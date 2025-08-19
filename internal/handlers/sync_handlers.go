@@ -1,11 +1,7 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
-	"etalon-server/internal/api"
 	"etalon-server/internal/seeder"
-	"etalon-server/internal/services"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,41 +10,23 @@ import (
 
 // SyncHandler обрабатывает запросы, связанные с синхронизацией и наполнением базы.
 type SyncHandler struct {
-	logger      *zap.Logger
-	syncService services.SyncService
-	seeder      *seeder.Seeder
-	seederKey   string
+	logger    *zap.Logger
+	seeder    *seeder.Seeder
+	seederKey string
 }
 
 // NewSyncHandler создает новый обработчик синхронизации.
-func NewSyncHandler(logger *zap.Logger, syncService services.SyncService, seeder *seeder.Seeder, seederKey string) *SyncHandler {
+func NewSyncHandler(logger *zap.Logger, seeder *seeder.Seeder, seederKey string) *SyncHandler {
 	return &SyncHandler{
-		logger:      logger,
-		syncService: syncService,
-		seeder:      seeder,
-		seederKey:   seederKey,
+		logger:    logger,
+		seeder:    seeder,
+		seederKey: seederKey,
 	}
 }
 
 // RegisterRoutes регистрирует роуты для этого обработчика.
 func (h *SyncHandler) RegisterRoutes(router chi.Router) {
-	router.Post("/servicedesk", h.TriggerSync)
 	router.Post("/seed", h.TriggerSeed)
-}
-
-// TriggerSync запускает фоновую синхронизацию с ServiceDesk.
-func (h *SyncHandler) TriggerSync(w http.ResponseWriter, r *http.Request) {
-	var req api.SyncRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Неверное тело запроса")
-		return
-	}
-
-	go h.syncService.SyncAllData(context.Background(), req.Full)
-
-	RespondWithJSON(w, http.StatusAccepted, map[string]string{
-		"message": "Синхронизация запущена",
-	})
 }
 
 // TriggerSeed запускает фоновое наполнение базы данных из мок-файлов.

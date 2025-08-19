@@ -60,7 +60,7 @@ func (r *companyRepo) GetByUUID(ctx context.Context, uuid string) (*models.Compa
 
 func (r *companyRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Company, error) {
 	var companies []*models.Company
-	err := r.db.WithContext(ctx).Select("service_desk_uuid", "last_modified_date").Find(&companies).Error
+	err := r.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at").Find(&companies).Error
 	if err != nil {
 		return nil, err
 	}

@@ -14,6 +14,7 @@ type FiscalRegisterRepo interface {
 	GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegister, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.FiscalRegister, error)
+	FindBySerialNumber(ctx context.Context, sn string) (*models.FiscalRegister, error)
 }
 
 // frRepo реализует интерфейс FiscalRegisterRepo.
@@ -53,7 +54,7 @@ func (r *frRepo) GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegi
 
 func (r *frRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error) {
 	var frs []*models.FiscalRegister
-	if err := r.db.WithContext(ctx).Select("service_desk_uuid", "last_modified_date").Find(&frs).Error; err != nil {
+	if err := r.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at").Find(&frs).Error; err != nil {
 		return nil, err
 	}
 	frMap := make(map[string]*models.FiscalRegister, len(frs))
@@ -72,4 +73,17 @@ func (r *frRepo) Search(ctx context.Context, term string, limit, offset int) ([]
 			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&frs).Error
 	return frs, err
+}
+
+// FindBySerialNumber ищет фискальный регистратор по серийному номеру.
+func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*models.FiscalRegister, error) {
+	if sn == "" {
+		return nil, nil
+	}
+	var fr models.FiscalRegister
+	err := r.db.WithContext(ctx).Where("fr_serial_number = ?", sn).Order("last_modified_date DESC").First(&fr).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &fr, err
 }

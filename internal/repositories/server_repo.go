@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/models"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -14,6 +15,8 @@ type ServerRepo interface {
 	GetByUUID(ctx context.Context, uuid string) (*models.Server, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Server, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error)
+	FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error)
+	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error)
 }
 
 type serverRepo struct {
@@ -52,7 +55,7 @@ func (r *serverRepo) GetByUUID(ctx context.Context, uuid string) (*models.Server
 
 func (r *serverRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Server, error) {
 	var servers []*models.Server
-	if err := r.db.WithContext(ctx).Select("service_desk_uuid", "last_modified_date").Find(&servers).Error; err != nil {
+	if err := r.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at").Find(&servers).Error; err != nil {
 		return nil, err
 	}
 	serverMap := make(map[string]*models.Server, len(servers))
@@ -71,4 +74,47 @@ func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int)
 			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&servers).Error
 	return servers, err
+}
+
+// FindWithEmptyCRMid находит серверы, у которых поле CRMid не заполнено,
+// и которые подлежат проверке.
+func (r *serverRepo) FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error) {
+	var servers []models.Server
+	// Выбираем только активные серверы, у которых CRMid пуст.
+	// Также, если была неудачная попытка, то следующая будет не раньше, чем через 30 дней.
+	thirtyDaysAgo := time.Now().AddDate(0, -1, 0)
+	err := r.db.WithContext(ctx).
+		Where("(crm_id IS NULL OR crm_id = '')").
+		Where("status = ?", "active").
+		Where("crmid_last_attempt IS NULL OR crmid_last_attempt < ?", thirtyDaysAgo).
+		Limit(limit).
+		Find(&servers).Error
+	return servers, err
+}
+
+// FindByCRMidOrIP ищет сервер по CRMid (приоритет) или по IP.
+func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error) {
+	var server models.Server
+
+	// CRMid является более надежным идентификатором
+	if crmid != "" {
+		err := r.db.WithContext(ctx).Where("crm_id = ?", crmid).First(&server).Error
+		if err == nil {
+			return &server, nil
+		}
+		if err != gorm.ErrRecordNotFound {
+			return nil, err
+		}
+	}
+
+	// Если по CRMid не нашли, ищем по IP
+	if ip != "" {
+		err := r.db.WithContext(ctx).Where("ip LIKE ?", ip+"%").First(&server).Error
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil // Явно возвращаем nil, если не найдено
+		}
+		return &server, err
+	}
+
+	return nil, nil
 }

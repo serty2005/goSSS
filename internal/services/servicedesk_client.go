@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"etalon-server/internal/config"
@@ -68,21 +67,13 @@ func (s *serviceDeskClientImpl) FetchEntityList(ctx context.Context, metaClass s
 		attrs = attrsMap[metaClass]
 	}
 
-	url := fmt.Sprintf("%s/find/%s", s.baseURL, metaClass)
-	body := map[string]string{
-		"accessKey": s.apiKey,
-		"attrs":     attrs,
-	}
+	// Все параметры в URL. Тело запроса будет пустым.
+	url := fmt.Sprintf("%s/find/%s?accessKey=%s&attrs=%s", s.baseURL, metaClass, s.apiKey, attrs)
 
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	// ИСПРАВЛЕНИЕ: Мы ожидаем в ответе массив, а не объект
 	var responseList []map[string]interface{}
 
-	err = s.doWithRetry(ctx, http.MethodPost, url, bytes.NewReader(payload), &responseList)
+	// Передаем nil в качестве тела запроса.
+	err := s.doWithRetry(ctx, http.MethodPost, url, nil, &responseList)
 	if err != nil {
 		return nil, err
 	}

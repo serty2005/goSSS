@@ -10,6 +10,7 @@ import (
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/seeder"
 	"etalon-server/internal/services"
+	"etalon-server/internal/utils"
 	"fmt"
 	"net/http"
 	"os"
@@ -26,15 +27,19 @@ import (
 
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
-	Config        *config.Config
-	Logger        *zap.Logger
-	DB            *gorm.DB
-	ReconcilerSvc services.ReconcilerService
-	Seeder        *seeder.Seeder
-	CrudHandler   *handlers.CrudHandler
-	SearchHandler *handlers.SearchHandler
-	SyncHandler   *handlers.SyncHandler
-	TaskHandler   *handlers.TaskHandler
+	Config         *config.Config
+	Logger         *zap.Logger
+	DB             *gorm.DB
+	ReconcilerSvc  services.ReconcilerService
+	CRMidWorkerSvc services.CRMidWorkerService
+	SDeskSyncSvc   services.SDeskSyncService
+	Seeder         *seeder.Seeder
+	CrudHandler    *handlers.CrudHandler
+	SearchHandler  *handlers.SearchHandler
+	SyncHandler    *handlers.SyncHandler
+	TaskHandler    *handlers.TaskHandler
+	AgentHandler   *handlers.AgentHandler
+	AgentSvc       services.AgentService
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -69,6 +74,7 @@ func New() (*Application, error) {
 		&models.FiscalRegister{},
 		&models.AgentFile{},
 		&models.ReconciliationTask{},
+		&models.Agent{},
 	)
 	if err != nil {
 		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
@@ -82,30 +88,39 @@ func New() (*Application, error) {
 	serverRepo := repositories.NewServerRepo(database)
 	workstationRepo := repositories.NewWorkstationRepo(database)
 	frRepo := repositories.NewFiscalRegisterRepo(database)
+	agentRepo := repositories.NewAgentRepo(database)
+	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Сервисы
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
-	syncService := services.NewSyncService(sdClient, companyRepo, serverRepo, workstationRepo, frRepo, appLogger, cfg.WorkerCount)
+	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, appLogger)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
-	reconcilerService := services.NewReconcilerService(cfg, appLogger, database, ftpClient)
+	reconcilerService := services.NewReconcilerService(cfg, appLogger, database, ftpClient, serverRepo, workstationRepo, frRepo)
+	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
+	crmidWorkerService := services.NewCRMidWorkerService(cfg, appLogger, database, serverRepo, rmsClient)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 
 	// Обработчики (Handlers)
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, syncService, dbSeeder, cfg.SeederKey)
+	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
+	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 
 	return &Application{
-		Config:        cfg,
-		Logger:        appLogger,
-		DB:            database,
-		ReconcilerSvc: reconcilerService,
-		Seeder:        dbSeeder,
-		CrudHandler:   crudHandler,
-		SearchHandler: searchHandler,
-		SyncHandler:   syncHandler,
-		TaskHandler:   taskHandler,
+		Config:         cfg,
+		Logger:         appLogger,
+		DB:             database,
+		ReconcilerSvc:  reconcilerService,
+		CRMidWorkerSvc: crmidWorkerService,
+		SDeskSyncSvc:   sdeskSyncService,
+		Seeder:         dbSeeder,
+		CrudHandler:    crudHandler,
+		SearchHandler:  searchHandler,
+		SyncHandler:    syncHandler,
+		TaskHandler:    taskHandler,
+		AgentHandler:   agentHandler,
+		AgentSvc:       agentService,
 	}, nil
 }
 
@@ -124,6 +139,11 @@ func (a *Application) Run() {
 		a.CrudHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
+		r.Route("/agents", func(r chi.Router) {
+			// Защищаем все роуты агентов с помощью middleware
+			r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
+			a.AgentHandler.RegisterRoutes(r)
+		})
 	})
 	r.Route("/sync", func(r chi.Router) {
 		a.SyncHandler.RegisterRoutes(r)
@@ -141,11 +161,23 @@ func (a *Application) Run() {
 	defer stop()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
 		a.ReconcilerSvc.Start(mainCtx)
+	}()
+
+	// Запуск CRMidWorkerSvc
+	go func() {
+		defer wg.Done()
+		a.CRMidWorkerSvc.Start(mainCtx)
+	}()
+
+	// Запуск SDeskSyncSvc
+	go func() {
+		defer wg.Done()
+		a.SDeskSyncSvc.Start(mainCtx)
 	}()
 
 	go func() {

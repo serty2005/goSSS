@@ -8,6 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// Константы для статусов агента
+const (
+	StatusPendingOwner       = "pending_owner"
+	StatusPendingZabbix      = "pending_zabbix_registration"
+	StatusActive             = "active"
+	StatusRegistrationFailed = "registration_failed"
+)
+
 // Base содержит общие поля для всех моделей.
 type Base struct {
 	ID              string  `gorm:"primaryKey;type:text"`
@@ -46,17 +54,22 @@ type Company struct {
 type Server struct {
 	Base
 	UniqueID             *string    `gorm:"type:text"`
+	CRMid                *string    `gorm:"column:crm_id;type:text;index"`
 	Teamviewer           *string    `gorm:"type:text"`
 	RDP                  *string    `gorm:"type:text"`
 	Anydesk              *string    `gorm:"type:text"`
 	IP                   *string    `gorm:"type:text"`
 	CabinetLink          *string    `gorm:"type:text"`
-	DeviceName           *string    `gorm:"type:text"`
+	DeviceName           *string    `gorm:"type:text;index"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Litemanager          *string    `gorm:"type:text"`
 	IikoVersion          *string    `gorm:"type:text"`
 	Description          *string    `gorm:"type:text"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+
+	// Новые поля для CRMid воркера
+	CrmidLastAttempt *time.Time `gorm:"column:crmid_last_attempt"`
+	Status           string     `gorm:"type:varchar(50);default:'active';index"` // 'active', 'inactive', 'to_delete'
 }
 
 // Workstation представляет сущность рабочей станции.
@@ -94,7 +107,10 @@ type Agent struct {
 	OwnerServiceDeskUUID string         `gorm:"type:text;index"`           // UUID сущности (Workstation или Server), к которой он привязан
 	Config               datatypes.JSON `gorm:"type:jsonb"`                // Конфигурация агента в формате JSON
 	LastHeartbeat        time.Time      // Время последнего heartbeat'а (будет обновляться)
-	Version              string         `gorm:"type:varchar(50)"` // Версия бинарного файла агента
+	Version              string         `gorm:"type:varchar(50)"`       // Версия бинарного файла агента
+	Hostname             string         `gorm:"type:text"`              // Имя хоста, переданное агентом
+	ZabbixHostname       string         `gorm:"type:text"`              // Имя хоста, сгенерированное для Zabbix
+	Status               string         `gorm:"type:varchar(50);index"` // Статус регистрации агента
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }

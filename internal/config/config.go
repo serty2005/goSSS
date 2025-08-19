@@ -23,6 +23,7 @@ type Config struct {
 	MaxRetries         int
 	RequestTimeout     time.Duration
 	SeederKey          string
+	AgentAPIKey        string
 
 	// Новая секция для FTP
 	FTPHost           string
@@ -32,6 +33,20 @@ type Config struct {
 	FTPPath           string
 	FTPCachePath      string
 	ReconcileInterval time.Duration
+
+	// Секция для Zabbix
+	ZabbixAPIURL   string
+	ZabbixAPIToken string
+
+	// Секция для CRMid Worker
+	RMSLogin             string
+	RMSPassword1         string
+	RMSPassword2         string
+	CRMidWorkerInterval  time.Duration
+	CRMidWorkerBatchSize int
+
+	// Секция настроек синхронизации с SD
+	SDeskSyncInterval time.Duration
 }
 
 // New загружает конфигурацию из файла .env и переменных окружения.
@@ -52,6 +67,7 @@ func New() *Config {
 		MaxRetries:         getEnvAsInt("MAX_RETRIES", 3),
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		SeederKey:          getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		AgentAPIKey:        getEnv("AGENT_API_KEY", ""),
 
 		// Новые параметры
 		FTPHost:           getEnv("FTP_HOST", "localhost"),
@@ -61,6 +77,20 @@ func New() *Config {
 		FTPPath:           getEnv("FTP_PATH", "/"),
 		FTPCachePath:      getEnv("FTP_CACHE_PATH", "./ftp_cache"),
 		ReconcileInterval: time.Duration(getEnvAsInt("RECONCILE_INTERVAL_MIN", 60)) * time.Minute,
+
+		// Параметры Zabbix
+		ZabbixAPIURL:   getEnv("ZABBIX_API_URL", ""),
+		ZabbixAPIToken: getEnv("ZABBIX_API_TOKEN", ""),
+
+		// Параметры CRMid Worker
+		RMSLogin:             getEnv("RMS_LOGIN", ""),
+		RMSPassword1:         getEnv("RMS_PASSWORD_1", ""),
+		RMSPassword2:         getEnv("RMS_PASSWORD_2", ""),
+		CRMidWorkerInterval:  time.Duration(getEnvAsInt("CRMID_WORKER_INTERVAL_MIN", 60)) * time.Minute,
+		CRMidWorkerBatchSize: getEnvAsInt("CRMID_WORKER_BATCH_SIZE", 100),
+
+		// Параметры синхронизации с SD
+		SDeskSyncInterval: time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 	}
 }
 
