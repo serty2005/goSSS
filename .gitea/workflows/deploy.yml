@@ -22,14 +22,14 @@ jobs:
           go-version: '1.23.4'
 
 
-      # Шаг 4: Логин в Docker Hub с использованием секретов Gitea
+      # Шаг 3: Логин в Docker Hub с использованием секретов Gitea
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Шаг 5: Сборка Docker-образа и отправка его в репозиторий
+      # Шаг 4: Сборка Docker-образа и отправка его в репозиторий
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
@@ -38,7 +38,7 @@ jobs:
           # ВАЖНО: Замените 'serty2005' на ваш логин в Docker Hub
           tags: serty2005/etalon-server:latest
 
-      # Шаг 6: Развертывание на продакшен-сервере по SSH
+      # Шаг 5: Развертывание на продакшен-сервере по SSH
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
