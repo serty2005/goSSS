@@ -38,7 +38,7 @@ jobs:
           # ВАЖНО: Замените 'serty2005' на ваш логин в Docker Hub
           tags: serty2005/etalon-server:latest
 
-      # Шаг 5: Развертывание на продакшен-сервере по SSH
+      # Шаг 6: Развертывание на продакшен-сервере по SSH
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
