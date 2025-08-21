@@ -26,13 +26,14 @@ type Config struct {
 	AgentAPIKey        string
 
 	// Новая секция для FTP
-	FTPHost           string
-	FTPUser           string
-	FTPPassword       string
-	FTPPort           string
-	FTPPath           string
-	FTPCachePath      string
-	ReconcileInterval time.Duration
+	FTPHost                string
+	FTPUser                string
+	FTPPassword            string
+	FTPPort                string
+	FTPPath                string
+	FTPCachePath           string
+	ReconcileInterval      time.Duration
+	EnableReconcilerWorker bool
 
 	// Секция для Zabbix
 	ZabbixAPIURL   string
@@ -44,9 +45,11 @@ type Config struct {
 	RMSPassword2         string
 	CRMidWorkerInterval  time.Duration
 	CRMidWorkerBatchSize int
+	EnableCRMidWorker    bool
 
 	// Секция настроек синхронизации с SD
-	SDeskSyncInterval time.Duration
+	SDeskSyncInterval     time.Duration
+	EnableSDeskSyncWorker bool
 }
 
 // New загружает конфигурацию из файла .env и переменных окружения.
@@ -69,20 +72,22 @@ func New() *Config {
 		SeederKey:          getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
 		AgentAPIKey:        getEnv("AGENT_API_KEY", ""),
 
-		// Новые параметры
-		FTPHost:           getEnv("FTP_HOST", "localhost"),
-		FTPUser:           getEnv("FTP_USER", "user"),
-		FTPPassword:       getEnv("FTP_PASSWORD", "password"),
-		FTPPort:           getEnv("FTP_PORT", "21"),
-		FTPPath:           getEnv("FTP_PATH", "/"),
-		FTPCachePath:      getEnv("FTP_CACHE_PATH", "./ftp_cache"),
-		ReconcileInterval: time.Duration(getEnvAsInt("RECONCILE_INTERVAL_MIN", 60)) * time.Minute,
+		// Параметры Reconciler
+		EnableReconcilerWorker: getEnvAsBool("ENABLE_RECONCILER_WORKER", true),
+		FTPHost:                getEnv("FTP_HOST", "localhost"),
+		FTPUser:                getEnv("FTP_USER", "user"),
+		FTPPassword:            getEnv("FTP_PASSWORD", "password"),
+		FTPPort:                getEnv("FTP_PORT", "21"),
+		FTPPath:                getEnv("FTP_PATH", "/"),
+		FTPCachePath:           getEnv("FTP_CACHE_PATH", "./ftp_cache"),
+		ReconcileInterval:      time.Duration(getEnvAsInt("RECONCILE_INTERVAL_MIN", 60)) * time.Minute,
 
 		// Параметры Zabbix
 		ZabbixAPIURL:   getEnv("ZABBIX_API_URL", ""),
 		ZabbixAPIToken: getEnv("ZABBIX_API_TOKEN", ""),
 
 		// Параметры CRMid Worker
+		EnableCRMidWorker:    getEnvAsBool("ENABLE_CRMID_WORKER", true),
 		RMSLogin:             getEnv("RMS_LOGIN", ""),
 		RMSPassword1:         getEnv("RMS_PASSWORD_1", ""),
 		RMSPassword2:         getEnv("RMS_PASSWORD_2", ""),
@@ -90,7 +95,8 @@ func New() *Config {
 		CRMidWorkerBatchSize: getEnvAsInt("CRMID_WORKER_BATCH_SIZE", 100),
 
 		// Параметры синхронизации с SD
-		SDeskSyncInterval: time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
+		EnableSDeskSyncWorker: getEnvAsBool("ENABLE_SDESK_SYNC_WORKER", true),
+		SDeskSyncInterval:     time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 	}
 }
 

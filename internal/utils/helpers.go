@@ -1,12 +1,18 @@
 package utils
 
-import "time"
+import (
+	"regexp"
+	"time"
+)
 
 // TimeLayoutServiceDesk определяет формат времени, используемый в ServiceDesk.
 const TimeLayoutServiceDesk = "2006.01.02 15:04:05"
 
 // TimeLayoutAgent определяет формат времени, используемый в JSON от агентов.
 const TimeLayoutAgent = "2006-01-02 15:04:05"
+
+// Regex для поиска любых символов, кроме цифр.
+var nonDigitRegex = regexp.MustCompile(`\D`)
 
 // ParseServiceDeskTime парсит строку времени из ServiceDesk.
 // Возвращает nil, если строка пустая или не может быть распарсена.
@@ -57,4 +63,19 @@ func SafeStringDereference(s *string) string {
 		return *s
 	}
 	return ""
+}
+
+// NormalizeRNKKT очищает регистрационный номер ККТ, оставляя только цифры.
+// "0007 2066 3405 9671" -> "0007206634059671"
+func NormalizeRNKKT(rnm string) string {
+	return nonDigitRegex.ReplaceAllString(rnm, "")
+}
+
+// FormatRNKKT форматирует чистый РН ККТ для вывода, добавляя пробелы.
+// "0007206634059671" -> "0007 2066 3405 9671"
+func FormatRNKKT(rnm string) string {
+	if len(rnm) != 16 {
+		return rnm // Возвращаем как есть, если длина некорректна
+	}
+	return rnm[0:4] + " " + rnm[4:8] + " " + rnm[8:12] + " " + rnm[12:16]
 }

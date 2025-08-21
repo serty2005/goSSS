@@ -86,6 +86,7 @@ type AgentDataDTO struct {
 	ModelName     string `json:"modelName"`
 	SerialNumber  string `json:"serialNumber"`
 	RNM           string `json:"RNM"`
+	INN           string `json:"INN"`
 	FNSerial      string `json:"fn_serial"`
 	DateTimeEnd   string `json:"dateTime_end"`
 	FFDVersion    string `json:"ffdVersion"`

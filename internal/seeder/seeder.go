@@ -122,7 +122,7 @@ func (s *Seeder) getAllCompanyUUIDs() (map[string]struct{}, error) {
 	return uuidSet, nil
 }
 
-// seedCompanies загружает и сохраняет компании.
+// seedCompanies загружает и сохраняет компании в два прохода для соблюдения внешних ключей.
 func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDeskClient) {
 	remoteList, err := sdClient.FetchEntityList(ctx, "ou$company", true)
 	if err != nil {
@@ -130,7 +130,9 @@ func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDes
 		return
 	}
 
-	companies := make([]models.Company, 0, len(remoteList))
+	var companiesWithParent, companiesWithoutParent []models.Company
+
+	// 1. Разделяем все компании на два списка: с родителями и без.
 	for _, data := range remoteList {
 		company, err := DataToCompanyForSeeder(ctx, data, sdClient, s.logger)
 		if err != nil {
@@ -138,14 +140,30 @@ func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDes
 			s.logger.Warn("Пропуск компании из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
 			continue
 		}
-		companies = append(companies, *company)
+		if company.ParentServiceDeskUUID != nil && *company.ParentServiceDeskUUID != "" {
+			companiesWithParent = append(companiesWithParent, *company)
+		} else {
+			companiesWithoutParent = append(companiesWithoutParent, *company)
+		}
 	}
 
-	if len(companies) > 0 {
-		if err := s.db.CreateInBatches(companies, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке компаний", zap.Error(err))
+	// 2. Первый проход: вставляем компании без родителей.
+	if len(companiesWithoutParent) > 0 {
+		if err := s.db.CreateInBatches(companiesWithoutParent, batchSize).Error; err != nil {
+			s.logger.Error("Ошибка при пакетной вставке компаний без родителей", zap.Error(err))
+			// Если корневые компании не вставились, продолжать нет смысла.
+			return
 		} else {
-			s.logger.Info("Успешно вставлено компаний", zap.Int("count", len(companies)))
+			s.logger.Info("Успешно вставлено компаний без родителей", zap.Int("count", len(companiesWithoutParent)))
+		}
+	}
+
+	// 3. Второй проход: вставляем компании с родителями.
+	if len(companiesWithParent) > 0 {
+		if err := s.db.CreateInBatches(companiesWithParent, batchSize).Error; err != nil {
+			s.logger.Error("Ошибка при пакетной вставке компаний с родителями", zap.Error(err))
+		} else {
+			s.logger.Info("Успешно вставлено компаний с родителями", zap.Int("count", len(companiesWithParent)))
 		}
 	}
 }

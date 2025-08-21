@@ -30,6 +30,9 @@ func (m *MockCompanyRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) 
 func (m *MockCompanyRepo) GetByUUID(ctx context.Context, uuid string) (*models.Company, error) {
 	return nil, nil
 }
+func (m *MockCompanyRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error) {
+	return nil, nil
+}
 func (m *MockCompanyRepo) Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]models.Company, error) {
 	return nil, nil
 }

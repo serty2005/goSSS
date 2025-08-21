@@ -11,7 +11,9 @@ import (
 type FiscalRegisterRepo interface {
 	Create(ctx context.Context, tx *gorm.DB, fr *models.FiscalRegister) error
 	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
+	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
 	GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegister, error)
+	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.FiscalRegister, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.FiscalRegister, error)
 	FindBySerialNumber(ctx context.Context, sn string) (*models.FiscalRegister, error)
@@ -43,9 +45,25 @@ func (r *frRepo) Update(ctx context.Context, tx *gorm.DB, uuid string, updateDat
 	return res.RowsAffected > 0, res.Error
 }
 
+// Delete выполняет "мягкое удаление" фискального регистратора по его ServiceDesk UUID.
+func (r *frRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Where("service_desk_uuid = ?", uuid).Delete(&models.FiscalRegister{})
+	return res.RowsAffected > 0, res.Error
+}
+
 func (r *frRepo) GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegister, error) {
 	var fr models.FiscalRegister
 	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&fr).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &fr, err
+}
+
+// GetByUUIDUnscoped находит запись по UUID, включая "мягко удаленные".
+func (r *frRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.FiscalRegister, error) {
+	var fr models.FiscalRegister
+	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&fr).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}

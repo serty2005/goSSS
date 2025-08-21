@@ -2,7 +2,7 @@ package validators
 
 import (
 	"fmt"
-	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,11 +11,9 @@ import (
 var (
 	uniqueIDRegex         = regexp.MustCompile(`^\d{3}-\d{3}-\d{3}$`)
 	remoteAccessIDRegex   = regexp.MustCompile(`(\d\s*){9,10}`)
-	liteManagerIDRegex    = regexp.MustCompile(`MH_\d{5}`)
-	iikoCloudDomainRegex  = regexp.MustCompile(`(?i)(https?://)?([a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
-	syrveCloudDomainRegex = regexp.MustCompile(`(?i)(https?://)?([a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
-	ipAddressRegex        = regexp.MustCompile(`^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:(\d+))?$`)
-	localDomainRegex      = regexp.MustCompile(`^[a-zA-Z0-9.-]+(:(\d+))?$`)
+	LiteManagerIDRegex    = regexp.MustCompile(`MH_\d{5}`)
+	iikoCloudDomainRegex  = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
+	syrveCloudDomainRegex = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
 )
 
 // ValidateUniqueID проверяет формат UniqueID.
@@ -38,10 +36,10 @@ func ValidateRemoteAccessID(raw string) *string {
 
 // ExtractLiteManagerID извлекает LiteManager ID из данных.
 func ExtractLiteManagerID(data map[string]interface{}, fallback string) *string {
-	if id, ok := data["litemanagerID"].(string); ok && liteManagerIDRegex.MatchString(id) {
+	if id, ok := data["litemanagerID"].(string); ok && LiteManagerIDRegex.MatchString(id) {
 		return &id
 	}
-	found := liteManagerIDRegex.FindString(fallback)
+	found := LiteManagerIDRegex.FindString(fallback)
 	if found != "" {
 		return &found
 	}
@@ -85,41 +83,55 @@ func ValidateCabinetLink(raw string, companyType string) string {
 }
 
 // ValidateIPAddress валидирует и нормализует IP-адрес или домен.
+// НОВАЯ РЕАЛИЗАЦИЯ: Использует пакет net/url для надежного парсинга.
 func ValidateIPAddress(raw string) *string {
 	if raw == "" {
 		return nil
 	}
+	raw = strings.TrimSpace(raw)
 
-	if matches := iikoCloudDomainRegex.FindStringSubmatch(raw); len(matches) > 0 {
-		res := fmt.Sprintf("%s:443", matches[3])
+	// 1. Приоритетная проверка на специальные облачные домены.
+	if matches := iikoCloudDomainRegex.FindStringSubmatch(raw); len(matches) > 1 {
+		res := fmt.Sprintf("%s:443", matches[1])
+		return &res
+	}
+	if matches := syrveCloudDomainRegex.FindStringSubmatch(raw); len(matches) > 1 {
+		res := fmt.Sprintf("%s:443", matches[1])
 		return &res
 	}
 
-	if matches := syrveCloudDomainRegex.FindStringSubmatch(raw); len(matches) > 0 {
-		res := fmt.Sprintf("%s:443", matches[3])
-		return &res
+	// 2. Используем url.Parse для надежного разбора.
+	// Добавляем схему "http://", если она отсутствует, чтобы парсер корректно работал
+	// с адресами вида "domain.com:8080".
+	parseableURL := raw
+	if !strings.Contains(parseableURL, "://") {
+		parseableURL = "http://" + parseableURL
 	}
 
-	if matches := ipAddressRegex.FindStringSubmatch(raw); len(matches) > 0 {
-		ip := net.ParseIP(fmt.Sprintf("%s.%s.%s.%s", matches[1], matches[2], matches[3], matches[4]))
-		if ip == nil {
-			return nil
-		}
-		port := "8080"
-		if matches[6] != "" {
-			port = matches[6]
-		}
-		res := fmt.Sprintf("%s:%s", ip.String(), port)
-		return &res
+	parsedURL, err := url.Parse(parseableURL)
+	if err != nil {
+		// Если даже с добавленной схемой парсинг не удался, считаем адрес невалидным.
+		return nil
 	}
 
-	if localDomainRegex.MatchString(raw) {
-		if !strings.Contains(raw, ":") {
-			res := fmt.Sprintf("%s:8080", raw)
-			return &res
-		}
-		return &raw
+	hostname := parsedURL.Hostname()
+	port := parsedURL.Port()
+
+	// Если не удалось извлечь хост, адрес невалидный.
+	if hostname == "" {
+		return nil
 	}
 
-	return nil
+	// 3. Формируем итоговую строку.
+	var result string
+	if port != "" {
+		// Если порт был указан в исходной строке, используем его.
+		result = fmt.Sprintf("%s:%s", hostname, port)
+	} else {
+		// Если порт не указан, используем порт по умолчанию 8080.
+		// Это стандарт для локальных серверов iikoRMS.
+		result = fmt.Sprintf("%s:8080", hostname)
+	}
+
+	return &result
 }

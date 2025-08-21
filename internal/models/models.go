@@ -44,6 +44,7 @@ type Company struct {
 	LastModifiedDate      *time.Time `json:"last_modified_date"`
 	AdditionalName        *string    `gorm:"type:text"`
 	ParentServiceDeskUUID *string    `gorm:"type:text"`
+	Parent                *Company   `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
 
 	Servers         []Server         `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	Workstations    []Workstation    `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
@@ -90,9 +91,10 @@ type FiscalRegister struct {
 	ModelKKT             *string    `gorm:"type:text"`
 	FFD                  *string    `gorm:"type:text"`
 	FRDownloader         *string    `gorm:"type:text"`
-	RNKKT                *string    `gorm:"column:rn_kkt;type:text"` // ИСПРАВЛЕНИЕ: Явно указываем имя столбца
+	RNKKT                *string    `gorm:"column:rn_kkt;type:text;index"`
 	LegalName            *string    `gorm:"type:text"`
-	FRSerialNumber       *string    `gorm:"type:text"`
+	INN                  *string    `gorm:"column:inn;type:text;index"`
+	FRSerialNumber       *string    `gorm:"type:text;index"`
 	FNNumber             *string    `gorm:"type:text"`
 	KKTRegDate           *time.Time `json:"kkt_reg_date"`
 	FNExpireDate         *time.Time `json:"fn_expire_date"`

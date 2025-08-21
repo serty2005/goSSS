@@ -13,6 +13,7 @@ type CompanyRepo interface {
 	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
 	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
 	GetByUUID(ctx context.Context, uuid string) (*models.Company, error)
+	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Company, error)
 	Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]models.Company, error)
 }
@@ -52,6 +53,15 @@ func (r *companyRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (boo
 func (r *companyRepo) GetByUUID(ctx context.Context, uuid string) (*models.Company, error) {
 	var company models.Company
 	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&company).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &company, err
+}
+
+func (r *companyRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error) {
+	var company models.Company
+	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&company).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}

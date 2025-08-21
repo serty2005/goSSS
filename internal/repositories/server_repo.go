@@ -12,7 +12,9 @@ import (
 type ServerRepo interface {
 	Create(ctx context.Context, tx *gorm.DB, server *models.Server) error
 	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
+	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
 	GetByUUID(ctx context.Context, uuid string) (*models.Server, error)
+	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Server, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Server, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error)
 	FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error)
@@ -44,9 +46,23 @@ func (r *serverRepo) Update(ctx context.Context, tx *gorm.DB, uuid string, updat
 	return res.RowsAffected > 0, res.Error
 }
 
+// Delete выполняет "мягкое удаление" сервера по его ServiceDesk UUID.
+func (r *serverRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Where("service_desk_uuid = ?", uuid).Delete(&models.Server{})
+	return res.RowsAffected > 0, res.Error
+}
+
 func (r *serverRepo) GetByUUID(ctx context.Context, uuid string) (*models.Server, error) {
 	var server models.Server
 	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&server).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &server, err
+}
+func (r *serverRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Server, error) {
+	var server models.Server
+	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&server).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}

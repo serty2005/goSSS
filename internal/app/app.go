@@ -82,6 +82,12 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
 
+	//Запуск одноразовых задач по очистке данных
+	cleanupService := services.NewCleanupService(database, appLogger)
+	go cleanupService.CleanupFRDuplicates(context.Background())
+
+	go cleanupService.CleanupServerDuplicatesAndJunk(context.Background())
+
 	// 6. Инициализация слоев (Репозитории -> Сервисы -> Обработчики)
 	// Репозитории
 	companyRepo := repositories.NewCompanyRepo(database)
@@ -161,31 +167,48 @@ func (a *Application) Run() {
 	defer stop()
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(1)
 
-	go func() {
-		defer wg.Done()
-		a.ReconcilerSvc.Start(mainCtx)
-	}()
+	// Воркер Reconciler (FTP)
+	if a.Config.EnableReconcilerWorker {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.ReconcilerSvc.Start(mainCtx)
+		}()
+	} else {
+		a.Logger.Info("Воркер Reconciler (FTP) отключен в конфигурации.")
+	}
 
-	// Запуск CRMidWorkerSvc
-	go func() {
-		defer wg.Done()
-		a.CRMidWorkerSvc.Start(mainCtx)
-	}()
+	// Воркер CRMid
+	if a.Config.EnableCRMidWorker {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.CRMidWorkerSvc.Start(mainCtx)
+		}()
+	} else {
+		a.Logger.Info("Воркер CRMid отключен в конфигурации.")
+	}
 
-	// Запуск SDeskSyncSvc
-	go func() {
-		defer wg.Done()
-		a.SDeskSyncSvc.Start(mainCtx)
-	}()
+	// Воркер синхронизации с ServiceDesk
+	if a.Config.EnableSDeskSyncWorker {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.SDeskSyncSvc.Start(mainCtx)
+		}()
+	} else {
+		a.Logger.Info("Воркер синхронизации с ServiceDesk отключен в конфигурации.")
+	}
 
+	// HTTP-сервер
 	go func() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			a.Logger.Error("Не удалось запустить сервер", zap.String("port", a.Config.ServerPort), zap.Error(err))
-			stop()
+			stop() // Останавливаем все, если сервер не смог запуститься
 		}
 	}()
 

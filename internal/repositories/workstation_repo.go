@@ -11,7 +11,9 @@ import (
 type WorkstationRepo interface {
 	Create(ctx context.Context, tx *gorm.DB, workstation *models.Workstation) error
 	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
+	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
 	GetByUUID(ctx context.Context, uuid string) (*models.Workstation, error)
+	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Workstation, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Workstation, error)
 	FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error)
@@ -43,9 +45,23 @@ func (r *workstationRepo) Update(ctx context.Context, tx *gorm.DB, uuid string, 
 	return res.RowsAffected > 0, res.Error
 }
 
+// Delete выполняет "мягкое удаление" рабочей станции по ее ServiceDesk UUID.
+func (r *workstationRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Where("service_desk_uuid = ?", uuid).Delete(&models.Workstation{})
+	return res.RowsAffected > 0, res.Error
+}
 func (r *workstationRepo) GetByUUID(ctx context.Context, uuid string) (*models.Workstation, error) {
 	var workstation models.Workstation
 	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&workstation).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &workstation, err
+}
+
+func (r *workstationRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Workstation, error) {
+	var workstation models.Workstation
+	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&workstation).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}

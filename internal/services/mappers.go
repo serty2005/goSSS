@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
@@ -73,12 +74,7 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 		return nil, fmt.Errorf("server data missing UUID")
 	}
 
-	ownerUUID := ""
-	if owner, ok := data["owner"].(map[string]interface{}); ok {
-		if oUUID, oOk := owner["UUID"].(string); oOk {
-			ownerUUID = oUUID
-		}
-	}
+	ownerUUID := getOwnerUUID(data)
 	if ownerUUID == "" {
 		return nil, fmt.Errorf("server with uuid %s has no owner, skipping", uuid)
 	}
@@ -88,37 +84,80 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 	server.OwnerServiceDeskUUID = &ownerUUID
 	server.MetaClass = "objectBase$Server"
 
-	if uniqueID, ok := data["UniqueID"].(string); ok {
-		server.UniqueID = validators.ValidateUniqueID(uniqueID)
+	// 1. Извлекаем все "сырые" строковые значения из данных ServiceDesk.
+	rawUniqueID, _ := data["UniqueID"].(string)
+	rawTeamviewer, _ := data["Teamviewer"].(string)
+	rawRDP, _ := data["RDP"].(string)
+	rawAnydesk, _ := data["AnyDesk"].(string)
+	rawIP, _ := data["IP"].(string)
+	rawDeviceName, _ := data["DeviceName"].(string)
+	rawIikoVersion, _ := data["iikoVersion"].(string)
+	rawDescription, _ := data["description"].(string)
+	rawNameForClient, _ := data["nameforclient"].(string)
+	rawLitemanager, _ := data["litemanagerID"].(string) // Извлекаем litemanagerID напрямую
+
+	// 2. Валидируем и заполняем основные поля модели.
+	server.UniqueID = validators.ValidateUniqueID(rawUniqueID)
+	server.Teamviewer = validators.ValidateRemoteAccessID(rawTeamviewer)
+	server.Anydesk = validators.ValidateRemoteAccessID(rawAnydesk)
+	server.IP = validators.ValidateIPAddress(rawIP)
+
+	// Поле RDP сохраняется "как есть", без валидации.
+	if rawRDP != "" {
+		server.RDP = &rawRDP
 	}
-	if tv, ok := data["Teamviewer"].(string); ok {
-		server.Teamviewer = validators.ValidateRemoteAccessID(tv)
+
+	if rawDeviceName != "" {
+		server.DeviceName = &rawDeviceName
 	}
-	if rdp, ok := data["RDP"].(string); ok {
-		server.RDP = validators.ValidateRemoteAccessID(rdp)
+	if rawIikoVersion != "" {
+		server.IikoVersion = &rawIikoVersion
 	}
-	if ad, ok := data["AnyDesk"].(string); ok {
-		server.Anydesk = validators.ValidateRemoteAccessID(ad)
+
+	// 3. Собираем все извлеченные "сырые" данные в единое поле Description.
+	var descriptionParts []string
+	if rawNameForClient != "" {
+		descriptionParts = append(descriptionParts, "Имя для клиента: "+rawNameForClient)
 	}
-	if ip, ok := data["IP"].(string); ok {
-		server.IP = validators.ValidateIPAddress(ip)
+	if rawDescription != "" {
+		descriptionParts = append(descriptionParts, "Описание: "+rawDescription)
 	}
-	if dn, ok := data["DeviceName"].(string); ok {
-		server.DeviceName = &dn
+	if rawUniqueID != "" {
+		descriptionParts = append(descriptionParts, "UniqueID: "+rawUniqueID)
 	}
+	if rawTeamviewer != "" {
+		descriptionParts = append(descriptionParts, "Teamviewer: "+rawTeamviewer)
+	}
+	if rawAnydesk != "" {
+		descriptionParts = append(descriptionParts, "AnyDesk: "+rawAnydesk)
+	}
+	if rawRDP != "" {
+		descriptionParts = append(descriptionParts, "RDP: "+rawRDP)
+	}
+	if rawLitemanager != "" {
+		descriptionParts = append(descriptionParts, "Litemanager: "+rawLitemanager)
+	}
+	if rawIP != "" {
+		descriptionParts = append(descriptionParts, "IP/URL: "+rawIP)
+	}
+
+	fullDescription := strings.Join(descriptionParts, " | ")
+	if fullDescription != "" {
+		server.Description = &fullDescription
+	}
+
+	// 4. Заполняем остальные поля.
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
 		server.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
-	if iikoVer, ok := data["iikoVersion"].(string); ok {
-		server.IikoVersion = &iikoVer
+
+	// Litemanager заполняется либо из прямого поля, либо извлекается из описания (как fallback)
+	if rawLitemanager != "" && validators.LiteManagerIDRegex.MatchString(rawLitemanager) {
+		server.Litemanager = &rawLitemanager
+	} else {
+		// Если прямого поля нет, ищем в старых полях
+		server.Litemanager = validators.ExtractLiteManagerID(data, fullDescription)
 	}
-
-	nameForClient, _ := data["nameforclient"].(string)
-	description, _ := data["description"].(string)
-	fullDesc := strings.TrimSpace(nameForClient + " " + description)
-	server.Description = &fullDesc
-
-	server.Litemanager = validators.ExtractLiteManagerID(data, fullDesc)
 
 	if cl, ok := data["CabinetLink"].(string); ok && server.IP != nil {
 		companyType := validators.DetermineCompanyTypeFromIP(*server.IP)
@@ -165,6 +204,9 @@ func DataToWorkstation(data map[string]interface{}) (*models.Workstation, error)
 	return ws, nil
 }
 
+// Regex для поиска ИНН в строке.
+var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
+
 // DataToFiscalRegister преобразует мапу в модель FiscalRegister.
 func DataToFiscalRegister(data map[string]interface{}) (*models.FiscalRegister, error) {
 	uuid, _ := data["UUID"].(string)
@@ -201,10 +243,22 @@ func DataToFiscalRegister(data map[string]interface{}) (*models.FiscalRegister, 
 		fr.FRDownloader = &val
 	}
 	if val, ok := data["RNKKT"].(string); ok {
-		fr.RNKKT = &val
+		// Нормализуем РН ККТ перед сохранением
+		normalizedRNKKT := utils.NormalizeRNKKT(val)
+		fr.RNKKT = &normalizedRNKKT
 	}
 	if val, ok := data["LegalName"].(string); ok {
-		fr.LegalName = &val
+		// ИЗВЛЕЧЕНИЕ ИНН: Ищем ИНН в юридическом имени
+		matches := innRegex.FindStringSubmatch(val)
+		if len(matches) > 1 {
+			inn := matches[1]
+			fr.INN = &inn
+			// Очищаем LegalName от найденного ИНН
+			cleanName := strings.TrimSpace(innRegex.ReplaceAllString(val, ""))
+			fr.LegalName = &cleanName
+		} else {
+			fr.LegalName = &val
+		}
 	}
 	if val, ok := data["FRSerialNumber"].(string); ok {
 		fr.FRSerialNumber = &val

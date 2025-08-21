@@ -23,20 +23,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// rmsUrlRegex используется для извлечения домена из URL RMS-сервера.
 var rmsUrlRegex = regexp.MustCompile(`(?i)(https?://)?([a-zA-Z0-9.-]+)`)
 
-// ReconcilerService определяет публичный интерфейс для сервиса сверки.
-// Сервис отвечает за обработку данных от агентов (через AgentService) и
-// данных из JSON-файлов, поступающих с FTP-сервера.
 type ReconcilerService interface {
-	// Start запускает фоновый процесс для обработки файлов с FTP.
 	Start(ctx context.Context)
-	// ProcessAgentData выполняет основную логику сверки по данным от агента.
 	ProcessAgentData(ctx context.Context, data *api.AgentDataDTO) (ownerID, entityUUID, method string, err error)
 }
 
-// reconcilerServiceImpl является конкретной реализацией ReconcilerService.
 type reconcilerServiceImpl struct {
 	cfg             *config.Config
 	logger          *zap.Logger
@@ -47,7 +40,6 @@ type reconcilerServiceImpl struct {
 	frRepo          repositories.FiscalRegisterRepo
 }
 
-// NewReconcilerService создает новый экземпляр сервиса сверки с необходимыми зависимостями.
 func NewReconcilerService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, ftpClient FTPClient, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ReconcilerService {
 	return &reconcilerServiceImpl{
 		cfg:             cfg,
@@ -60,21 +52,17 @@ func NewReconcilerService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, f
 	}
 }
 
-// Start запускает сервис в фоновом режиме для периодической обработки файлов с FTP-сервера.
 func (s *reconcilerServiceImpl) Start(ctx context.Context) {
 	s.logger.Info("Запуск сервиса сверки (ReconcilerService)", zap.Duration("interval", s.cfg.ReconcileInterval))
 	ticker := time.NewTicker(s.cfg.ReconcileInterval)
 	defer ticker.Stop()
-
-	// Первый запуск сразу, не дожидаясь тикера
 	s.runReconciliationCycle(ctx)
-
 	for {
 		select {
 		case <-ticker.C:
 			s.runReconciliationCycle(ctx)
 		case <-ctx.Done():
-			s.logger.Info("Остановка сервиса сверки (ReconcilerService)...")
+			s.logger.Info("Выход из приложения, прерывание воркера сверки")
 			return
 		}
 	}
@@ -98,7 +86,7 @@ func (s *reconcilerServiceImpl) runReconciliationCycle(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
-			s.logger.Info("Контекст отменен, прерывание цикла обработки файлов.")
+			s.logger.Info("Выход из приложения, прерывание воркера обработки файлов.")
 			return
 		default:
 			s.processFile(ctx, file.Name())
@@ -108,7 +96,7 @@ func (s *reconcilerServiceImpl) runReconciliationCycle(ctx context.Context) {
 }
 
 // syncLocalCacheWithFTP скачивает новые или обновленные файлы с FTP-сервера в локальный кэш.
-func (s *reconcilerServiceImpl) syncLocalCacheWithFTP(ctx context.Context) error {
+func (s *reconcilerServiceImpl) syncLocalCacheWithFTP(_ context.Context) error {
 	s.logger.Info("Синхронизация локального кэша с FTP...")
 	ftpFiles, err := s.ftpClient.ListFiles(s.cfg.FTPPath)
 	if err != nil {
@@ -191,8 +179,6 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 	log := s.logger.With(zap.String("agent_hostname", data.Hostname))
 	log.Info("Начало процесса сверки данных от агента")
 
-	// Шаг 0: Предварительный поиск всех потенциальных кандидатов по их уникальным идентификаторам.
-	// Это оптимизация, чтобы не делать одни и те же запросы к БД на каждом шаге.
 	domain := ""
 	if matches := rmsUrlRegex.FindStringSubmatch(data.URLRms); len(matches) > 2 {
 		domain = matches[2]
@@ -201,7 +187,6 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 	foundWS, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, data.AnydeskID, data.LitemanagerID)
 	foundFR, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
 
-	// Шаг 1: Приоритет - совпадение по Серверу. CRMid и URL сервера считаются самыми надежными признаками.
 	if foundServer != nil {
 		log.Info("Приоритет 1: Найдено совпадение по Серверу", zap.String("server_uuid", utils.SafeStringDereference(foundServer.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundServer.OwnerServiceDeskUUID)
@@ -209,7 +194,6 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 		return ownerID, utils.SafeStringDereference(foundServer.ServiceDeskUUID), "server_match", nil
 	}
 
-	// Шаг 2: Если сервер не найден, приоритет - совпадение по Рабочей станции (ID удаленного доступа).
 	if foundWS != nil {
 		log.Info("Приоритет 2: Найдено совпадение по Рабочей станции", zap.String("ws_uuid", utils.SafeStringDereference(foundWS.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundWS.OwnerServiceDeskUUID)
@@ -217,7 +201,6 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 		return ownerID, utils.SafeStringDereference(foundWS.ServiceDeskUUID), "workstation_match", nil
 	}
 
-	// Шаг 3: Низший приоритет - совпадение по Фискальному регистратору (серийный номер).
 	if foundFR != nil {
 		log.Info("Приоритет 3: Найдено совпадение по Фискальному регистратору", zap.String("fr_uuid", utils.SafeStringDereference(foundFR.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundFR.OwnerServiceDeskUUID)
@@ -225,7 +208,6 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 		return ownerID, utils.SafeStringDereference(foundFR.ServiceDeskUUID), "fr_match", nil
 	}
 
-	// Если ничего не найдено, оборудование считается полностью новым, и для него требуется ручное создание владельца.
 	log.Warn("Не найдено совпадений ни по одному из приоритетов. Создание задачи 'new_client'.")
 	s.createTask(ctx, "new_client", "", "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
 	return "", "", "no_match", fmt.Errorf("не удалось найти совпадения")
@@ -236,27 +218,27 @@ func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.
 func (s *reconcilerServiceImpl) reconcileFromServerContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister, log *zap.Logger) {
 	s.reconcileServerData(ctx, server, data, log)
 
-	// Проверка рабочей станции
 	if data.AnydeskID != "" || data.TeamviewerID != "" || data.LitemanagerID != "" {
-		if ws != nil { // Станция с такими ID уже существует в базе
-			// Если ее владелец не совпадает с владельцем найденного сервера - это "переезд", создаем задачу.
+		if ws != nil {
+			// ИСПРАВЛЕНИЕ: Логика изменена. Мы всегда обогащаем найденную станцию.
+			log.Info("Найдена существующая рабочая станция, выполняется слияние данных.", zap.String("ws_uuid", utils.SafeStringDereference(ws.ServiceDeskUUID)))
 			if utils.SafeStringDereference(ws.OwnerServiceDeskUUID) != ownerID {
 				s.createTask(ctx, "owner_mismatch", "Workstation", utils.SafeStringDereference(ws.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(ws.OwnerServiceDeskUUID)))
 			}
-			s.reconcileWorkstationData(ctx, ws, data, log) // В любом случае обновляем данные станции.
-		} else { // Станции с такими ID не существует - это новое оборудование для известного клиента.
+			s.reconcileWorkstationData(ctx, ws, data, log)
+		} else {
+			log.Info("Рабочая станция с указанными ID не найдена. Создание задачи на добавление.")
 			s.createTask(ctx, "add_equipment", "Workstation", "", data, fmt.Sprintf("Добавить новую рабочую станцию для владельца %s", ownerID))
 		}
 	}
 
-	// Аналогичная проверка для фискального регистратора
 	if data.SerialNumber != "" {
-		if fr != nil { // ФР с таким SN существует
+		if fr != nil {
 			if utils.SafeStringDereference(fr.OwnerServiceDeskUUID) != ownerID {
 				s.createTask(ctx, "owner_mismatch", "FiscalRegister", utils.SafeStringDereference(fr.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(fr.OwnerServiceDeskUUID)))
 			}
 			s.reconcileFiscalRegisterData(ctx, fr, data, log)
-		} else { // ФР с таким SN не существует
+		} else {
 			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, fmt.Sprintf("Добавить новый ФР для владельца %s", ownerID))
 		}
 	}
@@ -325,46 +307,30 @@ func (s *reconcilerServiceImpl) reconcileWorkstationData(ctx context.Context, ws
 		updates["litemanager"] = data.LitemanagerID
 	}
 	if len(updates) > 0 {
+		log.Info("Обновление данных рабочей станции (слияние)", zap.String("ws_uuid", utils.SafeStringDereference(ws.ServiceDeskUUID)), zap.Any("added_ids", updates))
 		if _, err := s.workstationRepo.Update(ctx, nil, utils.SafeStringDereference(ws.ServiceDeskUUID), updates); err != nil {
 			log.Error("Не удалось обновить данные рабочей станции", zap.String("uuid", utils.SafeStringDereference(ws.ServiceDeskUUID)), zap.Error(err))
 		}
 	}
 }
 
-// reconcileFiscalRegisterData обновляет данные ФР по аналогии с другими сущностями.
-// Логика: если данные от агента отличаются от данных в БД, обновляем запись в БД.
+// reconcileFiscalRegisterData обновляет данные ФР, если они найдены по серийному номеру.
+// Логика: мы доверяем данным от агента как самым актуальным и полностью обновляем запись в БД.
 func (s *reconcilerServiceImpl) reconcileFiscalRegisterData(ctx context.Context, fr *models.FiscalRegister, data *api.AgentDataDTO, log *zap.Logger) {
 	updates := make(map[string]interface{})
 
-	// Сравнение и добавление в мапу обновлений для каждого поля
-	if data.ModelName != "" && utils.SafeStringDereference(fr.ModelKKT) != data.ModelName {
-		updates["model_kkt"] = data.ModelName
-	}
-	if data.RNM != "" && utils.SafeStringDereference(fr.RNKKT) != data.RNM {
-		updates["rn_kkt"] = data.RNM
-	}
-	if data.FNSerial != "" && utils.SafeStringDereference(fr.FNNumber) != data.FNSerial {
-		updates["fn_number"] = data.FNSerial
-	}
-	formattedFFD := utils.FormatFFDVersion(data.FFDVersion)
-	if formattedFFD != "" && utils.SafeStringDereference(fr.FFD) != formattedFFD {
-		updates["ffd"] = formattedFFD
-	}
+	// Собираем все поля из данных агента для полного обновления
+	updates["model_kkt"] = data.ModelName
+	updates["rn_kkt"] = utils.NormalizeRNKKT(data.RNM)
+	updates["fn_number"] = data.FNSerial
+	updates["inn"] = strings.TrimSpace(data.INN)
+	updates["ffd"] = utils.FormatFFDVersion(data.FFDVersion)
+	updates["fn_expire_date"] = utils.ParseAgentTime(data.DateTimeEnd)
+	updates["last_modified_date"] = time.Now() // Устанавливаем текущее время как дату последнего обновления
 
-	// Обработка дат
-	fnExpireDate := utils.ParseAgentTime(data.DateTimeEnd)
-	if fnExpireDate != nil && (fr.FNExpireDate == nil || !fr.FNExpireDate.Equal(*fnExpireDate)) {
-		updates["fn_expire_date"] = fnExpireDate
-	}
-	// TODO: Добавить KKTRegDate, если агент будет его передавать.
-
-	if len(updates) > 0 {
-		log.Info("Обнаружены изменения для фискального регистратора. Обновление...", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)), zap.Any("changes", updates))
-		if _, err := s.frRepo.Update(ctx, nil, utils.SafeStringDereference(fr.ServiceDeskUUID), updates); err != nil {
-			log.Error("Не удалось обновить данные ФР", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)), zap.Error(err))
-		}
-	} else {
-		log.Info("Данные фискального регистратора актуальны, обновление не требуется.", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)))
+	log.Info("Обновление фискального регистратора полным набором данных от агента.", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)), zap.Any("changes", updates))
+	if _, err := s.frRepo.Update(ctx, nil, utils.SafeStringDereference(fr.ServiceDeskUUID), updates); err != nil {
+		log.Error("Не удалось обновить данные ФР", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)), zap.Error(err))
 	}
 }
 

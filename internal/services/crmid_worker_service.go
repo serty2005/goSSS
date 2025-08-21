@@ -83,7 +83,7 @@ func (s *crmidWorkerServiceImpl) runCycle(ctx context.Context) {
 	for _, server := range servers {
 		select {
 		case <-ctx.Done():
-			s.logger.Info("Контекст отменен, прерывание цикла обработки серверов.")
+			s.logger.Info("Выход из приложения, прерывание воркера опроса RMS")
 			return
 		default:
 			s.processServer(ctx, server)
