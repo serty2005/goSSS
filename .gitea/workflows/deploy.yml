@@ -1,36 +1,41 @@
-name: Deploy Etalon Server
+name: Deploy Etalon Server Locally
 
-# Триггер: запускать workflow при пуше в ветку 'main'
 on:
   push:
     branches:
       - main
 
-runs-on: ubuntu-latest
+runs-on: ubuntu-latest # Теперь эта метка будет запускать контейнер node:16-bullseye
 
 jobs:
   build-and-deploy:
-    # Запускать на последней версии Ubuntu, предоставляемой ранером
     runs-on: ubuntu-latest
     steps:
-      # Шаг 1: Получение исходного кода из репозитория
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Шаг 2: Настройка окружения Go
+      # Этот шаг нужен, чтобы Docker CLI был доступен внутри контейнера node
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.23.4'
+          go-version: '1.21'
 
-
-      # Этап сборки и пуша в локальный registry
+      - name: Run tests
+        run: go test ./...
+        
       - name: Build and Push to Local Registry
         run: |
-          # IP-адрес хоста, где запущен docker-compose и registry
-          # Либо localhost, если ранер на той же машине
-          REGISTRY_HOST=localhost:5000
+          # Теперь мы можем обращаться к registry по имени сервиса,
+          # так как контейнер задачи находится в той же сети.
+          REGISTRY_HOST=registry:5000 
           IMAGE_NAME=$REGISTRY_HOST/serty/etalon-server:latest
+          
+          # Настраиваем Docker внутри контейнера, чтобы он доверял нашему registry
+          # Это необходимо, так как мы не можем редактировать daemon.json внутри временного контейнера
+          echo "{\"insecure-registries\":[\"$REGISTRY_HOST\"]}" | sudo tee /etc/docker/daemon.json
           
           # Сборка образа
           docker build -t $IMAGE_NAME .
@@ -38,7 +43,7 @@ jobs:
           # Пуш в локальный registry
           docker push $IMAGE_NAME
 
-      # Шаг 6: Развертывание на продакшен-сервере по SSH
+      # Шаг развертывания остается прежним, так как он выполняется на продакшен-хосте
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
@@ -46,31 +51,16 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # IP-адрес хоста, где запущен docker-compose и registry
-            REGISTRY_HOST=localhost:5000
+            # Здесь мы используем IP-адрес или домен хоста, т.к. команда выполняется
+            # снаружи docker-compose сети. Замените на IP вашего хоста.
+            REGISTRY_HOST=localhost:5000 
             IMAGE_NAME=$REGISTRY_HOST/serty/etalon-server:latest
 
-            # Путь к директории приложения на продакшен-сервере
+            # ... остальная часть скрипта без изменений ...
             APP_DIR="/opt/etalon-server"
-            mkdir -p $APP_DIR/logs
-            mkdir -p $APP_DIR/ftp_cache
-
-            # Создаем .env файл
+            mkdir -p $APP_DIR/logs $APP_DIR/ftp_cache
             echo "${{ secrets.ENV_FILE_CONTENT }}" | base64 -d > $APP_DIR/.env
-
-            # Останавливаем и удаляем старый контейнер
             docker stop etalon-server || true
             docker rm etalon-server || true
-
-            # Скачиваем свежий образ ИЗ ЛОКАЛЬНОГО REGISTRY
             docker pull $IMAGE_NAME
-
-            # Запускаем новый контейнер
-            docker run -d \
-              --name etalon-server \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              -v $APP_DIR/logs:/root/logs \
-              -v $APP_DIR/ftp_cache:/root/ftp_cache \
-              --env-file $APP_DIR/.env \
-              $IMAGE_NAME
+            docker run -d --name etalon-server --restart unless-stopped -p 8080:8080 -v $APP_DIR/logs:/root/logs -v $APP_DIR/ftp_cache:/root/ftp_cache --env-file $APP_DIR/.env $IMAGE_NAME
