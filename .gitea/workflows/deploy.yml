@@ -21,9 +21,6 @@ jobs:
         with:
           go-version: '1.23.4'
 
-      # # Шаг 3: Запуск тестов для проверки качества кода
-      # - name: Run tests
-      #   run: go test ./...
 
       # Шаг 4: Логин в Docker Hub с использованием секретов Gitea
       - name: Login to Docker Hub
