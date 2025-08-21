@@ -6,6 +6,8 @@ on:
     branches:
       - main
 
+runs-on: ubuntu-latest
+
 jobs:
   build-and-deploy:
     # Запускать на последней версии Ubuntu, предоставляемой ранером
@@ -22,21 +24,19 @@ jobs:
           go-version: '1.23.4'
 
 
-      # Шаг 3: Логин в Docker Hub с использованием секретов Gitea
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # Шаг 4: Сборка Docker-образа и отправка его в репозиторий
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          # ВАЖНО: Замените 'serty2005' на ваш логин в Docker Hub
-          tags: serty2005/etalon-server:latest
+      # Этап сборки и пуша в локальный registry
+      - name: Build and Push to Local Registry
+        run: |
+          # IP-адрес хоста, где запущен docker-compose и registry
+          # Либо localhost, если ранер на той же машине
+          REGISTRY_HOST=localhost:5000
+          IMAGE_NAME=$REGISTRY_HOST/serty/etalon-server:latest
+          
+          # Сборка образа
+          docker build -t $IMAGE_NAME .
+          
+          # Пуш в локальный registry
+          docker push $IMAGE_NAME
 
       # Шаг 6: Развертывание на продакшен-сервере по SSH
       - name: Deploy to Production
@@ -46,19 +46,24 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Создаем или обновляем .env файл на сервере из секрета Gitea
-            # ВАЖНО: Укажите правильный путь к директории вашего приложения на сервере
+            # IP-адрес хоста, где запущен docker-compose и registry
+            REGISTRY_HOST=localhost:5000
+            IMAGE_NAME=$REGISTRY_HOST/serty/etalon-server:latest
+
+            # Путь к директории приложения на продакшен-сервере
             APP_DIR="/opt/etalon-server"
             mkdir -p $APP_DIR/logs
             mkdir -p $APP_DIR/ftp_cache
+
+            # Создаем .env файл
             echo "${{ secrets.ENV_FILE_CONTENT }}" | base64 -d > $APP_DIR/.env
 
-            # Останавливаем и удаляем старый контейнер, если он существует
+            # Останавливаем и удаляем старый контейнер
             docker stop etalon-server || true
             docker rm etalon-server || true
 
-            # Принудительно скачиваем свежую версию образа
-            docker pull serty2005/etalon-server:latest
+            # Скачиваем свежий образ ИЗ ЛОКАЛЬНОГО REGISTRY
+            docker pull $IMAGE_NAME
 
             # Запускаем новый контейнер
             docker run -d \
@@ -68,4 +73,4 @@ jobs:
               -v $APP_DIR/logs:/root/logs \
               -v $APP_DIR/ftp_cache:/root/ftp_cache \
               --env-file $APP_DIR/.env \
-              serty2005/etalon-server:latest
+              $IMAGE_NAME
