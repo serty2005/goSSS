@@ -19,6 +19,7 @@ type ServerRepo interface {
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error)
 	FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error)
 	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error)
+	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Server, error)
 }
 
 type serverRepo struct {
@@ -133,4 +134,14 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 	}
 
 	return nil, nil
+}
+
+// FindByOwnerUUIDs находит все серверы, принадлежащие указанным владельцам.
+func (r *serverRepo) FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Server, error) {
+	if len(ownerUUIDs) == 0 {
+		return nil, nil
+	}
+	var servers []models.Server
+	err := r.db.WithContext(ctx).Where("owner_service_desk_uuid IN ?", ownerUUIDs).Find(&servers).Error
+	return servers, err
 }

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -50,6 +51,9 @@ type Config struct {
 	// Секция настроек синхронизации с SD
 	SDeskSyncInterval     time.Duration
 	EnableSDeskSyncWorker bool
+
+	//Список разрешенных CORS origins
+	AllowedOrigins []string
 }
 
 // New загружает конфигурацию из файла .env и переменных окружения.
@@ -57,6 +61,9 @@ func New() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
 	}
+
+	// Читаем origins из .env как строку, разделенную запятыми
+	allowedOriginsStr := getEnv("ALLOWED_ORIGINS", "http://localhost:5173")
 
 	return &Config{
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
@@ -97,6 +104,8 @@ func New() *Config {
 		// Параметры синхронизации с SD
 		EnableSDeskSyncWorker: getEnvAsBool("ENABLE_SDESK_SYNC_WORKER", true),
 		SDeskSyncInterval:     time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
+
+		AllowedOrigins: strings.Split(allowedOriginsStr, ","),
 	}
 }
 

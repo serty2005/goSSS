@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"etalon-server/internal/api"
+	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
+	"etalon-server/internal/utils"
 	"net/http"
 	"strconv"
 	"sync"
@@ -36,105 +38,172 @@ func (h *SearchHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/search", h.Search)
 }
 
-// Search выполняет поиск по всем сущностям.
+// Search выполняет финальный, UI-ориентированный, owner-centric поиск.
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	term := r.URL.Query().Get("term")
 	if term == "" {
-		RespondWithError(w, http.StatusBadRequest, "Search term is required")
+		RespondWithError(w, http.StatusBadRequest, "Поисковый запрос не может быть пустым")
 		return
 	}
-
-	showInactive, _ := strconv.ParseBool(r.URL.Query().Get("show_inactive"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	ctx := r.Context()
+	log := h.logger.With(zap.String("search_term", term))
+
+	// --- Шаг 1: Найти все сущности, напрямую совпадающие с поисковым запросом ---
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var searchResult api.SearchResultDTO
-	errChan := make(chan error, 4)
+	var initialCompanies []models.Company
+	var initialServers []models.Server
+	var initialWorkstations []models.Workstation
+	var initialFRs []models.FiscalRegister
 
 	wg.Add(4)
-
-	go func() {
-		defer wg.Done()
-		companies, err := h.companyRepo.Search(ctx, term, showInactive, limit, offset)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		mu.Lock()
-		for _, c := range companies {
-			searchResult.Companies = append(searchResult.Companies, api.CompanySearchResultDTO{
-				ServiceDeskUUID: *c.ServiceDeskUUID, Title: c.Title, Address: c.Address,
-				AdditionalName: c.AdditionalName, ActiveContract: c.ActiveContract,
-			})
-		}
-		mu.Unlock()
-	}()
-
-	go func() {
-		defer wg.Done()
-		servers, err := h.serverRepo.Search(ctx, term, limit, offset)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		mu.Lock()
-		for _, s := range servers {
-			searchResult.Servers = append(searchResult.Servers, api.ServerSearchResultDTO{
-				ServiceDeskUUID: *s.ServiceDeskUUID, DeviceName: s.DeviceName, IP: s.IP, UniqueID: s.UniqueID,
-				Teamviewer: s.Teamviewer, RDP: s.RDP, Anydesk: s.Anydesk, Litemanager: s.Litemanager, OwnerServiceDeskUUID: s.OwnerServiceDeskUUID,
-			})
-		}
-		mu.Unlock()
-	}()
-
-	go func() {
-		defer wg.Done()
-		workstations, err := h.workstationRepo.Search(ctx, term, limit, offset)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		mu.Lock()
-		for _, ws := range workstations {
-			searchResult.Workstations = append(searchResult.Workstations, api.WorkstationSearchResultDTO{
-				ServiceDeskUUID: *ws.ServiceDeskUUID, DeviceName: ws.DeviceName, Teamviewer: ws.Teamviewer,
-				Anydesk: ws.Anydesk, Litemanager: ws.Litemanager, Description: ws.Description, OwnerServiceDeskUUID: ws.OwnerServiceDeskUUID,
-			})
-		}
-		mu.Unlock()
-	}()
-
-	go func() {
-		defer wg.Done()
-		frs, err := h.frRepo.Search(ctx, term, limit, offset)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		mu.Lock()
-		for _, fr := range frs {
-			searchResult.FiscalRegisters = append(searchResult.FiscalRegisters, api.FiscalRegisterSearchResultDTO{
-				ServiceDeskUUID: *fr.ServiceDeskUUID, RNKKT: fr.RNKKT, ModelKKT: fr.ModelKKT, FNExpireDate: fr.FNExpireDate,
-				FRSerialNumber: fr.FRSerialNumber, FNNumber: fr.FNNumber, LegalName: fr.LegalName, OwnerServiceDeskUUID: fr.OwnerServiceDeskUUID,
-			})
-		}
-		mu.Unlock()
-	}()
-
+	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, true, limit, 0) }()
+	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0) }()
+	go func() { defer wg.Done(); initialWorkstations, _ = h.workstationRepo.Search(ctx, term, limit, 0) }()
+	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
 	wg.Wait()
-	close(errChan)
 
-	for err := range errChan {
-		h.logger.Error("Search error", zap.Error(err))
-		RespondWithError(w, http.StatusInternalServerError, "An error occurred during search")
+	// --- Шаг 2: Собрать уникальный список ID всех затронутых владельцев ---
+	ownerUUIDs := make(map[string]bool)
+	for _, company := range initialCompanies {
+		ownerUUIDs[*company.ServiceDeskUUID] = true
+	}
+	for _, server := range initialServers {
+		if server.OwnerServiceDeskUUID != nil {
+			ownerUUIDs[*server.OwnerServiceDeskUUID] = true
+		}
+	}
+	for _, ws := range initialWorkstations {
+		if ws.OwnerServiceDeskUUID != nil {
+			ownerUUIDs[*ws.OwnerServiceDeskUUID] = true
+		}
+	}
+	for _, fr := range initialFRs {
+		if fr.OwnerServiceDeskUUID != nil {
+			ownerUUIDs[*fr.OwnerServiceDeskUUID] = true
+		}
+	}
+
+	if len(ownerUUIDs) == 0 {
+		log.Info("Не найдено совпадений или связанных владельцев.")
+		RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, searchResult)
+	uuids := make([]string, 0, len(ownerUUIDs))
+	for uuid := range ownerUUIDs {
+		uuids = append(uuids, uuid)
+	}
+
+	// --- Шаг 3: Загрузить ВСЕ данные для найденных владельцев ---
+	var allOwnerCompanies []models.Company
+	var allOwnerServers []models.Server
+	var allOwnerWorkstations []models.Workstation
+	var allOwnerFRs []models.FiscalRegister
+
+	wg.Add(4)
+	go func() { defer wg.Done(); allOwnerCompanies, _ = h.companyRepo.GetByUUIDs(ctx, uuids) }()
+	go func() { defer wg.Done(); allOwnerServers, _ = h.serverRepo.FindByOwnerUUIDs(ctx, uuids) }()
+	go func() { defer wg.Done(); allOwnerWorkstations, _ = h.workstationRepo.FindByOwnerUUIDs(ctx, uuids) }()
+	go func() { defer wg.Done(); allOwnerFRs, _ = h.frRepo.FindByOwnerUUIDs(ctx, uuids) }()
+	wg.Wait()
+
+	// --- Шаг 4: Сформировать финальную сгруппированную структуру ---
+
+	// Преобразуем оборудование в мапы для быстрого доступа
+	serversByOwner := groupServersByOwner(allOwnerServers)
+	workstationsByOwner := groupWorkstationsByOwner(allOwnerWorkstations)
+	frsByOwner := groupFRsByOwner(allOwnerFRs)
+
+	finalResponse := api.FinalSearchResponseDTO{}
+
+	// Создаем группу для каждой найденной компании-владельца
+	for _, owner := range allOwnerCompanies {
+		ownerID := *owner.ServiceDeskUUID
+
+		group := api.SearchGroupDTO{
+			Owner: api.OwnerFullDTO{
+				UUID:           ownerID,
+				Name:           utils.SafeStringDereference(owner.Title),
+				Address:        owner.Address,
+				ActiveContract: owner.ActiveContract,
+				AdditionalInfo: owner.AdditionalName,
+			},
+			FoundEntities: []api.FoundEntityDTO{},
+		}
+
+		// Добавляем все оборудование, принадлежащее этому владельцу
+		if servers, ok := serversByOwner[ownerID]; ok {
+			group.FoundEntities = append(group.FoundEntities, servers...)
+		}
+		if workstations, ok := workstationsByOwner[ownerID]; ok {
+			group.FoundEntities = append(group.FoundEntities, workstations...)
+		}
+		if frs, ok := frsByOwner[ownerID]; ok {
+			group.FoundEntities = append(group.FoundEntities, frs...)
+		}
+
+		finalResponse.SearchResults = append(finalResponse.SearchResults, group)
+	}
+
+	RespondWithJSON(w, http.StatusOK, finalResponse)
+}
+
+// --- Вспомогательные функции-группировщики ---
+
+func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDTO {
+	result := make(map[string][]api.FoundEntityDTO)
+	for _, s := range servers {
+		if s.OwnerServiceDeskUUID != nil {
+			ownerID := *s.OwnerServiceDeskUUID
+			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
+				EntityType: "Server",
+				Data: api.ServerRichDTO{
+					UUID: *s.ServiceDeskUUID, DeviceName: s.DeviceName, IP: s.IP,
+					Status: &s.Status, Anydesk: s.Anydesk, Teamviewer: s.Teamviewer,
+					RDP: s.RDP, Litemanager: s.Litemanager,
+				},
+			})
+		}
+	}
+	return result
+}
+
+func groupWorkstationsByOwner(workstations []models.Workstation) map[string][]api.FoundEntityDTO {
+	result := make(map[string][]api.FoundEntityDTO)
+	for _, ws := range workstations {
+		if ws.OwnerServiceDeskUUID != nil {
+			ownerID := *ws.OwnerServiceDeskUUID
+			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
+				EntityType: "Workstation",
+				Data: api.WorkstationRichDTO{
+					UUID: *ws.ServiceDeskUUID, DeviceName: ws.DeviceName, Status: ws.Status,
+					Anydesk: ws.Anydesk, Teamviewer: ws.Teamviewer, Litemanager: ws.Litemanager,
+				},
+			})
+		}
+	}
+	return result
+}
+
+func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDTO {
+	result := make(map[string][]api.FoundEntityDTO)
+	for _, fr := range frs {
+		if fr.OwnerServiceDeskUUID != nil {
+			ownerID := *fr.OwnerServiceDeskUUID
+			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
+				EntityType: "FiscalRegister",
+				Data: api.FiscalRegisterRichDTO{
+					UUID: *fr.ServiceDeskUUID, RNKKT: fr.RNKKT, ModelKKT: fr.ModelKKT,
+					FNExpireDate: fr.FNExpireDate, FNRegistrationDate: fr.KKTRegDate,
+					DriverVersion: fr.DriverVersion, FirmwareVersion: fr.FRDownloader,
+				},
+			})
+		}
+	}
+	return result
 }

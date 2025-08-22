@@ -17,6 +17,7 @@ type WorkstationRepo interface {
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Workstation, error)
 	FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error)
+	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Workstation, error)
 }
 
 // workstationRepo реализует интерфейс WorkstationRepo.
@@ -119,4 +120,14 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 		return nil, nil
 	}
 	return &ws, err
+}
+
+// FindByOwnerUUIDs находит все рабочие станции, принадлежащие указанным владельцам.
+func (r *workstationRepo) FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Workstation, error) {
+	if len(ownerUUIDs) == 0 {
+		return nil, nil
+	}
+	var workstations []models.Workstation
+	err := r.db.WithContext(ctx).Where("owner_service_desk_uuid IN ?", ownerUUIDs).Find(&workstations).Error
+	return workstations, err
 }

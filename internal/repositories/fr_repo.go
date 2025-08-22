@@ -17,6 +17,7 @@ type FiscalRegisterRepo interface {
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.FiscalRegister, error)
 	FindBySerialNumber(ctx context.Context, sn string) (*models.FiscalRegister, error)
+	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.FiscalRegister, error)
 }
 
 // frRepo реализует интерфейс FiscalRegisterRepo.
@@ -104,4 +105,14 @@ func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*models.Fis
 		return nil, nil
 	}
 	return &fr, err
+}
+
+// FindByOwnerUUIDs находит все фискальные регистраторы, принадлежащие указанным владельцам.
+func (r *frRepo) FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.FiscalRegister, error) {
+	if len(ownerUUIDs) == 0 {
+		return nil, nil
+	}
+	var frs []models.FiscalRegister
+	err := r.db.WithContext(ctx).Where("owner_service_desk_uuid IN ?", ownerUUIDs).Find(&frs).Error
+	return frs, err
 }

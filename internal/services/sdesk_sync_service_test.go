@@ -30,6 +30,16 @@ func (m *MockCompanyRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) 
 func (m *MockCompanyRepo) GetByUUID(ctx context.Context, uuid string) (*models.Company, error) {
 	return nil, nil
 }
+func (m *MockCompanyRepo) GetByUUIDs(ctx context.Context, uuids []string) ([]models.Company, error) {
+	// В данном наборе тестов этот метод не вызывается,
+	// поэтому мы можем просто вернуть пустые значения.
+	args := m.Called(ctx, uuids)
+	val, ok := args.Get(0).([]models.Company)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
+}
 func (m *MockCompanyRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error) {
 	return nil, nil
 }

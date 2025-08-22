@@ -82,6 +82,7 @@ type Workstation struct {
 	DeviceName           *string    `gorm:"type:text"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Description          *string    `gorm:"type:text"`
+	Status               *string    `gorm:"type:varchar(50);default:'offline'"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 }
 
@@ -90,7 +91,6 @@ type FiscalRegister struct {
 	Base
 	ModelKKT             *string    `gorm:"type:text"`
 	FFD                  *string    `gorm:"type:text"`
-	FRDownloader         *string    `gorm:"type:text"`
 	RNKKT                *string    `gorm:"column:rn_kkt;type:text;index"`
 	LegalName            *string    `gorm:"type:text"`
 	INN                  *string    `gorm:"column:inn;type:text;index"`
@@ -99,6 +99,8 @@ type FiscalRegister struct {
 	KKTRegDate           *time.Time `json:"kkt_reg_date"`
 	FNExpireDate         *time.Time `json:"fn_expire_date"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
+	FRDownloader         *string    `gorm:"type:text"`
+	DriverVersion        *string    `gorm:"type:varchar(50)"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 }
 

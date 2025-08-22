@@ -97,7 +97,7 @@ func (s *crmidWorkerServiceImpl) runCycle(ctx context.Context) {
 func (s *crmidWorkerServiceImpl) processServer(ctx context.Context, server models.Server) {
 	log := s.logger.With(zap.String("server_uuid", utils.SafeStringDereference(server.ServiceDeskUUID)), zap.String("server_ip", utils.SafeStringDereference(server.IP)))
 
-	// ИСПРАВЛЕНИЕ: Обработка серверов без IP
+	// Обработка серверов без IP
 	if server.IP == nil || *server.IP == "" {
 		log.Warn("У сервера отсутствует IP-адрес. Установка статуса 'to_delete'.")
 		updateData := map[string]interface{}{"status": "to_delete"}
@@ -119,7 +119,7 @@ func (s *crmidWorkerServiceImpl) processServer(ctx context.Context, server model
 
 	crmid, err := s.rmsClient.GetCRMid(ctx, url, s.cfg.RMSLogin, s.cfg.RMSPassword1, s.cfg.RMSPassword2)
 	if err != nil {
-		// ИСПРАВЛЕНИЕ: Умная обработка ошибок
+		// Умная обработка ошибок
 		s.handleProcessingError(ctx, server, url, err, log)
 		return
 	}

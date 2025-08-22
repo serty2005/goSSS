@@ -327,6 +327,9 @@ func (s *reconcilerServiceImpl) reconcileFiscalRegisterData(ctx context.Context,
 	updates["ffd"] = utils.FormatFFDVersion(data.FFDVersion)
 	updates["fn_expire_date"] = utils.ParseAgentTime(data.DateTimeEnd)
 	updates["last_modified_date"] = time.Now() // Устанавливаем текущее время как дату последнего обновления
+	if data.InstalledDriver != "" {
+		updates["driver_version"] = data.InstalledDriver
+	}
 
 	log.Info("Обновление фискального регистратора полным набором данных от агента.", zap.String("uuid", utils.SafeStringDereference(fr.ServiceDeskUUID)), zap.Any("changes", updates))
 	if _, err := s.frRepo.Update(ctx, nil, utils.SafeStringDereference(fr.ServiceDeskUUID), updates); err != nil {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -135,6 +136,24 @@ func (a *Application) Run() {
 	defer a.Logger.Sync()
 
 	r := chi.NewRouter()
+
+	// Middleware должно быть одним из первых в цепочке.
+	corsMiddleware := cors.New(cors.Options{
+		// AllowedOrigins - список разрешенных доменов.
+		// Можно использовать []string{"*"} для разрешения всех, но это менее безопасно.
+		AllowedOrigins: a.Config.AllowedOrigins,
+		// AllowedMethods - список разрешенных HTTP-методов.
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		// AllowedHeaders - список разрешенных заголовков.
+		// Authorization важен для JWT, Content-Type для POST/PUT запросов.
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		// AllowCredentials - разрешить отправку cookie и заголовков авторизации.
+		AllowCredentials: true,
+		// MaxAge - как долго (в секундах) результат предполетного запроса (OPTIONS) может быть кэширован.
+		MaxAge: 300,
+	})
+	r.Use(corsMiddleware.Handler)
+
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)

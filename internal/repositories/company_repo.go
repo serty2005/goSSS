@@ -13,6 +13,7 @@ type CompanyRepo interface {
 	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
 	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
 	GetByUUID(ctx context.Context, uuid string) (*models.Company, error)
+	GetByUUIDs(ctx context.Context, uuids []string) ([]models.Company, error)
 	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Company, error)
 	Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]models.Company, error)
@@ -57,6 +58,16 @@ func (r *companyRepo) GetByUUID(ctx context.Context, uuid string) (*models.Compa
 		return nil, nil
 	}
 	return &company, err
+}
+
+// GetByUUIDs находит компании по списку их ServiceDesk UUID.
+func (r *companyRepo) GetByUUIDs(ctx context.Context, uuids []string) ([]models.Company, error) {
+	if len(uuids) == 0 {
+		return nil, nil
+	}
+	var companies []models.Company
+	err := r.db.WithContext(ctx).Where("service_desk_uuid IN ?", uuids).Find(&companies).Error
+	return companies, err
 }
 
 func (r *companyRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error) {
