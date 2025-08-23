@@ -120,16 +120,22 @@ func (s *serverPollingServiceImpl) checkRateLimit(serverUUID string) bool {
 }
 
 // Start запускает сервис в фоновом режиме.
+// ИЗМЕНЕНИЕ: Переделано на тикер для корректного прерывания.
 func (s *serverPollingServiceImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера для опроса статусов серверов", zap.Duration("interval", s.cfg.ServerPollingInterval))
+	s.logger.Info("Запуск воркера для опроса статусов серверов", zap.Duration("interval", 1*time.Minute))
+	ticker := time.NewTicker(1 * time.Minute) // Пауза между циклами
+	defer ticker.Stop()
+
+	// Первый запуск сразу, не дожидаясь тикера
+	s.runCycle(ctx)
+
 	for {
 		select {
+		case <-ticker.C:
+			s.runCycle(ctx)
 		case <-ctx.Done():
 			s.logger.Info("Остановка воркера для опроса статусов серверов...")
 			return
-		default:
-			s.runCycle(ctx)
-			time.Sleep(1 * time.Minute)
 		}
 	}
 }

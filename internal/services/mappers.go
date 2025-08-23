@@ -3,15 +3,25 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/models"
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
+
+// ContractInfo represents the structure for storing aggregated contract details in JSON.
+type ContractInfo struct {
+	Services          []string `json:"services"`
+	OtherRecipients   []string `json:"other_recipients_uuids"`
+	ActiveContractIDs []string `json:"active_contract_ids"`
+}
 
 // DataToCompany преобразует мапу от ServiceDesk в модель Company.
 func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient ServiceDeskClient, logger *zap.Logger) (*models.Company, error) {
@@ -37,33 +47,83 @@ func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient Se
 		company.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
 
-	// Обработка parent
 	if parent, ok := data["parent"].(map[string]interface{}); ok {
 		if parentUUID, p_ok := parent["UUID"].(string); p_ok {
 			company.ParentServiceDeskUUID = &parentUUID
 		}
 	}
 
-	// Обработка active_contract
-	active := false
+	isActiveContract := false
+	contractInfo := ContractInfo{
+		Services:          []string{},
+		OtherRecipients:   []string{},
+		ActiveContractIDs: []string{},
+	}
+	serviceSet := make(map[string]struct{})
+	recipientSet := make(map[string]struct{})
+
 	if agreements, ok := data["recipientAgreements"].([]interface{}); ok {
 		for _, agr := range agreements {
-			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
-				if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-					isActive, err := sdClient.CheckAgreementActive(ctx, agrUUID)
-					if err != nil {
-						logger.Warn("Failed to check agreement status", zap.String("agreementUUID", agrUUID), zap.Error(err))
-						continue
+			agrMap, agrOk := agr.(map[string]interface{})
+			if !agrOk {
+				continue
+			}
+
+			metaClass, _ := agrMap["metaClass"].(string)
+			if metaClass != "agreement$agreement" {
+				continue
+			}
+
+			agrUUID, uuidOk := agrMap["UUID"].(string)
+			if !uuidOk {
+				continue
+			}
+
+			details, err := sdClient.FetchAgreementDetails(ctx, agrUUID)
+			if err != nil {
+				logger.Warn("Не удалось получить детали контракта", zap.String("agreementUUID", agrUUID), zap.Error(err))
+				continue
+			}
+
+			if details.State == "active" {
+				isActiveContract = true
+				contractInfo.ActiveContractIDs = append(contractInfo.ActiveContractIDs, agrUUID)
+
+				for _, service := range details.Services {
+					if _, exists := serviceSet[service.Title]; !exists {
+						serviceSet[service.Title] = struct{}{}
 					}
-					if isActive {
-						active = true
-						break
+				}
+
+				for _, recipient := range details.RecipientsOU {
+					if recipient.UUID != uuid {
+						if _, exists := recipientSet[recipient.UUID]; !exists {
+							recipientSet[recipient.UUID] = struct{}{}
+						}
 					}
 				}
 			}
 		}
 	}
-	company.ActiveContract = &active
+
+	// Заполняем срезы из сетов
+	for serviceTitle := range serviceSet {
+		contractInfo.Services = append(contractInfo.Services, serviceTitle)
+	}
+	for recipientUUID := range recipientSet {
+		contractInfo.OtherRecipients = append(contractInfo.OtherRecipients, recipientUUID)
+	}
+
+	sort.Strings(contractInfo.Services)
+	sort.Strings(contractInfo.OtherRecipients)
+	sort.Strings(contractInfo.ActiveContractIDs)
+	company.ActiveContract = &isActiveContract
+	contractInfoJSON, err := json.Marshal(contractInfo)
+	if err != nil {
+		logger.Error("Не удалось сериализовать информацию о контракте в JSON", zap.String("companyUUID", uuid), zap.Error(err))
+	} else {
+		company.ContractInfo = datatypes.JSON(contractInfoJSON)
+	}
 
 	return company, nil
 }

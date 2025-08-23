@@ -55,8 +55,17 @@ func (s *Seeder) SeedDatabase(sdClient services.ServiceDeskClient) error {
 
 	ctx := context.Background()
 
+	// НОВЫЙ ШАГ: Предварительная загрузка всех контрактов в кэш
+	s.logger.Info("Предварительная загрузка контрактов...")
+	agreementsCache, err := s.preloadAgreements(ctx, sdClient)
+	if err != nil {
+		s.logger.Error("Не удалось загрузить контракты, наполнение прервано", zap.Error(err))
+		return err
+	}
+	s.logger.Info("Контракты успешно загружены в кэш", zap.Int("count", len(agreementsCache)))
+
 	s.logger.Info("Шаг 2: Загрузка и вставка Компаний...")
-	s.seedCompanies(ctx, sdClient)
+	s.seedCompanies(ctx, sdClient, agreementsCache) // Передаем кэш в функцию
 
 	s.logger.Info("Получение UUID всех загруженных компаний для проверки связей...")
 	companyUUIDs, err := s.getAllCompanyUUIDs()
@@ -122,8 +131,24 @@ func (s *Seeder) getAllCompanyUUIDs() (map[string]struct{}, error) {
 	return uuidSet, nil
 }
 
+// preloadAgreements загружает все контракты из мок-файла в мапу для быстрого доступа.
+func (s *Seeder) preloadAgreements(ctx context.Context, sdClient services.ServiceDeskClient) (map[string]map[string]interface{}, error) {
+	remoteList, err := sdClient.FetchEntityList(ctx, "agreement$agreement", true)
+	if err != nil {
+		return nil, err
+	}
+
+	cache := make(map[string]map[string]interface{}, len(remoteList))
+	for _, data := range remoteList {
+		if uuid, ok := data["UUID"].(string); ok {
+			cache[uuid] = data
+		}
+	}
+	return cache, nil
+}
+
 // seedCompanies загружает и сохраняет компании в два прохода для соблюдения внешних ключей.
-func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDeskClient) {
+func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDeskClient, agreementsCache map[string]map[string]interface{}) {
 	remoteList, err := sdClient.FetchEntityList(ctx, "ou$company", true)
 	if err != nil {
 		s.logger.Error("Не удалось получить список компаний из мок-данных", zap.Error(err))
@@ -134,7 +159,8 @@ func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDes
 
 	// 1. Разделяем все компании на два списка: с родителями и без.
 	for _, data := range remoteList {
-		company, err := DataToCompanyForSeeder(ctx, data, sdClient, s.logger)
+		// ИЗМЕНЕНИЕ: Передаем кэш контрактов вместо sdClient
+		company, err := DataToCompanyForSeeder(ctx, data, agreementsCache, s.logger)
 		if err != nil {
 			uuid, _ := data["UUID"].(string)
 			s.logger.Warn("Пропуск компании из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
@@ -151,7 +177,6 @@ func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDes
 	if len(companiesWithoutParent) > 0 {
 		if err := s.db.CreateInBatches(companiesWithoutParent, batchSize).Error; err != nil {
 			s.logger.Error("Ошибка при пакетной вставке компаний без родителей", zap.Error(err))
-			// Если корневые компании не вставились, продолжать нет смысла.
 			return
 		} else {
 			s.logger.Info("Успешно вставлено компаний без родителей", zap.Int("count", len(companiesWithoutParent)))

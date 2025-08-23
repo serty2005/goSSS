@@ -125,9 +125,9 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 		}
 	}
 
-	// Если по CRMid не нашли, ищем по IP
+	// Если по CRMid не нашли, ищем по IP с точным совпадением
 	if ip != "" {
-		err := r.db.WithContext(ctx).Where("ip LIKE ?", ip+"%").First(&server).Error
+		err := r.db.WithContext(ctx).Where("ip = ?", ip).First(&server).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil // Явно возвращаем nil, если не найдено
 		}

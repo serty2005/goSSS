@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
+	"etalon-server/internal/validators"
 	"fmt"
 	"os"
 	"path"
@@ -173,109 +174,147 @@ func (s *reconcilerServiceImpl) processFile(ctx context.Context, fileName string
 }
 
 // ProcessAgentData выполняет основную "водопадную" логику сверки данных от агента.
-// Алгоритм работает по принципу приоритетов: сначала ищется совпадение по самому надежному
-// признаку (сервер), затем по менее надежному (рабочая станция) и так далее.
 func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.AgentDataDTO) (ownerID, entityUUID, method string, err error) {
 	log := s.logger.With(zap.String("agent_hostname", data.Hostname))
 	log.Info("Начало процесса сверки данных от агента")
 
-	domain := ""
-	if matches := rmsUrlRegex.FindStringSubmatch(data.URLRms); len(matches) > 2 {
-		domain = matches[2]
-	}
-	foundServer, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, domain)
+	// Нормализуем IP-адрес из URL RMS перед поиском
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+
+	foundServer, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(normalizedIP))
 	foundWS, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, data.AnydeskID, data.LitemanagerID)
 	foundFR, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
+
+	// Получаем информацию о компаниях-владельцах для обогащения комментариев в задачах
+	ownerCompanies := s.getOwnerCompanies(ctx, foundServer, foundWS, foundFR)
 
 	if foundServer != nil {
 		log.Info("Приоритет 1: Найдено совпадение по Серверу", zap.String("server_uuid", utils.SafeStringDereference(foundServer.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundServer.OwnerServiceDeskUUID)
-		s.reconcileFromServerContext(ctx, ownerID, data, foundServer, foundWS, foundFR, log)
+		s.reconcileFromServerContext(ctx, ownerID, data, foundServer, foundWS, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundServer.ServiceDeskUUID), "server_match", nil
 	}
 
 	if foundWS != nil {
 		log.Info("Приоритет 2: Найдено совпадение по Рабочей станции", zap.String("ws_uuid", utils.SafeStringDereference(foundWS.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundWS.OwnerServiceDeskUUID)
-		s.reconcileFromWorkstationContext(ctx, ownerID, data, foundWS, foundFR, log)
+		s.reconcileFromWorkstationContext(ctx, ownerID, data, foundWS, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundWS.ServiceDeskUUID), "workstation_match", nil
 	}
 
 	if foundFR != nil {
 		log.Info("Приоритет 3: Найдено совпадение по Фискальному регистратору", zap.String("fr_uuid", utils.SafeStringDereference(foundFR.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundFR.OwnerServiceDeskUUID)
-		s.reconcileFromFRContext(ctx, ownerID, data, foundFR, log)
+		s.reconcileFromFRContext(ctx, ownerID, data, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundFR.ServiceDeskUUID), "fr_match", nil
 	}
 
 	log.Warn("Не найдено совпадений ни по одному из приоритетов. Создание задачи 'new_client'.")
-	s.createTask(ctx, "new_client", "", "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
+	s.createTask(ctx, "new_client", "", "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.", "")
 	return "", "", "no_match", fmt.Errorf("не удалось найти совпадения")
 }
 
 // reconcileFromServerContext обрабатывает логику сверки, когда сервер является главной точкой отсчета.
-// Владелец сервера считается "истинным" владельцем для всего остального оборудования.
-func (s *reconcilerServiceImpl) reconcileFromServerContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromServerContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileServerData(ctx, server, data, log)
+
+	serverOwnerName := getCompanyName(owners, server.OwnerServiceDeskUUID)
+	serverIdentifier := fmt.Sprintf("по серверу '%s' (%s)", utils.SafeStringDereference(server.DeviceName), *server.ServiceDeskUUID)
 
 	if data.AnydeskID != "" || data.TeamviewerID != "" || data.LitemanagerID != "" {
 		if ws != nil {
-			// ИСПРАВЛЕНИЕ: Логика изменена. Мы всегда обогащаем найденную станцию.
 			log.Info("Найдена существующая рабочая станция, выполняется слияние данных.", zap.String("ws_uuid", utils.SafeStringDereference(ws.ServiceDeskUUID)))
 			if utils.SafeStringDereference(ws.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "Workstation", utils.SafeStringDereference(ws.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(ws.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, ws.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для рабочей станции '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, currentOwnerName, *ws.OwnerServiceDeskUUID, serverOwnerName, ownerID, serverIdentifier)
+				s.createTask(ctx, "owner_mismatch", "Workstation", *ws.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileWorkstationData(ctx, ws, data, log)
 		} else {
-			log.Info("Рабочая станция с указанными ID не найдена. Создание задачи на добавление.")
-			s.createTask(ctx, "add_equipment", "Workstation", "", data, fmt.Sprintf("Добавить новую рабочую станцию для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новую рабочую станцию для владельца '%s' (%s). Владелец определен %s. ID удаленного доступа: %s.",
+				serverOwnerName, ownerID, serverIdentifier, formatRemoteIDs(data))
+			s.createTask(ctx, "add_equipment", "Workstation", "", data, comment, serverIdentifier)
 		}
 	}
 
 	if data.SerialNumber != "" {
 		if fr != nil {
 			if utils.SafeStringDereference(fr.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "FiscalRegister", utils.SafeStringDereference(fr.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(fr.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для ФР с СН '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					*fr.FRSerialNumber, *fr.ServiceDeskUUID, currentOwnerName, *fr.OwnerServiceDeskUUID, serverOwnerName, ownerID, serverIdentifier)
+				s.createTask(ctx, "owner_mismatch", "FiscalRegister", *fr.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileFiscalRegisterData(ctx, fr, data, log)
 		} else {
-			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, fmt.Sprintf("Добавить новый ФР для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s' (%s). Владелец определен %s.",
+				data.SerialNumber, serverOwnerName, ownerID, serverIdentifier)
+			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, comment, serverIdentifier)
 		}
 	}
 }
 
 // reconcileFromWorkstationContext обрабатывает логику сверки, когда рабочая станция является точкой отсчета.
-func (s *reconcilerServiceImpl) reconcileFromWorkstationContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, ws *models.Workstation, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromWorkstationContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, ws *models.Workstation, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileWorkstationData(ctx, ws, data, log)
 
-	// Сервер по данным агента не был найден на шаге 1 (иначе мы бы не попали в эту функцию).
-	// Следовательно, это новый сервер для клиента, определенного по рабочей станции.
-	if data.CRMID != "" || data.URLRms != "" {
-		s.createTask(ctx, "add_equipment", "Server", "", data, fmt.Sprintf("Добавить новый сервер для владельца %s", ownerID))
+	wsOwnerName := getCompanyName(owners, ws.OwnerServiceDeskUUID)
+	wsIdentifier := fmt.Sprintf("по рабочей станции '%s' (%s)", utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID)
+
+	// Проверяем, нужно ли создавать задачу на добавление сервера
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+	if normalizedIP != nil {
+		isPrivate, _ := utils.IsPrivateIP(strings.Split(*normalizedIP, ":")[0])
+		if !isPrivate {
+			comment := fmt.Sprintf("Добавить новый сервер (IP: %s) для владельца '%s' (%s). Владелец определен %s.",
+				*normalizedIP, wsOwnerName, ownerID, wsIdentifier)
+			s.createTask(ctx, "add_equipment", "Server", "", data, comment, wsIdentifier)
+		} else {
+			log.Info("IP-адрес сервера является приватным, задача на добавление не создается.", zap.String("ip", *normalizedIP))
+		}
 	}
 
-	// Проверка фискального регистратора
 	if data.SerialNumber != "" {
 		if fr != nil {
 			if utils.SafeStringDereference(fr.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "FiscalRegister", utils.SafeStringDereference(fr.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от станции), текущий %s", ownerID, utils.SafeStringDereference(fr.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для ФР с СН '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					*fr.FRSerialNumber, *fr.ServiceDeskUUID, currentOwnerName, *fr.OwnerServiceDeskUUID, wsOwnerName, ownerID, wsIdentifier)
+				s.createTask(ctx, "owner_mismatch", "FiscalRegister", *fr.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileFiscalRegisterData(ctx, fr, data, log)
 		} else {
-			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, fmt.Sprintf("Добавить новый ФР для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s' (%s). Владелец определен %s.",
+				data.SerialNumber, wsOwnerName, ownerID, wsIdentifier)
+			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, comment, wsIdentifier)
 		}
 	}
 }
 
 // reconcileFromFRContext обрабатывает логику сверки, когда ФР является точкой отсчета.
-func (s *reconcilerServiceImpl) reconcileFromFRContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromFRContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileFiscalRegisterData(ctx, fr, data, log)
-	// Для сервера и станции создаем задачи на добавление, т.к. они не были найдены на предыдущих шагах.
-	if data.CRMID != "" || data.URLRms != "" {
-		s.createTask(ctx, "add_equipment", "Server", "", data, fmt.Sprintf("Добавить новый сервер для владельца %s (определен по ФР)", ownerID))
+
+	frOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+	frIdentifier := fmt.Sprintf("по ФР с СН '%s' (%s)", *fr.FRSerialNumber, *fr.ServiceDeskUUID)
+
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+	if normalizedIP != nil {
+		isPrivate, _ := utils.IsPrivateIP(strings.Split(*normalizedIP, ":")[0])
+		if !isPrivate {
+			comment := fmt.Sprintf("Добавить новый сервер (IP: %s) для владельца '%s' (%s). Владелец определен %s.",
+				*normalizedIP, frOwnerName, ownerID, frIdentifier)
+			s.createTask(ctx, "add_equipment", "Server", "", data, comment, frIdentifier)
+		} else {
+			log.Info("IP-адрес сервера является приватным, задача на добавление не создается.", zap.String("ip", *normalizedIP))
+		}
 	}
+
 	if data.AnydeskID != "" || data.TeamviewerID != "" || data.LitemanagerID != "" {
-		s.createTask(ctx, "add_equipment", "Workstation", "", data, fmt.Sprintf("Добавить новую рабочую станцию для владельца %s (определен по ФР)", ownerID))
+		comment := fmt.Sprintf("Добавить новую рабочую станцию для владельца '%s' (%s). Владелец определен %s. ID удаленного доступа: %s.",
+			frOwnerName, ownerID, frIdentifier, formatRemoteIDs(data))
+		s.createTask(ctx, "add_equipment", "Workstation", "", data, comment, frIdentifier)
 	}
 }
 
@@ -338,7 +377,7 @@ func (s *reconcilerServiceImpl) reconcileFiscalRegisterData(ctx context.Context,
 }
 
 // createTask создает задачу для ручного разбора администратором.
-func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entityType, entityUUID string, agentData *api.AgentDataDTO, comment string) {
+func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entityType, entityUUID string, agentData *api.AgentDataDTO, comment, reason string) {
 	details, _ := json.Marshal(agentData)
 	task := models.ReconciliationTask{
 		TaskType:   taskType,
@@ -351,7 +390,7 @@ func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entity
 	if err := s.db.WithContext(ctx).Create(&task).Error; err != nil {
 		s.logger.Error("Не удалось создать задачу на сверку", zap.Error(err))
 	} else {
-		s.logger.Info("Создана новая задача на сверку", zap.String("type", taskType), zap.String("entity_uuid", entityUUID), zap.String("comment", comment))
+		s.logger.Info("Создана новая задача на сверку", zap.String("type", taskType), zap.String("entity_uuid", entityUUID), zap.String("reason", reason))
 	}
 }
 
@@ -392,4 +431,70 @@ func (s *reconcilerServiceImpl) updateAgentFileStatus(ctx context.Context, fileN
 	if err != nil {
 		s.logger.Error("Не удалось обновить статус файла в БД", zap.String("file", fileName), zap.Error(err))
 	}
+}
+
+// getOwnerCompanies загружает из БД информацию о компаниях-владельцах для обогащения логов.
+func (s *reconcilerServiceImpl) getOwnerCompanies(ctx context.Context, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister) map[string]*models.Company {
+	uuids := make(map[string]struct{})
+	if server != nil && server.OwnerServiceDeskUUID != nil {
+		uuids[*server.OwnerServiceDeskUUID] = struct{}{}
+	}
+	if ws != nil && ws.OwnerServiceDeskUUID != nil {
+		uuids[*ws.OwnerServiceDeskUUID] = struct{}{}
+	}
+	if fr != nil && fr.OwnerServiceDeskUUID != nil {
+		uuids[*fr.OwnerServiceDeskUUID] = struct{}{}
+	}
+
+	if len(uuids) == 0 {
+		return nil
+	}
+
+	uuidList := make([]string, 0, len(uuids))
+	for uuid := range uuids {
+		uuidList = append(uuidList, uuid)
+	}
+
+	// Используем временный репозиторий для этого запроса
+	companyRepo := repositories.NewCompanyRepo(s.db)
+	companies, err := companyRepo.GetByUUIDs(ctx, uuidList)
+	if err != nil {
+		s.logger.Error("Не удалось получить информацию о компаниях-владельцах", zap.Error(err))
+		return nil
+	}
+
+	companyMap := make(map[string]*models.Company)
+	for i := range companies {
+		companyMap[*companies[i].ServiceDeskUUID] = &companies[i]
+	}
+	return companyMap
+}
+
+// getCompanyName безопасно извлекает имя компании из мапы.
+func getCompanyName(owners map[string]*models.Company, uuid *string) string {
+	if uuid == nil || owners == nil {
+		return "[Неизвестный владелец]"
+	}
+	if company, ok := owners[*uuid]; ok {
+		return utils.SafeStringDereference(company.Title)
+	}
+	return "[Неизвестный владелец]"
+}
+
+// formatRemoteIDs форматирует строку с ID удаленного доступа для логов/комментариев.
+func formatRemoteIDs(data *api.AgentDataDTO) string {
+	var parts []string
+	if data.TeamviewerID != "" && data.TeamviewerID != "None" {
+		parts = append(parts, "TV: "+data.TeamviewerID)
+	}
+	if data.AnydeskID != "" && data.AnydeskID != "None" {
+		parts = append(parts, "AD: "+data.AnydeskID)
+	}
+	if data.LitemanagerID != "" && data.LitemanagerID != "None" {
+		parts = append(parts, "LM: "+data.LitemanagerID)
+	}
+	if len(parts) == 0 {
+		return "не указаны"
+	}
+	return strings.Join(parts, ", ")
 }

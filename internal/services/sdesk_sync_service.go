@@ -1,17 +1,24 @@
+// internal/services/sdesk_sync_service.go
 package services
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"etalon-server/internal/config"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -37,6 +44,7 @@ type sdeskSyncServiceImpl struct {
 type localEntityInfo struct {
 	LastModifiedDate *time.Time
 	DeletedAt        gorm.DeletedAt
+	ContractInfo     datatypes.JSON
 }
 
 // NewSDeskSyncService создает новый экземпляр сервиса синхронизации.
@@ -99,10 +107,13 @@ func (s *sdeskSyncServiceImpl) runSyncCycle(ctx context.Context) {
 
 	s.logger.Info("Начало нового цикла синхронизации с ServiceDesk.")
 
-	s.syncEntityType(ctx, "ou$company")
-	s.syncEntityType(ctx, "objectBase$Server")
-	s.syncEntityType(ctx, "objectBase$Workstation")
-	s.syncEntityType(ctx, "objectBase$FR")
+	agreementCache := make(map[string]*AgreementDetailsDTO)
+	cycleCtx := context.WithValue(ctx, agreementCacheKey, agreementCache)
+
+	s.syncEntityType(cycleCtx, "ou$company")
+	s.syncEntityType(cycleCtx, "objectBase$Server")
+	s.syncEntityType(cycleCtx, "objectBase$Workstation")
+	s.syncEntityType(cycleCtx, "objectBase$FR")
 
 	s.logger.Info("Цикл синхронизации с ServiceDesk завершен.")
 }
@@ -118,6 +129,7 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		return
 	}
 
+	// ИЗМЕНЕНИЕ: Запрашиваем из локальной БД расширенную информацию
 	localMap, err := s.getLocalEntities(ctx, metaClass)
 	if err != nil {
 		log.Error("Не удалось получить локальные сущности", zap.Error(err))
@@ -138,14 +150,39 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		if remoteUUID == "" {
 			continue
 		}
-		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
-		if remoteLMD == nil {
-			continue
-		}
+
 		localEntity, exists := localMap[remoteUUID]
 		if !exists {
 			toCreate = append(toCreate, remoteUUID)
-		} else if localEntity.DeletedAt.Valid || (localEntity.LastModifiedDate != nil && remoteLMD.After(*localEntity.LastModifiedDate)) {
+			continue
+		}
+
+		// --- НАЧАЛО НОВОЙ ЛОГИКИ ПРИНЯТИЯ РЕШЕНИЯ ОБ ОБНОВЛЕНИИ ---
+		needsUpdate := false
+		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
+
+		// 1. Проверяем, не была ли сущность удалена у нас, а в SD снова появилась
+		if localEntity.DeletedAt.Valid {
+			needsUpdate = true
+		}
+
+		// 2. Стандартная проверка по дате модификации
+		if !needsUpdate && remoteLMD != nil && localEntity.LastModifiedDate != nil && remoteLMD.After(*localEntity.LastModifiedDate) {
+			needsUpdate = true
+		}
+
+		// 3. Специальная проверка для компаний по составу контрактов
+		if !needsUpdate && metaClass == "ou$company" {
+			remoteAgreements := getAgreementUUIDsFromRemote(remoteItem)
+			localAgreements := getAgreementUUIDsFromLocal(localEntity.ContractInfo)
+			if !areStringSlicesEqual(remoteAgreements, localAgreements) {
+				log.Debug("Обнаружено изменение в составе контрактов, требуется обновление", zap.String("uuid", remoteUUID))
+				needsUpdate = true
+			}
+		}
+		// --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
+		if needsUpdate {
 			toUpdate = append(toUpdate, remoteUUID)
 		}
 	}
@@ -161,7 +198,6 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		zap.Int("to_update", len(toUpdate)),
 		zap.Int("to_delete", len(toDelete)))
 
-	// Вызываем отдельные, чистые функции для каждого типа операции.
 	if len(toCreate) > 0 {
 		s.processCreationsInParallel(ctx, metaClass, toCreate, log)
 	}
@@ -208,13 +244,12 @@ func (s *sdeskSyncServiceImpl) processDeletions(ctx context.Context, metaClass s
 
 		if deleted {
 			log.Info("Сущность успешно помечена как удаленная", zap.String("uuid", uuid))
-			// После успешного удаления пытаемся закрыть задачу
 			s.resolveDeletionTask(ctx, uuid, log)
 		}
 	}
 }
 
-// НОВАЯ ФУНКЦИЯ: resolveDeletionTask находит и закрывает задачу на удаление в SD.
+// resolveDeletionTask находит и закрывает задачу на удаление в SD.
 func (s *sdeskSyncServiceImpl) resolveDeletionTask(ctx context.Context, entityUUID string, log *zap.Logger) {
 	result := s.db.WithContext(ctx).Model(&models.ReconciliationTask{}).
 		Where("entity_uuid = ? AND task_type = ? AND status = ?", entityUUID, "delete_from_servicedesk", "new").
@@ -236,11 +271,16 @@ func (s *sdeskSyncServiceImpl) getLocalEntities(ctx context.Context, metaClass s
 	var err error
 	switch metaClass {
 	case "ou$company":
-		entities, e := s.companyRepo.GetAllUUIDsAndDates(ctx)
-		err = e
+		// ИЗМЕНЕНИЕ: Используем более общий метод, чтобы получить и ContractInfo
+		var companies []models.Company
+		err = s.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at", "contract_info").Find(&companies).Error
 		if err == nil {
-			for uuid, entity := range entities {
-				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
+			for _, entity := range companies {
+				infoMap[*entity.ServiceDeskUUID] = localEntityInfo{
+					LastModifiedDate: entity.LastModifiedDate,
+					DeletedAt:        entity.DeletedAt,
+					ContractInfo:     entity.ContractInfo,
+				}
 			}
 		}
 	case "objectBase$Server":
@@ -283,7 +323,6 @@ func (s *sdeskSyncServiceImpl) processCreationsInParallel(ctx context.Context, m
 		go func() {
 			defer wg.Done()
 			for uuid := range tasks {
-				// Проверяем контекст перед каждой долгой операцией
 				select {
 				case <-ctx.Done():
 					return
@@ -308,7 +347,7 @@ func (s *sdeskSyncServiceImpl) processCreationsInParallel(ctx context.Context, m
 	wg.Wait()
 }
 
-// processUpdatesInParallel создает воркер-пул для обновления сущностей.
+// processUpdatesInParallel создает воркер-пул для проверки и создания задач о конфликтах.
 func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, metaClass string, toUpdate []string, log *zap.Logger) {
 	var wg sync.WaitGroup
 	tasks := make(chan string, len(toUpdate))
@@ -318,7 +357,6 @@ func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, met
 		go func() {
 			defer wg.Done()
 			for uuid := range tasks {
-				// Проверяем контекст перед каждой долгой операцией
 				select {
 				case <-ctx.Done():
 					return
@@ -330,7 +368,7 @@ func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, met
 						}
 						continue
 					}
-					s.updateEntityIfNeeded(ctx, metaClass, uuid, details, log)
+					s.checkEntityAndCreateTaskIfNeeded(ctx, metaClass, uuid, details, log)
 				}
 			}
 		}()
@@ -383,10 +421,14 @@ func (s *sdeskSyncServiceImpl) createEntity(ctx context.Context, metaClass strin
 	}
 }
 
-// updateEntityIfNeeded выполняет "умное слияние".
-func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaClass, uuid string, details map[string]interface{}, log *zap.Logger) {
+// checkEntityAndCreateTaskIfNeeded выполняет сравнение данных и решает,
+// нужно ли восстановить запись, создать задачу о конфликте или ничего не делать.
+func (s *sdeskSyncServiceImpl) checkEntityAndCreateTaskIfNeeded(ctx context.Context, metaClass, uuid string, details map[string]interface{}, log *zap.Logger) {
 	var updates map[string]interface{}
+	var diffLog []zap.Field
+	var currentEntity interface{}
 
+	// 1. Получаем текущую и новую версии сущности для сравнения
 	switch metaClass {
 	case "ou$company":
 		newData, mapErr := DataToCompany(ctx, details, s.sdClient, log)
@@ -394,13 +436,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга компании", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод, чтобы найти запись, даже если она удалена.
 		currentData, getErr := s.companyRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущую компанию для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущую компанию", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getCompanyDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getCompanyDiff(currentData, newData)
 
 	case "objectBase$Server":
 		newData, mapErr := DataToServer(details)
@@ -408,13 +450,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга сервера", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.serverRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущий сервер для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущий сервер", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getServerDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getServerDiff(currentData, newData)
 
 	case "objectBase$Workstation":
 		newData, mapErr := DataToWorkstation(details)
@@ -422,13 +464,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга рабочей станции", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.workstationRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущую станцию для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущую станцию", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getWorkstationDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getWorkstationDiff(currentData, newData)
 
 	case "objectBase$FR":
 		newData, mapErr := DataToFiscalRegister(details)
@@ -436,208 +478,317 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга ФР", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.frRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущий ФР для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущий ФР", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getFiscalRegisterDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getFiscalRegisterDiff(currentData, newData)
 
 	default:
-		log.Warn("Неизвестный metaClass для обновления", zap.String("metaClass", metaClass))
+		log.Warn("Неизвестный metaClass для проверки", zap.String("metaClass", metaClass))
 		return
 	}
 
-	if len(updates) > 0 {
-		log.Info("Обнаружены изменения, обновление сущности", zap.String("uuid", uuid), zap.Any("changes", updates))
-		err := s.db.Transaction(func(tx *gorm.DB) error {
-			switch metaClass {
-			case "ou$company":
-				_, err := s.companyRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$Server":
-				_, err := s.serverRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$Workstation":
-				_, err := s.workstationRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$FR":
-				_, err := s.frRepo.Update(ctx, tx, uuid, updates)
-				return err
-			}
-			return errors.New("неизвестный metaClass для транзакции обновления")
-		})
-		if err != nil {
-			log.Error("Ошибка при обновлении сущности", zap.String("uuid", uuid), zap.Error(err))
+	// 2. Принимаем решение на основе найденных изменений
+	if len(updates) == 0 {
+		s.resolveConflictTaskIfNeeded(ctx, uuid, log)
+		return
+	}
+
+	_, isRestorationOnly := updates["deleted_at"]
+	if len(updates) == 1 && isRestorationOnly {
+		// Сценарий 1: Только восстановление. Выполняем автоматически.
+		log.Info("Обнаружена восстановленная в SD сущность. Автоматическое восстановление.", append(diffLog, zap.String("uuid", uuid))...)
+		s.performUpdate(ctx, metaClass, uuid, updates, log)
+	} else {
+		// Сценарий 2: Есть другие расхождения. Создаем задачу.
+		log.Warn("Обнаружено расхождение данных между локальной БД и ServiceDesk. Создание задачи.", append(diffLog, zap.String("uuid", uuid))...)
+		s.createConflictTask(ctx, metaClass, uuid, currentEntity, details, diffLog, log)
+	}
+}
+
+// performUpdate выполняет обновление сущности в БД.
+func (s *sdeskSyncServiceImpl) performUpdate(ctx context.Context, metaClass, uuid string, updates map[string]interface{}, log *zap.Logger) {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		switch metaClass {
+		case "ou$company":
+			_, err := s.companyRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$Server":
+			_, err := s.serverRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$Workstation":
+			_, err := s.workstationRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$FR":
+			_, err := s.frRepo.Update(ctx, tx, uuid, updates)
+			return err
 		}
+		return errors.New("неизвестный metaClass для транзакции обновления")
+	})
+	if err != nil {
+		log.Error("Ошибка при автоматическом восстановлении сущности", zap.String("uuid", uuid), zap.Error(err))
+	}
+}
+
+// createConflictTask создает задачу о расхождении данных.
+func (s *sdeskSyncServiceImpl) createConflictTask(ctx context.Context, metaClass, uuid string, currentEntity interface{}, remoteDetails map[string]interface{}, diffLog []zap.Field, log *zap.Logger) {
+	detailsMap := make(map[string]interface{})
+	diffs := make(map[string]string)
+	for _, field := range diffLog {
+		if field.Key == "status" && field.String == "deleted -> restored" {
+			continue
+		}
+		diffs[field.Key] = field.String
+	}
+
+	if len(diffs) == 0 {
+		return
+	}
+
+	detailsMap["conflicts"] = diffs
+	detailsMap["local_entity"] = currentEntity
+	detailsMap["remote_entity"] = remoteDetails
+	detailsJSON, _ := json.Marshal(detailsMap)
+
+	entityType := metaClass
+	if parts := strings.Split(metaClass, "$"); len(parts) > 1 {
+		entityType = parts[1]
+	}
+	comment := fmt.Sprintf("Обнаружено расхождение данных для сущности '%s' (%s). Требуется ручная сверка.", uuid, entityType)
+
+	task := models.ReconciliationTask{
+		TaskType:   "data_conflict",
+		EntityType: entityType,
+		EntityUUID: uuid,
+		Details:    datatypes.JSON(detailsJSON),
+		Status:     "new",
+		Comment:    comment,
+	}
+
+	err := s.db.WithContext(ctx).
+		Where("entity_uuid = ? AND task_type = ? AND status = 'new'", uuid, "data_conflict").
+		FirstOrCreate(&task).Error
+
+	if err != nil {
+		log.Error("Не удалось создать или найти задачу о конфликте данных", zap.String("uuid", uuid), zap.Error(err))
+	}
+}
+
+// resolveConflictTaskIfNeeded автоматически закрывает задачу, если конфликт устранен.
+func (s *sdeskSyncServiceImpl) resolveConflictTaskIfNeeded(ctx context.Context, uuid string, log *zap.Logger) {
+	result := s.db.WithContext(ctx).Model(&models.ReconciliationTask{}).
+		Where("entity_uuid = ? AND task_type = ? AND status = 'new'", uuid, "data_conflict").
+		Updates(map[string]interface{}{
+			"status":  "resolved",
+			"comment": gorm.Expr("comment || ?", "\n[АВТОМАТИЧЕСКИ] Конфликт устранен, данные синхронизированы."),
+		})
+
+	if result.Error != nil {
+		log.Error("Ошибка при попытке автоматического разрешения задачи о конфликте", zap.String("uuid", uuid), zap.Error(result.Error))
+		return
+	}
+
+	if result.RowsAffected > 0 {
+		log.Info("Конфликт данных устранен. Существующая задача автоматически разрешена.", zap.String("uuid", uuid))
 	}
 }
 
 // --- Вспомогательные функции для сравнения (diff) ---
 
-func getCompanyDiff(current *models.Company, new *models.Company) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.Title) != utils.SafeStringDereference(new.Title) {
-		updates["title"] = new.Title
+// formatDiffValue безопасно форматирует значение (включая nil-указатели) для логирования.
+func formatDiffValue(v interface{}) string {
+	if v == nil {
+		return "<nil>"
 	}
-	if utils.SafeStringDereference(current.Address) != utils.SafeStringDereference(new.Address) {
-		updates["address"] = new.Address
-	}
-	if utils.SafeStringDereference(current.AdditionalName) != utils.SafeStringDereference(new.AdditionalName) {
-		updates["additional_name"] = new.AdditionalName
-	}
-	if utils.SafeStringDereference(current.ParentServiceDeskUUID) != utils.SafeStringDereference(new.ParentServiceDeskUUID) {
-		updates["parent_service_desk_uuid"] = new.ParentServiceDeskUUID
-	}
-	if (current.ActiveContract == nil && new.ActiveContract != nil) || (current.ActiveContract != nil && new.ActiveContract == nil) || (current.ActiveContract != nil && new.ActiveContract != nil && *current.ActiveContract != *new.ActiveContract) {
-		updates["active_contract"] = new.ActiveContract
-	}
-
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
+	val := reflect.ValueOf(v)
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return "<nil>"
 		}
+		return fmt.Sprintf("'%v'", val.Elem().Interface())
 	}
-
-	if len(updates) == 0 {
-		return nil
-	}
-	return updates
+	return fmt.Sprintf("'%v'", v)
 }
 
-func getServerDiff(current *models.Server, new *models.Server) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.UniqueID) != utils.SafeStringDereference(new.UniqueID) {
-		updates["unique_id"] = new.UniqueID
-	}
-	if utils.SafeStringDereference(current.CRMid) != utils.SafeStringDereference(new.CRMid) {
-		updates["crm_id"] = new.CRMid
-	}
-	if utils.SafeStringDereference(current.Teamviewer) != utils.SafeStringDereference(new.Teamviewer) {
-		updates["teamviewer"] = new.Teamviewer
-	}
-	if utils.SafeStringDereference(current.RDP) != utils.SafeStringDereference(new.RDP) {
-		updates["rdp"] = new.RDP
-	}
-	if utils.SafeStringDereference(current.Anydesk) != utils.SafeStringDereference(new.Anydesk) {
-		updates["anydesk"] = new.Anydesk
-	}
-	if utils.SafeStringDereference(current.IP) != utils.SafeStringDereference(new.IP) {
-		updates["ip"] = new.IP
-	}
-	if utils.SafeStringDereference(current.CabinetLink) != utils.SafeStringDereference(new.CabinetLink) {
-		updates["cabinet_link"] = new.CabinetLink
-	}
-	if utils.SafeStringDereference(current.DeviceName) != utils.SafeStringDereference(new.DeviceName) {
-		updates["device_name"] = new.DeviceName
-	}
-	if utils.SafeStringDereference(current.Litemanager) != utils.SafeStringDereference(new.Litemanager) {
-		updates["litemanager"] = new.Litemanager
-	}
-	if utils.SafeStringDereference(current.ServerVersion) != utils.SafeStringDereference(new.ServerVersion) {
-		updates["iiko_version"] = new.ServerVersion
-	}
-	if utils.SafeStringDereference(current.Description) != utils.SafeStringDereference(new.Description) {
-		updates["description"] = new.Description
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
+// compareAndLog - универсальная функция для сравнения полей и логирования расхождений.
+// ИСПРАВЛЕНИЕ: Дженерик-тип изменен на comparable для корректной работы оператора !=
+func compareAndLog[T comparable](updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *T) {
+	currentVal := reflect.ValueOf(current)
+	newVal := reflect.ValueOf(new)
+
+	isCurrentNil := current == nil || currentVal.IsNil()
+	isNewNil := new == nil || newVal.IsNil()
+
+	if isCurrentNil && isNewNil {
+		return
 	}
 
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
-		}
+	if isCurrentNil != isNewNil {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
+		return
 	}
-	if len(updates) == 0 {
-		return nil
+
+	if *current != *new {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
 	}
-	return updates
 }
 
-func getWorkstationDiff(current *models.Workstation, new *models.Workstation) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.Teamviewer) != utils.SafeStringDereference(new.Teamviewer) {
-		updates["teamviewer"] = new.Teamviewer
+// compareTimeAndLog - специальная функция для сравнения time.Time.
+func compareTimeAndLog(updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *time.Time) {
+	if current == nil && new == nil {
+		return
 	}
-	if utils.SafeStringDereference(current.Anydesk) != utils.SafeStringDereference(new.Anydesk) {
-		updates["anydesk"] = new.Anydesk
+	if (current == nil && new != nil) || (current != nil && new == nil) || (current != nil && new != nil && !current.Equal(*new)) {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
 	}
-	if utils.SafeStringDereference(current.Litemanager) != utils.SafeStringDereference(new.Litemanager) {
-		updates["litemanager"] = new.Litemanager
-	}
-	if utils.SafeStringDereference(current.DeviceName) != utils.SafeStringDereference(new.DeviceName) {
-		updates["device_name"] = new.DeviceName
-	}
-	if utils.SafeStringDereference(current.Description) != utils.SafeStringDereference(new.Description) {
-		updates["description"] = new.Description
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
-	}
-
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
-		}
-	}
-
-	if len(updates) == 0 {
-		return nil
-	}
-	return updates
 }
 
-func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.ModelKKT) != utils.SafeStringDereference(new.ModelKKT) {
-		updates["model_kkt"] = new.ModelKKT
+// canonicalJSON принимает JSON в виде []byte и возвращает его каноническую (компактную) форму.
+// Это необходимо для корректного сравнения JSON-объектов, игнорируя пробелы и форматирование.
+func canonicalJSON(jsonData []byte) []byte {
+	if jsonData == nil {
+		return nil
 	}
-	if utils.SafeStringDereference(current.FFD) != utils.SafeStringDereference(new.FFD) {
-		updates["ffd"] = new.FFD
+	buffer := new(bytes.Buffer)
+	// Compact убирает все незначимые пробелы из JSON
+	if err := json.Compact(buffer, jsonData); err != nil {
+		// В случае ошибки возвращаем исходный слайс байт
+		return jsonData
 	}
-	if utils.SafeStringDereference(current.FRDownloader) != utils.SafeStringDereference(new.FRDownloader) {
-		updates["fr_downloader"] = new.FRDownloader
-	}
-	if utils.SafeStringDereference(current.RNKKT) != utils.SafeStringDereference(new.RNKKT) {
-		updates["rn_kkt"] = new.RNKKT
-	}
-	if utils.SafeStringDereference(current.LegalName) != utils.SafeStringDereference(new.LegalName) {
-		updates["legal_name"] = new.LegalName
-	}
-	if utils.SafeStringDereference(current.INN) != utils.SafeStringDereference(new.INN) {
-		updates["inn"] = new.INN
-	}
-	if utils.SafeStringDereference(current.FRSerialNumber) != utils.SafeStringDereference(new.FRSerialNumber) {
-		updates["fr_serial_number"] = new.FRSerialNumber
-	}
-	if utils.SafeStringDereference(current.FNNumber) != utils.SafeStringDereference(new.FNNumber) {
-		updates["fn_number"] = new.FNNumber
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
-	}
+	return buffer.Bytes()
+}
 
-	if (current.KKTRegDate == nil && new.KKTRegDate != nil) || (current.KKTRegDate != nil && new.KKTRegDate == nil) || (current.KKTRegDate != nil && new.KKTRegDate != nil && !current.KKTRegDate.Equal(*new.KKTRegDate)) {
-		updates["kkt_reg_date"] = new.KKTRegDate
-	}
-	if (current.FNExpireDate == nil && new.FNExpireDate != nil) || (current.FNExpireDate != nil && new.FNExpireDate == nil) || (current.FNExpireDate != nil && new.FNExpireDate != nil && !current.FNExpireDate.Equal(*new.FNExpireDate)) {
-		updates["fn_expire_date"] = new.FNExpireDate
+// getCompanyDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Добавлена сверка ContractInfo.
+func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareAndLog(updates, &diffs, "title", current.Title, new.Title)
+	compareAndLog(updates, &diffs, "address", current.Address, new.Address)
+	compareAndLog(updates, &diffs, "active_contract", current.ActiveContract, new.ActiveContract)
+
+	// ИЗМЕНЕНИЕ: Сравниваем канонические представления JSON-полей
+	currentContractInfo := canonicalJSON(current.ContractInfo)
+	newContractInfo := canonicalJSON(new.ContractInfo)
+
+	if !bytes.Equal(currentContractInfo, newContractInfo) {
+		updates["contract_info"] = new.ContractInfo
+		diffs = append(diffs, zap.String("contract_info", fmt.Sprintf("'%s' -> '%s'", string(current.ContractInfo), string(new.ContractInfo))))
 	}
 
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
 		}
 	}
+	return updates, diffs
+}
 
-	if len(updates) == 0 {
+// getServerDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только указанные поля.
+func getServerDiff(current *models.Server, new *models.Server) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareAndLog(updates, &diffs, "unique_id", current.UniqueID, new.UniqueID)
+	compareAndLog(updates, &diffs, "rdp", current.RDP, new.RDP)
+	compareAndLog(updates, &diffs, "server_version", current.ServerVersion, new.ServerVersion)
+
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
+	}
+	return updates, diffs
+}
+
+// getWorkstationDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только ID удаленного доступа.
+func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareAndLog(updates, &diffs, "teamviewer", current.Teamviewer, new.Teamviewer)
+	compareAndLog(updates, &diffs, "anydesk", current.Anydesk, new.Anydesk)
+	compareAndLog(updates, &diffs, "litemanager", current.Litemanager, new.Litemanager)
+
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
+	}
+	return updates, diffs
+}
+
+// getFiscalRegisterDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только дату окончания ФН.
+func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareTimeAndLog(updates, &diffs, "fn_expire_date", current.FNExpireDate, new.FNExpireDate)
+
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
+	}
+	return updates, diffs
+}
+
+func getAgreementUUIDsFromRemote(remoteItem map[string]interface{}) []string {
+	var uuids []string
+	if agreements, ok := remoteItem["recipientAgreements"].([]interface{}); ok {
+		for _, agr := range agreements {
+			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
+				if metaClass, mcOk := agrMap["metaClass"].(string); mcOk && metaClass == "agreement$agreement" {
+					if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
+						uuids = append(uuids, agrUUID)
+					}
+				}
+			}
+		}
+	}
+	return uuids
+}
+
+func getAgreementUUIDsFromLocal(contractInfoJSON datatypes.JSON) []string {
+	if contractInfoJSON == nil {
 		return nil
 	}
-	return updates
+	var info struct {
+		ActiveContractIDs []string `json:"active_contract_ids"`
+	}
+	if err := json.Unmarshal(contractInfoJSON, &info); err != nil {
+		return nil
+	}
+	return info.ActiveContractIDs
+}
+
+func areStringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sort.Strings(a)
+	sort.Strings(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

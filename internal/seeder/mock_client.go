@@ -1,3 +1,4 @@
+// internal/seeder/mock_client.go
 package seeder
 
 import (
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
 
 // MockServiceDeskClient имитирует клиент ServiceDesk для чтения данных из локальных файлов.
@@ -20,7 +22,6 @@ type MockServiceDeskClient struct {
 }
 
 // NewMockServiceDeskClient создает новый мок-клиент.
-// dataPath - это путь к директории с файлами *.json.
 func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) services.ServiceDeskClient {
 	return &MockServiceDeskClient{
 		logger:   logger,
@@ -29,7 +30,6 @@ func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) services.Serv
 }
 
 // FetchEntityList читает список сущностей из JSON-файла.
-// Имя файла определяется по metaClass. Например, "ou$company" -> "companies.json".
 func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass string, full bool) ([]map[string]interface{}, error) {
 	var fileName string
 	switch metaClass {
@@ -41,6 +41,8 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass s
 		fileName = "workstations.json"
 	case "objectBase$FR":
 		fileName = "fiscal_registers.json"
+	case "agreement$agreement":
+		fileName = "agreements.json"
 	default:
 		return nil, fmt.Errorf("неизвестный metaClass для мок-клиента: %s", metaClass)
 	}
@@ -53,9 +55,7 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass s
 		return nil, fmt.Errorf("не удалось прочитать файл с мок-данными %s: %w", fullPath, err)
 	}
 
-	// ИСПРАВЛЕНИЕ: Мы ожидаем JSON-массив, а не объект с ключом "list"
 	var responseList []map[string]interface{}
-
 	if err := json.Unmarshal(file, &responseList); err != nil {
 		return nil, fmt.Errorf("не удалось декодировать JSON из файла %s: %w", fullPath, err)
 	}
@@ -63,10 +63,9 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass s
 	return responseList, nil
 }
 
-// CheckAgreementActive для мок-клиента всегда возвращает true.
-// Это упрощает логику наполнения, так как нам не нужно иметь моки для договоров.
-func (m *MockServiceDeskClient) CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error) {
-	return true, nil
+// FetchAgreementDetails не используется в seeder'е, но является частью интерфейса.
+func (m *MockServiceDeskClient) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*services.AgreementDetailsDTO, error) {
+	return nil, fmt.Errorf("метод FetchAgreementDetails не должен вызываться в мок-клиенте для seeder'а")
 }
 
 // FetchEntityDetails не используется в режиме наполнения, но является частью интерфейса.
@@ -75,8 +74,7 @@ func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid str
 }
 
 // DataToCompanyForSeeder - это специальная версия маппера для seeder'а.
-// Она использует мок-клиент и логгер, переданные как аргументы.
-func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sdClient services.ServiceDeskClient, logger *zap.Logger) (*models.Company, error) {
+func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, agreementsCache map[string]map[string]interface{}, logger *zap.Logger) (*models.Company, error) {
 	uuid, _ := data["UUID"].(string)
 	if uuid == "" {
 		return nil, fmt.Errorf("в данных компании отсутствует UUID")
@@ -89,13 +87,10 @@ func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sd
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
 	}
-	// Учитываем, что в реальном JSON поле называется 'adress'
 	if address, ok := data["adress"].(string); ok {
 		company.Address = &address
 	}
 	if addName, ok := data["additionalName"].(string); ok {
-		// В JSON может быть `null`, который Go парсит как `nil` для `interface{}`.
-		// Проверяем, что это не так, прежде чем делать каст.
 		if addName != "" {
 			company.AdditionalName = &addName
 		}
@@ -110,26 +105,75 @@ func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sd
 		}
 	}
 
-	active := false
+	// ИЗМЕНЕНИЕ: Добавлено полное наполнение ContractInfo
+	isActiveContract := false
+	contractInfo := services.ContractInfo{
+		Services:          []string{},
+		OtherRecipients:   []string{},
+		ActiveContractIDs: []string{},
+	}
+	serviceSet := make(map[string]struct{})
+	recipientSet := make(map[string]struct{})
+
 	if agreements, ok := data["recipientAgreements"].([]interface{}); ok {
 		for _, agr := range agreements {
 			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
 				if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-					// Используем переданный мок-клиент для проверки
-					isActive, err := sdClient.CheckAgreementActive(ctx, agrUUID)
-					if err != nil {
-						logger.Warn("Ошибка при проверке статуса договора (мок)", zap.String("agreementUUID", agrUUID), zap.Error(err))
+					details, detailsFound := agreementsCache[agrUUID]
+					if !detailsFound {
 						continue
 					}
-					if isActive {
-						active = true
-						break
+
+					if state, stateOk := details["state"].(string); stateOk && state == "active" {
+						isActiveContract = true
+						contractInfo.ActiveContractIDs = append(contractInfo.ActiveContractIDs, agrUUID)
+
+						// Парсим сервисы
+						if servicesData, sOk := details["services"].([]interface{}); sOk {
+							for _, serviceItem := range servicesData {
+								if serviceMap, smOk := serviceItem.(map[string]interface{}); smOk {
+									if serviceTitle, tOk := serviceMap["title"].(string); tOk {
+										if _, exists := serviceSet[serviceTitle]; !exists {
+											serviceSet[serviceTitle] = struct{}{}
+										}
+									}
+								}
+							}
+						}
+
+						// Парсим получателей
+						if recipientsData, rOk := details["recipientsOU"].([]interface{}); rOk {
+							for _, recipientItem := range recipientsData {
+								if recipientMap, rmOk := recipientItem.(map[string]interface{}); rmOk {
+									if recipientUUID, uOk := recipientMap["UUID"].(string); uOk && recipientUUID != uuid {
+										if _, exists := recipientSet[recipientUUID]; !exists {
+											recipientSet[recipientUUID] = struct{}{}
+										}
+									}
+								}
+							}
+						}
 					}
 				}
 			}
 		}
 	}
-	company.ActiveContract = &active
+
+	// Заполняем срезы из сетов
+	for serviceTitle := range serviceSet {
+		contractInfo.Services = append(contractInfo.Services, serviceTitle)
+	}
+	for recipientUUID := range recipientSet {
+		contractInfo.OtherRecipients = append(contractInfo.OtherRecipients, recipientUUID)
+	}
+
+	company.ActiveContract = &isActiveContract
+	contractInfoJSON, err := json.Marshal(contractInfo)
+	if err != nil {
+		logger.Error("Не удалось сериализовать информацию о контракте в JSON для сидера", zap.String("companyUUID", uuid), zap.Error(err))
+	} else {
+		company.ContractInfo = datatypes.JSON(contractInfoJSON)
+	}
 
 	return company, nil
 }

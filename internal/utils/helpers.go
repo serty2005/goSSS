@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"net"
 	"regexp"
 	"time"
 )
@@ -78,4 +80,19 @@ func FormatRNKKT(rnm string) string {
 		return rnm // Возвращаем как есть, если длина некорректна
 	}
 	return rnm[0:4] + " " + rnm[4:8] + " " + rnm[8:12] + " " + rnm[12:16]
+}
+
+// IsPrivateIP проверяет, является ли IP-адрес приватным (локальным).
+func IsPrivateIP(ipStr string) (bool, error) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false, fmt.Errorf("некорректный IP-адрес: %s", ipStr)
+	}
+
+	// Проверяем на соответствие стандартным диапазонам приватных сетей
+	_, private24, _ := net.ParseCIDR("10.0.0.0/8")
+	_, private20, _ := net.ParseCIDR("172.16.0.0/12")
+	_, private16, _ := net.ParseCIDR("192.168.0.0/16")
+
+	return private24.Contains(ip) || private20.Contains(ip) || private16.Contains(ip), nil
 }

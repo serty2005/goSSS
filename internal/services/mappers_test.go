@@ -26,9 +26,13 @@ func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid str
 	return args.Get(0).(map[string]interface{}), args.Error(1)
 }
 
-func (m *MockServiceDeskClient) CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error) {
+func (m *MockServiceDeskClient) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error) {
 	args := m.Called(ctx, agreementUUID)
-	return args.Bool(0), args.Error(1)
+	val, ok := args.Get(0).(*AgreementDetailsDTO)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // Вспомогательная функция для парсинга времени, т.к. utils не импортируется
@@ -46,7 +50,9 @@ func TestDataToCompany(t *testing.T) {
 	logger := zap.NewNop()
 	ctx := context.Background()
 
-	mockClient.On("CheckAgreementActive", mock.Anything, mock.AnythingOfType("string")).Return(true, nil)
+	// ИЗМЕНЕНИЕ: Настраиваем мок для нового метода
+	mockClient.On("FetchAgreementDetails", mock.Anything, "agreement-uuid-3").Return(&AgreementDetailsDTO{State: "active"}, nil)
+	mockClient.On("FetchAgreementDetails", mock.Anything, "agreement-uuid-inactive").Return(&AgreementDetailsDTO{State: "inactive"}, nil)
 
 	testCases := []struct {
 		name        string
@@ -64,7 +70,8 @@ func TestDataToCompany(t *testing.T) {
 				"lastModifiedDate": "2023.10.30 15:00:00",
 				"parent":           map[string]interface{}{"UUID": "parent-uuid-2"},
 				"recipientAgreements": []interface{}{
-					map[string]interface{}{"UUID": "agreement-uuid-3"},
+					map[string]interface{}{"UUID": "agreement-uuid-inactive", "metaClass": "agreement$agreement"},
+					map[string]interface{}{"UUID": "agreement-uuid-3", "metaClass": "agreement$agreement"},
 				},
 			},
 			expectError: false,
@@ -87,7 +94,7 @@ func TestDataToCompany(t *testing.T) {
 			expected:    nil,
 		},
 		{
-			name: "Частичные данные",
+			name: "Частичные данные без контрактов",
 			input: map[string]interface{}{
 				"UUID":  "company-uuid-4",
 				"title": "ООО Василек",
@@ -96,7 +103,7 @@ func TestDataToCompany(t *testing.T) {
 			expected: &models.Company{
 				Base:           models.Base{ServiceDeskUUID: StringPtr("company-uuid-4")},
 				Title:          StringPtr("ООО Василек"),
-				ActiveContract: BoolPtr(false), // Договоров нет
+				ActiveContract: BoolPtr(false),
 			},
 		},
 	}

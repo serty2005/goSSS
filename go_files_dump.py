@@ -198,14 +198,16 @@ type FoundEntityDTO struct {
 
 // ServerRichDTO содержит полный набор полей Сервера для UI.
 type ServerRichDTO struct {
-	UUID        string  `json:"uuid"`
-	DeviceName  *string `json:"device_name,omitempty"`
-	IP          *string `json:"ip,omitempty"`
-	Status      *string `json:"status,omitempty"`
-	Anydesk     *string `json:"anydesk,omitempty"`
-	Teamviewer  *string `json:"teamviewer,omitempty"`
-	RDP         *string `json:"rdp,omitempty"`
-	Litemanager *string `json:"litemanager,omitempty"`
+	UUID         string  `json:"uuid"`
+	DeviceName   *string `json:"device_name,omitempty"`
+	IP           *string `json:"ip,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	Anydesk      *string `json:"anydesk,omitempty"`
+	Teamviewer   *string `json:"teamviewer,omitempty"`
+	RDP          *string `json:"rdp,omitempty"`
+	Litemanager  *string `json:"litemanager,omitempty"`
+	UniqueID     *string `json:"unique_id,omitempty"`
+	PartnersLink *string `json:"partners_link,omitempty"`
 }
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
@@ -235,6 +237,7 @@ go `
 internal/app/app.go
 ===== START app.go =====
 go `
+// internal/app/app.go
 package app
 
 import (
@@ -265,37 +268,33 @@ import (
 
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
-	Config         *config.Config
-	Logger         *zap.Logger
-	DB             *gorm.DB
-	ReconcilerSvc  services.ReconcilerService
-	CRMidWorkerSvc services.CRMidWorkerService
-	SDeskSyncSvc   services.SDeskSyncService
-	Seeder         *seeder.Seeder
-	CrudHandler    *handlers.CrudHandler
-	SearchHandler  *handlers.SearchHandler
-	SyncHandler    *handlers.SyncHandler
-	TaskHandler    *handlers.TaskHandler
-	AgentHandler   *handlers.AgentHandler
-	AgentSvc       services.AgentService
+	Config               *config.Config
+	Logger               *zap.Logger
+	DB                   *gorm.DB
+	ReconcilerSvc        services.ReconcilerService
+	ServerPollingSvc     services.ServerPollingService
+	SDeskSyncSvc         services.SDeskSyncService
+	Seeder               *seeder.Seeder
+	CrudHandler          *handlers.CrudHandler
+	SearchHandler        *handlers.SearchHandler
+	SyncHandler          *handlers.SyncHandler
+	TaskHandler          *handlers.TaskHandler
+	AgentHandler         *handlers.AgentHandler
+	ServerActionsHandler *handlers.ServerActionsHandler // НОВЫЙ ОБРАБОТЧИК
+	AgentSvc             services.AgentService
 }
 
 // New создает и инициализирует новый экземпляр Application.
 func New() (*Application, error) {
-	// 1. Конфигурация
 	cfg := config.New()
-
-	// 2. Логгер
 	appLogger := logger.New(cfg.LogPath, cfg.DisableFileLogging)
 
-	// 3. Создание директории для кэша
 	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
 		appLogger.Fatal("Не удалось создать директорию для кэша FTP", zap.Error(err))
 	}
 
 	appLogger.Info("Инициализация приложения etalon-server...")
 
-	// 4. Подключение к БД
 	database, err := db.NewConnection(cfg)
 	if err != nil {
 		appLogger.Fatal("Не удалось подключиться к базе данных", zap.Error(err))
@@ -303,15 +302,10 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Подключение к базе данных установлено")
 
-	// 5. Миграции
 	appLogger.Info("Запуск миграций базы данных...")
 	err = database.AutoMigrate(
-		&models.Company{},
-		&models.Server{},
-		&models.Workstation{},
-		&models.FiscalRegister{},
-		&models.AgentFile{},
-		&models.ReconciliationTask{},
+		&models.Company{}, &models.Server{}, &models.Workstation{},
+		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{},
 	)
 	if err != nil {
@@ -320,14 +314,10 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
 
-	//Запуск одноразовых задач по очистке данных
 	cleanupService := services.NewCleanupService(database, appLogger)
 	go cleanupService.CleanupFRDuplicates(context.Background())
-
 	go cleanupService.CleanupServerDuplicatesAndJunk(context.Background())
 
-	// 6. Инициализация слоев (Репозитории -> Сервисы -> Обработчики)
-	// Репозитории
 	companyRepo := repositories.NewCompanyRepo(database)
 	serverRepo := repositories.NewServerRepo(database)
 	workstationRepo := repositories.NewWorkstationRepo(database)
@@ -335,36 +325,36 @@ func New() (*Application, error) {
 	agentRepo := repositories.NewAgentRepo(database)
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
-	// Сервисы
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
 	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, appLogger)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
 	reconcilerService := services.NewReconcilerService(cfg, appLogger, database, ftpClient, serverRepo, workstationRepo, frRepo)
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
-	crmidWorkerService := services.NewCRMidWorkerService(cfg, appLogger, database, serverRepo, rmsClient)
+	serverPollingService := services.NewServerPollingService(cfg, appLogger, database, serverRepo, rmsClient) // Добавлен db в конструктор
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 
-	// Обработчики (Handlers)
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
 	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
+	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverPollingService) // ИНИЦИАЛИЗАЦИЯ НОВОГО ОБРАБОТЧИКА
 
 	return &Application{
-		Config:         cfg,
-		Logger:         appLogger,
-		DB:             database,
-		ReconcilerSvc:  reconcilerService,
-		CRMidWorkerSvc: crmidWorkerService,
-		SDeskSyncSvc:   sdeskSyncService,
-		Seeder:         dbSeeder,
-		CrudHandler:    crudHandler,
-		SearchHandler:  searchHandler,
-		SyncHandler:    syncHandler,
-		TaskHandler:    taskHandler,
-		AgentHandler:   agentHandler,
-		AgentSvc:       agentService,
+		Config:               cfg,
+		Logger:               appLogger,
+		DB:                   database,
+		ReconcilerSvc:        reconcilerService,
+		ServerPollingSvc:     serverPollingService,
+		SDeskSyncSvc:         sdeskSyncService,
+		Seeder:               dbSeeder,
+		CrudHandler:          crudHandler,
+		SearchHandler:        searchHandler,
+		SyncHandler:          syncHandler,
+		TaskHandler:          taskHandler,
+		AgentHandler:         agentHandler,
+		ServerActionsHandler: serverActionsHandler, // ДОБАВЛЕН НОВЫЙ ОБРАБОТЧИК
+		AgentSvc:             agentService,
 	}, nil
 }
 
@@ -374,35 +364,24 @@ func (a *Application) Run() {
 
 	r := chi.NewRouter()
 
-	// Middleware должно быть одним из первых в цепочке.
 	corsMiddleware := cors.New(cors.Options{
-		// AllowedOrigins - список разрешенных доменов.
-		// Можно использовать []string{"*"} для разрешения всех, но это менее безопасно.
-		AllowedOrigins: a.Config.AllowedOrigins,
-		// AllowedMethods - список разрешенных HTTP-методов.
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		// AllowedHeaders - список разрешенных заголовков.
-		// Authorization важен для JWT, Content-Type для POST/PUT запросов.
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		// AllowCredentials - разрешить отправку cookie и заголовков авторизации.
+		AllowedOrigins:   a.Config.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		AllowCredentials: true,
-		// MaxAge - как долго (в секундах) результат предполетного запроса (OPTIONS) может быть кэширован.
-		MaxAge: 300,
+		MaxAge:           300,
 	})
 	r.Use(corsMiddleware.Handler)
 
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Route("/api", func(r chi.Router) {
 		a.CrudHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
+		a.ServerActionsHandler.RegisterRoutes(r) // РЕГИСТРАЦИЯ НОВЫХ РОУТОВ
 		r.Route("/agents", func(r chi.Router) {
-			// Защищаем все роуты агентов с помощью middleware
 			r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
 			a.AgentHandler.RegisterRoutes(r)
 		})
@@ -425,46 +404,33 @@ func (a *Application) Run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Воркер Reconciler (FTP)
 	if a.Config.EnableReconcilerWorker {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.ReconcilerSvc.Start(mainCtx)
-		}()
+		go func() { defer wg.Done(); a.ReconcilerSvc.Start(mainCtx) }()
 	} else {
 		a.Logger.Info("Воркер Reconciler (FTP) отключен в конфигурации.")
 	}
 
-	// Воркер CRMid
-	if a.Config.EnableCRMidWorker {
+	if a.Config.EnableServerPollingWorker {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.CRMidWorkerSvc.Start(mainCtx)
-		}()
+		go func() { defer wg.Done(); a.ServerPollingSvc.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер CRMid отключен в конфигурации.")
+		a.Logger.Info("Воркер опроса статусов серверов отключен в конфигурации.")
 	}
 
-	// Воркер синхронизации с ServiceDesk
 	if a.Config.EnableSDeskSyncWorker {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.SDeskSyncSvc.Start(mainCtx)
-		}()
+		go func() { defer wg.Done(); a.SDeskSyncSvc.Start(mainCtx) }()
 	} else {
 		a.Logger.Info("Воркер синхронизации с ServiceDesk отключен в конфигурации.")
 	}
 
-	// HTTP-сервер
 	go func() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			a.Logger.Error("Не удалось запустить сервер", zap.String("port", a.Config.ServerPort), zap.Error(err))
-			stop() // Останавливаем все, если сервер не смог запуститься
+			stop()
 		}
 	}()
 
@@ -500,6 +466,7 @@ go `
 internal/config/config.go
 ===== START config.go =====
 go `
+// internal/config/config.go
 package config
 
 import (
@@ -542,13 +509,13 @@ type Config struct {
 	ZabbixAPIURL   string
 	ZabbixAPIToken string
 
-	// Секция для CRMid Worker
-	RMSLogin             string
-	RMSPassword1         string
-	RMSPassword2         string
-	CRMidWorkerInterval  time.Duration
-	CRMidWorkerBatchSize int
-	EnableCRMidWorker    bool
+	// Секция для Server Polling Worker
+	RMSLogin                  string
+	RMSPassword1              string
+	RMSPassword2              string
+	ServerPollingInterval     time.Duration
+	ServerPollingBatchSize    int
+	EnableServerPollingWorker bool
 
 	// Секция настроек синхронизации с SD
 	SDeskSyncInterval     time.Duration
@@ -595,13 +562,13 @@ func New() *Config {
 		ZabbixAPIURL:   getEnv("ZABBIX_API_URL", ""),
 		ZabbixAPIToken: getEnv("ZABBIX_API_TOKEN", ""),
 
-		// Параметры CRMid Worker
-		EnableCRMidWorker:    getEnvAsBool("ENABLE_CRMID_WORKER", true),
-		RMSLogin:             getEnv("RMS_LOGIN", ""),
-		RMSPassword1:         getEnv("RMS_PASSWORD_1", ""),
-		RMSPassword2:         getEnv("RMS_PASSWORD_2", ""),
-		CRMidWorkerInterval:  time.Duration(getEnvAsInt("CRMID_WORKER_INTERVAL_MIN", 60)) * time.Minute,
-		CRMidWorkerBatchSize: getEnvAsInt("CRMID_WORKER_BATCH_SIZE", 100),
+		// Параметры Server Polling Worker (ранее CRMid Worker)
+		EnableServerPollingWorker: getEnvAsBool("ENABLE_SERVER_POLLING_WORKER", true), // ПЕРЕИМЕНОВАНО
+		RMSLogin:                  getEnv("RMS_LOGIN", ""),
+		RMSPassword1:              getEnv("RMS_PASSWORD_1", ""),
+		RMSPassword2:              getEnv("RMS_PASSWORD_2", ""),
+		ServerPollingInterval:     time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour, // ПЕРЕИМЕНОВАНО и изменено на часы
+		ServerPollingBatchSize:    getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),                                // ПЕРЕИМЕНОВАНО
 
 		// Параметры синхронизации с SD
 		EnableSDeskSyncWorker: getEnvAsBool("ENABLE_SDESK_SYNC_WORKER", true),
@@ -1025,8 +992,10 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -1180,12 +1149,35 @@ func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDT
 	for _, s := range servers {
 		if s.OwnerServiceDeskUUID != nil {
 			ownerID := *s.OwnerServiceDeskUUID
+
+			// Формируем ссылку на партнерский кабинет
+			var partnersLink *string
+			clientIdStr := utils.SafeStringDereference(s.CabinetLink)
+			// Проверяем, что clientIdStr не пустой и не содержит 'N/A'
+			if clientIdStr != "" && clientIdStr != "N/A" {
+				var link string
+				ipStr := utils.SafeStringDereference(s.IP)
+				if strings.Contains(strings.ToLower(ipStr), "syrve") {
+					link = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				} else {
+					link = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				}
+				partnersLink = &link
+			}
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Server",
 				Data: api.ServerRichDTO{
-					UUID: *s.ServiceDeskUUID, DeviceName: s.DeviceName, IP: s.IP,
-					Status: &s.Status, Anydesk: s.Anydesk, Teamviewer: s.Teamviewer,
-					RDP: s.RDP, Litemanager: s.Litemanager,
+					UUID:         *s.ServiceDeskUUID,
+					DeviceName:   s.DeviceName,
+					IP:           s.IP,
+					Status:       s.Status,
+					Anydesk:      s.Anydesk,
+					Teamviewer:   s.Teamviewer,
+					RDP:          s.RDP,
+					Litemanager:  s.Litemanager,
+					UniqueID:     s.UniqueID,
+					PartnersLink: partnersLink,
 				},
 			})
 		}
@@ -1230,6 +1222,113 @@ func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDT
 
 go `
 ===== END search_handler.go =====
+
+internal/handlers/server_actions_handler.go
+===== START server_actions_handler.go =====
+go `
+// internal/handlers/server_actions_handler.go
+package handlers
+
+import (
+	"encoding/json"
+	"errors"
+	"etalon-server/internal/services"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+// ServerActionsHandler обрабатывает специфичные действия над серверами.
+type ServerActionsHandler struct {
+	logger     *zap.Logger
+	pollingSvc services.ServerPollingService
+}
+
+// NewServerActionsHandler создает новый экземпляр обработчика.
+func NewServerActionsHandler(logger *zap.Logger, pollingSvc services.ServerPollingService) *ServerActionsHandler {
+	return &ServerActionsHandler{
+		logger:     logger,
+		pollingSvc: pollingSvc,
+	}
+}
+
+// RegisterRoutes регистрирует роуты для действий с серверами.
+func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
+	r.Post("/servers/{uuid}/install_license", h.installLicense)
+	r.Post("/servers/{uuid}/poll", h.pollServerStatus) // НОВЫЙ РОУТ
+}
+
+type installLicenseRequestDTO struct {
+	UniqueID string `json:"uniqueId"`
+}
+
+// installLicense обрабатывает запрос на запуск установки лицензии.
+func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Request) {
+	uuid := chi.URLParam(r, "uuid")
+	if uuid == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера не указан")
+		return
+	}
+
+	var dto installLicenseRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	if dto.UniqueID == "" {
+		RespondWithError(w, http.StatusBadRequest, "Поле 'uniqueId' обязательно для заполнения")
+		return
+	}
+
+	err := h.pollingSvc.InstallLicense(r.Context(), uuid, dto.UniqueID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondWithError(w, http.StatusNotFound, "Сервер с указанным UUID не найден")
+		} else {
+			h.logger.Error("Ошибка при вызове заглушки установки лицензии",
+				zap.String("uuid", uuid),
+				zap.String("uniqueId", dto.UniqueID),
+				zap.Error(err),
+			)
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии отправлена успешно"})
+}
+
+// pollServerStatus обрабатывает запрос на принудительный асинхронный опрос статуса сервера.
+func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.Request) {
+	uuid := chi.URLParam(r, "uuid")
+	if uuid == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера не указан")
+		return
+	}
+
+	err := h.pollingSvc.PollSingleServer(r.Context(), uuid)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrRateLimitExceeded):
+			RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			RespondWithError(w, http.StatusNotFound, "Сервер с указанным UUID не найден")
+		default:
+			h.logger.Error("Ошибка при запуске принудительного опроса", zap.String("uuid", uuid), zap.Error(err))
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	RespondWithJSON(w, http.StatusAccepted, map[string]string{"message": "Задача на опрос статуса сервера принята в обработку"})
+}
+
+go `
+===== END server_actions_handler.go =====
 
 internal/handlers/sync_handlers.go
 ===== START sync_handlers.go =====
@@ -1613,7 +1712,7 @@ const (
 type Base struct {
 	ID              string  `gorm:"primaryKey;type:text"`
 	MetaClass       string  `gorm:"type:text"`
-	ServiceDeskUUID *string `gorm:"type:text;uniqueIndex"`
+	ServiceDeskUUID *string `gorm:"type:text;unique"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
@@ -1631,13 +1730,14 @@ func (base *Base) BeforeCreate(tx *gorm.DB) (err error) {
 // Company представляет сущность компании.
 type Company struct {
 	Base
-	Address               *string    `gorm:"type:text"`
-	Title                 *string    `gorm:"type:text"`
-	ActiveContract        *bool      `gorm:"type:boolean"`
-	LastModifiedDate      *time.Time `json:"last_modified_date"`
-	AdditionalName        *string    `gorm:"type:text"`
-	ParentServiceDeskUUID *string    `gorm:"type:text"`
-	Parent                *Company   `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
+	Address               *string        `gorm:"type:text"`
+	Title                 *string        `gorm:"type:text"`
+	ActiveContract        *bool          `gorm:"type:boolean"`
+	LastModifiedDate      *time.Time     `json:"last_modified_date"`
+	AdditionalName        *string        `gorm:"type:text"`
+	ParentServiceDeskUUID *string        `gorm:"type:text"`
+	ContractInfo          datatypes.JSON `gorm:"type:jsonb"`
+	Parent                *Company       `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
 
 	Servers         []Server         `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	Workstations    []Workstation    `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
@@ -1657,13 +1757,15 @@ type Server struct {
 	DeviceName           *string    `gorm:"type:text;index"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Litemanager          *string    `gorm:"type:text"`
-	IikoVersion          *string    `gorm:"type:text"`
+	ServerVersion        *string    `gorm:"type:text"`
 	Description          *string    `gorm:"type:text"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 
 	// Новые поля для CRMid воркера
-	CrmidLastAttempt *time.Time `gorm:"column:crmid_last_attempt"`
-	Status           string     `gorm:"type:varchar(50);default:'active';index"` // 'active', 'inactive', 'to_delete'
+	ServerName    *string    `gorm:"type:text"`
+	ServerEdition *string    `gorm:"type:varchar(50)"`
+	LastPolledAt  *time.Time `gorm:"column:last_polled_at"`
+	Status        string     `gorm:"type:varchar(50);default:'unknown';index"` // ОБНОВЛЕНО: 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived'
 }
 
 // Workstation представляет сущность рабочей станции.
@@ -1724,7 +1826,7 @@ type AgentFile struct {
 // ReconciliationTask представляет задачу для ручного разбора администратором.
 type ReconciliationTask struct {
 	ID         uint           `gorm:"primarykey"`
-	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk'
+	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk', 'data_conflict'
 	EntityType string         `gorm:"type:varchar(50)"`                     // 'FiscalRegister', 'Workstation', 'Server'
 	EntityUUID string         `gorm:"type:text"`                            // UUID сущности, с которой связана задача
 	Details    datatypes.JSON `gorm:"type:jsonb"`                           // Детали задачи, например, старый и новый владелец
@@ -2036,6 +2138,7 @@ go `
 internal/repositories/server_repo.go
 ===== START server_repo.go =====
 go `
+// internal/repositories/server_repo.go
 package repositories
 
 import (
@@ -2055,9 +2158,9 @@ type ServerRepo interface {
 	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Server, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Server, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error)
-	FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error)
 	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error)
 	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Server, error)
+	FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]models.Server, error) // НОВЫЙ МЕТОД
 }
 
 type serverRepo struct {
@@ -2125,24 +2228,24 @@ func (r *serverRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*model
 func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error) {
 	var servers []models.Server
 	err := r.db.WithContext(ctx).
-		Where("device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
+		Where("device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&servers).Error
 	return servers, err
 }
 
-// FindWithEmptyCRMid находит серверы, у которых поле CRMid не заполнено,
-// и которые подлежат проверке.
-func (r *serverRepo) FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error) {
+// FindForPolling находит серверы, которые необходимо опросить.
+// Выбирает серверы, которые еще не опрашивались или чья последняя проверка была раньше, чем `interval` назад.
+func (r *serverRepo) FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]models.Server, error) {
 	var servers []models.Server
-	// Выбираем только активные серверы, у которых CRMid пуст.
-	// Также, если была неудачная попытка, то следующая будет не раньше, чем через 30 дней.
-	thirtyDaysAgo := time.Now().AddDate(0, -1, 0)
+	threshold := time.Now().Add(-interval)
+
 	err := r.db.WithContext(ctx).
-		Where("(crm_id IS NULL OR crm_id = '')").
-		Where("status = ?", "active").
-		Where("crmid_last_attempt IS NULL OR crmid_last_attempt < ?", thirtyDaysAgo).
+		Where("ip IS NOT NULL AND ip != ''").
+		Where("status != ?", "archived").
+		Where("last_polled_at IS NULL OR last_polled_at < ?", threshold).
 		Limit(limit).
+		Order("last_polled_at ASC"). // Начинаем с самых старых
 		Find(&servers).Error
 	return servers, err
 }
@@ -2162,9 +2265,9 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 		}
 	}
 
-	// Если по CRMid не нашли, ищем по IP
+	// Если по CRMid не нашли, ищем по IP с точным совпадением
 	if ip != "" {
-		err := r.db.WithContext(ctx).Where("ip LIKE ?", ip+"%").First(&server).Error
+		err := r.db.WithContext(ctx).Where("ip = ?", ip).First(&server).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil // Явно возвращаем nil, если не найдено
 		}
@@ -2195,6 +2298,7 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/models"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -2287,24 +2391,31 @@ func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset
 func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error) {
 	var ws models.Workstation
 	query := r.db.WithContext(ctx)
-	hasCondition := false
+
+	// Динамически строим запрос, добавляя условия только для валидных ID
+	var conditions []string
+	var values []interface{}
 
 	if tv != "" && tv != "None" {
-		query = query.Or("teamviewer = ?", tv)
-		hasCondition = true
+		conditions = append(conditions, "teamviewer = ?")
+		values = append(values, tv)
 	}
 	if ad != "" && ad != "None" {
-		query = query.Or("anydesk = ?", ad)
-		hasCondition = true
+		conditions = append(conditions, "anydesk = ?")
+		values = append(values, ad)
 	}
 	if lm != "" && lm != "None" {
-		query = query.Or("litemanager = ?", lm)
-		hasCondition = true
+		conditions = append(conditions, "litemanager = ?")
+		values = append(values, lm)
 	}
 
-	if !hasCondition {
+	// Если ни одного валидного ID не предоставлено, ничего не ищем
+	if len(conditions) == 0 {
 		return nil, nil
 	}
+
+	// Объединяем условия через OR
+	query = query.Where(strings.Join(conditions, " OR "), values...)
 
 	// Ищем самую свежую запись, если их несколько
 	err := query.Order("last_modified_date DESC").First(&ws).Error
@@ -2330,6 +2441,7 @@ go `
 internal/seeder/mock_client.go
 ===== START mock_client.go =====
 go `
+// internal/seeder/mock_client.go
 package seeder
 
 import (
@@ -2352,7 +2464,6 @@ type MockServiceDeskClient struct {
 }
 
 // NewMockServiceDeskClient создает новый мок-клиент.
-// dataPath - это путь к директории с файлами *.json.
 func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) services.ServiceDeskClient {
 	return &MockServiceDeskClient{
 		logger:   logger,
@@ -2361,7 +2472,6 @@ func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) services.Serv
 }
 
 // FetchEntityList читает список сущностей из JSON-файла.
-// Имя файла определяется по metaClass. Например, "ou$company" -> "companies.json".
 func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass string, full bool) ([]map[string]interface{}, error) {
 	var fileName string
 	switch metaClass {
@@ -2385,9 +2495,7 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass s
 		return nil, fmt.Errorf("не удалось прочитать файл с мок-данными %s: %w", fullPath, err)
 	}
 
-	// ИСПРАВЛЕНИЕ: Мы ожидаем JSON-массив, а не объект с ключом "list"
 	var responseList []map[string]interface{}
-
 	if err := json.Unmarshal(file, &responseList); err != nil {
 		return nil, fmt.Errorf("не удалось декодировать JSON из файла %s: %w", fullPath, err)
 	}
@@ -2395,10 +2503,12 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass s
 	return responseList, nil
 }
 
-// CheckAgreementActive для мок-клиента всегда возвращает true.
-// Это упрощает логику наполнения, так как нам не нужно иметь моки для договоров.
-func (m *MockServiceDeskClient) CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error) {
-	return true, nil
+// FetchAgreementDetails для мок-клиента всегда возвращает активный контракт.
+// Это упрощает логику наполнения.
+func (m *MockServiceDeskClient) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*services.AgreementDetailsDTO, error) {
+	return &services.AgreementDetailsDTO{
+		State: "active",
+	}, nil
 }
 
 // FetchEntityDetails не используется в режиме наполнения, но является частью интерфейса.
@@ -2407,7 +2517,6 @@ func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid str
 }
 
 // DataToCompanyForSeeder - это специальная версия маппера для seeder'а.
-// Она использует мок-клиент и логгер, переданные как аргументы.
 func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sdClient services.ServiceDeskClient, logger *zap.Logger) (*models.Company, error) {
 	uuid, _ := data["UUID"].(string)
 	if uuid == "" {
@@ -2421,13 +2530,10 @@ func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sd
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
 	}
-	// Учитываем, что в реальном JSON поле называется 'adress'
 	if address, ok := data["adress"].(string); ok {
 		company.Address = &address
 	}
 	if addName, ok := data["additionalName"].(string); ok {
-		// В JSON может быть `null`, который Go парсит как `nil` для `interface{}`.
-		// Проверяем, что это не так, прежде чем делать каст.
 		if addName != "" {
 			company.AdditionalName = &addName
 		}
@@ -2442,20 +2548,22 @@ func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, sd
 		}
 	}
 
+	// ИЗМЕНЕНИЕ: Логика адаптирована под новый интерфейс
 	active := false
 	if agreements, ok := data["recipientAgreements"].([]interface{}); ok {
 		for _, agr := range agreements {
 			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
-				if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-					// Используем переданный мок-клиент для проверки
-					isActive, err := sdClient.CheckAgreementActive(ctx, agrUUID)
-					if err != nil {
-						logger.Warn("Ошибка при проверке статуса договора (мок)", zap.String("agreementUUID", agrUUID), zap.Error(err))
-						continue
-					}
-					if isActive {
-						active = true
-						break
+				if metaClass, mcOk := agrMap["metaClass"].(string); mcOk && metaClass == "agreement$agreement" {
+					if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
+						details, err := sdClient.FetchAgreementDetails(ctx, agrUUID)
+						if err != nil {
+							logger.Warn("Ошибка при проверке статуса договора (мок)", zap.String("agreementUUID", agrUUID), zap.Error(err))
+							continue
+						}
+						if details.State == "active" {
+							active = true
+							break
+						}
 					}
 				}
 			}
@@ -3271,230 +3379,6 @@ func (s *cleanupServiceImpl) createServerCleanupTask(ctx context.Context, server
 go `
 ===== END cleanup_service.go =====
 
-internal/services/crmid_worker_service.go
-===== START crmid_worker_service.go =====
-go `
-package services
-
-import (
-	"context"
-	"encoding/json"
-	"errors"
-	"etalon-server/internal/config"
-	"etalon-server/internal/models"
-	"etalon-server/internal/repositories"
-	"etalon-server/internal/utils"
-	"fmt"
-	"net"
-	"strings"
-	"time"
-
-	"gorm.io/datatypes"
-	"gorm.io/gorm"
-
-	"go.uber.org/zap"
-)
-
-// CRMidWorkerService определяет интерфейс для фонового воркера обогащения CRMid.
-type CRMidWorkerService interface {
-	Start(ctx context.Context)
-}
-
-type crmidWorkerServiceImpl struct {
-	cfg        *config.Config
-	logger     *zap.Logger
-	db         *gorm.DB
-	serverRepo repositories.ServerRepo
-	rmsClient  utils.RMSClient
-}
-
-// NewCRMidWorkerService создает новый экземпляр сервиса.
-func NewCRMidWorkerService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient) CRMidWorkerService {
-	return &crmidWorkerServiceImpl{
-		cfg:        cfg,
-		logger:     logger,
-		db:         db,
-		serverRepo: serverRepo,
-		rmsClient:  rmsClient,
-	}
-}
-
-// Start запускает сервис в фоновом режиме.
-func (s *crmidWorkerServiceImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера для обогащения CRMid", zap.Duration("interval", s.cfg.CRMidWorkerInterval))
-	ticker := time.NewTicker(s.cfg.CRMidWorkerInterval)
-	defer ticker.Stop()
-
-	// Первый запуск сразу, не дожидаясь тикера
-	s.runCycle(ctx)
-
-	for {
-		select {
-		case <-ticker.C:
-			s.runCycle(ctx)
-		case <-ctx.Done():
-			s.logger.Info("Остановка воркера для обогащения CRMid...")
-			return
-		}
-	}
-}
-
-// runCycle выполняет один цикл работы воркера.
-func (s *crmidWorkerServiceImpl) runCycle(ctx context.Context) {
-	s.logger.Info("Начало нового цикла обогащения CRMid...")
-
-	servers, err := s.serverRepo.FindWithEmptyCRMid(ctx, s.cfg.CRMidWorkerBatchSize)
-	if err != nil {
-		s.logger.Error("Не удалось получить список серверов для обогащения", zap.Error(err))
-		return
-	}
-
-	if len(servers) == 0 {
-		s.logger.Info("Не найдено серверов, подлежащих проверке. Цикл завершен.")
-		return
-	}
-
-	s.logger.Info("Найдено серверов для обработки", zap.Int("count", len(servers)))
-
-	for _, server := range servers {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("Выход из приложения, прерывание воркера опроса RMS")
-			return
-		default:
-			s.processServer(ctx, server)
-			time.Sleep(2 * time.Second) // Уменьшим задержку, т.к. фильтрация стала умнее
-		}
-	}
-	s.logger.Info("Цикл обогащения CRMid завершен.")
-}
-
-// processServer обрабатывает один сервер.
-func (s *crmidWorkerServiceImpl) processServer(ctx context.Context, server models.Server) {
-	log := s.logger.With(zap.String("server_uuid", utils.SafeStringDereference(server.ServiceDeskUUID)), zap.String("server_ip", utils.SafeStringDereference(server.IP)))
-
-	// ИСПРАВЛЕНИЕ: Обработка серверов без IP
-	if server.IP == nil || *server.IP == "" {
-		log.Warn("У сервера отсутствует IP-адрес. Установка статуса 'to_delete'.")
-		updateData := map[string]interface{}{"status": "to_delete"}
-		if _, err := s.serverRepo.Update(ctx, nil, *server.ServiceDeskUUID, updateData); err != nil {
-			log.Error("Не удалось обновить статус сервера на 'to_delete'", zap.Error(err))
-		}
-		return
-	}
-
-	var url string
-	parts := strings.SplitN(*server.IP, ":", 2)
-	host := parts[0]
-
-	if len(parts) == 2 && parts[1] == "443" {
-		url = "https://" + host
-	} else {
-		url = "http://" + *server.IP
-	}
-
-	crmid, err := s.rmsClient.GetCRMid(ctx, url, s.cfg.RMSLogin, s.cfg.RMSPassword1, s.cfg.RMSPassword2)
-	if err != nil {
-		// ИСПРАВЛЕНИЕ: Умная обработка ошибок
-		s.handleProcessingError(ctx, server, url, err, log)
-		return
-	}
-
-	log.Info("CRMid успешно получен", zap.String("crmid", crmid), zap.String("url", url))
-	updateData := map[string]interface{}{
-		"crm_id":             crmid,
-		"status":             "active", // Если он был inactive, возвращаем в работу
-		"crmid_last_attempt": nil,      // Сбрасываем таймер неудачных попыток
-	}
-	_, err = s.serverRepo.Update(ctx, nil, *server.ServiceDeskUUID, updateData)
-	if err != nil {
-		log.Error("Не удалось обновить CRMid в базе данных", zap.Error(err))
-	} else {
-		log.Info("CRMid успешно сохранен в базе данных")
-	}
-}
-
-// handleProcessingError анализирует ошибку и принимает решение о дальнейших действиях.
-func (s *crmidWorkerServiceImpl) handleProcessingError(ctx context.Context, server models.Server, url string, err error, log *zap.Logger) {
-	log.Warn("Не удалось получить CRMid для сервера", zap.String("url", url), zap.Error(err))
-
-	// Проверяем, является ли ошибка сетевой (DNS lookup, connection refused и т.д.)
-	var dnsError *net.DNSError
-	isNetworkError := strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "i/o timeout") || errors.As(err, &dnsError)
-
-	updateData := make(map[string]interface{})
-	now := time.Now()
-	updateData["crmid_last_attempt"] = &now
-
-	if isNetworkError {
-		log.Info("Обнаружена сетевая ошибка. Сервер будет помечен как 'inactive' на 30 дней.")
-		updateData["status"] = "inactive"
-	}
-
-	// Обновляем сервер в БД
-	if _, updateErr := s.serverRepo.Update(ctx, nil, *server.ServiceDeskUUID, updateData); updateErr != nil {
-		log.Error("Не удалось обновить статус/время последней попытки для сервера", zap.Error(updateErr))
-	}
-
-	// Создаем/обновляем задачу для администратора в любом случае
-	s.createOrUpdateTask(ctx, server, err, log)
-}
-
-// createOrUpdateTask создает или обновляет задачу для администратора.
-func (s *crmidWorkerServiceImpl) createOrUpdateTask(ctx context.Context, server models.Server, processErr error, log *zap.Logger) {
-	taskType := "crmid_enrichment_failed"
-	entityUUID := utils.SafeStringDereference(server.ServiceDeskUUID)
-
-	detailsMap := map[string]string{
-		"serverIP":      utils.SafeStringDereference(server.IP),
-		"serverUUID":    entityUUID,
-		"lastError":     processErr.Error(),
-		"lastAttemptAt": time.Now().Format(time.RFC3339),
-	}
-	detailsJSON, _ := json.Marshal(detailsMap)
-
-	var existingTask models.ReconciliationTask
-	err := s.db.WithContext(ctx).
-		Where("entity_uuid = ? AND task_type = ?", entityUUID, taskType).
-		First(&existingTask).Error
-
-	if err == gorm.ErrRecordNotFound {
-		task := models.ReconciliationTask{
-			TaskType:   taskType,
-			EntityType: "Server",
-			EntityUUID: entityUUID,
-			Details:    datatypes.JSON(detailsJSON),
-			Status:     "new",
-			Comment:    fmt.Sprintf("Первая неудачная попытка получения CRMid. Ошибка: %v", processErr),
-		}
-		if createErr := s.db.WithContext(ctx).Create(&task).Error; createErr != nil {
-			log.Error("Не удалось создать задачу", zap.Error(createErr))
-		} else {
-			log.Info("Создана новая задача на ручное обогащение CRMid")
-		}
-		return
-	} else if err != nil {
-		log.Error("Ошибка при поиске существующей задачи", zap.Error(err))
-		return
-	}
-
-	commentUpdate := fmt.Sprintf("\n[%s] Повторная неудачная попытка. Ошибка: %v", time.Now().Format(time.RFC3339), processErr)
-	updateResult := s.db.WithContext(ctx).Model(&existingTask).Updates(map[string]interface{}{
-		"details": datatypes.JSON(detailsJSON),
-		"status":  "new", // Если задача была решена, но проблема вернулась - переоткрываем.
-		"comment": gorm.Expr("comment || ?", commentUpdate),
-	})
-
-	if updateResult.Error != nil {
-		log.Error("Не удалось обновить существующую задачу", zap.Error(updateResult.Error))
-	} else {
-		log.Info("Обновлена существующая задача на ручное обогащение CRMid")
-	}
-}
-
-go `
-===== END crmid_worker_service.go =====
-
 internal/services/ftp_client.go
 ===== START ftp_client.go =====
 go `
@@ -3599,10 +3483,12 @@ go `
 internal/services/mappers.go
 ===== START mappers.go =====
 go `
+// internal/services/mappers.go
 package services
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/models"
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
@@ -3611,7 +3497,15 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
+
+// ContractInfo represents the structure for storing aggregated contract details in JSON.
+type ContractInfo struct {
+	Services          []string `json:"services"`
+	OtherRecipients   []string `json:"other_recipients_uuids"`
+	ActiveContractIDs []string `json:"active_contract_ids"`
+}
 
 // DataToCompany преобразует мапу от ServiceDesk в модель Company.
 func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient ServiceDeskClient, logger *zap.Logger) (*models.Company, error) {
@@ -3645,25 +3539,73 @@ func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient Se
 	}
 
 	// Обработка active_contract
-	active := false
+	isActiveContract := false
+	contractInfo := ContractInfo{
+		Services:          []string{},
+		OtherRecipients:   []string{},
+		ActiveContractIDs: []string{},
+	}
+	serviceSet := make(map[string]struct{})
+	recipientSet := make(map[string]struct{})
+
 	if agreements, ok := data["recipientAgreements"].([]interface{}); ok {
 		for _, agr := range agreements {
-			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
-				if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-					isActive, err := sdClient.CheckAgreementActive(ctx, agrUUID)
-					if err != nil {
-						logger.Warn("Failed to check agreement status", zap.String("agreementUUID", agrUUID), zap.Error(err))
-						continue
+			agrMap, agrOk := agr.(map[string]interface{})
+			if !agrOk {
+				continue
+			}
+
+			// Пропускаем все контракты, кроме 'agreement$agreement'
+			metaClass, _ := agrMap["metaClass"].(string)
+			if metaClass != "agreement$agreement" {
+				continue
+			}
+
+			agrUUID, uuidOk := agrMap["UUID"].(string)
+			if !uuidOk {
+				continue
+			}
+
+			// Получаем детали контракта (с использованием кэша)
+			details, err := sdClient.FetchAgreementDetails(ctx, agrUUID)
+			if err != nil {
+				logger.Warn("Не удалось получить детали контракта", zap.String("agreementUUID", agrUUID), zap.Error(err))
+				continue
+			}
+
+			if details.State == "active" {
+				isActiveContract = true
+				contractInfo.ActiveContractIDs = append(contractInfo.ActiveContractIDs, agrUUID)
+
+				// Собираем уникальные сервисы
+				for _, service := range details.Services {
+					if _, exists := serviceSet[service.Title]; !exists {
+						serviceSet[service.Title] = struct{}{}
+						contractInfo.Services = append(contractInfo.Services, service.Title)
 					}
-					if isActive {
-						active = true
-						break
+				}
+
+				// Собираем уникальных получателей, исключая текущую компанию
+				for _, recipient := range details.RecipientsOU {
+					if recipient.UUID != uuid {
+						if _, exists := recipientSet[recipient.UUID]; !exists {
+							recipientSet[recipient.UUID] = struct{}{}
+							contractInfo.OtherRecipients = append(contractInfo.OtherRecipients, recipient.UUID)
+						}
 					}
 				}
 			}
 		}
 	}
-	company.ActiveContract = &active
+
+	company.ActiveContract = &isActiveContract
+	contractInfoJSON, err := json.Marshal(contractInfo)
+	if err != nil {
+		logger.Error("Не удалось сериализовать информацию о контракте в JSON", zap.String("companyUUID", uuid), zap.Error(err))
+	} else {
+		company.ContractInfo = datatypes.JSON(contractInfoJSON)
+	}
+	// --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
 	return company, nil
 }
@@ -3695,7 +3637,7 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 	rawIikoVersion, _ := data["iikoVersion"].(string)
 	rawDescription, _ := data["description"].(string)
 	rawNameForClient, _ := data["nameforclient"].(string)
-	rawLitemanager, _ := data["litemanagerID"].(string) // Извлекаем litemanagerID напрямую
+	rawLitemanager, _ := data["litemanagerID"].(string)
 
 	// 2. Валидируем и заполняем основные поля модели.
 	server.UniqueID = validators.ValidateUniqueID(rawUniqueID)
@@ -3712,7 +3654,7 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 		server.DeviceName = &rawDeviceName
 	}
 	if rawIikoVersion != "" {
-		server.IikoVersion = &rawIikoVersion
+		server.ServerVersion = &rawIikoVersion
 	}
 
 	// 3. Собираем все извлеченные "сырые" данные в единое поле Description.
@@ -3924,9 +3866,13 @@ func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid str
 	return args.Get(0).(map[string]interface{}), args.Error(1)
 }
 
-func (m *MockServiceDeskClient) CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error) {
+func (m *MockServiceDeskClient) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error) {
 	args := m.Called(ctx, agreementUUID)
-	return args.Bool(0), args.Error(1)
+	val, ok := args.Get(0).(*AgreementDetailsDTO)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // Вспомогательная функция для парсинга времени, т.к. utils не импортируется
@@ -3944,7 +3890,9 @@ func TestDataToCompany(t *testing.T) {
 	logger := zap.NewNop()
 	ctx := context.Background()
 
-	mockClient.On("CheckAgreementActive", mock.Anything, mock.AnythingOfType("string")).Return(true, nil)
+	// ИЗМЕНЕНИЕ: Настраиваем мок для нового метода
+	mockClient.On("FetchAgreementDetails", mock.Anything, "agreement-uuid-3").Return(&AgreementDetailsDTO{State: "active"}, nil)
+	mockClient.On("FetchAgreementDetails", mock.Anything, "agreement-uuid-inactive").Return(&AgreementDetailsDTO{State: "inactive"}, nil)
 
 	testCases := []struct {
 		name        string
@@ -3962,7 +3910,8 @@ func TestDataToCompany(t *testing.T) {
 				"lastModifiedDate": "2023.10.30 15:00:00",
 				"parent":           map[string]interface{}{"UUID": "parent-uuid-2"},
 				"recipientAgreements": []interface{}{
-					map[string]interface{}{"UUID": "agreement-uuid-3"},
+					map[string]interface{}{"UUID": "agreement-uuid-inactive", "metaClass": "agreement$agreement"},
+					map[string]interface{}{"UUID": "agreement-uuid-3", "metaClass": "agreement$agreement"},
 				},
 			},
 			expectError: false,
@@ -3985,7 +3934,7 @@ func TestDataToCompany(t *testing.T) {
 			expected:    nil,
 		},
 		{
-			name: "Частичные данные",
+			name: "Частичные данные без контрактов",
 			input: map[string]interface{}{
 				"UUID":  "company-uuid-4",
 				"title": "ООО Василек",
@@ -3994,7 +3943,7 @@ func TestDataToCompany(t *testing.T) {
 			expected: &models.Company{
 				Base:           models.Base{ServiceDeskUUID: StringPtr("company-uuid-4")},
 				Title:          StringPtr("ООО Василек"),
-				ActiveContract: BoolPtr(false), // Договоров нет
+				ActiveContract: BoolPtr(false),
 			},
 		},
 	}
@@ -4177,6 +4126,7 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
+	"etalon-server/internal/validators"
 	"fmt"
 	"os"
 	"path"
@@ -4342,109 +4292,147 @@ func (s *reconcilerServiceImpl) processFile(ctx context.Context, fileName string
 }
 
 // ProcessAgentData выполняет основную "водопадную" логику сверки данных от агента.
-// Алгоритм работает по принципу приоритетов: сначала ищется совпадение по самому надежному
-// признаку (сервер), затем по менее надежному (рабочая станция) и так далее.
 func (s *reconcilerServiceImpl) ProcessAgentData(ctx context.Context, data *api.AgentDataDTO) (ownerID, entityUUID, method string, err error) {
 	log := s.logger.With(zap.String("agent_hostname", data.Hostname))
 	log.Info("Начало процесса сверки данных от агента")
 
-	domain := ""
-	if matches := rmsUrlRegex.FindStringSubmatch(data.URLRms); len(matches) > 2 {
-		domain = matches[2]
-	}
-	foundServer, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, domain)
+	// Нормализуем IP-адрес из URL RMS перед поиском
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+
+	foundServer, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(normalizedIP))
 	foundWS, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, data.AnydeskID, data.LitemanagerID)
 	foundFR, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
+
+	// Получаем информацию о компаниях-владельцах для обогащения комментариев в задачах
+	ownerCompanies := s.getOwnerCompanies(ctx, foundServer, foundWS, foundFR)
 
 	if foundServer != nil {
 		log.Info("Приоритет 1: Найдено совпадение по Серверу", zap.String("server_uuid", utils.SafeStringDereference(foundServer.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundServer.OwnerServiceDeskUUID)
-		s.reconcileFromServerContext(ctx, ownerID, data, foundServer, foundWS, foundFR, log)
+		s.reconcileFromServerContext(ctx, ownerID, data, foundServer, foundWS, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundServer.ServiceDeskUUID), "server_match", nil
 	}
 
 	if foundWS != nil {
 		log.Info("Приоритет 2: Найдено совпадение по Рабочей станции", zap.String("ws_uuid", utils.SafeStringDereference(foundWS.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundWS.OwnerServiceDeskUUID)
-		s.reconcileFromWorkstationContext(ctx, ownerID, data, foundWS, foundFR, log)
+		s.reconcileFromWorkstationContext(ctx, ownerID, data, foundWS, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundWS.ServiceDeskUUID), "workstation_match", nil
 	}
 
 	if foundFR != nil {
 		log.Info("Приоритет 3: Найдено совпадение по Фискальному регистратору", zap.String("fr_uuid", utils.SafeStringDereference(foundFR.ServiceDeskUUID)))
 		ownerID = utils.SafeStringDereference(foundFR.OwnerServiceDeskUUID)
-		s.reconcileFromFRContext(ctx, ownerID, data, foundFR, log)
+		s.reconcileFromFRContext(ctx, ownerID, data, foundFR, ownerCompanies, log)
 		return ownerID, utils.SafeStringDereference(foundFR.ServiceDeskUUID), "fr_match", nil
 	}
 
 	log.Warn("Не найдено совпадений ни по одному из приоритетов. Создание задачи 'new_client'.")
-	s.createTask(ctx, "new_client", "", "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
+	s.createTask(ctx, "new_client", "", "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.", "")
 	return "", "", "no_match", fmt.Errorf("не удалось найти совпадения")
 }
 
 // reconcileFromServerContext обрабатывает логику сверки, когда сервер является главной точкой отсчета.
-// Владелец сервера считается "истинным" владельцем для всего остального оборудования.
-func (s *reconcilerServiceImpl) reconcileFromServerContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromServerContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileServerData(ctx, server, data, log)
+
+	serverOwnerName := getCompanyName(owners, server.OwnerServiceDeskUUID)
+	serverIdentifier := fmt.Sprintf("по серверу '%s' (%s)", utils.SafeStringDereference(server.DeviceName), *server.ServiceDeskUUID)
 
 	if data.AnydeskID != "" || data.TeamviewerID != "" || data.LitemanagerID != "" {
 		if ws != nil {
-			// ИСПРАВЛЕНИЕ: Логика изменена. Мы всегда обогащаем найденную станцию.
 			log.Info("Найдена существующая рабочая станция, выполняется слияние данных.", zap.String("ws_uuid", utils.SafeStringDereference(ws.ServiceDeskUUID)))
 			if utils.SafeStringDereference(ws.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "Workstation", utils.SafeStringDereference(ws.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(ws.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, ws.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для рабочей станции '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, currentOwnerName, *ws.OwnerServiceDeskUUID, serverOwnerName, ownerID, serverIdentifier)
+				s.createTask(ctx, "owner_mismatch", "Workstation", *ws.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileWorkstationData(ctx, ws, data, log)
 		} else {
-			log.Info("Рабочая станция с указанными ID не найдена. Создание задачи на добавление.")
-			s.createTask(ctx, "add_equipment", "Workstation", "", data, fmt.Sprintf("Добавить новую рабочую станцию для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новую рабочую станцию для владельца '%s' (%s). Владелец определен %s. ID удаленного доступа: %s.",
+				serverOwnerName, ownerID, serverIdentifier, formatRemoteIDs(data))
+			s.createTask(ctx, "add_equipment", "Workstation", "", data, comment, serverIdentifier)
 		}
 	}
 
 	if data.SerialNumber != "" {
 		if fr != nil {
 			if utils.SafeStringDereference(fr.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "FiscalRegister", utils.SafeStringDereference(fr.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от сервера), текущий %s", ownerID, utils.SafeStringDereference(fr.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для ФР с СН '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					*fr.FRSerialNumber, *fr.ServiceDeskUUID, currentOwnerName, *fr.OwnerServiceDeskUUID, serverOwnerName, ownerID, serverIdentifier)
+				s.createTask(ctx, "owner_mismatch", "FiscalRegister", *fr.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileFiscalRegisterData(ctx, fr, data, log)
 		} else {
-			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, fmt.Sprintf("Добавить новый ФР для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s' (%s). Владелец определен %s.",
+				data.SerialNumber, serverOwnerName, ownerID, serverIdentifier)
+			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, comment, serverIdentifier)
 		}
 	}
 }
 
 // reconcileFromWorkstationContext обрабатывает логику сверки, когда рабочая станция является точкой отсчета.
-func (s *reconcilerServiceImpl) reconcileFromWorkstationContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, ws *models.Workstation, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromWorkstationContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, ws *models.Workstation, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileWorkstationData(ctx, ws, data, log)
 
-	// Сервер по данным агента не был найден на шаге 1 (иначе мы бы не попали в эту функцию).
-	// Следовательно, это новый сервер для клиента, определенного по рабочей станции.
-	if data.CRMID != "" || data.URLRms != "" {
-		s.createTask(ctx, "add_equipment", "Server", "", data, fmt.Sprintf("Добавить новый сервер для владельца %s", ownerID))
+	wsOwnerName := getCompanyName(owners, ws.OwnerServiceDeskUUID)
+	wsIdentifier := fmt.Sprintf("по рабочей станции '%s' (%s)", utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID)
+
+	// Проверяем, нужно ли создавать задачу на добавление сервера
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+	if normalizedIP != nil {
+		isPrivate, _ := utils.IsPrivateIP(strings.Split(*normalizedIP, ":")[0])
+		if !isPrivate {
+			comment := fmt.Sprintf("Добавить новый сервер (IP: %s) для владельца '%s' (%s). Владелец определен %s.",
+				*normalizedIP, wsOwnerName, ownerID, wsIdentifier)
+			s.createTask(ctx, "add_equipment", "Server", "", data, comment, wsIdentifier)
+		} else {
+			log.Info("IP-адрес сервера является приватным, задача на добавление не создается.", zap.String("ip", *normalizedIP))
+		}
 	}
 
-	// Проверка фискального регистратора
 	if data.SerialNumber != "" {
 		if fr != nil {
 			if utils.SafeStringDereference(fr.OwnerServiceDeskUUID) != ownerID {
-				s.createTask(ctx, "owner_mismatch", "FiscalRegister", utils.SafeStringDereference(fr.ServiceDeskUUID), data, fmt.Sprintf("Ожидаемый владелец %s (от станции), текущий %s", ownerID, utils.SafeStringDereference(fr.OwnerServiceDeskUUID)))
+				currentOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+				comment := fmt.Sprintf("Несоответствие владельца для ФР с СН '%s' (%s). Текущий владелец: '%s' (%s). Ожидаемый владелец: '%s' (%s), определен %s.",
+					*fr.FRSerialNumber, *fr.ServiceDeskUUID, currentOwnerName, *fr.OwnerServiceDeskUUID, wsOwnerName, ownerID, wsIdentifier)
+				s.createTask(ctx, "owner_mismatch", "FiscalRegister", *fr.ServiceDeskUUID, data, comment, "")
 			}
 			s.reconcileFiscalRegisterData(ctx, fr, data, log)
 		} else {
-			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, fmt.Sprintf("Добавить новый ФР для владельца %s", ownerID))
+			comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s' (%s). Владелец определен %s.",
+				data.SerialNumber, wsOwnerName, ownerID, wsIdentifier)
+			s.createTask(ctx, "add_equipment", "FiscalRegister", "", data, comment, wsIdentifier)
 		}
 	}
 }
 
 // reconcileFromFRContext обрабатывает логику сверки, когда ФР является точкой отсчета.
-func (s *reconcilerServiceImpl) reconcileFromFRContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, fr *models.FiscalRegister, log *zap.Logger) {
+func (s *reconcilerServiceImpl) reconcileFromFRContext(ctx context.Context, ownerID string, data *api.AgentDataDTO, fr *models.FiscalRegister, owners map[string]*models.Company, log *zap.Logger) {
 	s.reconcileFiscalRegisterData(ctx, fr, data, log)
-	// Для сервера и станции создаем задачи на добавление, т.к. они не были найдены на предыдущих шагах.
-	if data.CRMID != "" || data.URLRms != "" {
-		s.createTask(ctx, "add_equipment", "Server", "", data, fmt.Sprintf("Добавить новый сервер для владельца %s (определен по ФР)", ownerID))
+
+	frOwnerName := getCompanyName(owners, fr.OwnerServiceDeskUUID)
+	frIdentifier := fmt.Sprintf("по ФР с СН '%s' (%s)", *fr.FRSerialNumber, *fr.ServiceDeskUUID)
+
+	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+	if normalizedIP != nil {
+		isPrivate, _ := utils.IsPrivateIP(strings.Split(*normalizedIP, ":")[0])
+		if !isPrivate {
+			comment := fmt.Sprintf("Добавить новый сервер (IP: %s) для владельца '%s' (%s). Владелец определен %s.",
+				*normalizedIP, frOwnerName, ownerID, frIdentifier)
+			s.createTask(ctx, "add_equipment", "Server", "", data, comment, frIdentifier)
+		} else {
+			log.Info("IP-адрес сервера является приватным, задача на добавление не создается.", zap.String("ip", *normalizedIP))
+		}
 	}
+
 	if data.AnydeskID != "" || data.TeamviewerID != "" || data.LitemanagerID != "" {
-		s.createTask(ctx, "add_equipment", "Workstation", "", data, fmt.Sprintf("Добавить новую рабочую станцию для владельца %s (определен по ФР)", ownerID))
+		comment := fmt.Sprintf("Добавить новую рабочую станцию для владельца '%s' (%s). Владелец определен %s. ID удаленного доступа: %s.",
+			frOwnerName, ownerID, frIdentifier, formatRemoteIDs(data))
+		s.createTask(ctx, "add_equipment", "Workstation", "", data, comment, frIdentifier)
 	}
 }
 
@@ -4507,7 +4495,7 @@ func (s *reconcilerServiceImpl) reconcileFiscalRegisterData(ctx context.Context,
 }
 
 // createTask создает задачу для ручного разбора администратором.
-func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entityType, entityUUID string, agentData *api.AgentDataDTO, comment string) {
+func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entityType, entityUUID string, agentData *api.AgentDataDTO, comment, reason string) {
 	details, _ := json.Marshal(agentData)
 	task := models.ReconciliationTask{
 		TaskType:   taskType,
@@ -4520,7 +4508,7 @@ func (s *reconcilerServiceImpl) createTask(ctx context.Context, taskType, entity
 	if err := s.db.WithContext(ctx).Create(&task).Error; err != nil {
 		s.logger.Error("Не удалось создать задачу на сверку", zap.Error(err))
 	} else {
-		s.logger.Info("Создана новая задача на сверку", zap.String("type", taskType), zap.String("entity_uuid", entityUUID), zap.String("comment", comment))
+		s.logger.Info("Создана новая задача на сверку", zap.String("type", taskType), zap.String("entity_uuid", entityUUID), zap.String("reason", reason))
 	}
 }
 
@@ -4563,26 +4551,97 @@ func (s *reconcilerServiceImpl) updateAgentFileStatus(ctx context.Context, fileN
 	}
 }
 
+// getOwnerCompanies загружает из БД информацию о компаниях-владельцах для обогащения логов.
+func (s *reconcilerServiceImpl) getOwnerCompanies(ctx context.Context, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister) map[string]*models.Company {
+	uuids := make(map[string]struct{})
+	if server != nil && server.OwnerServiceDeskUUID != nil {
+		uuids[*server.OwnerServiceDeskUUID] = struct{}{}
+	}
+	if ws != nil && ws.OwnerServiceDeskUUID != nil {
+		uuids[*ws.OwnerServiceDeskUUID] = struct{}{}
+	}
+	if fr != nil && fr.OwnerServiceDeskUUID != nil {
+		uuids[*fr.OwnerServiceDeskUUID] = struct{}{}
+	}
+
+	if len(uuids) == 0 {
+		return nil
+	}
+
+	uuidList := make([]string, 0, len(uuids))
+	for uuid := range uuids {
+		uuidList = append(uuidList, uuid)
+	}
+
+	// Используем временный репозиторий для этого запроса
+	companyRepo := repositories.NewCompanyRepo(s.db)
+	companies, err := companyRepo.GetByUUIDs(ctx, uuidList)
+	if err != nil {
+		s.logger.Error("Не удалось получить информацию о компаниях-владельцах", zap.Error(err))
+		return nil
+	}
+
+	companyMap := make(map[string]*models.Company)
+	for i := range companies {
+		companyMap[*companies[i].ServiceDeskUUID] = &companies[i]
+	}
+	return companyMap
+}
+
+// getCompanyName безопасно извлекает имя компании из мапы.
+func getCompanyName(owners map[string]*models.Company, uuid *string) string {
+	if uuid == nil || owners == nil {
+		return "[Неизвестный владелец]"
+	}
+	if company, ok := owners[*uuid]; ok {
+		return utils.SafeStringDereference(company.Title)
+	}
+	return "[Неизвестный владелец]"
+}
+
+// formatRemoteIDs форматирует строку с ID удаленного доступа для логов/комментариев.
+func formatRemoteIDs(data *api.AgentDataDTO) string {
+	var parts []string
+	if data.TeamviewerID != "" && data.TeamviewerID != "None" {
+		parts = append(parts, "TV: "+data.TeamviewerID)
+	}
+	if data.AnydeskID != "" && data.AnydeskID != "None" {
+		parts = append(parts, "AD: "+data.AnydeskID)
+	}
+	if data.LitemanagerID != "" && data.LitemanagerID != "None" {
+		parts = append(parts, "LM: "+data.LitemanagerID)
+	}
+	if len(parts) == 0 {
+		return "не указаны"
+	}
+	return strings.Join(parts, ", ")
+}
+
 go `
 ===== END reconciler_service.go =====
 
 internal/services/sdesk_sync_service.go
 ===== START sdesk_sync_service.go =====
 go `
+// internal/services/sdesk_sync_service.go
 package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"etalon-server/internal/config"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -4670,10 +4729,13 @@ func (s *sdeskSyncServiceImpl) runSyncCycle(ctx context.Context) {
 
 	s.logger.Info("Начало нового цикла синхронизации с ServiceDesk.")
 
-	s.syncEntityType(ctx, "ou$company")
-	s.syncEntityType(ctx, "objectBase$Server")
-	s.syncEntityType(ctx, "objectBase$Workstation")
-	s.syncEntityType(ctx, "objectBase$FR")
+	agreementCache := make(map[string]*AgreementDetailsDTO)
+	cycleCtx := context.WithValue(ctx, agreementCacheKey, agreementCache)
+
+	s.syncEntityType(cycleCtx, "ou$company")
+	s.syncEntityType(cycleCtx, "objectBase$Server")
+	s.syncEntityType(cycleCtx, "objectBase$Workstation")
+	s.syncEntityType(cycleCtx, "objectBase$FR")
 
 	s.logger.Info("Цикл синхронизации с ServiceDesk завершен.")
 }
@@ -4732,7 +4794,6 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		zap.Int("to_update", len(toUpdate)),
 		zap.Int("to_delete", len(toDelete)))
 
-	// Вызываем отдельные, чистые функции для каждого типа операции.
 	if len(toCreate) > 0 {
 		s.processCreationsInParallel(ctx, metaClass, toCreate, log)
 	}
@@ -4779,13 +4840,12 @@ func (s *sdeskSyncServiceImpl) processDeletions(ctx context.Context, metaClass s
 
 		if deleted {
 			log.Info("Сущность успешно помечена как удаленная", zap.String("uuid", uuid))
-			// После успешного удаления пытаемся закрыть задачу
 			s.resolveDeletionTask(ctx, uuid, log)
 		}
 	}
 }
 
-// НОВАЯ ФУНКЦИЯ: resolveDeletionTask находит и закрывает задачу на удаление в SD.
+// resolveDeletionTask находит и закрывает задачу на удаление в SD.
 func (s *sdeskSyncServiceImpl) resolveDeletionTask(ctx context.Context, entityUUID string, log *zap.Logger) {
 	result := s.db.WithContext(ctx).Model(&models.ReconciliationTask{}).
 		Where("entity_uuid = ? AND task_type = ? AND status = ?", entityUUID, "delete_from_servicedesk", "new").
@@ -4854,7 +4914,6 @@ func (s *sdeskSyncServiceImpl) processCreationsInParallel(ctx context.Context, m
 		go func() {
 			defer wg.Done()
 			for uuid := range tasks {
-				// Проверяем контекст перед каждой долгой операцией
 				select {
 				case <-ctx.Done():
 					return
@@ -4879,7 +4938,7 @@ func (s *sdeskSyncServiceImpl) processCreationsInParallel(ctx context.Context, m
 	wg.Wait()
 }
 
-// processUpdatesInParallel создает воркер-пул для обновления сущностей.
+// processUpdatesInParallel создает воркер-пул для проверки и создания задач о конфликтах.
 func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, metaClass string, toUpdate []string, log *zap.Logger) {
 	var wg sync.WaitGroup
 	tasks := make(chan string, len(toUpdate))
@@ -4889,7 +4948,6 @@ func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, met
 		go func() {
 			defer wg.Done()
 			for uuid := range tasks {
-				// Проверяем контекст перед каждой долгой операцией
 				select {
 				case <-ctx.Done():
 					return
@@ -4901,7 +4959,7 @@ func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, met
 						}
 						continue
 					}
-					s.updateEntityIfNeeded(ctx, metaClass, uuid, details, log)
+					s.checkEntityAndCreateTaskIfNeeded(ctx, metaClass, uuid, details, log)
 				}
 			}
 		}()
@@ -4954,10 +5012,14 @@ func (s *sdeskSyncServiceImpl) createEntity(ctx context.Context, metaClass strin
 	}
 }
 
-// updateEntityIfNeeded выполняет "умное слияние".
-func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaClass, uuid string, details map[string]interface{}, log *zap.Logger) {
+// checkEntityAndCreateTaskIfNeeded выполняет сравнение данных и решает,
+// нужно ли восстановить запись, создать задачу о конфликте или ничего не делать.
+func (s *sdeskSyncServiceImpl) checkEntityAndCreateTaskIfNeeded(ctx context.Context, metaClass, uuid string, details map[string]interface{}, log *zap.Logger) {
 	var updates map[string]interface{}
+	var diffLog []zap.Field
+	var currentEntity interface{}
 
+	// 1. Получаем текущую и новую версии сущности для сравнения
 	switch metaClass {
 	case "ou$company":
 		newData, mapErr := DataToCompany(ctx, details, s.sdClient, log)
@@ -4965,13 +5027,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга компании", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод, чтобы найти запись, даже если она удалена.
 		currentData, getErr := s.companyRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущую компанию для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущую компанию", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getCompanyDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getCompanyDiff(currentData, newData)
 
 	case "objectBase$Server":
 		newData, mapErr := DataToServer(details)
@@ -4979,13 +5041,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга сервера", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.serverRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущий сервер для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущий сервер", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getServerDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getServerDiff(currentData, newData)
 
 	case "objectBase$Workstation":
 		newData, mapErr := DataToWorkstation(details)
@@ -4993,13 +5055,13 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга рабочей станции", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.workstationRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущую станцию для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущую станцию", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getWorkstationDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getWorkstationDiff(currentData, newData)
 
 	case "objectBase$FR":
 		newData, mapErr := DataToFiscalRegister(details)
@@ -5007,210 +5069,257 @@ func (s *sdeskSyncServiceImpl) updateEntityIfNeeded(ctx context.Context, metaCla
 			log.Error("Ошибка маппинга ФР", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
 		}
-		// ИСПРАВЛЕНИЕ: Используем Unscoped-метод.
 		currentData, getErr := s.frRepo.GetByUUIDUnscoped(ctx, uuid)
 		if getErr != nil || currentData == nil {
-			log.Error("Не удалось получить текущий ФР для сравнения", zap.String("uuid", uuid), zap.Error(getErr))
+			log.Error("Не удалось получить текущий ФР", zap.String("uuid", uuid), zap.Error(getErr))
 			return
 		}
-		updates = getFiscalRegisterDiff(currentData, newData)
+		currentEntity = currentData
+		updates, diffLog = getFiscalRegisterDiff(currentData, newData)
 
 	default:
-		log.Warn("Неизвестный metaClass для обновления", zap.String("metaClass", metaClass))
+		log.Warn("Неизвестный metaClass для проверки", zap.String("metaClass", metaClass))
 		return
 	}
 
-	if len(updates) > 0 {
-		log.Info("Обнаружены изменения, обновление сущности", zap.String("uuid", uuid), zap.Any("changes", updates))
-		err := s.db.Transaction(func(tx *gorm.DB) error {
-			switch metaClass {
-			case "ou$company":
-				_, err := s.companyRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$Server":
-				_, err := s.serverRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$Workstation":
-				_, err := s.workstationRepo.Update(ctx, tx, uuid, updates)
-				return err
-			case "objectBase$FR":
-				_, err := s.frRepo.Update(ctx, tx, uuid, updates)
-				return err
-			}
-			return errors.New("неизвестный metaClass для транзакции обновления")
-		})
-		if err != nil {
-			log.Error("Ошибка при обновлении сущности", zap.String("uuid", uuid), zap.Error(err))
+	// 2. Принимаем решение на основе найденных изменений
+	if len(updates) == 0 {
+		s.resolveConflictTaskIfNeeded(ctx, uuid, log)
+		return
+	}
+
+	_, isRestorationOnly := updates["deleted_at"]
+	if len(updates) == 1 && isRestorationOnly {
+		// Сценарий 1: Только восстановление. Выполняем автоматически.
+		log.Info("Обнаружена восстановленная в SD сущность. Автоматическое восстановление.", append(diffLog, zap.String("uuid", uuid))...)
+		s.performUpdate(ctx, metaClass, uuid, updates, log)
+	} else {
+		// Сценарий 2: Есть другие расхождения. Создаем задачу.
+		log.Warn("Обнаружено расхождение данных между локальной БД и ServiceDesk. Создание задачи.", append(diffLog, zap.String("uuid", uuid))...)
+		s.createConflictTask(ctx, metaClass, uuid, currentEntity, details, diffLog, log)
+	}
+}
+
+// performUpdate выполняет обновление сущности в БД.
+func (s *sdeskSyncServiceImpl) performUpdate(ctx context.Context, metaClass, uuid string, updates map[string]interface{}, log *zap.Logger) {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		switch metaClass {
+		case "ou$company":
+			_, err := s.companyRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$Server":
+			_, err := s.serverRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$Workstation":
+			_, err := s.workstationRepo.Update(ctx, tx, uuid, updates)
+			return err
+		case "objectBase$FR":
+			_, err := s.frRepo.Update(ctx, tx, uuid, updates)
+			return err
 		}
+		return errors.New("неизвестный metaClass для транзакции обновления")
+	})
+	if err != nil {
+		log.Error("Ошибка при автоматическом восстановлении сущности", zap.String("uuid", uuid), zap.Error(err))
+	}
+}
+
+// createConflictTask создает задачу о расхождении данных.
+func (s *sdeskSyncServiceImpl) createConflictTask(ctx context.Context, metaClass, uuid string, currentEntity interface{}, remoteDetails map[string]interface{}, diffLog []zap.Field, log *zap.Logger) {
+	detailsMap := make(map[string]interface{})
+	diffs := make(map[string]string)
+	for _, field := range diffLog {
+		if field.Key == "status" && field.String == "deleted -> restored" {
+			continue
+		}
+		diffs[field.Key] = field.String
+	}
+
+	if len(diffs) == 0 {
+		return
+	}
+
+	detailsMap["conflicts"] = diffs
+	detailsMap["local_entity"] = currentEntity
+	detailsMap["remote_entity"] = remoteDetails
+	detailsJSON, _ := json.Marshal(detailsMap)
+
+	entityType := metaClass
+	if parts := strings.Split(metaClass, "$"); len(parts) > 1 {
+		entityType = parts[1]
+	}
+	comment := fmt.Sprintf("Обнаружено расхождение данных для сущности '%s' (%s). Требуется ручная сверка.", uuid, entityType)
+
+	task := models.ReconciliationTask{
+		TaskType:   "data_conflict",
+		EntityType: entityType,
+		EntityUUID: uuid,
+		Details:    datatypes.JSON(detailsJSON),
+		Status:     "new",
+		Comment:    comment,
+	}
+
+	err := s.db.WithContext(ctx).
+		Where("entity_uuid = ? AND task_type = ? AND status = 'new'", uuid, "data_conflict").
+		FirstOrCreate(&task).Error
+
+	if err != nil {
+		log.Error("Не удалось создать или найти задачу о конфликте данных", zap.String("uuid", uuid), zap.Error(err))
+	}
+}
+
+// resolveConflictTaskIfNeeded автоматически закрывает задачу, если конфликт устранен.
+func (s *sdeskSyncServiceImpl) resolveConflictTaskIfNeeded(ctx context.Context, uuid string, log *zap.Logger) {
+	result := s.db.WithContext(ctx).Model(&models.ReconciliationTask{}).
+		Where("entity_uuid = ? AND task_type = ? AND status = 'new'", uuid, "data_conflict").
+		Updates(map[string]interface{}{
+			"status":  "resolved",
+			"comment": gorm.Expr("comment || ?", "\n[АВТОМАТИЧЕСКИ] Конфликт устранен, данные синхронизированы."),
+		})
+
+	if result.Error != nil {
+		log.Error("Ошибка при попытке автоматического разрешения задачи о конфликте", zap.String("uuid", uuid), zap.Error(result.Error))
+		return
+	}
+
+	if result.RowsAffected > 0 {
+		log.Info("Конфликт данных устранен. Существующая задача автоматически разрешена.", zap.String("uuid", uuid))
 	}
 }
 
 // --- Вспомогательные функции для сравнения (diff) ---
 
-func getCompanyDiff(current *models.Company, new *models.Company) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.Title) != utils.SafeStringDereference(new.Title) {
-		updates["title"] = new.Title
+// formatDiffValue безопасно форматирует значение (включая nil-указатели) для логирования.
+func formatDiffValue(v interface{}) string {
+	if v == nil {
+		return "<nil>"
 	}
-	if utils.SafeStringDereference(current.Address) != utils.SafeStringDereference(new.Address) {
-		updates["address"] = new.Address
-	}
-	if utils.SafeStringDereference(current.AdditionalName) != utils.SafeStringDereference(new.AdditionalName) {
-		updates["additional_name"] = new.AdditionalName
-	}
-	if utils.SafeStringDereference(current.ParentServiceDeskUUID) != utils.SafeStringDereference(new.ParentServiceDeskUUID) {
-		updates["parent_service_desk_uuid"] = new.ParentServiceDeskUUID
-	}
-	if (current.ActiveContract == nil && new.ActiveContract != nil) || (current.ActiveContract != nil && new.ActiveContract == nil) || (current.ActiveContract != nil && new.ActiveContract != nil && *current.ActiveContract != *new.ActiveContract) {
-		updates["active_contract"] = new.ActiveContract
-	}
-
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
+	val := reflect.ValueOf(v)
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return "<nil>"
 		}
+		return fmt.Sprintf("'%v'", val.Elem().Interface())
 	}
-
-	if len(updates) == 0 {
-		return nil
-	}
-	return updates
+	return fmt.Sprintf("'%v'", v)
 }
 
-func getServerDiff(current *models.Server, new *models.Server) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.UniqueID) != utils.SafeStringDereference(new.UniqueID) {
-		updates["unique_id"] = new.UniqueID
-	}
-	if utils.SafeStringDereference(current.CRMid) != utils.SafeStringDereference(new.CRMid) {
-		updates["crm_id"] = new.CRMid
-	}
-	if utils.SafeStringDereference(current.Teamviewer) != utils.SafeStringDereference(new.Teamviewer) {
-		updates["teamviewer"] = new.Teamviewer
-	}
-	if utils.SafeStringDereference(current.RDP) != utils.SafeStringDereference(new.RDP) {
-		updates["rdp"] = new.RDP
-	}
-	if utils.SafeStringDereference(current.Anydesk) != utils.SafeStringDereference(new.Anydesk) {
-		updates["anydesk"] = new.Anydesk
-	}
-	if utils.SafeStringDereference(current.IP) != utils.SafeStringDereference(new.IP) {
-		updates["ip"] = new.IP
-	}
-	if utils.SafeStringDereference(current.CabinetLink) != utils.SafeStringDereference(new.CabinetLink) {
-		updates["cabinet_link"] = new.CabinetLink
-	}
-	if utils.SafeStringDereference(current.DeviceName) != utils.SafeStringDereference(new.DeviceName) {
-		updates["device_name"] = new.DeviceName
-	}
-	if utils.SafeStringDereference(current.Litemanager) != utils.SafeStringDereference(new.Litemanager) {
-		updates["litemanager"] = new.Litemanager
-	}
-	if utils.SafeStringDereference(current.IikoVersion) != utils.SafeStringDereference(new.IikoVersion) {
-		updates["iiko_version"] = new.IikoVersion
-	}
-	if utils.SafeStringDereference(current.Description) != utils.SafeStringDereference(new.Description) {
-		updates["description"] = new.Description
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
+// compareAndLog - универсальная функция для сравнения полей и логирования расхождений.
+// ИСПРАВЛЕНИЕ: Дженерик-тип изменен на comparable для корректной работы оператора !=
+func compareAndLog[T comparable](updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *T) {
+	currentVal := reflect.ValueOf(current)
+	newVal := reflect.ValueOf(new)
+
+	isCurrentNil := current == nil || currentVal.IsNil()
+	isNewNil := new == nil || newVal.IsNil()
+
+	if isCurrentNil && isNewNil {
+		return
 	}
 
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
-		}
+	if isCurrentNil != isNewNil {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
+		return
 	}
-	if len(updates) == 0 {
-		return nil
+
+	if *current != *new {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
 	}
-	return updates
 }
 
-func getWorkstationDiff(current *models.Workstation, new *models.Workstation) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.Teamviewer) != utils.SafeStringDereference(new.Teamviewer) {
-		updates["teamviewer"] = new.Teamviewer
+// compareTimeAndLog - специальная функция для сравнения time.Time.
+func compareTimeAndLog(updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *time.Time) {
+	if current == nil && new == nil {
+		return
 	}
-	if utils.SafeStringDereference(current.Anydesk) != utils.SafeStringDereference(new.Anydesk) {
-		updates["anydesk"] = new.Anydesk
+	if (current == nil && new != nil) || (current != nil && new == nil) || (current != nil && new != nil && !current.Equal(*new)) {
+		updates[key] = new
+		logString := fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))
+		*diffs = append(*diffs, zap.String(key, logString))
 	}
-	if utils.SafeStringDereference(current.Litemanager) != utils.SafeStringDereference(new.Litemanager) {
-		updates["litemanager"] = new.Litemanager
-	}
-	if utils.SafeStringDereference(current.DeviceName) != utils.SafeStringDereference(new.DeviceName) {
-		updates["device_name"] = new.DeviceName
-	}
-	if utils.SafeStringDereference(current.Description) != utils.SafeStringDereference(new.Description) {
-		updates["description"] = new.Description
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
-	}
-
-	if len(updates) > 0 || current.DeletedAt.Valid {
-		updates["last_modified_date"] = new.LastModifiedDate
-		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
-		}
-	}
-
-	if len(updates) == 0 {
-		return nil
-	}
-	return updates
 }
 
-func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) map[string]interface{} {
+// getCompanyDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только UI-значимые поля.
+func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
-	if utils.SafeStringDereference(current.ModelKKT) != utils.SafeStringDereference(new.ModelKKT) {
-		updates["model_kkt"] = new.ModelKKT
-	}
-	if utils.SafeStringDereference(current.FFD) != utils.SafeStringDereference(new.FFD) {
-		updates["ffd"] = new.FFD
-	}
-	if utils.SafeStringDereference(current.FRDownloader) != utils.SafeStringDereference(new.FRDownloader) {
-		updates["fr_downloader"] = new.FRDownloader
-	}
-	if utils.SafeStringDereference(current.RNKKT) != utils.SafeStringDereference(new.RNKKT) {
-		updates["rn_kkt"] = new.RNKKT
-	}
-	if utils.SafeStringDereference(current.LegalName) != utils.SafeStringDereference(new.LegalName) {
-		updates["legal_name"] = new.LegalName
-	}
-	if utils.SafeStringDereference(current.INN) != utils.SafeStringDereference(new.INN) {
-		updates["inn"] = new.INN
-	}
-	if utils.SafeStringDereference(current.FRSerialNumber) != utils.SafeStringDereference(new.FRSerialNumber) {
-		updates["fr_serial_number"] = new.FRSerialNumber
-	}
-	if utils.SafeStringDereference(current.FNNumber) != utils.SafeStringDereference(new.FNNumber) {
-		updates["fn_number"] = new.FNNumber
-	}
-	if utils.SafeStringDereference(current.OwnerServiceDeskUUID) != utils.SafeStringDereference(new.OwnerServiceDeskUUID) {
-		updates["owner_service_desk_uuid"] = new.OwnerServiceDeskUUID
-	}
+	diffs := make([]zap.Field, 0)
 
-	if (current.KKTRegDate == nil && new.KKTRegDate != nil) || (current.KKTRegDate != nil && new.KKTRegDate == nil) || (current.KKTRegDate != nil && new.KKTRegDate != nil && !current.KKTRegDate.Equal(*new.KKTRegDate)) {
-		updates["kkt_reg_date"] = new.KKTRegDate
+	compareAndLog(updates, &diffs, "title", current.Title, new.Title)
+	compareAndLog(updates, &diffs, "address", current.Address, new.Address)
+	compareAndLog(updates, &diffs, "active_contract", current.ActiveContract, new.ActiveContract)
+
+	// Сравниваем JSON-поля как строки
+	if string(current.ContractInfo) != string(new.ContractInfo) {
+		updates["contract_info"] = new.ContractInfo
+		diffs = append(diffs, zap.String("contract_info", fmt.Sprintf("'%s' -> '%s'", string(current.ContractInfo), string(new.ContractInfo))))
 	}
-	if (current.FNExpireDate == nil && new.FNExpireDate != nil) || (current.FNExpireDate != nil && new.FNExpireDate == nil) || (current.FNExpireDate != nil && new.FNExpireDate != nil && !current.FNExpireDate.Equal(*new.FNExpireDate)) {
-		updates["fn_expire_date"] = new.FNExpireDate
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
 	}
+	return updates, diffs
+}
+
+// getServerDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только указанные поля.
+func getServerDiff(current *models.Server, new *models.Server) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareAndLog(updates, &diffs, "unique_id", current.UniqueID, new.UniqueID)
+	compareAndLog(updates, &diffs, "rdp", current.RDP, new.RDP)
+	compareAndLog(updates, &diffs, "server_version", current.ServerVersion, new.ServerVersion)
 
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
-			updates["deleted_at"] = nil
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
 		}
 	}
+	return updates, diffs
+}
 
-	if len(updates) == 0 {
-		return nil
+// getWorkstationDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только ID удаленного доступа.
+func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareAndLog(updates, &diffs, "teamviewer", current.Teamviewer, new.Teamviewer)
+	compareAndLog(updates, &diffs, "anydesk", current.Anydesk, new.Anydesk)
+	compareAndLog(updates, &diffs, "litemanager", current.Litemanager, new.Litemanager)
+
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
 	}
-	return updates
+	return updates, diffs
+}
+
+// getFiscalRegisterDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Сверяет только дату окончания ФН.
+func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) (map[string]interface{}, []zap.Field) {
+	updates := make(map[string]interface{})
+	diffs := make([]zap.Field, 0)
+
+	compareTimeAndLog(updates, &diffs, "fn_expire_date", current.FNExpireDate, new.FNExpireDate)
+
+	if len(updates) > 0 || current.DeletedAt.Valid {
+		updates["last_modified_date"] = new.LastModifiedDate
+		if current.DeletedAt.Valid {
+			updates["deleted_at"] = gorm.Expr("NULL")
+			diffs = append(diffs, zap.String("status", "deleted -> restored"))
+		}
+	}
+	return updates, diffs
 }
 
 go `
@@ -5224,11 +5333,8 @@ package services
 import (
 	"context"
 	"etalon-server/internal/models"
-	"testing"
-	"time"
 
 	"github.com/stretchr/testify/mock"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -5278,83 +5384,329 @@ func (m *MockCompanyRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*
 	return val, args.Error(1)
 }
 
-// ВАЖНО: Этот тест устарел, так как логика syncCompanies была полностью переписана
-// в syncEntityType. Он исправлен для компиляции, но требует полного переписывания
-// для проверки новой логики.
-func TestSyncService_SyncCompanies_DEPRECATED(t *testing.T) {
-	logger := zap.NewNop()
-	ctx := context.Background()
+go `
+===== END sdesk_sync_service_test.go =====
+
+internal/services/server_polling_service.go
+===== START server_polling_service.go =====
+go `
+// internal/services/server_polling_service.go
+package services
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"etalon-server/internal/config"
+	"etalon-server/internal/models"
+	"etalon-server/internal/repositories"
+	"etalon-server/internal/utils"
+	"fmt"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
+)
+
+var (
+	// ErrRateLimitExceeded возвращается, когда превышен лимит запросов на опрос для одного сервера.
+	ErrRateLimitExceeded = errors.New("слишком много запросов на опрос сервера")
+)
+
+const (
+	rateLimitCount  = 3
+	rateLimitWindow = 2 * time.Minute
+)
+
+// ServerPollingService определяет интерфейс для фонового воркера опроса статусов серверов.
+type ServerPollingService interface {
+	Start(ctx context.Context)
+	InstallLicense(ctx context.Context, serverUUID, uniqueID string) error
+	PollSingleServer(ctx context.Context, serverUUID string) error // НОВЫЙ МЕТОД
+}
+
+type serverPollingServiceImpl struct {
+	cfg        *config.Config
+	logger     *zap.Logger
+	db         *gorm.DB
+	serverRepo repositories.ServerRepo
+	rmsClient  utils.RMSClient
+
+	// Поля для in-memory rate limiter'а
+	rateLimiter   *sync.Mutex
+	requestStamps map[string][]time.Time
+}
+
+// NewServerPollingService создает новый экземпляр сервиса.
+func NewServerPollingService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient) ServerPollingService {
+	return &serverPollingServiceImpl{
+		cfg:           cfg,
+		logger:        logger,
+		db:            db,
+		serverRepo:    serverRepo,
+		rmsClient:     rmsClient,
+		rateLimiter:   &sync.Mutex{},
+		requestStamps: make(map[string][]time.Time),
+	}
+}
+
+// PollSingleServer запускает асинхронную задачу опроса для одного сервера с проверкой rate limit.
+func (s *serverPollingServiceImpl) PollSingleServer(ctx context.Context, serverUUID string) error {
+	if !s.checkRateLimit(serverUUID) {
+		return ErrRateLimitExceeded
+	}
+
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера из БД: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	s.logger.Info("Получен ручной запрос на опрос сервера", zap.String("uuid", serverUUID))
+
+	// Запускаем реальную обработку в отдельной горутине, чтобы не блокировать ответ API.
+	go func() {
+		// Используем новый контекст, так как родительский контекст запроса может быть отменен после ответа.
+		s.processServer(context.Background(), *server)
+	}()
+
+	return nil
+}
+
+// checkRateLimit проверяет, можно ли выполнить запрос для данного serverUUID.
+func (s *serverPollingServiceImpl) checkRateLimit(serverUUID string) bool {
+	s.rateLimiter.Lock()
+	defer s.rateLimiter.Unlock()
+
 	now := time.Now()
-	yesterday := now.Add(-24 * time.Hour)
-	tomorrow := now.Add(24 * time.Hour)
+	limitWindowStart := now.Add(-rateLimitWindow)
 
-	t.Run("creates new company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
+	// Получаем историю запросов для этого UUID
+	stamps := s.requestStamps[serverUUID]
 
-		remoteList := []map[string]interface{}{
-			{"UUID": "new-company-1", "lastModifiedDate": "2023.10.30 10:00:00"},
+	// Очищаем старые временные метки
+	recentStamps := make([]time.Time, 0, len(stamps))
+	for _, stamp := range stamps {
+		if stamp.After(limitWindowStart) {
+			recentStamps = append(recentStamps, stamp)
 		}
-		localMap := make(map[string]*models.Company)
+	}
 
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
-		localMockSDClient.On("FetchEntityDetails", ctx, "new-company-1", "ou$company").Return(map[string]interface{}{
-			"UUID": "new-company-1", "title": "Новая Компания",
-		}, nil).Once()
+	// Проверяем лимит
+	if len(recentStamps) >= rateLimitCount {
+		s.logger.Warn("Превышен лимит запросов на опрос для сервера", zap.String("uuid", serverUUID))
+		s.requestStamps[serverUUID] = recentStamps // Сохраняем очищенный список
+		return false
+	}
 
-		// Для теста UPSERT логика должна быть другой, пока пропустим этот assert
-		// localMockRepo.On("Create", ctx, (*gorm.DB)(nil), mock.AnythingOfType("*models.Company")).Return(nil).Once()
+	// Добавляем текущую метку и разрешаем запрос
+	recentStamps = append(recentStamps, now)
+	s.requestStamps[serverUUID] = recentStamps
+	return true
+}
 
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
+// Start запускает сервис в фоновом режиме.
+// ИЗМЕНЕНИЕ: Переделано на тикер для корректного прерывания.
+func (s *serverPollingServiceImpl) Start(ctx context.Context) {
+	s.logger.Info("Запуск воркера для опроса статусов серверов", zap.Duration("interval", 1*time.Minute))
+	ticker := time.NewTicker(1 * time.Minute) // Пауза между циклами
+	defer ticker.Stop()
 
-	t.Run("updates existing company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
+	// Первый запуск сразу, не дожидаясь тикера
+	s.runCycle(ctx)
 
-		remoteList := []map[string]interface{}{
-			{"UUID": "existing-company-1", "lastModifiedDate": now.Format("2006.01.02 15:04:05")},
+	for {
+		select {
+		case <-ticker.C:
+			s.runCycle(ctx)
+		case <-ctx.Done():
+			s.logger.Info("Остановка воркера для опроса статусов серверов...")
+			return
 		}
-		localMap := map[string]*models.Company{
-			"existing-company-1": {Base: models.Base{ServiceDeskUUID: StringPtr("existing-company-1")}, LastModifiedDate: &yesterday},
+	}
+}
+
+// runCycle выполняет один цикл работы воркера.
+func (s *serverPollingServiceImpl) runCycle(ctx context.Context) {
+	s.logger.Info("Начало нового цикла опроса статусов серверов...")
+
+	servers, err := s.serverRepo.FindForPolling(ctx, s.cfg.ServerPollingBatchSize, s.cfg.ServerPollingInterval)
+	if err != nil {
+		s.logger.Error("Не удалось получить список серверов для опроса", zap.Error(err))
+		return
+	}
+
+	if len(servers) == 0 {
+		s.logger.Info("Не найдено серверов, подлежащих опросу. Цикл завершен.")
+		return
+	}
+
+	s.logger.Info("Найдено серверов для обработки", zap.Int("count", len(servers)))
+
+	for _, server := range servers {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("Выход из приложения, прерывание цикла опроса серверов.")
+			return
+		default:
+			s.processServer(ctx, server)
+			time.Sleep(2 * time.Second)
 		}
+	}
+	s.logger.Info("Цикл опроса статусов серверов завершен.")
+}
 
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
-		localMockSDClient.On("FetchEntityDetails", ctx, "existing-company-1", "ou$company").Return(map[string]interface{}{
-			"UUID": "existing-company-1", "title": "Обновленная Компания",
-		}, nil).Once()
+// processServer обрабатывает один сервер.
+func (s *serverPollingServiceImpl) processServer(ctx context.Context, server models.Server) {
+	log := s.logger.With(zap.String("server_uuid", utils.SafeStringDereference(server.ServiceDeskUUID)), zap.String("server_ip", utils.SafeStringDereference(server.IP)))
 
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
+	if server.IP == nil || *server.IP == "" {
+		log.Warn("У сервера отсутствует IP-адрес, опрос невозможен.")
+		updates := map[string]interface{}{"last_polled_at": time.Now()}
+		s.serverRepo.Update(ctx, nil, *server.ServiceDeskUUID, updates)
+		return
+	}
 
-	t.Run("skips up-to-date company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
+	var url string
+	parts := strings.SplitN(*server.IP, ":", 2)
+	host := parts[0]
+	if len(parts) == 2 && (parts[1] == "443" || strings.Contains(*server.IP, "iiko.it") || strings.Contains(*server.IP, "syrve.online")) {
+		url = "https://" + host
+	} else {
+		url = "http://" + *server.IP
+	}
 
-		remoteList := []map[string]interface{}{
-			{"UUID": "uptodate-company-1", "lastModifiedDate": now.Format("2006.01.02 15:04:05")},
+	info, err := s.rmsClient.GetServerMonitoringInfo(ctx, url)
+
+	updates := make(map[string]interface{})
+	updates["last_polled_at"] = time.Now()
+
+	if err != nil {
+		log.Warn("Не удалось получить информацию о сервере", zap.String("url", url), zap.Error(err))
+		// Проверяем на специфическую ошибку DNS
+		if strings.Contains(err.Error(), "no such host") {
+			log.Info("Обнаружена ошибка DNS lookup. Сервер будет архивирован.")
+			updates["status"] = "archived"
+		} else {
+			// Для всех остальных ошибок просто ставим 'offline'
+			updates["status"] = "offline"
 		}
-		localMap := map[string]*models.Company{
-			"uptodate-company-1": {Base: models.Base{ServiceDeskUUID: StringPtr("uptodate-company-1")}, LastModifiedDate: &tomorrow},
+	} else {
+		log.Info("Информация о сервере успешно получена", zap.String("state", info.ServerState), zap.String("version", info.Version))
+		updates["server_name"] = info.ServerName
+		updates["server_edition"] = info.Edition
+		updates["server_version"] = shortenVersion(info.Version)
+		status := mapServerStateToStatus(info.ServerState)
+		updates["status"] = status
+
+		if status == "license" {
+			s.createLicenseTask(ctx, server)
 		}
+	}
 
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
+	_, updateErr := s.serverRepo.Update(ctx, nil, *server.ServiceDeskUUID, updates)
+	if updateErr != nil {
+		log.Error("Не удалось обновить информацию о сервере в базе данных", zap.Error(updateErr))
+	} else {
+		log.Info("Информация о сервере успешно сохранена в базе данных")
+	}
+}
 
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
+// createLicenseTask создает задачу для администратора на установку лицензии.
+func (s *serverPollingServiceImpl) createLicenseTask(ctx context.Context, server models.Server) {
+	log := s.logger.With(zap.String("server_uuid", *server.ServiceDeskUUID))
+	taskType := "license_installation_required"
+	entityUUID := *server.ServiceDeskUUID
+
+	var existingTask models.ReconciliationTask
+	err := s.db.WithContext(ctx).
+		Where("entity_uuid = ? AND task_type = ? AND status = 'new'", entityUUID, taskType).
+		First(&existingTask).Error
+
+	if err == nil {
+		return
+	}
+	if err != gorm.ErrRecordNotFound {
+		log.Error("Ошибка при поиске существующей задачи на установку лицензии", zap.Error(err))
+		return
+	}
+
+	detailsMap := map[string]string{
+		"serverName":      utils.SafeStringDereference(server.ServerName),
+		"serverUUID":      entityUUID,
+		"suggestedUnique": utils.SafeStringDereference(server.UniqueID),
+	}
+	detailsJSON, _ := json.Marshal(detailsMap)
+
+	task := models.ReconciliationTask{
+		TaskType:   taskType,
+		EntityType: "Server",
+		EntityUUID: entityUUID,
+		Details:    datatypes.JSON(detailsJSON),
+		Status:     "new",
+		Comment:    fmt.Sprintf("Сервер '%s' ожидает установку лицензии. Предлагаемый UniqueID: %s", utils.SafeStringDereference(server.ServerName), utils.SafeStringDereference(server.UniqueID)),
+	}
+	if createErr := s.db.WithContext(ctx).Create(&task).Error; createErr != nil {
+		log.Error("Не удалось создать задачу на установку лицензии", zap.Error(createErr))
+	} else {
+		log.Info("Создана новая задача на установку лицензии")
+	}
+}
+
+// InstallLicense - это метод-заглушка для ручного запуска установки лицензии.
+func (s *serverPollingServiceImpl) InstallLicense(ctx context.Context, serverUUID, uniqueID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	s.logger.Info("ЗАГЛУШКА: Запущена установка лицензии",
+		zap.String("server_uuid", serverUUID),
+		zap.String("server_name", utils.SafeStringDereference(server.ServerName)),
+		zap.String("unique_id", uniqueID),
+	)
+
+	return nil
+}
+
+// mapServerStateToStatus преобразует статус из ответа сервера в наш внутренний статус.
+func mapServerStateToStatus(state string) string {
+	switch state {
+	case "STARTED_SUCCESSFULLY":
+		return "active"
+	case "WAITING_LICENSE":
+		return "license"
+	case "STARTING":
+		return "starting"
+	default:
+		return "unknown"
+	}
+}
+
+// shortenVersion обрезает версию до формата X.Y.Z
+func shortenVersion(fullVersion string) string {
+	if fullVersion == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`^(\d+\.\d+\.\d+)`)
+	matches := re.FindStringSubmatch(fullVersion)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return fullVersion
 }
 
 go `
-===== END sdesk_sync_service_test.go =====
+===== END server_polling_service.go =====
 
 internal/services/servicedesk_client.go
 ===== START servicedesk_client.go =====
@@ -5367,6 +5719,7 @@ import (
 	"etalon-server/internal/config"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -5390,11 +5743,27 @@ var minimalAttrsMap = map[string]string{
 	"objectBase$FR":          "UUID,lastModifiedDate,owner",
 }
 
+// AgreementDetailsDTO содержит детали контракта, полученные от ServiceDesk.
+type AgreementDetailsDTO struct {
+	State          string `json:"state"`
+	StateStartTime string `json:"stateStartTime"`
+	Services       []struct {
+		UUID      string `json:"UUID"`
+		Title     string `json:"title"`
+		MetaClass string `json:"metaClass"`
+	} `json:"services"`
+	RecipientsOU []struct {
+		UUID      string `json:"UUID"`
+		Title     string `json:"title"`
+		MetaClass string `json:"metaClass"`
+	} `json:"recipientsOU"`
+}
+
 // ServiceDeskClient определяет интерфейс для взаимодействия с API ServiceDesk.
 type ServiceDeskClient interface {
 	FetchEntityList(ctx context.Context, metaClass string, full bool) ([]map[string]interface{}, error)
 	FetchEntityDetails(ctx context.Context, uuid string, metaClass string) (map[string]interface{}, error)
-	CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error)
+	FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error)
 }
 
 // serviceDeskClientImpl реализует ServiceDeskClient.
@@ -5409,9 +5778,22 @@ type serviceDeskClientImpl struct {
 
 // NewServiceDeskClient создает новый клиент для ServiceDesk.
 func NewServiceDeskClient(cfg *config.Config, logger *zap.Logger) ServiceDeskClient {
+	// ИЗМЕНЕНИЕ: Детальная настройка транспорта для http.Client
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second, // Таймаут на установку TCP-соединения
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	return &serviceDeskClientImpl{
 		client: &http.Client{
-			Timeout: cfg.RequestTimeout,
+			Transport: transport,
+			Timeout:   cfg.RequestTimeout, // Общий таймаут на весь запрос
 		},
 		baseURL:    strings.TrimRight(cfg.ServiceDeskBaseURL, "/"),
 		apiKey:     cfg.ServiceDeskKey,
@@ -5419,6 +5801,40 @@ func NewServiceDeskClient(cfg *config.Config, logger *zap.Logger) ServiceDeskCli
 		logger:     logger,
 		maxRetries: cfg.MaxRetries,
 	}
+}
+
+// AgreementContextKey - тип ключа для передачи кэша через контекст.
+type AgreementContextKey string
+
+const agreementCacheKey AgreementContextKey = "agreementCache"
+
+// FetchAgreementDetails получает детальную информацию о контракте по UUID.
+// ИЗМЕНЕНИЕ: Логика кэширования теперь работает через контекст.
+func (s *serviceDeskClientImpl) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error) {
+	// 1. Проверяем кэш в контексте
+	if cache, ok := ctx.Value(agreementCacheKey).(map[string]*AgreementDetailsDTO); ok {
+		if cachedDetails, found := cache[agreementUUID]; found {
+			s.logger.Debug("Детали контракта взяты из кэша контекста", zap.String("agreementUUID", agreementUUID))
+			return cachedDetails, nil
+		}
+	}
+
+	// 2. Если в кэше нет, делаем запрос
+	url := fmt.Sprintf("%s/get/%s?accessKey=%s&attrs=state,stateStartTime,services,recipientsOU", s.baseURL, agreementUUID, s.apiKey)
+
+	var response AgreementDetailsDTO
+	err := s.doWithRetry(ctx, http.MethodGet, url, nil, &response)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Сохраняем в кэш контекста, если он есть
+	if cache, ok := ctx.Value(agreementCacheKey).(map[string]*AgreementDetailsDTO); ok {
+		cache[agreementUUID] = &response
+		s.logger.Debug("Детали контракта получены по API и сохранены в кэш контекста", zap.String("agreementUUID", agreementUUID))
+	}
+
+	return &response, nil
 }
 
 // FetchEntityList получает список сущностей указанного метакласса.
@@ -5531,6 +5947,8 @@ go `
 package utils
 
 import (
+	"fmt"
+	"net"
 	"regexp"
 	"time"
 )
@@ -5610,45 +6028,55 @@ func FormatRNKKT(rnm string) string {
 	return rnm[0:4] + " " + rnm[4:8] + " " + rnm[8:12] + " " + rnm[12:16]
 }
 
+// IsPrivateIP проверяет, является ли IP-адрес приватным (локальным).
+func IsPrivateIP(ipStr string) (bool, error) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false, fmt.Errorf("некорректный IP-адрес: %s", ipStr)
+	}
+
+	// Проверяем на соответствие стандартным диапазонам приватных сетей
+	_, private24, _ := net.ParseCIDR("10.0.0.0/8")
+	_, private20, _ := net.ParseCIDR("172.16.0.0/12")
+	_, private16, _ := net.ParseCIDR("192.168.0.0/16")
+
+	return private24.Contains(ip) || private20.Contains(ip) || private16.Contains(ip), nil
+}
+
 go `
 ===== END helpers.go =====
 
 internal/utils/rms_client.go
 ===== START rms_client.go =====
 go `
+// internal/utils/rms_client.go
+// internal/utils/rms_client.go
 package utils
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-// Структуры для парсинга XML-ответов от сервера iikoRMS
-type ServerInfo struct {
-	XMLName xml.Name `xml:"r"`
-	Version string   `xml:"version"`
-	Edition string   `xml:"edition"`
-}
-
-type LicenseInfoResponse struct {
-	XMLName           xml.Name `xml:"result"`
-	CrmOrganizationId string   `xml:"licenseInfo>licenseData>r>crmOrganizationId"`
-	SerialNumber      string   `xml:"licenseInfo>licenseData>r>serialNumber"`
+// ServerInfoXML структура для парсинга XML-ответа от сервера iikoRMS
+type ServerInfoXML struct {
+	XMLName     xml.Name `xml:"r"`
+	ServerName  string   `xml:"serverName"`
+	Version     string   `xml:"version"`
+	Edition     string   `xml:"edition"`
+	ServerState string   `xml:"serverState"`
 }
 
 // RMSClient определяет интерфейс для взаимодействия с RMS API.
 type RMSClient interface {
-	GetCRMid(ctx context.Context, serverURL, login, password, fallbackPassword string) (string, error)
+	GetServerMonitoringInfo(ctx context.Context, serverURL string) (*ServerInfoXML, error)
 }
 
 type rmsClientImpl struct {
@@ -5664,6 +6092,72 @@ func NewRMSClient(timeout time.Duration, logger *zap.Logger) RMSClient {
 		},
 		logger: logger,
 	}
+}
+
+// GetServerMonitoringInfo получает статус и информацию о сервере.
+// ИСПРАВЛЕНО: Теперь в первую очередь парсит XML.
+func (c *rmsClientImpl) GetServerMonitoringInfo(ctx context.Context, serverURL string) (*ServerInfoXML, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать GET-запрос: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось выполнить GET-запрос для получения информации о сервере: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, NewHttpError(resp.StatusCode, fmt.Sprintf("сервер вернул ошибку при получении информации: %s", resp.Status))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать ответ от сервера: %w", err)
+	}
+
+	var info ServerInfoXML
+	if err := xml.Unmarshal(body, &info); err != nil {
+		// Попытка fallback на JSON, если XML не удался
+		c.logger.Warn("Не удалось распарсить XML, попытка распарсить как JSON", zap.String("server_url", serverURL), zap.Error(err))
+		var jsonInfo struct {
+			ServerName  string `json:"serverName"`
+			Edition     string `json:"edition"`
+			Version     string `json:"version"`
+			ServerState string `json:"serverState"`
+		}
+		if jsonErr := json.Unmarshal(body, &jsonInfo); jsonErr == nil {
+			info.ServerName = jsonInfo.ServerName
+			info.Edition = jsonInfo.Edition
+			info.Version = jsonInfo.Version
+			info.ServerState = jsonInfo.ServerState
+		} else {
+			return nil, fmt.Errorf("не удалось разобрать ответ ни как XML, ни как JSON: %w", err)
+		}
+	}
+
+	return &info, nil
+}
+
+/*
+ =================================================================================
+  ОТНОСИТСЯ К СТАРОЙ ЛОГИКЕ
+  ПОЛУЧЕНИЯ CRMID.
+  ОН МОЖЕТ ПОНАДОБИТЬСЯ В БУДУЩЕМ ДЛЯ ДРУГИХ ЗАДАЧ.
+ =================================================================================
+
+// Структуры для парсинга XML-ответов от сервера iikoRMS
+type ServerInfo struct {
+	XMLName xml.Name `xml:"r"`
+	Version string   `xml:"version"`
+	Edition string   `xml:"edition"`
+}
+
+type LicenseInfoResponse struct {
+	XMLName           xml.Name `xml:"result"`
+	CrmOrganizationId string   `xml:"licenseInfo>licenseData>r>crmOrganizationId"`
+	SerialNumber      string   `xml:"licenseInfo>licenseData>r>serialNumber"`
 }
 
 // GetCRMid подключается к серверу iikoRMS и возвращает его CRMid.
@@ -5694,7 +6188,7 @@ func (c *rmsClientImpl) GetCRMid(ctx context.Context, serverURL, login, password
 
 func (c *rmsClientImpl) fetchCRMid(ctx context.Context, serverURL, login, password string, log *zap.Logger) (string, error) {
 	// 1. Получаем информацию о сервере (версия, редакция)
-	info, err := c.getServerInfo(ctx, serverURL)
+	info, err := c.getServerInfoXML(ctx, serverURL)
 	if err != nil {
 		return "", err
 	}
@@ -5752,7 +6246,7 @@ func (c *rmsClientImpl) fetchCRMid(ctx context.Context, serverURL, login, passwo
 	return licenseInfo.CrmOrganizationId, nil
 }
 
-func (c *rmsClientImpl) getServerInfo(ctx context.Context, serverURL string) (*ServerInfo, error) {
+func (c *rmsClientImpl) getServerInfoXML(ctx context.Context, serverURL string) (*ServerInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать GET-запрос: %w", err)
@@ -5783,6 +6277,7 @@ func (c *rmsClientImpl) getServerInfo(ctx context.Context, serverURL string) (*S
 
 	return &info, nil
 }
+*/
 
 // HttpError специальный тип ошибки для HTTP-ответов
 type HttpError struct {

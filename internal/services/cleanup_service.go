@@ -207,7 +207,7 @@ func (s *cleanupServiceImpl) cleanupServerDuplicates(ctx context.Context, log *z
 }
 
 // cleanupJunkServers находит и удаляет "мусорные" серверы.
-func (s *cleanupServiceImpl) cleanupJunkServers(ctx context.Context, log *zap.Logger) (int, error) {
+func (s *cleanupServiceImpl) cleanupJunkServers(ctx context.Context, _ *zap.Logger) (int, error) {
 	var junkServers []models.Server
 	// Ищем записи, где все ключевые поля пустые.
 	err := s.db.WithContext(ctx).Where(

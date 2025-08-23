@@ -5,8 +5,10 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -160,12 +162,35 @@ func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDT
 	for _, s := range servers {
 		if s.OwnerServiceDeskUUID != nil {
 			ownerID := *s.OwnerServiceDeskUUID
+
+			// Формируем ссылку на партнерский кабинет
+			var partnersLink *string
+			clientIdStr := utils.SafeStringDereference(s.CabinetLink)
+			// Проверяем, что clientIdStr не пустой и не содержит 'N/A'
+			if clientIdStr != "" && clientIdStr != "N/A" {
+				var link string
+				ipStr := utils.SafeStringDereference(s.IP)
+				if strings.Contains(strings.ToLower(ipStr), "syrve") {
+					link = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				} else {
+					link = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				}
+				partnersLink = &link
+			}
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Server",
 				Data: api.ServerRichDTO{
-					UUID: *s.ServiceDeskUUID, DeviceName: s.DeviceName, IP: s.IP,
-					Status: &s.Status, Anydesk: s.Anydesk, Teamviewer: s.Teamviewer,
-					RDP: s.RDP, Litemanager: s.Litemanager,
+					UUID:         *s.ServiceDeskUUID,
+					DeviceName:   s.DeviceName,
+					IP:           s.IP,
+					Status:       s.Status,
+					Anydesk:      s.Anydesk,
+					Teamviewer:   s.Teamviewer,
+					RDP:          s.RDP,
+					Litemanager:  s.Litemanager,
+					UniqueID:     s.UniqueID,
+					PartnersLink: partnersLink,
 				},
 			})
 		}

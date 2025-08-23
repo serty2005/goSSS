@@ -20,7 +20,7 @@ const (
 type Base struct {
 	ID              string  `gorm:"primaryKey;type:text"`
 	MetaClass       string  `gorm:"type:text"`
-	ServiceDeskUUID *string `gorm:"type:text;uniqueIndex"`
+	ServiceDeskUUID *string `gorm:"type:text;unique"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
@@ -38,13 +38,14 @@ func (base *Base) BeforeCreate(tx *gorm.DB) (err error) {
 // Company представляет сущность компании.
 type Company struct {
 	Base
-	Address               *string    `gorm:"type:text"`
-	Title                 *string    `gorm:"type:text"`
-	ActiveContract        *bool      `gorm:"type:boolean"`
-	LastModifiedDate      *time.Time `json:"last_modified_date"`
-	AdditionalName        *string    `gorm:"type:text"`
-	ParentServiceDeskUUID *string    `gorm:"type:text"`
-	Parent                *Company   `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
+	Address               *string        `gorm:"type:text"`
+	Title                 *string        `gorm:"type:text"`
+	ActiveContract        *bool          `gorm:"type:boolean"`
+	LastModifiedDate      *time.Time     `json:"last_modified_date"`
+	AdditionalName        *string        `gorm:"type:text"`
+	ParentServiceDeskUUID *string        `gorm:"type:text"`
+	ContractInfo          datatypes.JSON `gorm:"type:jsonb"`
+	Parent                *Company       `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
 
 	Servers         []Server         `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	Workstations    []Workstation    `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
@@ -133,7 +134,7 @@ type AgentFile struct {
 // ReconciliationTask представляет задачу для ручного разбора администратором.
 type ReconciliationTask struct {
 	ID         uint           `gorm:"primarykey"`
-	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk'
+	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk', 'data_conflict'
 	EntityType string         `gorm:"type:varchar(50)"`                     // 'FiscalRegister', 'Workstation', 'Server'
 	EntityUUID string         `gorm:"type:text"`                            // UUID сущности, с которой связана задача
 	Details    datatypes.JSON `gorm:"type:jsonb"`                           // Детали задачи, например, старый и новый владелец

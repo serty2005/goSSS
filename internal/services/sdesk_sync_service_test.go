@@ -3,11 +3,8 @@ package services
 import (
 	"context"
 	"etalon-server/internal/models"
-	"testing"
-	"time"
 
 	"github.com/stretchr/testify/mock"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -55,79 +52,4 @@ func (m *MockCompanyRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*
 		return nil, args.Error(1)
 	}
 	return val, args.Error(1)
-}
-
-// ВАЖНО: Этот тест устарел, так как логика syncCompanies была полностью переписана
-// в syncEntityType. Он исправлен для компиляции, но требует полного переписывания
-// для проверки новой логики.
-func TestSyncService_SyncCompanies_DEPRECATED(t *testing.T) {
-	logger := zap.NewNop()
-	ctx := context.Background()
-	now := time.Now()
-	yesterday := now.Add(-24 * time.Hour)
-	tomorrow := now.Add(24 * time.Hour)
-
-	t.Run("creates new company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
-
-		remoteList := []map[string]interface{}{
-			{"UUID": "new-company-1", "lastModifiedDate": "2023.10.30 10:00:00"},
-		}
-		localMap := make(map[string]*models.Company)
-
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
-		localMockSDClient.On("FetchEntityDetails", ctx, "new-company-1", "ou$company").Return(map[string]interface{}{
-			"UUID": "new-company-1", "title": "Новая Компания",
-		}, nil).Once()
-
-		// Для теста UPSERT логика должна быть другой, пока пропустим этот assert
-		// localMockRepo.On("Create", ctx, (*gorm.DB)(nil), mock.AnythingOfType("*models.Company")).Return(nil).Once()
-
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
-
-	t.Run("updates existing company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
-
-		remoteList := []map[string]interface{}{
-			{"UUID": "existing-company-1", "lastModifiedDate": now.Format("2006.01.02 15:04:05")},
-		}
-		localMap := map[string]*models.Company{
-			"existing-company-1": {Base: models.Base{ServiceDeskUUID: StringPtr("existing-company-1")}, LastModifiedDate: &yesterday},
-		}
-
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
-		localMockSDClient.On("FetchEntityDetails", ctx, "existing-company-1", "ou$company").Return(map[string]interface{}{
-			"UUID": "existing-company-1", "title": "Обновленная Компания",
-		}, nil).Once()
-
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
-
-	t.Run("skips up-to-date company", func(t *testing.T) {
-		localMockRepo := new(MockCompanyRepo)
-		localMockSDClient := new(MockServiceDeskClient)
-		// ИСПРАВЛЕНИЕ: Используем новый конструктор NewSDeskSyncService
-		localSyncService := NewSDeskSyncService(nil, nil, localMockSDClient, localMockRepo, nil, nil, nil, logger)
-
-		remoteList := []map[string]interface{}{
-			{"UUID": "uptodate-company-1", "lastModifiedDate": now.Format("2006.01.02 15:04:05")},
-		}
-		localMap := map[string]*models.Company{
-			"uptodate-company-1": {Base: models.Base{ServiceDeskUUID: StringPtr("uptodate-company-1")}, LastModifiedDate: &tomorrow},
-		}
-
-		localMockSDClient.On("FetchEntityList", ctx, "ou$company", false).Return(remoteList, nil).Once()
-		localMockRepo.On("GetAllUUIDsAndDates", ctx).Return(localMap, nil).Once()
-
-		localSyncService.(*sdeskSyncServiceImpl).syncEntityType(ctx, "ou$company")
-	})
 }
