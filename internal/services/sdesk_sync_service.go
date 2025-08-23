@@ -536,8 +536,8 @@ func getServerDiff(current *models.Server, new *models.Server) map[string]interf
 	if utils.SafeStringDereference(current.Litemanager) != utils.SafeStringDereference(new.Litemanager) {
 		updates["litemanager"] = new.Litemanager
 	}
-	if utils.SafeStringDereference(current.IikoVersion) != utils.SafeStringDereference(new.IikoVersion) {
-		updates["iiko_version"] = new.IikoVersion
+	if utils.SafeStringDereference(current.ServerVersion) != utils.SafeStringDereference(new.ServerVersion) {
+		updates["iiko_version"] = new.ServerVersion
 	}
 	if utils.SafeStringDereference(current.Description) != utils.SafeStringDereference(new.Description) {
 		updates["description"] = new.Description

@@ -1,0 +1,100 @@
+// internal/handlers/server_actions_handler.go
+package handlers
+
+import (
+	"encoding/json"
+	"errors"
+	"etalon-server/internal/services"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+// ServerActionsHandler обрабатывает специфичные действия над серверами.
+type ServerActionsHandler struct {
+	logger     *zap.Logger
+	pollingSvc services.ServerPollingService
+}
+
+// NewServerActionsHandler создает новый экземпляр обработчика.
+func NewServerActionsHandler(logger *zap.Logger, pollingSvc services.ServerPollingService) *ServerActionsHandler {
+	return &ServerActionsHandler{
+		logger:     logger,
+		pollingSvc: pollingSvc,
+	}
+}
+
+// RegisterRoutes регистрирует роуты для действий с серверами.
+func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
+	r.Post("/servers/{uuid}/install_license", h.installLicense)
+	r.Post("/servers/{uuid}/poll", h.pollServerStatus) // НОВЫЙ РОУТ
+}
+
+type installLicenseRequestDTO struct {
+	UniqueID string `json:"uniqueId"`
+}
+
+// installLicense обрабатывает запрос на запуск установки лицензии.
+func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Request) {
+	uuid := chi.URLParam(r, "uuid")
+	if uuid == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера не указан")
+		return
+	}
+
+	var dto installLicenseRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	if dto.UniqueID == "" {
+		RespondWithError(w, http.StatusBadRequest, "Поле 'uniqueId' обязательно для заполнения")
+		return
+	}
+
+	err := h.pollingSvc.InstallLicense(r.Context(), uuid, dto.UniqueID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondWithError(w, http.StatusNotFound, "Сервер с указанным UUID не найден")
+		} else {
+			h.logger.Error("Ошибка при вызове заглушки установки лицензии",
+				zap.String("uuid", uuid),
+				zap.String("uniqueId", dto.UniqueID),
+				zap.Error(err),
+			)
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии отправлена успешно"})
+}
+
+// pollServerStatus обрабатывает запрос на принудительный асинхронный опрос статуса сервера.
+func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.Request) {
+	uuid := chi.URLParam(r, "uuid")
+	if uuid == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера не указан")
+		return
+	}
+
+	err := h.pollingSvc.PollSingleServer(r.Context(), uuid)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrRateLimitExceeded):
+			RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			RespondWithError(w, http.StatusNotFound, "Сервер с указанным UUID не найден")
+		default:
+			h.logger.Error("Ошибка при запуске принудительного опроса", zap.String("uuid", uuid), zap.Error(err))
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	RespondWithJSON(w, http.StatusAccepted, map[string]string{"message": "Задача на опрос статуса сервера принята в обработку"})
+}

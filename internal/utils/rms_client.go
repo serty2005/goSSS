@@ -1,36 +1,31 @@
+// internal/utils/rms_client.go
+// internal/utils/rms_client.go
 package utils
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-// Структуры для парсинга XML-ответов от сервера iikoRMS
-type ServerInfo struct {
-	XMLName xml.Name `xml:"r"`
-	Version string   `xml:"version"`
-	Edition string   `xml:"edition"`
-}
-
-type LicenseInfoResponse struct {
-	XMLName           xml.Name `xml:"result"`
-	CrmOrganizationId string   `xml:"licenseInfo>licenseData>r>crmOrganizationId"`
-	SerialNumber      string   `xml:"licenseInfo>licenseData>r>serialNumber"`
+// ServerInfoXML структура для парсинга XML-ответа от сервера iikoRMS
+type ServerInfoXML struct {
+	XMLName     xml.Name `xml:"r"`
+	ServerName  string   `xml:"serverName"`
+	Version     string   `xml:"version"`
+	Edition     string   `xml:"edition"`
+	ServerState string   `xml:"serverState"`
 }
 
 // RMSClient определяет интерфейс для взаимодействия с RMS API.
 type RMSClient interface {
-	GetCRMid(ctx context.Context, serverURL, login, password, fallbackPassword string) (string, error)
+	GetServerMonitoringInfo(ctx context.Context, serverURL string) (*ServerInfoXML, error)
 }
 
 type rmsClientImpl struct {
@@ -46,6 +41,72 @@ func NewRMSClient(timeout time.Duration, logger *zap.Logger) RMSClient {
 		},
 		logger: logger,
 	}
+}
+
+// GetServerMonitoringInfo получает статус и информацию о сервере.
+// ИСПРАВЛЕНО: Теперь в первую очередь парсит XML.
+func (c *rmsClientImpl) GetServerMonitoringInfo(ctx context.Context, serverURL string) (*ServerInfoXML, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать GET-запрос: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось выполнить GET-запрос для получения информации о сервере: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, NewHttpError(resp.StatusCode, fmt.Sprintf("сервер вернул ошибку при получении информации: %s", resp.Status))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать ответ от сервера: %w", err)
+	}
+
+	var info ServerInfoXML
+	if err := xml.Unmarshal(body, &info); err != nil {
+		// Попытка fallback на JSON, если XML не удался
+		c.logger.Warn("Не удалось распарсить XML, попытка распарсить как JSON", zap.String("server_url", serverURL), zap.Error(err))
+		var jsonInfo struct {
+			ServerName  string `json:"serverName"`
+			Edition     string `json:"edition"`
+			Version     string `json:"version"`
+			ServerState string `json:"serverState"`
+		}
+		if jsonErr := json.Unmarshal(body, &jsonInfo); jsonErr == nil {
+			info.ServerName = jsonInfo.ServerName
+			info.Edition = jsonInfo.Edition
+			info.Version = jsonInfo.Version
+			info.ServerState = jsonInfo.ServerState
+		} else {
+			return nil, fmt.Errorf("не удалось разобрать ответ ни как XML, ни как JSON: %w", err)
+		}
+	}
+
+	return &info, nil
+}
+
+/*
+ =================================================================================
+  ОТНОСИТСЯ К СТАРОЙ ЛОГИКЕ
+  ПОЛУЧЕНИЯ CRMID.
+  ОН МОЖЕТ ПОНАДОБИТЬСЯ В БУДУЩЕМ ДЛЯ ДРУГИХ ЗАДАЧ.
+ =================================================================================
+
+// Структуры для парсинга XML-ответов от сервера iikoRMS
+type ServerInfo struct {
+	XMLName xml.Name `xml:"r"`
+	Version string   `xml:"version"`
+	Edition string   `xml:"edition"`
+}
+
+type LicenseInfoResponse struct {
+	XMLName           xml.Name `xml:"result"`
+	CrmOrganizationId string   `xml:"licenseInfo>licenseData>r>crmOrganizationId"`
+	SerialNumber      string   `xml:"licenseInfo>licenseData>r>serialNumber"`
 }
 
 // GetCRMid подключается к серверу iikoRMS и возвращает его CRMid.
@@ -76,7 +137,7 @@ func (c *rmsClientImpl) GetCRMid(ctx context.Context, serverURL, login, password
 
 func (c *rmsClientImpl) fetchCRMid(ctx context.Context, serverURL, login, password string, log *zap.Logger) (string, error) {
 	// 1. Получаем информацию о сервере (версия, редакция)
-	info, err := c.getServerInfo(ctx, serverURL)
+	info, err := c.getServerInfoXML(ctx, serverURL)
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +195,7 @@ func (c *rmsClientImpl) fetchCRMid(ctx context.Context, serverURL, login, passwo
 	return licenseInfo.CrmOrganizationId, nil
 }
 
-func (c *rmsClientImpl) getServerInfo(ctx context.Context, serverURL string) (*ServerInfo, error) {
+func (c *rmsClientImpl) getServerInfoXML(ctx context.Context, serverURL string) (*ServerInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать GET-запрос: %w", err)
@@ -165,6 +226,7 @@ func (c *rmsClientImpl) getServerInfo(ctx context.Context, serverURL string) (*S
 
 	return &info, nil
 }
+*/
 
 // HttpError специальный тип ошибки для HTTP-ответов
 type HttpError struct {

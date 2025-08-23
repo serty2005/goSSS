@@ -1,3 +1,4 @@
+// internal/config/config.go
 package config
 
 import (
@@ -40,13 +41,13 @@ type Config struct {
 	ZabbixAPIURL   string
 	ZabbixAPIToken string
 
-	// Секция для CRMid Worker
-	RMSLogin             string
-	RMSPassword1         string
-	RMSPassword2         string
-	CRMidWorkerInterval  time.Duration
-	CRMidWorkerBatchSize int
-	EnableCRMidWorker    bool
+	// Секция для Server Polling Worker
+	RMSLogin                  string
+	RMSPassword1              string
+	RMSPassword2              string
+	ServerPollingInterval     time.Duration
+	ServerPollingBatchSize    int
+	EnableServerPollingWorker bool
 
 	// Секция настроек синхронизации с SD
 	SDeskSyncInterval     time.Duration
@@ -93,13 +94,13 @@ func New() *Config {
 		ZabbixAPIURL:   getEnv("ZABBIX_API_URL", ""),
 		ZabbixAPIToken: getEnv("ZABBIX_API_TOKEN", ""),
 
-		// Параметры CRMid Worker
-		EnableCRMidWorker:    getEnvAsBool("ENABLE_CRMID_WORKER", true),
-		RMSLogin:             getEnv("RMS_LOGIN", ""),
-		RMSPassword1:         getEnv("RMS_PASSWORD_1", ""),
-		RMSPassword2:         getEnv("RMS_PASSWORD_2", ""),
-		CRMidWorkerInterval:  time.Duration(getEnvAsInt("CRMID_WORKER_INTERVAL_MIN", 60)) * time.Minute,
-		CRMidWorkerBatchSize: getEnvAsInt("CRMID_WORKER_BATCH_SIZE", 100),
+		// Параметры Server Polling Worker (ранее CRMid Worker)
+		EnableServerPollingWorker: getEnvAsBool("ENABLE_SERVER_POLLING_WORKER", true), // ПЕРЕИМЕНОВАНО
+		RMSLogin:                  getEnv("RMS_LOGIN", ""),
+		RMSPassword1:              getEnv("RMS_PASSWORD_1", ""),
+		RMSPassword2:              getEnv("RMS_PASSWORD_2", ""),
+		ServerPollingInterval:     time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour, // ПЕРЕИМЕНОВАНО и изменено на часы
+		ServerPollingBatchSize:    getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),                                // ПЕРЕИМЕНОВАНО
 
 		// Параметры синхронизации с SD
 		EnableSDeskSyncWorker: getEnvAsBool("ENABLE_SDESK_SYNC_WORKER", true),

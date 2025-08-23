@@ -1,3 +1,4 @@
+// internal/services/mappers.go
 package services
 
 import (
@@ -94,7 +95,7 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 	rawIikoVersion, _ := data["iikoVersion"].(string)
 	rawDescription, _ := data["description"].(string)
 	rawNameForClient, _ := data["nameforclient"].(string)
-	rawLitemanager, _ := data["litemanagerID"].(string) // Извлекаем litemanagerID напрямую
+	rawLitemanager, _ := data["litemanagerID"].(string)
 
 	// 2. Валидируем и заполняем основные поля модели.
 	server.UniqueID = validators.ValidateUniqueID(rawUniqueID)
@@ -111,7 +112,7 @@ func DataToServer(data map[string]interface{}) (*models.Server, error) {
 		server.DeviceName = &rawDeviceName
 	}
 	if rawIikoVersion != "" {
-		server.IikoVersion = &rawIikoVersion
+		server.ServerVersion = &rawIikoVersion
 	}
 
 	// 3. Собираем все извлеченные "сырые" данные в единое поле Description.

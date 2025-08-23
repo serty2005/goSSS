@@ -1,3 +1,4 @@
+// internal/repositories/server_repo.go
 package repositories
 
 import (
@@ -17,9 +18,9 @@ type ServerRepo interface {
 	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Server, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Server, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error)
-	FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error)
 	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error)
 	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Server, error)
+	FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]models.Server, error) // НОВЫЙ МЕТОД
 }
 
 type serverRepo struct {
@@ -87,24 +88,24 @@ func (r *serverRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*model
 func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int) ([]models.Server, error) {
 	var servers []models.Server
 	err := r.db.WithContext(ctx).
-		Where("device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
+		Where("device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&servers).Error
 	return servers, err
 }
 
-// FindWithEmptyCRMid находит серверы, у которых поле CRMid не заполнено,
-// и которые подлежат проверке.
-func (r *serverRepo) FindWithEmptyCRMid(ctx context.Context, limit int) ([]models.Server, error) {
+// FindForPolling находит серверы, которые необходимо опросить.
+// Выбирает серверы, которые еще не опрашивались или чья последняя проверка была раньше, чем `interval` назад.
+func (r *serverRepo) FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]models.Server, error) {
 	var servers []models.Server
-	// Выбираем только активные серверы, у которых CRMid пуст.
-	// Также, если была неудачная попытка, то следующая будет не раньше, чем через 30 дней.
-	thirtyDaysAgo := time.Now().AddDate(0, -1, 0)
+	threshold := time.Now().Add(-interval)
+
 	err := r.db.WithContext(ctx).
-		Where("(crm_id IS NULL OR crm_id = '')").
-		Where("status = ?", "active").
-		Where("crmid_last_attempt IS NULL OR crmid_last_attempt < ?", thirtyDaysAgo).
+		Where("ip IS NOT NULL AND ip != ''").
+		Where("status != ?", "archived").
+		Where("last_polled_at IS NULL OR last_polled_at < ?", threshold).
 		Limit(limit).
+		Order("last_polled_at ASC"). // Начинаем с самых старых
 		Find(&servers).Error
 	return servers, err
 }

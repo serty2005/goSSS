@@ -64,13 +64,15 @@ type Server struct {
 	DeviceName           *string    `gorm:"type:text;index"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Litemanager          *string    `gorm:"type:text"`
-	IikoVersion          *string    `gorm:"type:text"`
+	ServerVersion        *string    `gorm:"type:text"`
 	Description          *string    `gorm:"type:text"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 
 	// Новые поля для CRMid воркера
-	CrmidLastAttempt *time.Time `gorm:"column:crmid_last_attempt"`
-	Status           string     `gorm:"type:varchar(50);default:'active';index"` // 'active', 'inactive', 'to_delete'
+	ServerName    *string    `gorm:"type:text"`
+	ServerEdition *string    `gorm:"type:varchar(50)"`
+	LastPolledAt  *time.Time `gorm:"column:last_polled_at"`
+	Status        string     `gorm:"type:varchar(50);default:'unknown';index"` // ОБНОВЛЕНО: 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived'
 }
 
 // Workstation представляет сущность рабочей станции.
