@@ -5,13 +5,16 @@ import (
 	"context"
 	"etalon-server/internal/config"
 	"etalon-server/internal/db"
+	"etalon-server/internal/gateways"
 	"etalon-server/internal/handlers"
 	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
+	"etalon-server/internal/processing"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/seeder"
 	"etalon-server/internal/services"
 	"etalon-server/internal/utils"
+	"etalon-server/pkg/eventbus"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,14 +32,16 @@ import (
 
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
-	Config           *config.Config
-	Logger           *zap.Logger
-	DB               *gorm.DB
-	ReconcilerSvc    services.ReconcilerService
-	ServerPollingSvc services.ServerPollingService
-	SDeskSyncSvc     services.SDeskSyncService
-	ContractSyncSvc  services.ContractSyncService
-	// CleanupSvc удален из DI, т.к. он используется только при старте
+	Config               *config.Config
+	Logger               *zap.Logger
+	DB                   *gorm.DB
+	EventBus             eventbus.EventBus
+	Orchestrator         *processing.Orchestrator
+	SDeskGateway         gateways.ServiceDeskGateway
+	ContractGateway      gateways.ContractGateway
+	DuplicatesGateway    gateways.DuplicatesGateway
+	PollingGateway       gateways.ServerPollingGateway
+	AgentFTPGateway   gateways.AgentFTPGateway
 	Seeder               *seeder.Seeder
 	CrudHandler          *handlers.CrudHandler
 	SearchHandler        *handlers.SearchHandler
@@ -44,9 +49,10 @@ type Application struct {
 	TaskHandler          *handlers.TaskHandler
 	AgentHandler         *handlers.AgentHandler
 	ServerActionsHandler *handlers.ServerActionsHandler
+	ServerActionsSvc     services.ServerActionsService
+	EntityMatcherSvc  services.EntityMatcherService
 	AgentSvc             services.AgentService
-	// Добавляем сервис очистки для доступа в методе Run
-	cleanupService services.CleanupService
+	DebugHandler         *handlers.DebugHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -79,6 +85,9 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
 
+	// --- Инициализация компонентов ---
+	bus := eventbus.NewInMemoryEventBus(1000)
+
 	// Репозитории
 	companyRepo := repositories.NewCompanyRepo(database)
 	serverRepo := repositories.NewServerRepo(database)
@@ -89,40 +98,50 @@ func New() (*Application, error) {
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Создаем отдельные логгеры для каждого воркера/сервиса
-	sdeskSyncLogger := logger.New(cfg.LogDir, "sdesk_sync", cfg.DisableFileLogging)
+	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.DisableFileLogging)
+	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.DisableFileLogging)
 	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.DisableFileLogging)
 	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.DisableFileLogging)
 	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.DisableFileLogging)
-	cleanupLogger := logger.New(cfg.LogDir, "cleanup", cfg.DisableFileLogging)
+	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.DisableFileLogging)
 
-	// Сервисы
+	// Сервисы, шлюзы и оркестратор
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
-	cleanupService := services.NewCleanupService(database, cleanupLogger)
-	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, sdeskSyncLogger)
-	contractSyncService := services.NewContractSyncService(cfg, database, sdClient, contractRepo, contractSyncLogger)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
-	reconcilerService := services.NewReconcilerService(cfg, database, ftpClient, serverRepo, workstationRepo, frRepo, reconcilerLogger)
-	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
-	serverPollingService := services.NewServerPollingService(cfg, database, serverRepo, rmsClient, serverPollingLogger)
+	// reconcilerService := services.NewReconcilerService(cfg, database, ftpClient, serverRepo, workstationRepo, frRepo, reconcilerLogger)
+	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
+
+	// --- Новая архитектура ---
+	entityMatcherSvc := services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo)
+	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, companyRepo, serverRepo, workstationRepo, frRepo)
+	contractGateway := gateways.NewContractGateway(cfg, database, sdClient, contractRepo, bus, contractSyncLogger)
+	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
+	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
+	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
+	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, entityMatcherSvc)
+	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo)
 
 	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractSyncService)
+	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
-	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverPollingService)
+	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
+	debugHandler := handlers.NewDebugHandler(appLogger, bus)
 
 	return &Application{
 		Config:               cfg,
 		Logger:               appLogger,
 		DB:                   database,
-		ReconcilerSvc:        reconcilerService,
-		ServerPollingSvc:     serverPollingService,
-		SDeskSyncSvc:         sdeskSyncService,
-		ContractSyncSvc:      contractSyncService,
-		cleanupService:       cleanupService,
+		EventBus:             bus,
+		Orchestrator:         orchestrator,
+		SDeskGateway:         sdeskGateway,
+		ContractGateway:      contractGateway,
+		DuplicatesGateway:    duplicatesGateway,
+		PollingGateway:       pollingGateway,
+		AgentFTPGateway:      agentFTPGateway,
 		Seeder:               dbSeeder,
 		CrudHandler:          crudHandler,
 		SearchHandler:        searchHandler,
@@ -130,7 +149,10 @@ func New() (*Application, error) {
 		TaskHandler:          taskHandler,
 		AgentHandler:         agentHandler,
 		ServerActionsHandler: serverActionsHandler,
+		ServerActionsSvc:     serverActionsSvc,
+		EntityMatcherSvc:     entityMatcherSvc,
 		AgentSvc:             agentService,
+		DebugHandler:         debugHandler,
 	}, nil
 }
 
@@ -165,6 +187,9 @@ func (a *Application) Run() {
 	r.Route("/sync", func(r chi.Router) {
 		a.SyncHandler.RegisterRoutes(r)
 	})
+	r.Route("/debug", func(r chi.Router) {
+		a.DebugHandler.RegisterRoutes(r)
+	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to Etalon Server"))
 	})
@@ -180,48 +205,51 @@ func (a *Application) Run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Запускаем задачи очистки
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.cleanupService.CleanupFRDuplicates(mainCtx)
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.cleanupService.CleanupServerDuplicatesAndJunk(mainCtx)
-	}()
+	// --- Запуск компонентов новой архитектуры ---
+	// Шина событий
+	go func() { defer wg.Done(); a.EventBus.Start(mainCtx, a.Logger) }()
 
-	// Воркер Reconciler (FTP)
-	if a.Config.EnableReconcilerWorker {
+	// Оркестратор (он только подписывается, активной работы не ведет)
+	a.Orchestrator.Start(mainCtx)
+
+	// Шлюз поиска дубликатов
+	if a.Config.EnableDuplicatesGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.ReconcilerSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.DuplicatesGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер Reconciler (FTP) отключен в конфигурации.")
+		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
 	}
 
-	// Воркер опроса статусов серверов
-	if a.Config.EnableServerPollingWorker {
+	// Шлюз для данных от агентов (FTP)
+	if a.Config.EnableAgentFTPGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.ServerPollingSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.AgentFTPGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер опроса статусов серверов отключен в конфигурации.")
+		a.Logger.Info("Шлюз агентов (FTP) отключен в конфигурации.")
 	}
 
-	// Воркер синхронизации сущностей с ServiceDesk
-	if a.Config.EnableSDeskSyncWorker {
+	// Шлюз опроса статусов серверов
+	if a.Config.EnablePollingGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.SDeskSyncSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.PollingGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер синхронизации сущностей с ServiceDesk отключен в конфигурации.")
+		a.Logger.Info("Шлюз опроса статусов серверов отключен в конфигурации.")
 	}
 
-	// Воркер синхронизации контрактов
-	if a.Config.EnableContractSyncWorker {
+	// Шлюз синхронизации сущностей с ServiceDesk
+	if a.Config.EnableSDeskGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.ContractSyncSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.SDeskGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер синхронизации контрактов отключен в конфигурации.")
+		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
+	}
+
+	// Шлюз синхронизации контрактов
+	if a.Config.EnableContractGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.ContractGateway.Start(mainCtx) }()
+	} else {
+		a.Logger.Info("Шлюз синхронизации контрактов отключен в конфигурации.")
 	}
 
 	// HTTP-сервер

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/api"
+	"etalon-server/internal/core/events"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
+	"etalon-server/pkg/eventbus"
 	"fmt"
 	"regexp"
 	"strings"
@@ -40,25 +42,23 @@ type agentServiceImpl struct {
 	logger        *zap.Logger
 	agentRepo     repositories.AgentRepo
 	companyRepo   repositories.CompanyRepo
-	reconcilerSvc ReconcilerService
-	db            *gorm.DB // Для транзакций и создания задач
+	db            *gorm.DB
+	bus         eventbus.EventBus
 }
 
 // NewAgentService создает новый экземпляр сервиса агентов.
-func NewAgentService(logger *zap.Logger, agentRepo repositories.AgentRepo, companyRepo repositories.CompanyRepo, reconcilerSvc ReconcilerService, db *gorm.DB) AgentService {
+func NewAgentService(logger *zap.Logger, agentRepo repositories.AgentRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, bus eventbus.EventBus) AgentService {
 	return &agentServiceImpl{
-		logger:        logger,
-		agentRepo:     agentRepo,
-		companyRepo:   companyRepo,
-		reconcilerSvc: reconcilerSvc,
-		db:            db,
+		logger:      logger,
+		agentRepo:   agentRepo,
+		companyRepo: companyRepo,
+		db:          db,
+		bus:         bus,
 	}
 }
 
 // RegisterAgent обрабатывает запрос на регистрацию нового агента.
-// RegisterAgent обрабатывает запрос на регистрацию нового агента.
 func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.RegistrationRequestDTO) (*models.Agent, error) {
-	// 1. Проверяем, не существует ли уже такой агент
 	existingAgent, err := s.agentRepo.GetByUUID(ctx, req.AgentUUID)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка проверки существования агента: %w", err)
@@ -67,45 +67,26 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		return nil, ErrAgentAlreadyExists
 	}
 
-	// 2. Вызываем ReconcilerService для определения владельца
-	// ИСПРАВЛЕНИЕ: Сигнатура вызова изменена (убраны votes).
-	ownerUUID, _, _, err := s.reconcilerSvc.ProcessAgentData(ctx, &req.InitialData)
-	if err != nil {
-		s.logger.Error("Ошибка при обработке данных для определения владельца", zap.Error(err))
-	}
-
+	// Создаем "пустого" агента в статусе ожидания.
 	agent := &models.Agent{
 		UUID:          req.AgentUUID,
 		Hostname:      req.Hostname,
 		Version:       req.AgentVersion,
 		LastHeartbeat: time.Now(),
-		Type:          "workstation", // Пока хардкод, в будущем можно определять
+		Type:          "workstation",
+		Status:        models.StatusPendingOwner, // Владелец будет определен Оркестратором
 	}
 
-	// 3. Логика на основе результата определения владельца
-	if ownerUUID == "" {
-		s.logger.Warn("Владелец для нового агента не определен. Создание задачи.", zap.String("agent_uuid", req.AgentUUID))
-		agent.Status = models.StatusPendingOwner
-		if err := s.createTaskForUndefinedOwner(ctx, req); err != nil {
-			return nil, err
-		}
-	} else {
-		s.logger.Info("Владелец для нового агента определен", zap.String("agent_uuid", req.AgentUUID), zap.String("owner_uuid", ownerUUID))
-		agent.Status = models.StatusPendingZabbix
-		agent.OwnerServiceDeskUUID = ownerUUID
-
-		// Генерируем предварительное имя для Zabbix
-		zabbixHostname, err := s.generateZabbixHostname(ctx, ownerUUID, req.InitialData.Hostname)
-		if err != nil {
-			return nil, fmt.Errorf("ошибка генерации имени хоста Zabbix: %w", err)
-		}
-		agent.ZabbixHostname = zabbixHostname
-	}
-
-	// 4. Сохраняем агента в БД
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		return nil, fmt.Errorf("не удалось создать агента в БД: %w", err)
 	}
+
+	// Публикуем событие для Оркестратора, чтобы он запустил логику сверки и определения владельца.
+	s.bus.Publish(eventbus.Event{
+		Type:    events.AgentDataReceived,
+		Payload: req.InitialData,
+	})
+	s.logger.Info("Новый агент зарегистрирован, событие на обработку данных отправлено", zap.String("uuid", req.AgentUUID))
 
 	return agent, nil
 }
@@ -120,21 +101,20 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		return ErrAgentNotFound
 	}
 
-	// Обновляем heartbeat
 	agent.LastHeartbeat = time.Now()
 	if data.AgentVersion != "" {
 		agent.Version = data.AgentVersion
 	}
 	if err := s.agentRepo.Update(ctx, agent); err != nil {
 		s.logger.Error("Не удалось обновить heartbeat агента", zap.String("uuid", agentUUID), zap.Error(err))
-		// Не возвращаем ошибку, чтобы сверка все равно прошла
 	}
 
-	// Запускаем сверку данных
-	_, _, _, err = s.reconcilerSvc.ProcessAgentData(ctx, data)
-	if err != nil {
-		return fmt.Errorf("ошибка сверки данных агента: %w", err)
-	}
+	// Просто публикуем событие, вся логика сверки будет выполняться в Оркестраторе.
+	s.bus.Publish(eventbus.Event{
+		Type:    events.AgentDataReceived,
+		Payload: *data,
+	})
+	s.logger.Info("Данные от агента получены, событие на обработку отправлено", zap.String("uuid", agentUUID))
 
 	return nil
 }

@@ -1,4 +1,3 @@
-// internal/handlers/server_actions_handler.go
 package handlers
 
 import (
@@ -15,14 +14,14 @@ import (
 // ServerActionsHandler обрабатывает специфичные действия над серверами.
 type ServerActionsHandler struct {
 	logger     *zap.Logger
-	pollingSvc services.ServerPollingService
+	actionsSvc services.ServerActionsService // Заменяем зависимость
 }
 
 // NewServerActionsHandler создает новый экземпляр обработчика.
-func NewServerActionsHandler(logger *zap.Logger, pollingSvc services.ServerPollingService) *ServerActionsHandler {
+func NewServerActionsHandler(logger *zap.Logger, actionsSvc services.ServerActionsService) *ServerActionsHandler {
 	return &ServerActionsHandler{
 		logger:     logger,
-		pollingSvc: pollingSvc,
+		actionsSvc: actionsSvc,
 	}
 }
 
@@ -55,7 +54,7 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	err := h.pollingSvc.InstallLicense(r.Context(), uuid, dto.UniqueID)
+	err := h.actionsSvc.InstallLicense(r.Context(), uuid, dto.UniqueID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным UUID не найден")
@@ -81,7 +80,7 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	err := h.pollingSvc.PollSingleServer(r.Context(), uuid)
+	err := h.actionsSvc.PollSingleServer(r.Context(), uuid)
 
 	if err != nil {
 		switch {

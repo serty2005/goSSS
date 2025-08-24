@@ -21,6 +21,7 @@ type Base struct {
 	ID              string  `gorm:"primaryKey;type:text"`
 	MetaClass       string  `gorm:"type:text"`
 	ServiceDeskUUID *string `gorm:"type:text;unique"`
+	LastUpdatedBy   string  `gorm:"type:varchar(50);default:'unknown'"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
