@@ -13,7 +13,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,8 +23,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var rmsUrlRegex = regexp.MustCompile(`(?i)(https?://)?([a-zA-Z0-9.-]+)`)
-
 type ReconcilerService interface {
 	Start(ctx context.Context)
 	ProcessAgentData(ctx context.Context, data *api.AgentDataDTO) (ownerID, entityUUID, method string, err error)
@@ -33,7 +30,7 @@ type ReconcilerService interface {
 
 type reconcilerServiceImpl struct {
 	cfg             *config.Config
-	logger          *zap.Logger
+	logger          *zap.Logger // Этот логгер теперь специфичен для reconciler
 	db              *gorm.DB
 	ftpClient       FTPClient
 	serverRepo      repositories.ServerRepo
@@ -41,7 +38,7 @@ type reconcilerServiceImpl struct {
 	frRepo          repositories.FiscalRegisterRepo
 }
 
-func NewReconcilerService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, ftpClient FTPClient, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ReconcilerService {
+func NewReconcilerService(cfg *config.Config, db *gorm.DB, ftpClient FTPClient, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo, logger *zap.Logger) ReconcilerService {
 	return &reconcilerServiceImpl{
 		cfg:             cfg,
 		logger:          logger,
@@ -52,7 +49,6 @@ func NewReconcilerService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, f
 		frRepo:          frRepo,
 	}
 }
-
 func (s *reconcilerServiceImpl) Start(ctx context.Context) {
 	s.logger.Info("Запуск сервиса сверки (ReconcilerService)", zap.Duration("interval", s.cfg.ReconcileInterval))
 	ticker := time.NewTicker(s.cfg.ReconcileInterval)

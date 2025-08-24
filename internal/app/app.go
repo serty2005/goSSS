@@ -29,32 +29,36 @@ import (
 
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
-	Config               *config.Config
-	Logger               *zap.Logger
-	DB                   *gorm.DB
-	ReconcilerSvc        services.ReconcilerService
-	ServerPollingSvc     services.ServerPollingService
-	SDeskSyncSvc         services.SDeskSyncService
+	Config           *config.Config
+	Logger           *zap.Logger
+	DB               *gorm.DB
+	ReconcilerSvc    services.ReconcilerService
+	ServerPollingSvc services.ServerPollingService
+	SDeskSyncSvc     services.SDeskSyncService
+	ContractSyncSvc  services.ContractSyncService
+	// CleanupSvc удален из DI, т.к. он используется только при старте
 	Seeder               *seeder.Seeder
 	CrudHandler          *handlers.CrudHandler
 	SearchHandler        *handlers.SearchHandler
 	SyncHandler          *handlers.SyncHandler
 	TaskHandler          *handlers.TaskHandler
 	AgentHandler         *handlers.AgentHandler
-	ServerActionsHandler *handlers.ServerActionsHandler // НОВЫЙ ОБРАБОТЧИК
+	ServerActionsHandler *handlers.ServerActionsHandler
 	AgentSvc             services.AgentService
+	// Добавляем сервис очистки для доступа в методе Run
+	cleanupService services.CleanupService
 }
 
 // New создает и инициализирует новый экземпляр Application.
 func New() (*Application, error) {
 	cfg := config.New()
-	appLogger := logger.New(cfg.LogPath, cfg.DisableFileLogging)
+
+	appLogger := logger.New(cfg.LogDir, "app", cfg.DisableFileLogging)
+	appLogger.Info("Инициализация приложения etalon-server...")
 
 	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
 		appLogger.Fatal("Не удалось создать директорию для кэша FTP", zap.Error(err))
 	}
-
-	appLogger.Info("Инициализация приложения etalon-server...")
 
 	database, err := db.NewConnection(cfg)
 	if err != nil {
@@ -67,7 +71,7 @@ func New() (*Application, error) {
 	err = database.AutoMigrate(
 		&models.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{},
+		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
 	)
 	if err != nil {
 		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
@@ -75,31 +79,40 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
 
-	cleanupService := services.NewCleanupService(database, appLogger)
-	go cleanupService.CleanupFRDuplicates(context.Background())
-	go cleanupService.CleanupServerDuplicatesAndJunk(context.Background())
-
+	// Репозитории
 	companyRepo := repositories.NewCompanyRepo(database)
 	serverRepo := repositories.NewServerRepo(database)
 	workstationRepo := repositories.NewWorkstationRepo(database)
 	frRepo := repositories.NewFiscalRegisterRepo(database)
 	agentRepo := repositories.NewAgentRepo(database)
+	contractRepo := repositories.NewContractRepo(database)
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
-	sdClient := services.NewServiceDeskClient(cfg, appLogger)
-	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, appLogger)
-	ftpClient := services.NewFTPClient(cfg, appLogger)
-	reconcilerService := services.NewReconcilerService(cfg, appLogger, database, ftpClient, serverRepo, workstationRepo, frRepo)
-	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
-	serverPollingService := services.NewServerPollingService(cfg, appLogger, database, serverRepo, rmsClient) // Добавлен db в конструктор
-	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
+	// Создаем отдельные логгеры для каждого воркера/сервиса
+	sdeskSyncLogger := logger.New(cfg.LogDir, "sdesk_sync", cfg.DisableFileLogging)
+	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.DisableFileLogging)
+	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.DisableFileLogging)
+	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.DisableFileLogging)
+	cleanupLogger := logger.New(cfg.LogDir, "cleanup", cfg.DisableFileLogging)
 
+	// Сервисы
+	sdClient := services.NewServiceDeskClient(cfg, appLogger)
+	cleanupService := services.NewCleanupService(database, cleanupLogger)
+	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, sdeskSyncLogger)
+	contractSyncService := services.NewContractSyncService(cfg, database, sdClient, contractRepo, contractSyncLogger)
+	ftpClient := services.NewFTPClient(cfg, appLogger)
+	reconcilerService := services.NewReconcilerService(cfg, database, ftpClient, serverRepo, workstationRepo, frRepo, reconcilerLogger)
+	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
+	serverPollingService := services.NewServerPollingService(cfg, database, serverRepo, rmsClient, serverPollingLogger)
+	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
+
+	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
+	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractSyncService)
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
-	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverPollingService) // ИНИЦИАЛИЗАЦИЯ НОВОГО ОБРАБОТЧИКА
+	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverPollingService)
 
 	return &Application{
 		Config:               cfg,
@@ -108,13 +121,15 @@ func New() (*Application, error) {
 		ReconcilerSvc:        reconcilerService,
 		ServerPollingSvc:     serverPollingService,
 		SDeskSyncSvc:         sdeskSyncService,
+		ContractSyncSvc:      contractSyncService,
+		cleanupService:       cleanupService,
 		Seeder:               dbSeeder,
 		CrudHandler:          crudHandler,
 		SearchHandler:        searchHandler,
 		SyncHandler:          syncHandler,
 		TaskHandler:          taskHandler,
 		AgentHandler:         agentHandler,
-		ServerActionsHandler: serverActionsHandler, // ДОБАВЛЕН НОВЫЙ ОБРАБОТЧИК
+		ServerActionsHandler: serverActionsHandler,
 		AgentSvc:             agentService,
 	}, nil
 }
@@ -141,7 +156,7 @@ func (a *Application) Run() {
 		a.CrudHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
-		a.ServerActionsHandler.RegisterRoutes(r) // РЕГИСТРАЦИЯ НОВЫХ РОУТОВ
+		a.ServerActionsHandler.RegisterRoutes(r)
 		r.Route("/agents", func(r chi.Router) {
 			r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
 			a.AgentHandler.RegisterRoutes(r)
@@ -165,6 +180,19 @@ func (a *Application) Run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
+	// Запускаем задачи очистки
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.cleanupService.CleanupFRDuplicates(mainCtx)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.cleanupService.CleanupServerDuplicatesAndJunk(mainCtx)
+	}()
+
+	// Воркер Reconciler (FTP)
 	if a.Config.EnableReconcilerWorker {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.ReconcilerSvc.Start(mainCtx) }()
@@ -172,6 +200,7 @@ func (a *Application) Run() {
 		a.Logger.Info("Воркер Reconciler (FTP) отключен в конфигурации.")
 	}
 
+	// Воркер опроса статусов серверов
 	if a.Config.EnableServerPollingWorker {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.ServerPollingSvc.Start(mainCtx) }()
@@ -179,13 +208,23 @@ func (a *Application) Run() {
 		a.Logger.Info("Воркер опроса статусов серверов отключен в конфигурации.")
 	}
 
+	// Воркер синхронизации сущностей с ServiceDesk
 	if a.Config.EnableSDeskSyncWorker {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.SDeskSyncSvc.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер синхронизации с ServiceDesk отключен в конфигурации.")
+		a.Logger.Info("Воркер синхронизации сущностей с ServiceDesk отключен в конфигурации.")
 	}
 
+	// Воркер синхронизации контрактов
+	if a.Config.EnableContractSyncWorker {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.ContractSyncSvc.Start(mainCtx) }()
+	} else {
+		a.Logger.Info("Воркер синхронизации контрактов отключен в конфигурации.")
+	}
+
+	// HTTP-сервер
 	go func() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))

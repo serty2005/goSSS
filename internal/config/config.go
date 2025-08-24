@@ -18,7 +18,7 @@ type Config struct {
 	ServiceDeskBaseURL string
 	ServiceDeskKey     string
 	ServerPort         string
-	LogPath            string
+	LogDir             string
 	DisableFileLogging bool
 	RateLimit          int
 	WorkerCount        int
@@ -53,6 +53,10 @@ type Config struct {
 	SDeskSyncInterval     time.Duration
 	EnableSDeskSyncWorker bool
 
+	// Синхронизация контрактов
+	ContractSyncInterval     time.Duration
+	EnableContractSyncWorker bool
+
 	//Список разрешенных CORS origins
 	AllowedOrigins []string
 }
@@ -71,7 +75,7 @@ func New() *Config {
 		ServiceDeskBaseURL: getEnv("BASE_URL", "https://servicedesk.example.com"),
 		ServiceDeskKey:     getEnv("SDKEY", ""),
 		ServerPort:         getEnv("PORT", "8080"),
-		LogPath:            getEnv("LOG_PATH", "./logs/app.log"),
+		LogDir:             getEnv("LOG_DIR", "./logs"),
 		DisableFileLogging: getEnvAsBool("DISABLE_FILE_LOGGING", false),
 		RateLimit:          getEnvAsInt("RATE_LIMIT", 45),
 		WorkerCount:        getEnvAsInt("WORKER_COUNT", 10),
@@ -94,17 +98,21 @@ func New() *Config {
 		ZabbixAPIURL:   getEnv("ZABBIX_API_URL", ""),
 		ZabbixAPIToken: getEnv("ZABBIX_API_TOKEN", ""),
 
-		// Параметры Server Polling Worker (ранее CRMid Worker)
-		EnableServerPollingWorker: getEnvAsBool("ENABLE_SERVER_POLLING_WORKER", true), // ПЕРЕИМЕНОВАНО
+		// Параметры Server Polling Worker
+		EnableServerPollingWorker: getEnvAsBool("ENABLE_SERVER_POLLING_WORKER", true),
 		RMSLogin:                  getEnv("RMS_LOGIN", ""),
 		RMSPassword1:              getEnv("RMS_PASSWORD_1", ""),
 		RMSPassword2:              getEnv("RMS_PASSWORD_2", ""),
-		ServerPollingInterval:     time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour, // ПЕРЕИМЕНОВАНО и изменено на часы
-		ServerPollingBatchSize:    getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),                                // ПЕРЕИМЕНОВАНО
+		ServerPollingInterval:     time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour,
+		ServerPollingBatchSize:    getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),
 
 		// Параметры синхронизации с SD
 		EnableSDeskSyncWorker: getEnvAsBool("ENABLE_SDESK_SYNC_WORKER", true),
 		SDeskSyncInterval:     time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
+
+		// Синхронизация контрактов
+		EnableContractSyncWorker: getEnvAsBool("ENABLE_CONTRACT_SYNC_WORKER", true),
+		ContractSyncInterval:     time.Duration(getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)) * time.Minute,
 
 		AllowedOrigins: strings.Split(allowedOriginsStr, ","),
 	}

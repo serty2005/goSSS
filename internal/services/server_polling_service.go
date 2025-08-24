@@ -44,13 +44,12 @@ type serverPollingServiceImpl struct {
 	serverRepo repositories.ServerRepo
 	rmsClient  utils.RMSClient
 
-	// Поля для in-memory rate limiter'а
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
 // NewServerPollingService создает новый экземпляр сервиса.
-func NewServerPollingService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient) ServerPollingService {
+func NewServerPollingService(cfg *config.Config, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient, logger *zap.Logger) ServerPollingService {
 	return &serverPollingServiceImpl{
 		cfg:           cfg,
 		logger:        logger,

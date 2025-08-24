@@ -1,8 +1,6 @@
-// internal/services/sdesk_sync_service.go
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +10,6 @@ import (
 	"etalon-server/internal/utils"
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +41,6 @@ type sdeskSyncServiceImpl struct {
 type localEntityInfo struct {
 	LastModifiedDate *time.Time
 	DeletedAt        gorm.DeletedAt
-	ContractInfo     datatypes.JSON
 }
 
 // NewSDeskSyncService создает новый экземпляр сервиса синхронизации.
@@ -72,7 +68,7 @@ func NewSDeskSyncService(
 
 // Start запускает воркер в фоновом режиме.
 func (s *sdeskSyncServiceImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера синхронизации с ServiceDesk", zap.Duration("interval", s.cfg.SDeskSyncInterval))
+	s.logger.Info("Запуск воркера синхронизации сущностей с ServiceDesk", zap.Duration("interval", s.cfg.SDeskSyncInterval))
 	ticker := time.NewTicker(s.cfg.SDeskSyncInterval)
 	defer ticker.Stop()
 
@@ -83,7 +79,7 @@ func (s *sdeskSyncServiceImpl) Start(ctx context.Context) {
 		case <-ticker.C:
 			s.runSyncCycle(ctx)
 		case <-ctx.Done():
-			s.logger.Info("Остановка воркера синхронизации с ServiceDesk...")
+			s.logger.Info("Остановка воркера синхронизации сущностей с ServiceDesk...")
 			return
 		}
 	}
@@ -92,7 +88,7 @@ func (s *sdeskSyncServiceImpl) Start(ctx context.Context) {
 func (s *sdeskSyncServiceImpl) runSyncCycle(ctx context.Context) {
 	s.mu.Lock()
 	if s.isSyncing {
-		s.logger.Warn("Цикл синхронизации уже запущен. Пропуск.")
+		s.logger.Warn("Цикл синхронизации сущностей уже запущен. Пропуск.")
 		s.mu.Unlock()
 		return
 	}
@@ -105,17 +101,14 @@ func (s *sdeskSyncServiceImpl) runSyncCycle(ctx context.Context) {
 		s.mu.Unlock()
 	}()
 
-	s.logger.Info("Начало нового цикла синхронизации с ServiceDesk.")
+	s.logger.Info("Начало нового цикла синхронизации сущностей.")
 
-	agreementCache := make(map[string]*AgreementDetailsDTO)
-	cycleCtx := context.WithValue(ctx, agreementCacheKey, agreementCache)
+	s.syncEntityType(ctx, "ou$company")
+	s.syncEntityType(ctx, "objectBase$Server")
+	s.syncEntityType(ctx, "objectBase$Workstation")
+	s.syncEntityType(ctx, "objectBase$FR")
 
-	s.syncEntityType(cycleCtx, "ou$company")
-	s.syncEntityType(cycleCtx, "objectBase$Server")
-	s.syncEntityType(cycleCtx, "objectBase$Workstation")
-	s.syncEntityType(cycleCtx, "objectBase$FR")
-
-	s.logger.Info("Цикл синхронизации с ServiceDesk завершен.")
+	s.logger.Info("Цикл синхронизации сущностей завершен.")
 }
 
 // syncEntityType выполняет инкрементальную синхронизацию для одного типа сущности.
@@ -129,7 +122,6 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		return
 	}
 
-	// ИЗМЕНЕНИЕ: Запрашиваем из локальной БД расширенную информацию
 	localMap, err := s.getLocalEntities(ctx, metaClass)
 	if err != nil {
 		log.Error("Не удалось получить локальные сущности", zap.Error(err))
@@ -150,39 +142,14 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 		if remoteUUID == "" {
 			continue
 		}
-
+		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
+		if remoteLMD == nil {
+			continue
+		}
 		localEntity, exists := localMap[remoteUUID]
 		if !exists {
 			toCreate = append(toCreate, remoteUUID)
-			continue
-		}
-
-		// --- НАЧАЛО НОВОЙ ЛОГИКИ ПРИНЯТИЯ РЕШЕНИЯ ОБ ОБНОВЛЕНИИ ---
-		needsUpdate := false
-		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
-
-		// 1. Проверяем, не была ли сущность удалена у нас, а в SD снова появилась
-		if localEntity.DeletedAt.Valid {
-			needsUpdate = true
-		}
-
-		// 2. Стандартная проверка по дате модификации
-		if !needsUpdate && remoteLMD != nil && localEntity.LastModifiedDate != nil && remoteLMD.After(*localEntity.LastModifiedDate) {
-			needsUpdate = true
-		}
-
-		// 3. Специальная проверка для компаний по составу контрактов
-		if !needsUpdate && metaClass == "ou$company" {
-			remoteAgreements := getAgreementUUIDsFromRemote(remoteItem)
-			localAgreements := getAgreementUUIDsFromLocal(localEntity.ContractInfo)
-			if !areStringSlicesEqual(remoteAgreements, localAgreements) {
-				log.Debug("Обнаружено изменение в составе контрактов, требуется обновление", zap.String("uuid", remoteUUID))
-				needsUpdate = true
-			}
-		}
-		// --- КОНЕЦ НОВОЙ ЛОГИКИ ---
-
-		if needsUpdate {
+		} else if localEntity.DeletedAt.Valid || (localEntity.LastModifiedDate != nil && remoteLMD.After(*localEntity.LastModifiedDate)) {
 			toUpdate = append(toUpdate, remoteUUID)
 		}
 	}
@@ -213,55 +180,31 @@ func (s *sdeskSyncServiceImpl) syncEntityType(ctx context.Context, metaClass str
 	}
 }
 
-// processDeletions выполняет "мягкое удаление" и закрывает связанные задачи.
+// processDeletions выполняет "мягкое удаление".
 func (s *sdeskSyncServiceImpl) processDeletions(ctx context.Context, metaClass string, toDelete []string, log *zap.Logger) {
 	log.Info("Запуск процесса 'мягкого удаления' для устаревших записей", zap.Int("count", len(toDelete)))
 
 	for _, uuid := range toDelete {
-		var deleted bool
-		var err error
-
-		err = s.db.Transaction(func(tx *gorm.DB) error {
+		err := s.db.Transaction(func(tx *gorm.DB) error {
+			var txErr error
 			switch metaClass {
 			case "ou$company":
-				deleted, err = s.companyRepo.Delete(ctx, tx, uuid)
+				_, txErr = s.companyRepo.Delete(ctx, tx, uuid)
 			case "objectBase$Server":
-				deleted, err = s.serverRepo.Delete(ctx, tx, uuid)
+				_, txErr = s.serverRepo.Delete(ctx, tx, uuid)
 			case "objectBase$Workstation":
-				deleted, err = s.workstationRepo.Delete(ctx, tx, uuid)
+				_, txErr = s.workstationRepo.Delete(ctx, tx, uuid)
 			case "objectBase$FR":
-				deleted, err = s.frRepo.Delete(ctx, tx, uuid)
+				_, txErr = s.frRepo.Delete(ctx, tx, uuid)
 			default:
-				return fmt.Errorf("неизвестный metaClass для удаления: %s", metaClass)
+				txErr = fmt.Errorf("неизвестный metaClass для удаления: %s", metaClass)
 			}
-			return err
+			return txErr
 		})
 
 		if err != nil {
 			log.Error("Ошибка при 'мягком удалении' сущности", zap.String("uuid", uuid), zap.Error(err))
-			continue
 		}
-
-		if deleted {
-			log.Info("Сущность успешно помечена как удаленная", zap.String("uuid", uuid))
-			s.resolveDeletionTask(ctx, uuid, log)
-		}
-	}
-}
-
-// resolveDeletionTask находит и закрывает задачу на удаление в SD.
-func (s *sdeskSyncServiceImpl) resolveDeletionTask(ctx context.Context, entityUUID string, log *zap.Logger) {
-	result := s.db.WithContext(ctx).Model(&models.ReconciliationTask{}).
-		Where("entity_uuid = ? AND task_type = ? AND status = ?", entityUUID, "delete_from_servicedesk", "new").
-		Update("status", "resolved")
-
-	if result.Error != nil {
-		log.Error("Ошибка при поиске и обновлении задачи на удаление", zap.String("uuid", entityUUID), zap.Error(result.Error))
-		return
-	}
-
-	if result.RowsAffected > 0 {
-		log.Info("Найдена и закрыта связанная задача на удаление из ServiceDesk", zap.String("uuid", entityUUID))
 	}
 }
 
@@ -271,16 +214,11 @@ func (s *sdeskSyncServiceImpl) getLocalEntities(ctx context.Context, metaClass s
 	var err error
 	switch metaClass {
 	case "ou$company":
-		// ИЗМЕНЕНИЕ: Используем более общий метод, чтобы получить и ContractInfo
-		var companies []models.Company
-		err = s.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at", "contract_info").Find(&companies).Error
+		entities, e := s.companyRepo.GetAllUUIDsAndDates(ctx)
+		err = e
 		if err == nil {
-			for _, entity := range companies {
-				infoMap[*entity.ServiceDeskUUID] = localEntityInfo{
-					LastModifiedDate: entity.LastModifiedDate,
-					DeletedAt:        entity.DeletedAt,
-					ContractInfo:     entity.ContractInfo,
-				}
+			for uuid, entity := range entities {
+				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
 			}
 		}
 	case "objectBase$Server":
@@ -329,9 +267,7 @@ func (s *sdeskSyncServiceImpl) processCreationsInParallel(ctx context.Context, m
 				default:
 					details, err := s.sdClient.FetchEntityDetails(ctx, uuid, metaClass)
 					if err != nil {
-						if !errors.Is(err, context.Canceled) {
-							log.Error("Не удалось получить детали для новой сущности", zap.String("uuid", uuid), zap.Error(err))
-						}
+						log.Error("Не удалось получить детали для новой сущности", zap.String("uuid", uuid), zap.Error(err))
 						continue
 					}
 					s.createEntity(ctx, metaClass, details, log)
@@ -363,9 +299,7 @@ func (s *sdeskSyncServiceImpl) processUpdatesInParallel(ctx context.Context, met
 				default:
 					details, err := s.sdClient.FetchEntityDetails(ctx, uuid, metaClass)
 					if err != nil {
-						if !errors.Is(err, context.Canceled) {
-							log.Error("Не удалось получить детали для обновления сущности", zap.String("uuid", uuid), zap.Error(err))
-						}
+						log.Error("Не удалось получить детали для обновления сущности", zap.String("uuid", uuid), zap.Error(err))
 						continue
 					}
 					s.checkEntityAndCreateTaskIfNeeded(ctx, metaClass, uuid, details, log)
@@ -387,7 +321,7 @@ func (s *sdeskSyncServiceImpl) createEntity(ctx context.Context, metaClass strin
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		switch metaClass {
 		case "ou$company":
-			company, mapErr := DataToCompany(ctx, details, s.sdClient, log)
+			company, mapErr := DataToCompany(ctx, details, log)
 			if mapErr != nil {
 				return mapErr
 			}
@@ -431,7 +365,7 @@ func (s *sdeskSyncServiceImpl) checkEntityAndCreateTaskIfNeeded(ctx context.Cont
 	// 1. Получаем текущую и новую версии сущности для сравнения
 	switch metaClass {
 	case "ou$company":
-		newData, mapErr := DataToCompany(ctx, details, s.sdClient, log)
+		newData, mapErr := DataToCompany(ctx, details, log)
 		if mapErr != nil {
 			log.Error("Ошибка маппинга компании", zap.String("uuid", uuid), zap.Error(mapErr))
 			return
@@ -499,11 +433,9 @@ func (s *sdeskSyncServiceImpl) checkEntityAndCreateTaskIfNeeded(ctx context.Cont
 
 	_, isRestorationOnly := updates["deleted_at"]
 	if len(updates) == 1 && isRestorationOnly {
-		// Сценарий 1: Только восстановление. Выполняем автоматически.
 		log.Info("Обнаружена восстановленная в SD сущность. Автоматическое восстановление.", append(diffLog, zap.String("uuid", uuid))...)
 		s.performUpdate(ctx, metaClass, uuid, updates, log)
 	} else {
-		// Сценарий 2: Есть другие расхождения. Создаем задачу.
 		log.Warn("Обнаружено расхождение данных между локальной БД и ServiceDesk. Создание задачи.", append(diffLog, zap.String("uuid", uuid))...)
 		s.createConflictTask(ctx, metaClass, uuid, currentEntity, details, diffLog, log)
 	}
@@ -614,7 +546,6 @@ func formatDiffValue(v interface{}) string {
 }
 
 // compareAndLog - универсальная функция для сравнения полей и логирования расхождений.
-// ИСПРАВЛЕНИЕ: Дженерик-тип изменен на comparable для корректной работы оператора !=
 func compareAndLog[T comparable](updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *T) {
 	currentVal := reflect.ValueOf(current)
 	newVal := reflect.ValueOf(new)
@@ -652,38 +583,13 @@ func compareTimeAndLog(updates map[string]interface{}, diffs *[]zap.Field, key s
 	}
 }
 
-// canonicalJSON принимает JSON в виде []byte и возвращает его каноническую (компактную) форму.
-// Это необходимо для корректного сравнения JSON-объектов, игнорируя пробелы и форматирование.
-func canonicalJSON(jsonData []byte) []byte {
-	if jsonData == nil {
-		return nil
-	}
-	buffer := new(bytes.Buffer)
-	// Compact убирает все незначимые пробелы из JSON
-	if err := json.Compact(buffer, jsonData); err != nil {
-		// В случае ошибки возвращаем исходный слайс байт
-		return jsonData
-	}
-	return buffer.Bytes()
-}
-
-// getCompanyDiff - ОБНОВЛЕННАЯ ВЕРСИЯ. Добавлена сверка ContractInfo.
+// getCompanyDiff - Упрощенная версия. Сверяет только UI-значимые поля.
 func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
 	diffs := make([]zap.Field, 0)
 
 	compareAndLog(updates, &diffs, "title", current.Title, new.Title)
 	compareAndLog(updates, &diffs, "address", current.Address, new.Address)
-	compareAndLog(updates, &diffs, "active_contract", current.ActiveContract, new.ActiveContract)
-
-	// ИЗМЕНЕНИЕ: Сравниваем канонические представления JSON-полей
-	currentContractInfo := canonicalJSON(current.ContractInfo)
-	newContractInfo := canonicalJSON(new.ContractInfo)
-
-	if !bytes.Equal(currentContractInfo, newContractInfo) {
-		updates["contract_info"] = new.ContractInfo
-		diffs = append(diffs, zap.String("contract_info", fmt.Sprintf("'%s' -> '%s'", string(current.ContractInfo), string(new.ContractInfo))))
-	}
 
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
@@ -748,47 +654,4 @@ func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalReg
 		}
 	}
 	return updates, diffs
-}
-
-func getAgreementUUIDsFromRemote(remoteItem map[string]interface{}) []string {
-	var uuids []string
-	if agreements, ok := remoteItem["recipientAgreements"].([]interface{}); ok {
-		for _, agr := range agreements {
-			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
-				if metaClass, mcOk := agrMap["metaClass"].(string); mcOk && metaClass == "agreement$agreement" {
-					if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-						uuids = append(uuids, agrUUID)
-					}
-				}
-			}
-		}
-	}
-	return uuids
-}
-
-func getAgreementUUIDsFromLocal(contractInfoJSON datatypes.JSON) []string {
-	if contractInfoJSON == nil {
-		return nil
-	}
-	var info struct {
-		ActiveContractIDs []string `json:"active_contract_ids"`
-	}
-	if err := json.Unmarshal(contractInfoJSON, &info); err != nil {
-		return nil
-	}
-	return info.ActiveContractIDs
-}
-
-func areStringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sort.Strings(a)
-	sort.Strings(b)
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

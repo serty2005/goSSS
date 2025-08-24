@@ -38,18 +38,37 @@ func (base *Base) BeforeCreate(tx *gorm.DB) (err error) {
 // Company представляет сущность компании.
 type Company struct {
 	Base
-	Address               *string        `gorm:"type:text"`
-	Title                 *string        `gorm:"type:text"`
-	ActiveContract        *bool          `gorm:"type:boolean"`
-	LastModifiedDate      *time.Time     `json:"last_modified_date"`
-	AdditionalName        *string        `gorm:"type:text"`
-	ParentServiceDeskUUID *string        `gorm:"type:text"`
-	ContractInfo          datatypes.JSON `gorm:"type:jsonb"`
-	Parent                *Company       `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
+	Address               *string    `gorm:"type:text"`
+	Title                 *string    `gorm:"type:text"`
+	ActiveContract        *bool      `gorm:"type:boolean"`
+	LastModifiedDate      *time.Time `json:"last_modified_date"`
+	AdditionalName        *string    `gorm:"type:text"`
+	ParentServiceDeskUUID *string    `gorm:"type:text"`
+	Parent                *Company   `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
 
+	Contracts       []Contract       `gorm:"many2many:company_contracts;"`
 	Servers         []Server         `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	Workstations    []Workstation    `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	FiscalRegisters []FiscalRegister `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
+}
+
+// Contract представляет сущность контракта.
+type Contract struct {
+	Base
+	State            *string `gorm:"type:varchar(50);index"`
+	StateStartTime   *time.Time
+	Services         datatypes.JSON `gorm:"type:jsonb"`
+	Recipients       datatypes.JSON `gorm:"type:jsonb"`
+	LastModifiedDate *time.Time     `json:"last_modified_date"`
+	ServiceLevel     int            `gorm:"default:-1;index"`
+	Companies        []Company      `gorm:"many2many:company_contracts;"`
+}
+
+type CompanyContract struct {
+	CompanyServiceDeskUUID  string   `gorm:"primaryKey"`
+	Company                 Company  `gorm:"foreignKey:CompanyServiceDeskUUID;references:ServiceDeskUUID"`
+	ContractServiceDeskUUID string   `gorm:"primaryKey"`
+	Contract                Contract `gorm:"foreignKey:ContractServiceDeskUUID;references:ServiceDeskUUID"`
 }
 
 // Server представляет сущность сервера.
