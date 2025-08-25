@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/config"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -29,11 +30,27 @@ var minimalAttrsMap = map[string]string{
 	"objectBase$FR":          "UUID,lastModifiedDate,owner",
 }
 
+// AgreementDetailsDTO содержит детали контракта, полученные от ServiceDesk.
+type AgreementDetailsDTO struct {
+	State          string `json:"state"`
+	StateStartTime string `json:"stateStartTime"`
+	Services       []struct {
+		UUID      string `json:"UUID"`
+		Title     string `json:"title"`
+		MetaClass string `json:"metaClass"`
+	} `json:"services"`
+	RecipientsOU []struct {
+		UUID      string `json:"UUID"`
+		Title     string `json:"title"`
+		MetaClass string `json:"metaClass"`
+	} `json:"recipientsOU"`
+}
+
 // ServiceDeskClient определяет интерфейс для взаимодействия с API ServiceDesk.
 type ServiceDeskClient interface {
 	FetchEntityList(ctx context.Context, metaClass string, full bool) ([]map[string]interface{}, error)
 	FetchEntityDetails(ctx context.Context, uuid string, metaClass string) (map[string]interface{}, error)
-	CheckAgreementActive(ctx context.Context, agreementUUID string) (bool, error)
+	FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error)
 }
 
 // serviceDeskClientImpl реализует ServiceDeskClient.
@@ -48,9 +65,22 @@ type serviceDeskClientImpl struct {
 
 // NewServiceDeskClient создает новый клиент для ServiceDesk.
 func NewServiceDeskClient(cfg *config.Config, logger *zap.Logger) ServiceDeskClient {
+	// ИЗМЕНЕНИЕ: Детальная настройка транспорта для http.Client
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second, // Таймаут на установку TCP-соединения
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	return &serviceDeskClientImpl{
 		client: &http.Client{
-			Timeout: cfg.RequestTimeout,
+			Transport: transport,
+			Timeout:   cfg.RequestTimeout, // Общий таймаут на весь запрос
 		},
 		baseURL:    strings.TrimRight(cfg.ServiceDeskBaseURL, "/"),
 		apiKey:     cfg.ServiceDeskKey,
@@ -58,6 +88,40 @@ func NewServiceDeskClient(cfg *config.Config, logger *zap.Logger) ServiceDeskCli
 		logger:     logger,
 		maxRetries: cfg.MaxRetries,
 	}
+}
+
+// AgreementContextKey - тип ключа для передачи кэша через контекст.
+type AgreementContextKey string
+
+const agreementCacheKey AgreementContextKey = "agreementCache"
+
+// FetchAgreementDetails получает детальную информацию о контракте по UUID.
+// ИЗМЕНЕНИЕ: Логика кэширования теперь работает через контекст.
+func (s *serviceDeskClientImpl) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*AgreementDetailsDTO, error) {
+	// 1. Проверяем кэш в контексте
+	if cache, ok := ctx.Value(agreementCacheKey).(map[string]*AgreementDetailsDTO); ok {
+		if cachedDetails, found := cache[agreementUUID]; found {
+			s.logger.Debug("Детали контракта взяты из кэша контекста", zap.String("agreementUUID", agreementUUID))
+			return cachedDetails, nil
+		}
+	}
+
+	// 2. Если в кэше нет, делаем запрос
+	url := fmt.Sprintf("%s/get/%s?accessKey=%s&attrs=state,stateStartTime,services,recipientsOU", s.baseURL, agreementUUID, s.apiKey)
+
+	var response AgreementDetailsDTO
+	err := s.doWithRetry(ctx, http.MethodGet, url, nil, &response)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Сохраняем в кэш контекста, если он есть
+	if cache, ok := ctx.Value(agreementCacheKey).(map[string]*AgreementDetailsDTO); ok {
+		cache[agreementUUID] = &response
+		s.logger.Debug("Детали контракта получены по API и сохранены в кэш контекста", zap.String("agreementUUID", agreementUUID))
+	}
+
+	return &response, nil
 }
 
 // FetchEntityList получает список сущностей указанного метакласса.

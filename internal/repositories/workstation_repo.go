@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/models"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -94,25 +95,32 @@ func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset
 // FindByRemoteIDs ищет рабочую станцию по любому из ID удаленного доступа.
 func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error) {
 	var ws models.Workstation
-	query := r.db.WithContext(ctx)
-	hasCondition := false
+	query := r.db.WithContext(ctx).Where("status != ?", "locked")
+
+	// Динамически строим запрос, добавляя условия только для валидных ID
+	var conditions []string
+	var values []interface{}
 
 	if tv != "" && tv != "None" {
-		query = query.Or("teamviewer = ?", tv)
-		hasCondition = true
+		conditions = append(conditions, "teamviewer = ?")
+		values = append(values, tv)
 	}
 	if ad != "" && ad != "None" {
-		query = query.Or("anydesk = ?", ad)
-		hasCondition = true
+		conditions = append(conditions, "anydesk = ?")
+		values = append(values, ad)
 	}
 	if lm != "" && lm != "None" {
-		query = query.Or("litemanager = ?", lm)
-		hasCondition = true
+		conditions = append(conditions, "litemanager = ?")
+		values = append(values, lm)
 	}
 
-	if !hasCondition {
+	// Если ни одного валидного ID не предоставлено, ничего не ищем
+	if len(conditions) == 0 {
 		return nil, nil
 	}
+
+	// Объединяем условия через OR
+	query = query.Where(strings.Join(conditions, " OR "), values...)
 
 	// Ищем самую свежую запись, если их несколько
 	err := query.Order("last_modified_date DESC").First(&ws).Error

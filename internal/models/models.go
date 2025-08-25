@@ -20,7 +20,8 @@ const (
 type Base struct {
 	ID              string  `gorm:"primaryKey;type:text"`
 	MetaClass       string  `gorm:"type:text"`
-	ServiceDeskUUID *string `gorm:"type:text;uniqueIndex"`
+	ServiceDeskUUID *string `gorm:"type:text;unique"`
+	LastUpdatedBy   string  `gorm:"type:varchar(50);default:'unknown'"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
@@ -46,9 +47,29 @@ type Company struct {
 	ParentServiceDeskUUID *string    `gorm:"type:text"`
 	Parent                *Company   `gorm:"foreignKey:ParentServiceDeskUUID;references:ServiceDeskUUID"`
 
+	Contracts       []Contract       `gorm:"many2many:company_contracts;"`
 	Servers         []Server         `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	Workstations    []Workstation    `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
 	FiscalRegisters []FiscalRegister `gorm:"foreignKey:OwnerServiceDeskUUID;references:ServiceDeskUUID"`
+}
+
+// Contract представляет сущность контракта.
+type Contract struct {
+	Base
+	State            *string `gorm:"type:varchar(50);index"`
+	StateStartTime   *time.Time
+	Services         datatypes.JSON `gorm:"type:jsonb"`
+	Recipients       datatypes.JSON `gorm:"type:jsonb"`
+	LastModifiedDate *time.Time     `json:"last_modified_date"`
+	ServiceLevel     int            `gorm:"default:-1;index"`
+	Companies        []Company      `gorm:"many2many:company_contracts;"`
+}
+
+type CompanyContract struct {
+	CompanyServiceDeskUUID  string   `gorm:"primaryKey"`
+	Company                 Company  `gorm:"foreignKey:CompanyServiceDeskUUID;references:ServiceDeskUUID"`
+	ContractServiceDeskUUID string   `gorm:"primaryKey"`
+	Contract                Contract `gorm:"foreignKey:ContractServiceDeskUUID;references:ServiceDeskUUID"`
 }
 
 // Server представляет сущность сервера.
@@ -66,13 +87,16 @@ type Server struct {
 	Litemanager          *string    `gorm:"type:text"`
 	ServerVersion        *string    `gorm:"type:text"`
 	Description          *string    `gorm:"type:text"`
-	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+	OwnerServiceDeskUUID *string    `gorm:"type:text;index"`
 
-	// Новые поля для CRMid воркера
-	ServerName    *string    `gorm:"type:text"`
-	ServerEdition *string    `gorm:"type:varchar(50)"`
-	LastPolledAt  *time.Time `gorm:"column:last_polled_at"`
-	Status        string     `gorm:"type:varchar(50);default:'unknown';index"` // ОБНОВЛЕНО: 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived'
+	AdditionalOwners []Company `gorm:"many2many:server_additional_owners;foreignKey:ServiceDeskUUID;joinForeignKey:ServerServiceDeskUUID;references:ServiceDeskUUID;joinReferences:CompanyServiceDeskUUID"`
+
+	// Поля для опроса серверов
+	ServerName       *string    `gorm:"type:text"`
+	ServerEdition    *string    `gorm:"type:varchar(50)"`
+	LastPolledAt     *time.Time `gorm:"column:last_polled_at"`
+	Status           string     `gorm:"type:varchar(50);default:'unknown';index"` // 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived', 'locked'
+	StatusBeforeLock *string    `gorm:"type:varchar(50)"`
 }
 
 // Workstation представляет сущность рабочей станции.
@@ -84,8 +108,9 @@ type Workstation struct {
 	DeviceName           *string    `gorm:"type:text"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Description          *string    `gorm:"type:text"`
-	Status               *string    `gorm:"type:varchar(50);default:'offline'"`
-	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+	Status               *string    `gorm:"type:varchar(50);default:'offline'"` // Добавляем 'locked' как возможный статус
+	StatusBeforeLock     *string    `gorm:"type:varchar(50)"`                   // Хранит статус до "заморозки"
+	OwnerServiceDeskUUID *string    `gorm:"type:text;index"`                    // Ссылка на Company.UUID
 }
 
 // FiscalRegister представляет сущность фискального регистратора.
@@ -133,7 +158,7 @@ type AgentFile struct {
 // ReconciliationTask представляет задачу для ручного разбора администратором.
 type ReconciliationTask struct {
 	ID         uint           `gorm:"primarykey"`
-	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk'
+	TaskType   string         `gorm:"type:varchar(50);not null;index"`      // 'owner_mismatch', 'new_client', 'delete_duplicate', 'delete_from_servicedesk', 'data_conflict'
 	EntityType string         `gorm:"type:varchar(50)"`                     // 'FiscalRegister', 'Workstation', 'Server'
 	EntityUUID string         `gorm:"type:text"`                            // UUID сущности, с которой связана задача
 	Details    datatypes.JSON `gorm:"type:jsonb"`                           // Детали задачи, например, старый и новый владелец

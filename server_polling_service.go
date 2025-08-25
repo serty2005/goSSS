@@ -44,13 +44,12 @@ type serverPollingServiceImpl struct {
 	serverRepo repositories.ServerRepo
 	rmsClient  utils.RMSClient
 
-	// Поля для in-memory rate limiter'а
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
 // NewServerPollingService создает новый экземпляр сервиса.
-func NewServerPollingService(cfg *config.Config, logger *zap.Logger, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient) ServerPollingService {
+func NewServerPollingService(cfg *config.Config, db *gorm.DB, serverRepo repositories.ServerRepo, rmsClient utils.RMSClient, logger *zap.Logger) ServerPollingService {
 	return &serverPollingServiceImpl{
 		cfg:           cfg,
 		logger:        logger,
@@ -120,16 +119,22 @@ func (s *serverPollingServiceImpl) checkRateLimit(serverUUID string) bool {
 }
 
 // Start запускает сервис в фоновом режиме.
+// ИЗМЕНЕНИЕ: Переделано на тикер для корректного прерывания.
 func (s *serverPollingServiceImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера для опроса статусов серверов", zap.Duration("interval", s.cfg.ServerPollingInterval))
+	s.logger.Info("Запуск воркера для опроса статусов серверов", zap.Duration("interval", 1*time.Minute))
+	ticker := time.NewTicker(1 * time.Minute) // Пауза между циклами
+	defer ticker.Stop()
+
+	// Первый запуск сразу, не дожидаясь тикера
+	s.runCycle(ctx)
+
 	for {
 		select {
+		case <-ticker.C:
+			s.runCycle(ctx)
 		case <-ctx.Done():
 			s.logger.Info("Остановка воркера для опроса статусов серверов...")
 			return
-		default:
-			s.runCycle(ctx)
-			time.Sleep(1 * time.Minute)
 		}
 	}
 }

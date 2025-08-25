@@ -3,6 +3,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/models"
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
@@ -11,10 +12,12 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
 
 // DataToCompany преобразует мапу от ServiceDesk в модель Company.
-func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient ServiceDeskClient, logger *zap.Logger) (*models.Company, error) {
+// ВАЖНО: Эта функция больше не определяет ActiveContract. Это делается в SDeskSyncService.
+func DataToCompany(ctx context.Context, data map[string]interface{}, logger *zap.Logger) (*models.Company, error) {
 	uuid, _ := data["UUID"].(string)
 	if uuid == "" {
 		return nil, fmt.Errorf("company data missing UUID")
@@ -37,35 +40,120 @@ func DataToCompany(ctx context.Context, data map[string]interface{}, sdClient Se
 		company.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
 
-	// Обработка parent
 	if parent, ok := data["parent"].(map[string]interface{}); ok {
 		if parentUUID, p_ok := parent["UUID"].(string); p_ok {
 			company.ParentServiceDeskUUID = &parentUUID
 		}
 	}
 
-	// Обработка active_contract
-	active := false
-	if agreements, ok := data["recipientAgreements"].([]interface{}); ok {
-		for _, agr := range agreements {
-			if agrMap, agrOk := agr.(map[string]interface{}); agrOk {
-				if agrUUID, uuidOk := agrMap["UUID"].(string); uuidOk {
-					isActive, err := sdClient.CheckAgreementActive(ctx, agrUUID)
-					if err != nil {
-						logger.Warn("Failed to check agreement status", zap.String("agreementUUID", agrUUID), zap.Error(err))
-						continue
-					}
-					if isActive {
-						active = true
-						break
-					}
+	initialActiveState := false
+	company.ActiveContract = &initialActiveState
+
+	return company, nil
+}
+
+// DataToContract преобразует "сырые" данные от ServiceDesk в модель models.Contract.
+func DataToContract(data map[string]interface{}) (*models.Contract, error) {
+	uuid, _ := data["UUID"].(string)
+	if uuid == "" {
+		return nil, fmt.Errorf("contract data missing UUID")
+	}
+
+	contract := &models.Contract{}
+	contract.ServiceDeskUUID = &uuid
+	contract.MetaClass = "agreement$agreement"
+
+	if state, ok := data["state"].(string); ok {
+		contract.State = &state
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		contract.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+	}
+	if sst, ok := data["stateStartTime"].(string); ok {
+		contract.StateStartTime = utils.ParseServiceDeskTime(sst)
+	}
+
+	var serviceTitles []string
+	if services, ok := data["services"].([]interface{}); ok {
+		for _, serviceItem := range services {
+			if serviceMap, smOk := serviceItem.(map[string]interface{}); smOk {
+				if title, tOk := serviceMap["title"].(string); tOk {
+					serviceTitles = append(serviceTitles, title)
+				}
+			}
+		}
+		servicesJSON, err := json.Marshal(serviceTitles)
+		if err == nil {
+			contract.Services = datatypes.JSON(servicesJSON)
+		}
+	}
+
+	// ИЗМЕНЕНИЕ: Определяем и сохраняем уровень обслуживания
+	contract.ServiceLevel = determineServiceLevel(serviceTitles)
+
+	if recipients, ok := data["recipientsOU"].([]interface{}); ok {
+		var recipientUUIDs []string
+		for _, recipientItem := range recipients {
+			if recipientMap, rmOk := recipientItem.(map[string]interface{}); rmOk {
+				if recipientUUID, uOk := recipientMap["UUID"].(string); uOk {
+					recipientUUIDs = append(recipientUUIDs, recipientUUID)
+				}
+			}
+		}
+		recipientsJSON, err := json.Marshal(recipientUUIDs)
+		if err == nil {
+			contract.Recipients = datatypes.JSON(recipientsJSON)
+		}
+	}
+
+	return contract, nil
+}
+
+// determineServiceLevel определяет уровень обслуживания на основе списка услуг в контракте.
+func determineServiceLevel(serviceTitles []string) int {
+	// Создаем сет для быстрого поиска
+	serviceSet := make(map[string]struct{})
+	for _, title := range serviceTitles {
+		serviceSet[title] = struct{}{}
+	}
+
+	// Проверяем по приоритету от высшего к низшему
+	if _, ok := serviceSet["TS Standard (без выездов)"]; ok {
+		return 3
+	}
+	if _, ok := serviceSet["TS Standard"]; ok {
+		return 2
+	}
+	if _, ok := serviceSet["TS Cloud"]; ok {
+		return 1
+	}
+	if _, ok := serviceSet["Прием на АО"]; ok {
+		return 0
+	}
+	if _, ok := serviceSet["Разовое обращение"]; ok {
+		return 5
+	}
+	if _, ok := serviceSet["Базовая услуга"]; ok {
+		return 5
+	}
+
+	// Если ни одно из условий не сработало
+	return -1 // -1 означает "не определен"
+}
+
+// GetCompanyUUIDsFromContract извлекает все UUID получателей (компаний) из данных контракта.
+func GetCompanyUUIDsFromContract(data map[string]interface{}) []string {
+	var uuids []string
+	if recipients, ok := data["recipientsOU"].([]interface{}); ok {
+		for _, r := range recipients {
+			if rMap, rOk := r.(map[string]interface{}); rOk {
+				if uuid, uuidOk := rMap["UUID"].(string); uuidOk {
+					uuids = append(uuids, uuid)
 				}
 			}
 		}
 	}
-	company.ActiveContract = &active
-
-	return company, nil
+	return uuids
 }
 
 // DataToServer преобразует мапу от ServiceDesk в модель Server.

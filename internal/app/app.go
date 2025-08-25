@@ -5,13 +5,16 @@ import (
 	"context"
 	"etalon-server/internal/config"
 	"etalon-server/internal/db"
+	"etalon-server/internal/gateways"
 	"etalon-server/internal/handlers"
 	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
+	"etalon-server/internal/processing"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/seeder"
 	"etalon-server/internal/services"
 	"etalon-server/internal/utils"
+	"etalon-server/pkg/eventbus"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,29 +35,36 @@ type Application struct {
 	Config               *config.Config
 	Logger               *zap.Logger
 	DB                   *gorm.DB
-	ReconcilerSvc        services.ReconcilerService
-	ServerPollingSvc     services.ServerPollingService
-	SDeskSyncSvc         services.SDeskSyncService
+	ProcessingEngine     processing.ProcessingEngine
+	EventBus             eventbus.EventBus
+	Orchestrator         *processing.Orchestrator
+	SDeskGateway         gateways.ServiceDeskGateway
+	ContractGateway      gateways.ContractGateway
+	DuplicatesGateway    gateways.DuplicatesGateway
+	PollingGateway       gateways.ServerPollingGateway
+	AgentFTPGateway      gateways.AgentFTPGateway
 	Seeder               *seeder.Seeder
 	CrudHandler          *handlers.CrudHandler
 	SearchHandler        *handlers.SearchHandler
 	SyncHandler          *handlers.SyncHandler
 	TaskHandler          *handlers.TaskHandler
 	AgentHandler         *handlers.AgentHandler
-	ServerActionsHandler *handlers.ServerActionsHandler // НОВЫЙ ОБРАБОТЧИК
+	ServerActionsHandler *handlers.ServerActionsHandler
+	ServerActionsSvc     services.ServerActionsService
 	AgentSvc             services.AgentService
+	DebugHandler         *handlers.DebugHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
 func New() (*Application, error) {
 	cfg := config.New()
-	appLogger := logger.New(cfg.LogPath, cfg.DisableFileLogging)
+
+	appLogger := logger.New(cfg.LogDir, "app", cfg.DisableFileLogging)
+	appLogger.Info("Инициализация приложения etalon-server...")
 
 	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
 		appLogger.Fatal("Не удалось создать директорию для кэша FTP", zap.Error(err))
 	}
-
-	appLogger.Info("Инициализация приложения etalon-server...")
 
 	database, err := db.NewConnection(cfg)
 	if err != nil {
@@ -67,7 +77,7 @@ func New() (*Application, error) {
 	err = database.AutoMigrate(
 		&models.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{},
+		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
 	)
 	if err != nil {
 		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
@@ -75,47 +85,76 @@ func New() (*Application, error) {
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
 
-	cleanupService := services.NewCleanupService(database, appLogger)
-	go cleanupService.CleanupFRDuplicates(context.Background())
-	go cleanupService.CleanupServerDuplicatesAndJunk(context.Background())
+	// --- Инициализация компонентов ---
+	bus := eventbus.NewInMemoryEventBus(1000)
 
+	// Репозитории
 	companyRepo := repositories.NewCompanyRepo(database)
 	serverRepo := repositories.NewServerRepo(database)
 	workstationRepo := repositories.NewWorkstationRepo(database)
 	frRepo := repositories.NewFiscalRegisterRepo(database)
 	agentRepo := repositories.NewAgentRepo(database)
+	contractRepo := repositories.NewContractRepo(database)
+	taskRepo := repositories.NewTaskRepo(database)
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
-	sdClient := services.NewServiceDeskClient(cfg, appLogger)
-	sdeskSyncService := services.NewSDeskSyncService(cfg, database, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, appLogger)
-	ftpClient := services.NewFTPClient(cfg, appLogger)
-	reconcilerService := services.NewReconcilerService(cfg, appLogger, database, ftpClient, serverRepo, workstationRepo, frRepo)
-	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, reconcilerService, database)
-	serverPollingService := services.NewServerPollingService(cfg, appLogger, database, serverRepo, rmsClient) // Добавлен db в конструктор
-	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
+	// Создаем отдельные логгеры для каждого воркера/сервиса
+	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.DisableFileLogging)
+	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.DisableFileLogging)
+	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.DisableFileLogging)
+	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.DisableFileLogging)
+	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.DisableFileLogging)
+	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.DisableFileLogging)
 
+	// Сервисы, шлюзы и оркестратор
+	sdClient := services.NewServiceDeskClient(cfg, appLogger)
+	ftpClient := services.NewFTPClient(cfg, appLogger)
+	// reconcilerService := services.NewReconcilerService(cfg, database, ftpClient, serverRepo, workstationRepo, frRepo, reconcilerLogger)
+	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
+	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
+
+	// Создаем движок, передавая ему matcher
+	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
+	// --- Новая архитектура ---
+	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, companyRepo, serverRepo, workstationRepo, frRepo)
+	contractGateway := gateways.NewContractGateway(cfg, database, sdClient, contractRepo, bus, contractSyncLogger)
+	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
+	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
+	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
+	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, processingEngine)
+	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo, companyRepo, database)
+
+	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
+	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
-	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverPollingService) // ИНИЦИАЛИЗАЦИЯ НОВОГО ОБРАБОТЧИКА
+	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
+	debugHandler := handlers.NewDebugHandler(appLogger, bus)
 
 	return &Application{
 		Config:               cfg,
 		Logger:               appLogger,
 		DB:                   database,
-		ReconcilerSvc:        reconcilerService,
-		ServerPollingSvc:     serverPollingService,
-		SDeskSyncSvc:         sdeskSyncService,
+		ProcessingEngine:     processingEngine,
+		EventBus:             bus,
+		Orchestrator:         orchestrator,
+		SDeskGateway:         sdeskGateway,
+		ContractGateway:      contractGateway,
+		DuplicatesGateway:    duplicatesGateway,
+		PollingGateway:       pollingGateway,
+		AgentFTPGateway:      agentFTPGateway,
 		Seeder:               dbSeeder,
 		CrudHandler:          crudHandler,
 		SearchHandler:        searchHandler,
 		SyncHandler:          syncHandler,
 		TaskHandler:          taskHandler,
 		AgentHandler:         agentHandler,
-		ServerActionsHandler: serverActionsHandler, // ДОБАВЛЕН НОВЫЙ ОБРАБОТЧИК
+		ServerActionsHandler: serverActionsHandler,
+		ServerActionsSvc:     serverActionsSvc,
 		AgentSvc:             agentService,
+		DebugHandler:         debugHandler,
 	}, nil
 }
 
@@ -141,7 +180,7 @@ func (a *Application) Run() {
 		a.CrudHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
-		a.ServerActionsHandler.RegisterRoutes(r) // РЕГИСТРАЦИЯ НОВЫХ РОУТОВ
+		a.ServerActionsHandler.RegisterRoutes(r)
 		r.Route("/agents", func(r chi.Router) {
 			r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
 			a.AgentHandler.RegisterRoutes(r)
@@ -149,6 +188,9 @@ func (a *Application) Run() {
 	})
 	r.Route("/sync", func(r chi.Router) {
 		a.SyncHandler.RegisterRoutes(r)
+	})
+	r.Route("/debug", func(r chi.Router) {
+		a.DebugHandler.RegisterRoutes(r)
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to Etalon Server"))
@@ -165,27 +207,54 @@ func (a *Application) Run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	if a.Config.EnableReconcilerWorker {
+	// --- Запуск компонентов новой архитектуры ---
+	// Шина событий
+	go func() { defer wg.Done(); a.EventBus.Start(mainCtx, a.Logger) }()
+
+	// Оркестратор (он только подписывается, активной работы не ведет)
+	a.Orchestrator.Start(mainCtx)
+
+	// Шлюз поиска дубликатов
+	if a.Config.EnableDuplicatesGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.ReconcilerSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.DuplicatesGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер Reconciler (FTP) отключен в конфигурации.")
+		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
 	}
 
-	if a.Config.EnableServerPollingWorker {
+	// Шлюз для данных от агентов (FTP)
+	if a.Config.EnableAgentFTPGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.ServerPollingSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.AgentFTPGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер опроса статусов серверов отключен в конфигурации.")
+		a.Logger.Info("Шлюз агентов (FTP) отключен в конфигурации.")
 	}
 
-	if a.Config.EnableSDeskSyncWorker {
+	// Шлюз опроса статусов серверов
+	if a.Config.EnablePollingGateway {
 		wg.Add(1)
-		go func() { defer wg.Done(); a.SDeskSyncSvc.Start(mainCtx) }()
+		go func() { defer wg.Done(); a.PollingGateway.Start(mainCtx) }()
 	} else {
-		a.Logger.Info("Воркер синхронизации с ServiceDesk отключен в конфигурации.")
+		a.Logger.Info("Шлюз опроса статусов серверов отключен в конфигурации.")
 	}
 
+	// Шлюз синхронизации сущностей с ServiceDesk
+	if a.Config.EnableSDeskGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.SDeskGateway.Start(mainCtx) }()
+	} else {
+		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
+	}
+
+	// Шлюз синхронизации контрактов
+	if a.Config.EnableContractGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.ContractGateway.Start(mainCtx) }()
+	} else {
+		a.Logger.Info("Шлюз синхронизации контрактов отключен в конфигурации.")
+	}
+
+	// HTTP-сервер
 	go func() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))

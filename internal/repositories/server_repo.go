@@ -56,7 +56,7 @@ func (r *serverRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool
 
 func (r *serverRepo) GetByUUID(ctx context.Context, uuid string) (*models.Server, error) {
 	var server models.Server
-	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&server).Error
+	err := r.db.WithContext(ctx).Preload("AdditionalOwners").Where("service_desk_uuid = ?", uuid).First(&server).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -64,7 +64,7 @@ func (r *serverRepo) GetByUUID(ctx context.Context, uuid string) (*models.Server
 }
 func (r *serverRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Server, error) {
 	var server models.Server
-	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&server).Error
+	err := r.db.WithContext(ctx).Unscoped().Preload("AdditionalOwners").Where("service_desk_uuid = ?", uuid).First(&server).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -114,9 +114,11 @@ func (r *serverRepo) FindForPolling(ctx context.Context, limit int, interval tim
 func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*models.Server, error) {
 	var server models.Server
 
+	query := r.db.WithContext(ctx).Preload("AdditionalOwners")
+
 	// CRMid является более надежным идентификатором
 	if crmid != "" {
-		err := r.db.WithContext(ctx).Where("crm_id = ?", crmid).First(&server).Error
+		err := query.Where("crm_id = ? AND status != ?", crmid, "locked").First(&server).Error
 		if err == nil {
 			return &server, nil
 		}
@@ -125,9 +127,9 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 		}
 	}
 
-	// Если по CRMid не нашли, ищем по IP
+	// Если по CRMid не нашли, ищем по IP с точным совпадением
 	if ip != "" {
-		err := r.db.WithContext(ctx).Where("ip LIKE ?", ip+"%").First(&server).Error
+		err := query.Where("ip = ? AND status != ?", ip, "locked").First(&server).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil // Явно возвращаем nil, если не найдено
 		}

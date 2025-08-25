@@ -15,6 +15,7 @@ type CompanyRepo interface {
 	GetByUUID(ctx context.Context, uuid string) (*models.Company, error)
 	GetByUUIDs(ctx context.Context, uuids []string) ([]models.Company, error)
 	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Company, error)
+	GetAllParentUUIDs(ctx context.Context, childUUID string) ([]string, error)
 	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Company, error)
 	Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]models.Company, error)
 }
@@ -77,6 +78,36 @@ func (r *companyRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*mode
 		return nil, nil
 	}
 	return &company, err
+}
+
+// GetAllParentUUIDs находит все родительские UUID для дочерней компании.
+func (r *companyRepo) GetAllParentUUIDs(ctx context.Context, childUUID string) ([]string, error) {
+	var parentUUIDs []string
+	currentUUID := childUUID
+
+	// Защита от бесконечного цикла, максимум 10 уровней вложенности
+	for i := 0; i < 10; i++ {
+		var company models.Company
+		err := r.db.WithContext(ctx).
+			Select("parent_service_desk_uuid").
+			Where("service_desk_uuid = ?", currentUUID).
+			First(&company).Error
+
+		if err == gorm.ErrRecordNotFound {
+			break // Дошли до корня или компания не найдена
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if company.ParentServiceDeskUUID != nil && *company.ParentServiceDeskUUID != "" {
+			parentUUIDs = append(parentUUIDs, *company.ParentServiceDeskUUID)
+			currentUUID = *company.ParentServiceDeskUUID
+		} else {
+			break // Нет родителя
+		}
+	}
+	return parentUUIDs, nil
 }
 
 func (r *companyRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Company, error) {

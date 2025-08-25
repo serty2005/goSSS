@@ -1,0 +1,180 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"etalon-server/internal/core/events"
+	"etalon-server/internal/repositories"
+	"etalon-server/pkg/eventbus"
+	"fmt"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+var (
+	// ErrRateLimitExceeded возвращается, когда превышен лимит запросов на опрос для одного сервера.
+	ErrRateLimitExceeded = errors.New("слишком много запросов на опрос сервера")
+)
+
+const (
+	rateLimitCount  = 3
+	rateLimitWindow = 2 * time.Minute
+)
+
+// ServerActionsService определяет интерфейс для ручных действий над серверами.
+type ServerActionsService interface {
+	PollSingleServer(ctx context.Context, serverUUID string) error
+	InstallLicense(ctx context.Context, serverUUID, uniqueID string) error
+	AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
+	RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
+}
+
+type serverActionsServiceImpl struct {
+	logger        *zap.Logger
+	bus           eventbus.EventBus
+	serverRepo    repositories.ServerRepo
+	companyRepo   repositories.CompanyRepo
+	db            *gorm.DB
+	rateLimiter   *sync.Mutex
+	requestStamps map[string][]time.Time
+}
+
+// NewServerActionsService создает новый экземпляр сервиса.
+func NewServerActionsService(logger *zap.Logger, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB) ServerActionsService {
+	return &serverActionsServiceImpl{
+		logger:        logger,
+		bus:           bus,
+		serverRepo:    serverRepo,
+		companyRepo:   companyRepo,
+		db:            db,
+		rateLimiter:   &sync.Mutex{},
+		requestStamps: make(map[string][]time.Time),
+	}
+}
+
+// PollSingleServer запускает асинхронную задачу опроса через событие, с проверкой rate limit.
+func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverUUID string) error {
+	if !s.checkRateLimit(serverUUID) {
+		return ErrRateLimitExceeded
+	}
+
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера из БД: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", zap.String("uuid", serverUUID))
+
+	s.bus.Publish(eventbus.Event{
+		Type: events.ServerPollingRequested,
+		Payload: events.ServerPollingRequestedPayload{
+			ServerUUID: serverUUID,
+		},
+	})
+
+	return nil
+}
+
+// checkRateLimit проверяет, можно ли выполнить запрос для данного serverUUID.
+func (s *serverActionsServiceImpl) checkRateLimit(serverUUID string) bool {
+	s.rateLimiter.Lock()
+	defer s.rateLimiter.Unlock()
+	now := time.Now()
+	limitWindowStart := now.Add(-rateLimitWindow)
+	stamps := s.requestStamps[serverUUID]
+	recentStamps := make([]time.Time, 0, len(stamps))
+	for _, stamp := range stamps {
+		if stamp.After(limitWindowStart) {
+			recentStamps = append(recentStamps, stamp)
+		}
+	}
+	if len(recentStamps) >= rateLimitCount {
+		s.logger.Warn("Превышен лимит запросов на опрос для сервера", zap.String("uuid", serverUUID))
+		s.requestStamps[serverUUID] = recentStamps
+		return false
+	}
+	recentStamps = append(recentStamps, now)
+	s.requestStamps[serverUUID] = recentStamps
+	return true
+}
+
+// InstallLicense - метод-заглушка для ручного запуска установки лицензии.
+func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverUUID, uniqueID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+	s.logger.Info("ЗАГЛУШКА: Запущена установка лицензии",
+		zap.String("server_uuid", serverUUID),
+		zap.String("unique_id", uniqueID),
+	)
+	// В будущем здесь тоже может быть публикация события, например, `license.installation.requested`
+	return nil
+}
+
+// AddAdditionalOwner добавляет компанию в список дополнительных владельцев сервера.
+func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения компании: %w", err)
+	}
+	if company == nil {
+		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+	}
+
+	// Используем GORM Association для добавления связи
+	err = s.db.Model(server).Association("AdditionalOwners").Append(company)
+	if err != nil {
+		s.logger.Error("Не удалось добавить дополнительного владельца", zap.Error(err))
+		return fmt.Errorf("ошибка добавления связи в БД: %w", err)
+	}
+
+	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
+	return nil
+}
+
+// RemoveAdditionalOwner удаляет компанию из списка дополнительных владельцев сервера.
+func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения компании: %w", err)
+	}
+	if company == nil {
+		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+	}
+
+	// Используем GORM Association для удаления связи
+	err = s.db.Model(server).Association("AdditionalOwners").Delete(company)
+	if err != nil {
+		s.logger.Error("Не удалось удалить дополнительного владельца", zap.Error(err))
+		return fmt.Errorf("ошибка удаления связи из БД: %w", err)
+	}
+
+	s.logger.Info("Дополнительный владелец успешно удален с сервера", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
+	return nil
+}

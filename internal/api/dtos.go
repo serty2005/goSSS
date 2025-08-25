@@ -161,14 +161,16 @@ type FoundEntityDTO struct {
 
 // ServerRichDTO содержит полный набор полей Сервера для UI.
 type ServerRichDTO struct {
-	UUID        string  `json:"uuid"`
-	DeviceName  *string `json:"device_name,omitempty"`
-	IP          *string `json:"ip,omitempty"`
-	Status      *string `json:"status,omitempty"`
-	Anydesk     *string `json:"anydesk,omitempty"`
-	Teamviewer  *string `json:"teamviewer,omitempty"`
-	RDP         *string `json:"rdp,omitempty"`
-	Litemanager *string `json:"litemanager,omitempty"`
+	UUID         string  `json:"uuid"`
+	DeviceName   *string `json:"device_name,omitempty"`
+	IP           *string `json:"ip,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	Anydesk      *string `json:"anydesk,omitempty"`
+	Teamviewer   *string `json:"teamviewer,omitempty"`
+	RDP          *string `json:"rdp,omitempty"`
+	Litemanager  *string `json:"litemanager,omitempty"`
+	UniqueID     *string `json:"unique_id,omitempty"`
+	PartnersLink *string `json:"partners_link,omitempty"`
 }
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
