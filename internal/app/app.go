@@ -122,7 +122,7 @@ func New() (*Application, error) {
 	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
 	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
 	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, processingEngine)
-	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo)
+	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo, companyRepo, database)
 
 	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)

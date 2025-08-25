@@ -28,7 +28,9 @@ func NewServerActionsHandler(logger *zap.Logger, actionsSvc services.ServerActio
 // RegisterRoutes регистрирует роуты для действий с серверами.
 func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/servers/{uuid}/install_license", h.installLicense)
-	r.Post("/servers/{uuid}/poll", h.pollServerStatus) // НОВЫЙ РОУТ
+	r.Post("/servers/{uuid}/poll", h.pollServerStatus)
+	r.Post("/servers/{server_uuid}/additional_owners", h.addAdditionalOwner)
+	r.Delete("/servers/{server_uuid}/additional_owners/{company_uuid}", h.removeAdditionalOwner)
 }
 
 type installLicenseRequestDTO struct {
@@ -96,4 +98,60 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 	}
 
 	RespondWithJSON(w, http.StatusAccepted, map[string]string{"message": "Задача на опрос статуса сервера принята в обработку"})
+}
+
+type additionalOwnerRequestDTO struct {
+	CompanyUUID string `json:"company_uuid"`
+}
+
+// addAdditionalOwner обрабатывает запрос на добавление дополнительного владельца.
+func (h *ServerActionsHandler) addAdditionalOwner(w http.ResponseWriter, r *http.Request) {
+	serverUUID := chi.URLParam(r, "server_uuid")
+	var dto additionalOwnerRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	if serverUUID == "" || dto.CompanyUUID == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера и компании обязательны")
+		return
+	}
+
+	err := h.actionsSvc.AddAdditionalOwner(r.Context(), serverUUID, dto.CompanyUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
+		} else {
+			h.logger.Error("Ошибка при добавлении дополнительного владельца", zap.Error(err))
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Дополнительный владелец успешно добавлен"})
+}
+
+// removeAdditionalOwner обрабатывает запрос на удаление дополнительного владельца.
+func (h *ServerActionsHandler) removeAdditionalOwner(w http.ResponseWriter, r *http.Request) {
+	serverUUID := chi.URLParam(r, "server_uuid")
+	companyUUID := chi.URLParam(r, "company_uuid")
+
+	if serverUUID == "" || companyUUID == "" {
+		RespondWithError(w, http.StatusBadRequest, "UUID сервера и компании обязательны")
+		return
+	}
+
+	err := h.actionsSvc.RemoveAdditionalOwner(r.Context(), serverUUID, companyUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
+		} else {
+			h.logger.Error("Ошибка при удалении дополнительного владельца", zap.Error(err))
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

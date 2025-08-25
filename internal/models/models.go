@@ -87,7 +87,9 @@ type Server struct {
 	Litemanager          *string    `gorm:"type:text"`
 	ServerVersion        *string    `gorm:"type:text"`
 	Description          *string    `gorm:"type:text"`
-	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+	OwnerServiceDeskUUID *string    `gorm:"type:text;index"`
+
+	AdditionalOwners []Company `gorm:"many2many:server_additional_owners;foreignKey:ServiceDeskUUID;joinForeignKey:ServerServiceDeskUUID;references:ServiceDeskUUID;joinReferences:CompanyServiceDeskUUID"`
 
 	// Поля для опроса серверов
 	ServerName       *string    `gorm:"type:text"`

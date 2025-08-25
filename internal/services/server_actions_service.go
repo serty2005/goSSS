@@ -28,22 +28,28 @@ const (
 type ServerActionsService interface {
 	PollSingleServer(ctx context.Context, serverUUID string) error
 	InstallLicense(ctx context.Context, serverUUID, uniqueID string) error
+	AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
+	RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
 }
 
 type serverActionsServiceImpl struct {
 	logger        *zap.Logger
 	bus           eventbus.EventBus
 	serverRepo    repositories.ServerRepo
+	companyRepo   repositories.CompanyRepo
+	db            *gorm.DB
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
 // NewServerActionsService создает новый экземпляр сервиса.
-func NewServerActionsService(logger *zap.Logger, bus eventbus.EventBus, serverRepo repositories.ServerRepo) ServerActionsService {
+func NewServerActionsService(logger *zap.Logger, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB) ServerActionsService {
 	return &serverActionsServiceImpl{
 		logger:        logger,
 		bus:           bus,
 		serverRepo:    serverRepo,
+		companyRepo:   companyRepo,
+		db:            db,
 		rateLimiter:   &sync.Mutex{},
 		requestStamps: make(map[string][]time.Time),
 	}
@@ -112,5 +118,63 @@ func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverUUI
 		zap.String("unique_id", uniqueID),
 	)
 	// В будущем здесь тоже может быть публикация события, например, `license.installation.requested`
+	return nil
+}
+
+// AddAdditionalOwner добавляет компанию в список дополнительных владельцев сервера.
+func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения компании: %w", err)
+	}
+	if company == nil {
+		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+	}
+
+	// Используем GORM Association для добавления связи
+	err = s.db.Model(server).Association("AdditionalOwners").Append(company)
+	if err != nil {
+		s.logger.Error("Не удалось добавить дополнительного владельца", zap.Error(err))
+		return fmt.Errorf("ошибка добавления связи в БД: %w", err)
+	}
+
+	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
+	return nil
+}
+
+// RemoveAdditionalOwner удаляет компанию из списка дополнительных владельцев сервера.
+func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
+	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения сервера: %w", err)
+	}
+	if server == nil {
+		return gorm.ErrRecordNotFound
+	}
+
+	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения компании: %w", err)
+	}
+	if company == nil {
+		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+	}
+
+	// Используем GORM Association для удаления связи
+	err = s.db.Model(server).Association("AdditionalOwners").Delete(company)
+	if err != nil {
+		s.logger.Error("Не удалось удалить дополнительного владельца", zap.Error(err))
+		return fmt.Errorf("ошибка удаления связи из БД: %w", err)
+	}
+
+	s.logger.Info("Дополнительный владелец успешно удален с сервера", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
 	return nil
 }
