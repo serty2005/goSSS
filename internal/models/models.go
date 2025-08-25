@@ -89,11 +89,12 @@ type Server struct {
 	Description          *string    `gorm:"type:text"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 
-	// Новые поля для CRMid воркера
-	ServerName    *string    `gorm:"type:text"`
-	ServerEdition *string    `gorm:"type:varchar(50)"`
-	LastPolledAt  *time.Time `gorm:"column:last_polled_at"`
-	Status        string     `gorm:"type:varchar(50);default:'unknown';index"` // ОБНОВЛЕНО: 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived'
+	// Поля для опроса серверов
+	ServerName       *string    `gorm:"type:text"`
+	ServerEdition    *string    `gorm:"type:varchar(50)"`
+	LastPolledAt     *time.Time `gorm:"column:last_polled_at"`
+	Status           string     `gorm:"type:varchar(50);default:'unknown';index"` // 'active', 'inactive', 'to_delete', 'offline', 'license', 'starting', 'unknown', 'archived', 'locked'
+	StatusBeforeLock *string    `gorm:"type:varchar(50)"`
 }
 
 // Workstation представляет сущность рабочей станции.
@@ -105,8 +106,9 @@ type Workstation struct {
 	DeviceName           *string    `gorm:"type:text"`
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	Description          *string    `gorm:"type:text"`
-	Status               *string    `gorm:"type:varchar(50);default:'offline'"`
-	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+	Status               *string    `gorm:"type:varchar(50);default:'offline'"` // Добавляем 'locked' как возможный статус
+	StatusBeforeLock     *string    `gorm:"type:varchar(50)"`                   // Хранит статус до "заморозки"
+	OwnerServiceDeskUUID *string    `gorm:"type:text;index"`                    // Ссылка на Company.UUID
 }
 
 // FiscalRegister представляет сущность фискального регистратора.

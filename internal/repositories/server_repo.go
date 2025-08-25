@@ -116,7 +116,7 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 
 	// CRMid является более надежным идентификатором
 	if crmid != "" {
-		err := r.db.WithContext(ctx).Where("crm_id = ?", crmid).First(&server).Error
+		err := r.db.WithContext(ctx).Where("crm_id = ? AND status != ?", crmid, "locked").First(&server).Error
 		if err == nil {
 			return &server, nil
 		}
@@ -127,7 +127,7 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 
 	// Если по CRMid не нашли, ищем по IP с точным совпадением
 	if ip != "" {
-		err := r.db.WithContext(ctx).Where("ip = ?", ip).First(&server).Error
+		err := r.db.WithContext(ctx).Where("ip = ? AND status != ?", ip, "locked").First(&server).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil // Явно возвращаем nil, если не найдено
 		}

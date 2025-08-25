@@ -29,11 +29,12 @@ type Orchestrator struct {
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
-	matcherSvc      services.EntityMatcherService
+	taskRepo        repositories.TaskRepo
+	engine          ProcessingEngine
 }
 
-func NewOrchestrator(logger *zap.Logger, db *gorm.DB, bus eventbus.EventBus, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo,matcherSvc services.EntityMatcherService,) *Orchestrator {
-	return &Orchestrator{logger, db, bus, companyRepo, serverRepo, workstationRepo, frRepo, matcherSvc,}
+func NewOrchestrator(logger *zap.Logger, db *gorm.DB, bus eventbus.EventBus, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo, taskRepo repositories.TaskRepo, engine ProcessingEngine) *Orchestrator {
+	return &Orchestrator{logger, db, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, engine}
 }
 
 // Start запускает Оркестратор, подписывая его на необходимые события.
@@ -69,28 +70,88 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 	}
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		source := "contract_gateway"
+		txCtx := tx.WithContext(ctx)
+		// --- Шаг 1: Обновление статусов самих компаний ---
 		if len(activeUUIDs) > 0 {
-			res := tx.WithContext(ctx).Model(&models.Company{}).
-				Where("service_desk_uuid IN ?", activeUUIDs).
-				Updates(map[string]interface{}{"active_contract": true, "last_updated_by": source})
-			if res.Error != nil {
+			if res := txCtx.Model(&models.Company{}).Where("service_desk_uuid IN ?", activeUUIDs).Updates(map[string]interface{}{"active_contract": true, "last_updated_by": source}); res.Error != nil {
 				return res.Error
 			}
-			log.Info("Установлен статус ActiveContract=true для компаний", zap.Int64("updated_count", res.RowsAffected))
 		}
 		if len(inactiveUUIDs) > 0 {
-			res := tx.WithContext(ctx).Model(&models.Company{}).
-				Where("service_desk_uuid IN ?", inactiveUUIDs).
-				Updates(map[string]interface{}{"active_contract": false, "last_updated_by": source})
-			if res.Error != nil {
+			if res := txCtx.Model(&models.Company{}).Where("service_desk_uuid IN ?", inactiveUUIDs).Updates(map[string]interface{}{"active_contract": false, "last_updated_by": source}); res.Error != nil {
 				return res.Error
 			}
-			log.Info("Установлен статус ActiveContract=false для компаний", zap.Int64("updated_count", res.RowsAffected))
 		}
+
+		// --- Шаг 2: "Заморозка" оборудования для неактивных компаний ---
+		if len(inactiveUUIDs) > 0 {
+			// Серверы
+			resSrv := txCtx.Model(&models.Server{}).
+				Where("owner_service_desk_uuid IN ? AND status != ?", inactiveUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status_before_lock": gorm.Expr("status"), // Сохраняем текущий статус
+					"status":             "locked",
+				})
+			if resSrv.Error != nil {
+				return resSrv.Error
+			}
+			if resSrv.RowsAffected > 0 {
+				log.Info("Заморожено серверов", zap.Int64("count", resSrv.RowsAffected))
+			}
+
+			// Рабочие станции
+			resWs := txCtx.Model(&models.Workstation{}).
+				Where("owner_service_desk_uuid IN ? AND status != ?", inactiveUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status_before_lock": gorm.Expr("status"),
+					"status":             "locked",
+				})
+			if resWs.Error != nil {
+				return resWs.Error
+			}
+			if resWs.RowsAffected > 0 {
+				log.Info("Заморожено рабочих станций", zap.Int64("count", resWs.RowsAffected))
+			}
+		}
+
+		// --- Шаг 3: "Разморозка" оборудования для активных компаний ---
+		if len(activeUUIDs) > 0 {
+			// Серверы
+			resSrv := txCtx.Model(&models.Server{}).
+				Where("owner_service_desk_uuid IN ? AND status = ? AND status_before_lock IS NOT NULL", activeUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status":             gorm.Expr("status_before_lock"), // Восстанавливаем статус
+					"status_before_lock": nil,                             // Очищаем поле
+				})
+			if resSrv.Error != nil {
+				return resSrv.Error
+			}
+			if resSrv.RowsAffected > 0 {
+				log.Info("Разморожено серверов", zap.Int64("count", resSrv.RowsAffected))
+			}
+
+			// Рабочие станции
+			resWs := txCtx.Model(&models.Workstation{}).
+				Where("owner_service_desk_uuid IN ? AND status = ? AND status_before_lock IS NOT NULL", activeUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status":             gorm.Expr("status_before_lock"),
+					"status_before_lock": nil,
+				})
+			if resWs.Error != nil {
+				return resWs.Error
+			}
+			if resWs.RowsAffected > 0 {
+				log.Info("Разморожено рабочих станций", zap.Int64("count", resWs.RowsAffected))
+			}
+		}
+
 		return nil
 	})
+
 	if err != nil {
-		log.Error("Ошибка транзакции при обновлении статусов контрактов", zap.Error(err))
+		log.Error("Ошибка транзакции при обновлении статусов контрактов и оборудования", zap.Error(err))
+	} else {
+		log.Info("Обновление статусов контрактов и оборудования успешно завершено.")
 	}
 }
 
@@ -241,6 +302,7 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		}
 	}
 }
+
 // handleDuplicatesFound создает или обновляет задачу на разрешение дубликатов.
 func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.DuplicatesFoundPayload)
@@ -260,8 +322,8 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 	taskIdentifier := fmt.Sprintf("duplicate-%s-%s-%s", payload.EntityType, payload.Field, payload.Value)
 
 	detailsMap := map[string]interface{}{
-		"field":      payload.Field,
-		"value":      payload.Value,
+		"field":       payload.Field,
+		"value":       payload.Value,
 		"entityUUIDs": payload.UUIDs,
 	}
 	detailsJSON, _ := json.Marshal(detailsMap)
@@ -372,31 +434,69 @@ func (o *Orchestrator) resolveConflictTaskIfNeeded(ctx context.Context, uuid str
 	}
 }
 
-// handleAgentDataReceived выполняет основную "водопадную" логику сверки данных от агента.
+// handleAgentDataReceived теперь просто вызывает движок и исполняет его план.
 func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventbus.Event) {
 	data, ok := event.Payload.(api.AgentDataDTO)
 	if !ok {
 		o.logger.Error("Некорректная полезная нагрузка для события AgentDataReceived")
 		return
 	}
-	
-	log := o.logger.With(zap.String("agent_hostname", data.Hostname))
-	log.Info("Оркестратор НАЧАЛ обработку события AgentDataReceived")
 
-	matched := o.matcherSvc.FindEntityByAgentData(ctx, &data)
+	logIdentifier := data.SerialNumber
+	if logIdentifier == "" {
+		logIdentifier = data.TeamviewerID
+	}
+	log := o.logger.With(zap.String("log_identifier", logIdentifier))
+	log.Debug("Оркестратор НАЧАЛ обработку события AgentDataReceived")
 
-	if matched == nil {
-		log.Warn("Не найдено совпадений. Создание задачи 'new_client'.")
-		// o.createTask(ctx, "new_client", "", "", &data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.", "")
+	result := o.engine.ProcessAgentData(ctx, &data)
+
+	if len(result.Actions) == 0 {
+		log.Info("Движок не вернул никаких действий для выполнения.")
 		return
 	}
-	
-	// Здесь будет полная логика из reconcileFromServerContext, reconcileFromWorkstationContext и т.д.
-	// Пока что оставим заглушку, чтобы не перегружать ответ.
-	log.Info("Найдено совпадение, логика сверки будет запущена",
-		zap.String("entityType", matched.EntityType),
-		zap.String("ownerUUID", matched.OwnerUUID),
-	)
+
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		for _, action := range result.Actions {
+			log.Debug("Выполнение действия из плана", zap.String("action", string(action.Type)), zap.String("entity", action.EntityType))
+			switch action.Type {
+			case ActionCreateTask:
+				if err := tx.Create(action.Task).Error; err != nil {
+					return err
+				}
+			case ActionUpdate:
+				// Добавляем источник обновления
+				action.Updates["last_updated_by"] = "agent"
+				var errUpdate error
+				switch action.EntityType {
+				case "Server":
+					_, errUpdate = o.serverRepo.Update(ctx, tx, action.EntityUUID, action.Updates)
+				case "Workstation":
+					_, errUpdate = o.workstationRepo.Update(ctx, tx, action.EntityUUID, action.Updates)
+				case "FiscalRegister":
+					_, errUpdate = o.frRepo.Update(ctx, tx, action.EntityUUID, action.Updates)
+				default:
+					return fmt.Errorf("неизвестный тип сущности для обновления: %s", action.EntityType)
+				}
+				if errUpdate != nil {
+					return errUpdate
+				}
+			case ActionCommentTask:
+				res := tx.Model(&models.ReconciliationTask{}).Where("id = ?", action.TaskID).
+					Update("comment", gorm.Expr("comment || ?", action.Comment))
+				if res.Error != nil {
+					return res.Error
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Error("Ошибка при выполнении плана действий от движка", zap.Error(err))
+	} else {
+		log.Info("План действий от движка успешно выполнен.", zap.Int("actions_count", len(result.Actions)))
+	}
 }
 
 // handleServerPollingSucceeded обрабатывает успешный результат опроса сервера.
@@ -407,12 +507,12 @@ func (o *Orchestrator) handleServerPollingSucceeded(ctx context.Context, event e
 	}
 	log := o.logger.With(zap.String("uuid", payload.ServerUUID))
 	updates := map[string]interface{}{
-		"server_name":      payload.ServerName,
-		"server_edition":   payload.ServerEdition,
-		"server_version":   payload.ServerVersion,
-		"status":           payload.NewStatus,
-		"last_polled_at":   payload.LastPolledAt,
-		"last_updated_by":  "rms_polling",
+		"server_name":     payload.ServerName,
+		"server_edition":  payload.ServerEdition,
+		"server_version":  payload.ServerVersion,
+		"status":          payload.NewStatus,
+		"last_polled_at":  payload.LastPolledAt,
+		"last_updated_by": "rms_polling",
 	}
 
 	if _, err := o.serverRepo.Update(ctx, nil, payload.ServerUUID, updates); err != nil {
@@ -442,7 +542,6 @@ func (o *Orchestrator) handleServerPollingFailed(ctx context.Context, event even
 		log.Info("Статус сервера обновлен после неудачного опроса", zap.String("new_status", payload.NewStatus))
 	}
 }
-
 
 // --- Вспомогательные функции для сравнения (diff) ---
 

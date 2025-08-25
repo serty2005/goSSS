@@ -95,7 +95,7 @@ func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset
 // FindByRemoteIDs ищет рабочую станцию по любому из ID удаленного доступа.
 func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error) {
 	var ws models.Workstation
-	query := r.db.WithContext(ctx)
+	query := r.db.WithContext(ctx).Where("status != ?", "locked")
 
 	// Динамически строим запрос, добавляя условия только для валидных ID
 	var conditions []string

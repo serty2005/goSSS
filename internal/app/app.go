@@ -35,13 +35,14 @@ type Application struct {
 	Config               *config.Config
 	Logger               *zap.Logger
 	DB                   *gorm.DB
+	ProcessingEngine     processing.ProcessingEngine
 	EventBus             eventbus.EventBus
 	Orchestrator         *processing.Orchestrator
 	SDeskGateway         gateways.ServiceDeskGateway
 	ContractGateway      gateways.ContractGateway
 	DuplicatesGateway    gateways.DuplicatesGateway
 	PollingGateway       gateways.ServerPollingGateway
-	AgentFTPGateway   gateways.AgentFTPGateway
+	AgentFTPGateway      gateways.AgentFTPGateway
 	Seeder               *seeder.Seeder
 	CrudHandler          *handlers.CrudHandler
 	SearchHandler        *handlers.SearchHandler
@@ -50,7 +51,6 @@ type Application struct {
 	AgentHandler         *handlers.AgentHandler
 	ServerActionsHandler *handlers.ServerActionsHandler
 	ServerActionsSvc     services.ServerActionsService
-	EntityMatcherSvc  services.EntityMatcherService
 	AgentSvc             services.AgentService
 	DebugHandler         *handlers.DebugHandler
 }
@@ -95,6 +95,7 @@ func New() (*Application, error) {
 	frRepo := repositories.NewFiscalRegisterRepo(database)
 	agentRepo := repositories.NewAgentRepo(database)
 	contractRepo := repositories.NewContractRepo(database)
+	taskRepo := repositories.NewTaskRepo(database)
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Создаем отдельные логгеры для каждого воркера/сервиса
@@ -112,14 +113,15 @@ func New() (*Application, error) {
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
 
+	// Создаем движок, передавая ему matcher
+	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
 	// --- Новая архитектура ---
-	entityMatcherSvc := services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo)
 	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, companyRepo, serverRepo, workstationRepo, frRepo)
 	contractGateway := gateways.NewContractGateway(cfg, database, sdClient, contractRepo, bus, contractSyncLogger)
 	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
 	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
 	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
-	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, entityMatcherSvc)
+	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, processingEngine)
 	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo)
 
 	// Обработчики
@@ -135,6 +137,7 @@ func New() (*Application, error) {
 		Config:               cfg,
 		Logger:               appLogger,
 		DB:                   database,
+		ProcessingEngine:     processingEngine,
 		EventBus:             bus,
 		Orchestrator:         orchestrator,
 		SDeskGateway:         sdeskGateway,
@@ -150,7 +153,6 @@ func New() (*Application, error) {
 		AgentHandler:         agentHandler,
 		ServerActionsHandler: serverActionsHandler,
 		ServerActionsSvc:     serverActionsSvc,
-		EntityMatcherSvc:     entityMatcherSvc,
 		AgentSvc:             agentService,
 		DebugHandler:         debugHandler,
 	}, nil

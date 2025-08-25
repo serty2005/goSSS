@@ -41,7 +41,11 @@ func NewEntityMatcherService(
 
 // FindEntityByAgentData выполняет "водопадную" логику поиска.
 func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, data *api.AgentDataDTO) *MatchedEntity {
-	log := s.logger.With(zap.String("agent_hostname", data.Hostname))
+	logIdentifier := data.SerialNumber
+	if logIdentifier == "" {
+		logIdentifier = data.TeamviewerID
+	}
+	log := s.logger.With(zap.String("log_identifier", logIdentifier))
 
 	normalizedIP := validators.ValidateIPAddress(data.URLRms)
 
@@ -55,8 +59,8 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 		}
 	}
 
-	// Приоритет 2: Поиск по Рабочей станции
-	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, data.AnydeskID, data.LitemanagerID); ws != nil {
+	// Приоритет 2: Поиск по Рабочей станции (БЕЗ ANYDESK)
+	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID); ws != nil {
 		log.Info("Найдено совпадение по Рабочей станции", zap.String("uuid", *ws.ServiceDeskUUID))
 		return &MatchedEntity{
 			Entity:     ws,
@@ -65,7 +69,7 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 		}
 	}
 
-	// Приоритет 3: Поиск по Фискальному регистратору
+	// Приоритет 3: Поиск по Фискальному регистратору (используем только серийный номер)
 	if fr, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber); fr != nil {
 		log.Info("Найдено совпадение по Фискальному регистратору", zap.String("uuid", *fr.ServiceDeskUUID))
 		return &MatchedEntity{

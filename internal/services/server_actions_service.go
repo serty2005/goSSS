@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/repositories"
 	"etalon-server/pkg/eventbus"
@@ -11,6 +12,16 @@ import (
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+)
+
+var (
+	// ErrRateLimitExceeded возвращается, когда превышен лимит запросов на опрос для одного сервера.
+	ErrRateLimitExceeded = errors.New("слишком много запросов на опрос сервера")
+)
+
+const (
+	rateLimitCount  = 3
+	rateLimitWindow = 2 * time.Minute
 )
 
 // ServerActionsService определяет интерфейс для ручных действий над серверами.
