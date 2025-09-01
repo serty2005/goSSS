@@ -129,7 +129,44 @@ type WorkstationCfgDTO struct {
 	CashServerLogPath string `json:"cash_server_log_path"`
 }
 
-// --- НОВЫЕ DTO для UI-ориентированного поиска ---
+// --- DTO для аутентификации и пользователей ---
+
+// LoginRequestDTO - тело запроса для входа в систему.
+type LoginRequestDTO struct {
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required"`
+}
+
+// UserDTO - DTO для отображения информации о пользователе.
+type UserDTO struct {
+	ID       uint     `json:"id"`
+	Username string   `json:"username"`
+	FullName string   `json:"fullName"`
+	Roles    []string `json:"roles"`
+}
+
+// LoginResponseDTO - тело ответа при успешном входе.
+type LoginResponseDTO struct {
+	AccessToken string  `json:"access_token"`
+	User        UserDTO `json:"user"`
+}
+
+// UserCreateDTO - DTO для создания нового пользователя.
+type UserCreateDTO struct {
+	Username string   `json:"username" validate:"required"`
+	Password string   `json:"password" validate:"required,min=6"`
+	FullName string   `json:"fullName" validate:"required"`
+	Roles    []string `json:"roles" validate:"required"`
+}
+
+// UserUpdateDTO - DTO для обновления пользователя.
+type UserUpdateDTO struct {
+	Password *string  `json:"password,omitempty" validate:"omitempty,min=6"`
+	FullName *string  `json:"fullName,omitempty"`
+	Roles    []string `json:"roles,omitempty"`
+}
+
+// --- DTO для UI-ориентированного поиска ---
 
 // FinalSearchResponseDTO - корневой объект для нового ответа поиска.
 type FinalSearchResponseDTO struct {

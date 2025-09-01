@@ -23,8 +23,13 @@ type Config struct {
 	AllowedOrigins     []string
 
 	// --- Настройки API ---
-	AgentAPIKey string
-	SeederKey   string
+	AgentAPIKey      string
+	SeederKey        string
+	JWTSecret        string
+	JWTExpirationMin int
+	AdminUsername    string
+	AdminPassword    string
+	AdminFullName    string
 
 	// --- Настройки ServiceDesk Client ---
 	ServiceDeskBaseURL string
@@ -44,12 +49,12 @@ type Config struct {
 	ContractSyncInterval  time.Duration
 
 	// Шлюз опроса статусов серверов (RMS Polling)
-	EnablePollingGateway    bool
-	ServerPollingInterval   time.Duration
-	ServerPollingBatchSize  int
-	RMSLogin                string
-	RMSPassword1            string
-	RMSPassword2            string
+	EnablePollingGateway   bool
+	ServerPollingInterval  time.Duration
+	ServerPollingBatchSize int
+	RMSLogin               string
+	RMSPassword1           string
+	RMSPassword2           string
 
 	// Шлюз для данных от агентов (FTP)
 	EnableAgentFTPGateway bool
@@ -62,7 +67,7 @@ type Config struct {
 	FTPCachePath          string
 
 	// Шлюз поиска дубликатов
-	EnableDuplicatesGateway bool
+	EnableDuplicatesGateway  bool
 	DuplicatesSearchInterval time.Duration
 }
 
@@ -86,6 +91,11 @@ func New() *Config {
 		// API
 		AgentAPIKey: getEnv("AGENT_API_KEY", ""),
 		SeederKey:   getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
+		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440), // 24 часа
+		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
+		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
 
 		// ServiceDesk Client
 		ServiceDeskBaseURL: getEnv("BASE_URL", "https://servicedesk.example.com"),
@@ -105,12 +115,12 @@ func New() *Config {
 		ContractSyncInterval:  time.Duration(getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)) * time.Minute,
 
 		// Server Polling Gateway
-		EnablePollingGateway:    getEnvAsBool("ENABLE_POLLING_GATEWAY", true),
-		ServerPollingInterval:   time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour,
-		ServerPollingBatchSize:  getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),
-		RMSLogin:                getEnv("RMS_LOGIN", ""),
-		RMSPassword1:            getEnv("RMS_PASSWORD_1", ""),
-		RMSPassword2:            getEnv("RMS_PASSWORD_2", ""),
+		EnablePollingGateway:   getEnvAsBool("ENABLE_POLLING_GATEWAY", true),
+		ServerPollingInterval:  time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour,
+		ServerPollingBatchSize: getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),
+		RMSLogin:               getEnv("RMS_LOGIN", ""),
+		RMSPassword1:           getEnv("RMS_PASSWORD_1", ""),
+		RMSPassword2:           getEnv("RMS_PASSWORD_2", ""),
 
 		// Agent FTP Gateway
 		EnableAgentFTPGateway: getEnvAsBool("ENABLE_AGENT_FTP_GATEWAY", true),

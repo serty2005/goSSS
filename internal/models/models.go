@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -166,4 +167,31 @@ type ReconciliationTask struct {
 	Comment    string         `gorm:"type:text"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+// User представляет пользователя системы.
+type User struct {
+	ID           uint           `gorm:"primarykey"`
+	Username     string         `gorm:"type:varchar(100);uniqueIndex;not null"`
+	PasswordHash string         `gorm:"type:text;not null"`
+	FullName     string         `gorm:"type:text"`
+	Roles        datatypes.JSON `gorm:"type:jsonb"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// HashPassword хеширует пароль с использованием bcrypt перед сохранением.
+func (u *User) HashPassword(password string) error {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = string(bytes)
+	return nil
+}
+
+// CheckPassword проверяет, соответствует ли предоставленный пароль хешу.
+func (u *User) CheckPassword(password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password))
+	return err == nil
 }

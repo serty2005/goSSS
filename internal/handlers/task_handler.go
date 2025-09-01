@@ -169,13 +169,14 @@ func (h *TaskHandler) findDuplicateGroups(field string, entityType string) ([]ap
 	var groups []api.DuplicateGroupDTO
 	for _, res := range results {
 		var records []interface{}
-		if entityType == "Workstation" {
+		switch entityType {
+		case "Workstation":
 			var wsRecords []models.Workstation
 			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&wsRecords)
 			for i := range wsRecords {
 				records = append(records, wsRecords[i])
 			}
-		} else if entityType == "Server" {
+		case "Server":
 			var srvRecords []models.Server
 			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&srvRecords)
 			for i := range srvRecords {

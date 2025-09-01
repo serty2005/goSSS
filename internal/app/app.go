@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/config"
 	"etalon-server/internal/db"
 	"etalon-server/internal/gateways"
@@ -27,6 +28,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -50,7 +52,9 @@ type Application struct {
 	TaskHandler          *handlers.TaskHandler
 	AgentHandler         *handlers.AgentHandler
 	ServerActionsHandler *handlers.ServerActionsHandler
+	AuthHandler          *handlers.AuthHandler
 	ServerActionsSvc     services.ServerActionsService
+	AuthSvc              services.AuthService
 	AgentSvc             services.AgentService
 	DebugHandler         *handlers.DebugHandler
 }
@@ -78,12 +82,18 @@ func New() (*Application, error) {
 		&models.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
+		&models.User{},
 	)
 	if err != nil {
 		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
 		return nil, err
 	}
 	appLogger.Info("Миграции базы данных успешно завершены.")
+
+	if err := seedAdminUser(cfg, database, appLogger); err != nil {
+		appLogger.Fatal("Не удалось создать пользователя-администратора", zap.Error(err))
+		return nil, err
+	}
 
 	// --- Инициализация компонентов ---
 	bus := eventbus.NewInMemoryEventBus(1000)
@@ -96,6 +106,7 @@ func New() (*Application, error) {
 	agentRepo := repositories.NewAgentRepo(database)
 	contractRepo := repositories.NewContractRepo(database)
 	taskRepo := repositories.NewTaskRepo(database)
+	userRepo := repositories.NewUserRepo(database)
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Создаем отдельные логгеры для каждого воркера/сервиса
@@ -109,8 +120,8 @@ func New() (*Application, error) {
 	// Сервисы, шлюзы и оркестратор
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
-	// reconcilerService := services.NewReconcilerService(cfg, database, ftpClient, serverRepo, workstationRepo, frRepo, reconcilerLogger)
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
+	authService := services.NewAuthService(cfg, userRepo)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
 
 	// Создаем движок, передавая ему matcher
@@ -131,6 +142,7 @@ func New() (*Application, error) {
 	taskHandler := handlers.NewTaskHandler(appLogger, database)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
+	authHandler := handlers.NewAuthHandler(appLogger, authService)
 	debugHandler := handlers.NewDebugHandler(appLogger, bus)
 
 	return &Application{
@@ -152,6 +164,8 @@ func New() (*Application, error) {
 		TaskHandler:          taskHandler,
 		AgentHandler:         agentHandler,
 		ServerActionsHandler: serverActionsHandler,
+		AuthHandler:          authHandler,
+		AuthSvc:              authService,
 		ServerActionsSvc:     serverActionsSvc,
 		AgentSvc:             agentService,
 		DebugHandler:         debugHandler,
@@ -175,15 +189,33 @@ func (a *Application) Run() {
 
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
+	// Публичные роуты для аутентификации
+	r.Route("/api/auth", func(r chi.Router) {
+		a.AuthHandler.RegisterRoutes(r)
+	})
 
+	// Роуты для агентов со своей аутентификацией
+	r.Route("/api/agents", func(r chi.Router) {
+		r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
+		a.AgentHandler.RegisterRoutes(r)
+	})
+
+	// Защищенная группа роутов для UI
 	r.Route("/api", func(r chi.Router) {
+		// Применяем middleware для проверки JWT
+		r.Use(handlers.JwtAuthMiddleware(a.Config))
+
+		// Регистрируем все защищенные хендлеры
 		a.CrudHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
 		a.ServerActionsHandler.RegisterRoutes(r)
-		r.Route("/agents", func(r chi.Router) {
-			r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
-			a.AgentHandler.RegisterRoutes(r)
+
+		// Пример группы роутов только для админов
+		r.Route("/users", func(r chi.Router) {
+			r.Use(handlers.AdminRequiredMiddleware)
+			// Здесь будут регистрироваться роуты для UserHandler
+			// a.UserHandler.RegisterRoutes(r)
 		})
 	})
 	r.Route("/sync", func(r chi.Router) {
@@ -288,4 +320,33 @@ func (a *Application) SeedDBAndExit() {
 	}
 	a.Logger.Info("Наполнение базы данных успешно завершено. Программа завершает работу.")
 	os.Exit(0)
+}
+
+// Новая функция для сидинга админа
+func seedAdminUser(cfg *config.Config, db *gorm.DB, logger *zap.Logger) error {
+	var count int64
+	db.Model(&models.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
+
+	if count > 0 {
+		logger.Info("Пользователь-администратор уже существует, пропуск создания.")
+		return nil
+	}
+
+	logger.Info("Создание пользователя-администратора по умолчанию...")
+	rolesJSON, _ := json.Marshal([]string{"admin"})
+	admin := &models.User{
+		Username: cfg.AdminUsername,
+		FullName: cfg.AdminFullName,
+		Roles:    datatypes.JSON(rolesJSON),
+	}
+	if err := admin.HashPassword(cfg.AdminPassword); err != nil {
+		return err
+	}
+
+	if err := db.Create(admin).Error; err != nil {
+		return err
+	}
+
+	logger.Info("Пользователь-администратор успешно создан.", zap.String("username", cfg.AdminUsername))
+	return nil
 }
