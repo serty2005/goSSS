@@ -71,6 +71,21 @@ func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid str
 	return nil, fmt.Errorf("метод FetchEntityDetails не реализован для мок-клиента")
 }
 
+// UpdateEntity - заглушка для соответствия интерфейсу.
+func (m *MockServiceDeskClient) UpdateEntity(ctx context.Context, metaClass, uuid string, data map[string]interface{}) error {
+	return fmt.Errorf("метод UpdateEntity не реализован для мок-клиента")
+}
+
+// CreateEntity - заглушка для соответствия интерфейсу.
+func (m *MockServiceDeskClient) CreateEntity(ctx context.Context, metaClass string, data map[string]interface{}) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("метод CreateEntity не реализован для мок-клиента")
+}
+
+// FindReferenceID - заглушка для соответствия интерфейсу.
+func (m *MockServiceDeskClient) FindReferenceID(ctx context.Context, metaClass, title string, useSubstringSearch bool) (string, error) {
+	return "", fmt.Errorf("метод FindReferenceID не реализован для мок-клиента")
+}
+
 // DataToCompanyForSeeder - это специальная версия маппера для seeder'а.
 // ИСПРАВЛЕНИЕ: Удалена вся логика, связанная с ContractInfo.
 func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, agreementsCache map[string]map[string]interface{}, logger *zap.Logger) (*models.Company, error) {

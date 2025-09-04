@@ -1,4 +1,3 @@
-// <-- НОВЫЙ ФАЙЛ -->
 // internal/services/task_resolution_service.go
 package services
 
@@ -23,6 +22,12 @@ var (
 	ErrInternalExecution = errors.New("внутренняя ошибка при выполнении действия по задаче")
 )
 
+// НОВЫЙ ТИП: Создаем собственный тип для ключа контекста, чтобы избежать коллизий.
+type contextKey string
+
+// НОВАЯ КОНСТАНТА: Определяем ключ для транзакции.
+const transactionKey contextKey = "tx"
+
 // TaskResolutionService определяет интерфейс для сервиса выполнения задач.
 type TaskResolutionService interface {
 	Resolve(ctx context.Context, taskID uint, dto *api.ResolveTaskRequestDTO) (*models.ReconciliationTask, error)
@@ -46,7 +51,8 @@ func NewTaskResolutionService(logger *zap.Logger, db *gorm.DB, taskRepo reposito
 func (s *taskResolutionServiceImpl) Resolve(ctx context.Context, taskID uint, dto *api.ResolveTaskRequestDTO) (*models.ReconciliationTask, error) {
 	var updatedTask *models.ReconciliationTask
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := context.WithValue(ctx, "tx", tx)
+		// ИСПРАВЛЕНО: Используем наш типизированный ключ вместо строки.
+		txCtx := context.WithValue(ctx, transactionKey, tx)
 
 		task, err := s.taskRepo.GetByID(txCtx, taskID)
 		if err != nil {
@@ -109,8 +115,8 @@ func (s *taskResolutionServiceImpl) handleDataConflict(ctx context.Context, task
 			return ErrInternalExecution
 		}
 
-		// Применяем удаленные данные
-		tx := ctx.Value("tx").(*gorm.DB)
+		// ИСПРАВЛЕНО: Используем наш типизированный ключ.
+		tx := ctx.Value(transactionKey).(*gorm.DB)
 		var err error
 		switch task.EntityType {
 		case "Server":
@@ -140,7 +146,8 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 		return ErrInvalidPayload
 	}
 
-	tx := ctx.Value("tx").(*gorm.DB)
+	// ИСПРАВЛЕНО: Используем наш типизированный ключ.
+	tx := ctx.Value(transactionKey).(*gorm.DB)
 	for _, uuidInterface := range deleteUUIDs {
 		uuid, ok := uuidInterface.(string)
 		if !ok {
@@ -174,7 +181,8 @@ func (s *taskResolutionServiceImpl) handleOwnerMismatch(ctx context.Context, tas
 		if !ok {
 			return ErrInvalidPayload
 		}
-		tx := ctx.Value("tx").(*gorm.DB)
+		// ИСПРАВЛЕНО: Используем наш типизированный ключ.
+		tx := ctx.Value(transactionKey).(*gorm.DB)
 		updates := map[string]interface{}{"owner_service_desk_uuid": newOwnerUUID}
 		var err error
 		switch task.EntityType {
@@ -211,7 +219,8 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 			return ErrInternalExecution
 		}
 
-		tx := ctx.Value("tx").(*gorm.DB)
+		// ИСПРАВЛЕНО: Используем наш типизированный ключ.
+		tx := ctx.Value(transactionKey).(*gorm.DB)
 		var err error
 		switch task.EntityType {
 		case "Workstation":

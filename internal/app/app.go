@@ -56,6 +56,7 @@ type Application struct {
 	ServerActionsSvc     services.ServerActionsService
 	AuthSvc              services.AuthService
 	AgentSvc             services.AgentService
+	SDEditorSvc          services.SDEditorService
 	DebugHandler         *handlers.DebugHandler
 }
 
@@ -116,6 +117,7 @@ func New() (*Application, error) {
 	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.DisableFileLogging)
 	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.DisableFileLogging)
 	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.DisableFileLogging)
+	sdEditorLogger := logger.New(cfg.LogDir, "sdesk_editor", cfg.DisableFileLogging)
 
 	// Сервисы, шлюзы и оркестратор
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
@@ -124,6 +126,7 @@ func New() (*Application, error) {
 	authService := services.NewAuthService(cfg, userRepo)
 	taskResolutionService := services.NewTaskResolutionService(appLogger, database, taskRepo, serverRepo, workstationRepo, frRepo)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
+	sdEditorService := services.NewSDEditorService(sdEditorLogger, sdClient, taskRepo)
 
 	// Создаем движок, передавая ему matcher
 	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
@@ -140,7 +143,7 @@ func New() (*Application, error) {
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
 	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
-	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService)
+	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
 	authHandler := handlers.NewAuthHandler(appLogger, authService)
@@ -169,6 +172,7 @@ func New() (*Application, error) {
 		AuthSvc:              authService,
 		ServerActionsSvc:     serverActionsSvc,
 		AgentSvc:             agentService,
+		SDEditorSvc:          sdEditorService,
 		DebugHandler:         debugHandler,
 	}, nil
 }

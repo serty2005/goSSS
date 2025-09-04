@@ -232,6 +232,20 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 	source := "servicedesk_gateway"
 
 	err := o.db.Transaction(func(tx *gorm.DB) error {
+		txCtx := tx.WithContext(ctx)
+
+		// Функция-хелпер для проверки существования владельца внутри транзакции
+		ownerExists := func(ownerUUID string) (bool, error) {
+			if ownerUUID == "" {
+				return false, nil // Считаем, что пустой владелец "не существует"
+			}
+			var count int64
+			if err := txCtx.Model(&models.Company{}).Where("service_desk_uuid = ?", ownerUUID).Count(&count).Error; err != nil {
+				return false, err
+			}
+			return count > 0, nil
+		}
+
 		switch payload.MetaClass {
 		case "ou$company":
 			entityType = "Company"
@@ -258,6 +272,15 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if mapErr != nil {
 				return mapErr
 			}
+			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
+			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
+			}
+			if !exists {
+				log.Warn("Пропуск обработки Сервера, так как его владелец не найден в локальной БД.", zap.String("ownerUUID", *newData.OwnerServiceDeskUUID))
+				return nil // Корректно выходим из транзакции для этого события
+			}
 			resolvedEntityData = newData
 			currentData, getErr := o.serverRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
@@ -277,6 +300,15 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if mapErr != nil {
 				return mapErr
 			}
+			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
+			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
+			}
+			if !exists {
+				log.Warn("Пропуск обработки РС, так как ее владелец не найден в локальной БД.", zap.String("ownerUUID", *newData.OwnerServiceDeskUUID))
+				return nil
+			}
 			resolvedEntityData = newData
 			currentData, getErr := o.workstationRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
@@ -295,6 +327,15 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			newData, mapErr := services.DataToFiscalRegister(payload.Data)
 			if mapErr != nil {
 				return mapErr
+			}
+			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
+			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
+			}
+			if !exists {
+				log.Warn("Пропуск обработки ФР, так как его владелец не найден в локальной БД.", zap.String("ownerUUID", *newData.OwnerServiceDeskUUID))
+				return nil
 			}
 			resolvedEntityData = newData
 			currentData, getErr := o.frRepo.GetByUUIDUnscoped(ctx, payload.UUID)
@@ -324,7 +365,6 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		return
 	}
 
-	// --- НОВЫЙ БЛОК: Запуск асинхронной проверки на решение задач ---
 	if resolvedEntityData != nil {
 		go o.resolveTasksOnUpdate(context.Background(), entityType, payload.UUID, resolvedEntityData)
 	}

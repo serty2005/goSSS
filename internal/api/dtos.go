@@ -40,22 +40,25 @@ type ErrorResponseDTO struct {
 
 // AgentDataDTO определяет структуру данных, получаемых от агента.
 type AgentDataDTO struct {
-	ModelName       string `json:"modelName"`
-	SerialNumber    string `json:"serialNumber"`
-	RNM             string `json:"RNM"`
-	INN             string `json:"INN"`
-	FNSerial        string `json:"fn_serial"`
-	DateTimeEnd     string `json:"dateTime_end"`
-	FFDVersion      string `json:"ffdVersion"`
-	Hostname        string `json:"hostname"`
-	URLRms          string `json:"url_rms"`
-	CRMID           string `json:"crmId"`
-	TeamviewerID    string `json:"teamviewer_id"`
-	AnydeskID       string `json:"anydesk_id"`
-	LitemanagerID   string `json:"litemanager_id"`
-	CurrentTime     string `json:"current_time"`
-	AgentVersion    string `json:"agent_version"`
-	InstalledDriver string `json:"installed_driver,omitempty"`
+	ModelName        string `json:"modelName"`
+	SerialNumber     string `json:"serialNumber"`
+	RNM              string `json:"RNM"`
+	INN              string `json:"INN"`
+	FNSerial         string `json:"fn_serial"`
+	DateTimeEnd      string `json:"dateTime_end"`
+	FFDVersion       string `json:"ffdVersion"`
+	FNExecution      string `json:"fnExecution"`
+	OrganizationName string `json:"organizationName"`
+	DateTimeReg      string `json:"datetime_reg"`
+	Hostname         string `json:"hostname"`
+	URLRms           string `json:"url_rms"`
+	CRMID            string `json:"crmId"`
+	TeamviewerID     string `json:"teamviewer_id"`
+	AnydeskID        string `json:"anydesk_id"`
+	LitemanagerID    string `json:"litemanager_id"`
+	CurrentTime      string `json:"current_time"`
+	AgentVersion     string `json:"agent_version"`
+	InstalledDriver  string `json:"installed_driver,omitempty"`
 
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
@@ -81,6 +84,9 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "fn_serial")
 	delete(raw, "dateTime_end")
 	delete(raw, "ffdVersion")
+	delete(raw, "fnExecution")
+	delete(raw, "organizationName")
+	delete(raw, "datetime_reg")
 	delete(raw, "hostname")
 	delete(raw, "url_rms")
 	delete(raw, "crmId")
@@ -230,4 +236,14 @@ type FiscalRegisterRichDTO struct {
 	FNRegistrationDate *time.Time `json:"fn_registration_date,omitempty"`
 	DriverVersion      *string    `json:"driver_version,omitempty"`
 	FirmwareVersion    *string    `json:"firmware_version,omitempty"`
+}
+
+// CreateEntityInSDRequestDTO - тело запроса для создания сущности в ServiceDesk по задаче.
+type CreateEntityInSDRequestDTO struct {
+	EntityType string `json:"entity_type" validate:"required"` // 'FiscalRegister', 'Workstation', 'Server'
+}
+
+// CreateEntityInSDResponseDTO - тело ответа при успешном создании сущности в ServiceDesk.
+type CreateEntityInSDResponseDTO struct {
+	ServiceDeskUUID string `json:"service_desk_uuid"`
 }

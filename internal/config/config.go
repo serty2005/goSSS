@@ -37,6 +37,7 @@ type Config struct {
 	RateLimit          int
 	MaxRetries         int
 	ConcurrentRequests int
+	ServiceDeskDryRun  bool
 
 	// --- Настройки фоновых шлюзов (Gateways) ---
 
@@ -89,8 +90,8 @@ func New() *Config {
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
 		// API
-		AgentAPIKey: getEnv("AGENT_API_KEY", ""),
-		SeederKey:   getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
+		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
 		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
 		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440), // 24 часа
 		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
@@ -103,6 +104,7 @@ func New() *Config {
 		RateLimit:          getEnvAsInt("RATE_LIMIT", 45),
 		MaxRetries:         getEnvAsInt("MAX_RETRIES", 3),
 		ConcurrentRequests: getEnvAsInt("CONCURRENT_REQUESTS", 10),
+		ServiceDeskDryRun:  getEnvAsBool("SD_DRY_RUN", false),
 
 		// --- Шлюзы ---
 

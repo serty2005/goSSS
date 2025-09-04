@@ -21,15 +21,17 @@ import (
 type TaskHandler struct {
 	logger        *zap.Logger
 	db            *gorm.DB
-	resolutionSvc services.TaskResolutionService // <-- ДОБАВЛЕНО ПОЛЕ
+	resolutionSvc services.TaskResolutionService
+	sdEditorSvc   services.SDEditorService
 }
 
 // NewTaskHandler создает новый экземпляр обработчика.
-func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.TaskResolutionService) *TaskHandler {
+func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.TaskResolutionService, sdEditorSvc services.SDEditorService) *TaskHandler {
 	return &TaskHandler{
 		logger:        logger,
 		db:            db,
 		resolutionSvc: resolutionSvc,
+		sdEditorSvc:   sdEditorSvc,
 	}
 }
 
@@ -37,6 +39,7 @@ func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.Task
 func (h *TaskHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/tasks", h.GetTasks)
 	r.Post("/tasks/{id}/resolve", h.ResolveTask)
+	r.Post("/tasks/{id}/create-entity-in-sd", h.createEntityFromTask) // <-- ОБНОВЛЕННЫЙ РОУТ
 	r.Get("/duplicates", h.GetDuplicates)
 }
 
@@ -110,6 +113,55 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	RespondWithJSON(w, http.StatusOK, updatedTask)
+}
+
+// createEntityFromTask обрабатывает запрос на создание сущности в ServiceDesk на основе задачи.
+func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Request) {
+	taskIDStr := chi.URLParam(r, "id")
+	taskID, err := strconv.ParseUint(taskIDStr, 10, 32)
+	if err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Некорректный ID задачи")
+		return
+	}
+
+	var dto api.CreateEntityInSDRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+	// TODO: Добавить валидацию DTO
+
+	var newUUID string
+	switch dto.EntityType {
+	case "FiscalRegister":
+		newUUID, err = h.sdEditorSvc.CreateFiscalRegisterFromTask(r.Context(), uint(taskID))
+	// Сюда можно будет добавить другие типы сущностей в будущем
+	// case "Workstation":
+	// 	newUUID, err = h.sdEditorSvc.CreateWorkstationFromTask(r.Context(), uint(taskID))
+	default:
+		RespondWithError(w, http.StatusBadRequest, fmt.Sprintf("Создание сущности типа '%s' не поддерживается", dto.EntityType))
+		return
+	}
+
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrTaskNotFound):
+			RespondWithError(w, http.StatusNotFound, "Задача не найдена")
+		default:
+			h.logger.Error("Ошибка при создании сущности в ServiceDesk по задаче",
+				zap.Uint64("taskID", taskID),
+				zap.String("entityType", dto.EntityType),
+				zap.Error(err),
+			)
+			RespondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Внутренняя ошибка: %v", err))
+		}
+		return
+	}
+
+	response := api.CreateEntityInSDResponseDTO{
+		ServiceDeskUUID: newUUID,
+	}
+	RespondWithJSON(w, http.StatusCreated, response)
 }
 
 // GetDuplicates находит и возвращает группы дубликатов в формате JSON.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -34,9 +35,10 @@ func ParseAgentTime(dateStr string) *time.Time {
 	if dateStr == "" {
 		return nil
 	}
+	// Убираем возможные пробелы на концах строки
+	dateStr = strings.TrimSpace(dateStr)
 	t, err := time.Parse(TimeLayoutAgent, dateStr)
 	if err != nil {
-		// Попробуем также формат ServiceDesk на всякий случай
 		t, err2 := time.Parse(TimeLayoutServiceDesk, dateStr)
 		if err2 != nil {
 			return nil
@@ -54,7 +56,6 @@ func FormatFFDVersion(rawVersion string) string {
 	case "105":
 		return "1.05"
 	default:
-		// Возвращаем как есть, если формат неизвестен
 		return rawVersion
 	}
 }
@@ -68,18 +69,17 @@ func SafeStringDereference(s *string) string {
 }
 
 // NormalizeRNKKT очищает регистрационный номер ККТ, оставляя только цифры.
-// "0007 2066 3405 9671" -> "0007206634059671"
 func NormalizeRNKKT(rnm string) string {
 	return nonDigitRegex.ReplaceAllString(rnm, "")
 }
 
-// FormatRNKKT форматирует чистый РН ККТ для вывода, добавляя пробелы.
-// "0007206634059671" -> "0007 2066 3405 9671"
+// FormatRNKKT форматирует чистый РН ККТ для вывода в ServiceDesk, добавляя пробелы.
 func FormatRNKKT(rnm string) string {
-	if len(rnm) != 16 {
-		return rnm // Возвращаем как есть, если длина некорректна
+	cleanRnm := NormalizeRNKKT(rnm)
+	if len(cleanRnm) != 16 {
+		return cleanRnm // Возвращаем как есть, если длина некорректна
 	}
-	return rnm[0:4] + " " + rnm[4:8] + " " + rnm[8:12] + " " + rnm[12:16]
+	return fmt.Sprintf("%s %s %s %s", cleanRnm[0:4], cleanRnm[4:8], cleanRnm[8:12], cleanRnm[12:16])
 }
 
 // IsPrivateIP проверяет, является ли IP-адрес приватным (локальным).
@@ -89,7 +89,6 @@ func IsPrivateIP(ipStr string) (bool, error) {
 		return false, fmt.Errorf("некорректный IP-адрес: %s", ipStr)
 	}
 
-	// Проверяем на соответствие стандартным диапазонам приватных сетей
 	_, private24, _ := net.ParseCIDR("10.0.0.0/8")
 	_, private20, _ := net.ParseCIDR("172.16.0.0/12")
 	_, private16, _ := net.ParseCIDR("192.168.0.0/16")
