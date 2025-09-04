@@ -69,7 +69,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
 	wg.Wait()
 
-	// --- Шаг 2: Собрать уникальный список ID всех затронутых владельцев ---
+	// --- Шаг 2: Собрать уникальный список ID всех затронутых владельцев и их родителей ---
 	ownerUUIDs := make(map[string]bool)
 	for _, company := range initialCompanies {
 		ownerUUIDs[*company.ServiceDeskUUID] = true
@@ -96,12 +96,24 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// НОВОЕ: Добавляем родительские компании в список для поиска
+	uuidsToEnrich := make([]string, 0, len(ownerUUIDs))
+	for uuid := range ownerUUIDs {
+		uuidsToEnrich = append(uuidsToEnrich, uuid)
+	}
+	for _, uuid := range uuidsToEnrich {
+		parents, _ := h.companyRepo.GetAllParentUUIDs(ctx, uuid)
+		for _, parentUUID := range parents {
+			ownerUUIDs[parentUUID] = true
+		}
+	}
+
 	uuids := make([]string, 0, len(ownerUUIDs))
 	for uuid := range ownerUUIDs {
 		uuids = append(uuids, uuid)
 	}
 
-	// --- Шаг 3: Загрузить ВСЕ данные для найденных владельцев ---
+	// --- Шаг 3: Загрузить ВСЕ данные для найденных владельцев (включая родителей) ---
 	var allOwnerCompanies []models.Company
 	var allOwnerServers []models.Server
 	var allOwnerWorkstations []models.Workstation
@@ -115,17 +127,22 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	// --- Шаг 4: Сформировать финальную сгруппированную структуру ---
-
-	// Преобразуем оборудование в мапы для быстрого доступа
 	serversByOwner := groupServersByOwner(allOwnerServers)
 	workstationsByOwner := groupWorkstationsByOwner(allOwnerWorkstations)
 	frsByOwner := groupFRsByOwner(allOwnerFRs)
 
 	finalResponse := api.FinalSearchResponseDTO{}
+	initialOwnerUUIDs := make(map[string]struct{})
+	for _, uuid := range uuidsToEnrich {
+		initialOwnerUUIDs[uuid] = struct{}{}
+	}
 
-	// Создаем группу для каждой найденной компании-владельца
+	// Создаем группу для каждой ИЗНАЧАЛЬНО найденной компании-владельца
 	for _, owner := range allOwnerCompanies {
 		ownerID := *owner.ServiceDeskUUID
+		if _, ok := initialOwnerUUIDs[ownerID]; !ok {
+			continue // Пропускаем родительские компании, чтобы не создавать для них отдельные группы
+		}
 
 		group := api.SearchGroupDTO{
 			Owner: api.OwnerFullDTO{
@@ -138,15 +155,29 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			FoundEntities: []api.FoundEntityDTO{},
 		}
 
-		// Добавляем все оборудование, принадлежащее этому владельцу
-		if servers, ok := serversByOwner[ownerID]; ok {
-			group.FoundEntities = append(group.FoundEntities, servers...)
+		// Собираем все UUID: свой, родителей, и т.д. для этой группы
+		currentAndParentUUIDs := map[string]struct{}{ownerID: {}}
+		parents, _ := h.companyRepo.GetAllParentUUIDs(ctx, ownerID)
+		for _, pUUID := range parents {
+			currentAndParentUUIDs[pUUID] = struct{}{}
 		}
-		if workstations, ok := workstationsByOwner[ownerID]; ok {
-			group.FoundEntities = append(group.FoundEntities, workstations...)
-		}
-		if frs, ok := frsByOwner[ownerID]; ok {
-			group.FoundEntities = append(group.FoundEntities, frs...)
+
+		// Добавляем оборудование, принадлежащее этой компании И ЕЕ РОДИТЕЛЯМ
+		for uuid := range currentAndParentUUIDs {
+			if servers, ok := serversByOwner[uuid]; ok {
+				group.FoundEntities = append(group.FoundEntities, servers...)
+			}
+			if workstations, ok := workstationsByOwner[uuid]; ok {
+				// Рабочие станции и ФР добавляем только для самой компании, не для родителей
+				if uuid == ownerID {
+					group.FoundEntities = append(group.FoundEntities, workstations...)
+				}
+			}
+			if frs, ok := frsByOwner[uuid]; ok {
+				if uuid == ownerID {
+					group.FoundEntities = append(group.FoundEntities, frs...)
+				}
+			}
 		}
 
 		finalResponse.SearchResults = append(finalResponse.SearchResults, group)
@@ -166,7 +197,6 @@ func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDT
 			// Формируем ссылку на партнерский кабинет
 			var partnersLink *string
 			clientIdStr := utils.SafeStringDereference(s.CabinetLink)
-			// Проверяем, что clientIdStr не пустой и не содержит 'N/A'
 			if clientIdStr != "" && clientIdStr != "N/A" {
 				var link string
 				ipStr := utils.SafeStringDereference(s.IP)

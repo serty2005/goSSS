@@ -345,45 +345,78 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 		zap.String("value", payload.Value),
 	)
 
-	// Создаем уникальный идентификатор для задачи, чтобы избежать дублирования
-	// задач для одной и той же группы дубликатов.
+	// НОВОЕ: Проверяем владельцев, чтобы определить тип задачи
+	var owners []string
+	switch payload.EntityType {
+	case "Server":
+		o.db.Model(&models.Server{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+	case "Workstation":
+		o.db.Model(&models.Workstation{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+	case "FiscalRegister":
+		o.db.Model(&models.FiscalRegister{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+	}
+
+	if len(owners) < 2 {
+		return // Недостаточно данных для анализа
+	}
+
+	// Проверяем, принадлежат ли все дубликаты одной и той же компании
+	firstOwner := owners[0]
+	allSameOwner := true
+	for _, owner := range owners[1:] {
+		if owner != firstOwner {
+			allSameOwner = false
+			break
+		}
+	}
+
+	taskType := "resolve_duplicate"
+	comment := fmt.Sprintf(
+		"Обнаружены дубликаты (%d шт.) по полю '%s' со значением '%s' для сущности '%s'. Требуется выбрать эталонную запись, а остальные удалить.",
+		len(payload.UUIDs), payload.Field, payload.Value, payload.EntityType,
+	)
+
+	if !allSameOwner {
+		taskType = "data_conflict"
+		comment = fmt.Sprintf(
+			"Конфликт данных! Обнаружены сущности (%s), принадлежащие РАЗНЫМ владельцам, с одинаковым значением '%s' в поле '%s'. Требуется определить эталонную запись и решить, что делать с остальными.",
+			payload.EntityType, payload.Value, payload.Field,
+		)
+	}
+
 	taskIdentifier := fmt.Sprintf("duplicate-%s-%s-%s", payload.EntityType, payload.Field, payload.Value)
 
 	detailsMap := map[string]interface{}{
 		"field":       payload.Field,
 		"value":       payload.Value,
 		"entityUUIDs": payload.UUIDs,
+		"ownerUUIDs":  owners,
+		"isSameOwner": allSameOwner,
 	}
 	detailsJSON, _ := json.Marshal(detailsMap)
 
-	comment := fmt.Sprintf(
-		"Обнаружены дубликаты (%d шт.) по полю '%s' со значением '%s' для сущности '%s'. Требуется выбрать эталонную запись, а остальные удалить.",
-		len(payload.UUIDs), payload.Field, payload.Value, payload.EntityType,
-	)
-
 	task := models.ReconciliationTask{
-		TaskType:   "resolve_duplicate",
+		TaskType:   taskType,
 		EntityType: payload.EntityType,
-		EntityUUID: taskIdentifier, // Используем наш уникальный идентификатор
+		EntityUUID: taskIdentifier,
 		Details:    datatypes.JSON(detailsJSON),
 		Status:     "new",
 		Comment:    comment,
 	}
 
-	// Используем FirstOrCreate, чтобы не создавать повторные задачи.
-	// Если задача с таким EntityUUID (нашим идентификатором) уже есть, ничего не делаем.
 	result := o.db.WithContext(ctx).
 		Where(models.ReconciliationTask{EntityUUID: taskIdentifier, Status: "new"}).
 		FirstOrCreate(&task)
 
 	if result.Error != nil {
-		log.Error("Не удалось создать задачу на разрешение дубликатов", zap.Error(result.Error))
+		log.Error("Не удалось создать задачу", zap.String("taskType", taskType), zap.Error(result.Error))
 	} else if result.RowsAffected > 0 {
-		log.Info("Создана новая задача на разрешение дубликатов.")
+		log.Info("Создана новая задача", zap.String("taskType", taskType))
 	} else {
-		log.Debug("Активная задача на разрешение этих дубликатов уже существует.")
+		log.Debug("Активная задача для этого конфликта/дубликата уже существует.")
 	}
 }
+
 func (o *Orchestrator) performUpdate(ctx context.Context, tx *gorm.DB, metaClass, uuid string, updates map[string]interface{}) error {
 	switch metaClass {
 	case "ou$company":
@@ -493,7 +526,6 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 					return err
 				}
 			case ActionUpdate:
-				// Добавляем источник обновления
 				action.Updates["last_updated_by"] = "agent"
 				var errUpdate error
 				switch action.EntityType {
@@ -514,6 +546,20 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 					Update("comment", gorm.Expr("comment || ?", action.Comment))
 				if res.Error != nil {
 					return res.Error
+				}
+			case ActionAddAdditionalOwner:
+				var server models.Server
+				if err := tx.Where("service_desk_uuid = ?", action.EntityUUID).First(&server).Error; err != nil {
+					return fmt.Errorf("не удалось найти сервер для добавления владельца: %w", err)
+				}
+
+				var company models.Company
+				if err := tx.Where("service_desk_uuid = ?", action.AdditionalOwnerUUID).First(&company).Error; err != nil {
+					return fmt.Errorf("не удалось найти компанию для добавления в качестве владельца: %w", err)
+				}
+
+				if err := tx.Model(&server).Association("AdditionalOwners").Append(&company); err != nil {
+					return fmt.Errorf("не удалось добавить доп. владельца: %w", err)
 				}
 			}
 		}

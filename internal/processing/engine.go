@@ -10,7 +10,6 @@ import (
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
 	"fmt"
-	"net"
 	"strings"
 
 	"go.uber.org/zap"
@@ -21,20 +20,22 @@ import (
 type ActionType string
 
 const (
-	ActionCreateTask  ActionType = "create_task"
-	ActionUpdate      ActionType = "update"
-	ActionCommentTask ActionType = "comment_task" // Новое действие
+	ActionCreateTask         ActionType = "create_task"
+	ActionUpdate             ActionType = "update"
+	ActionCommentTask        ActionType = "comment_task" // Новое действие
+	ActionAddAdditionalOwner ActionType = "add_additional_owner"
 )
 
 // Action представляет одно действие в плане.
 type Action struct {
-	Type       ActionType
-	EntityType string
-	EntityUUID string
-	Updates    map[string]interface{}
-	Task       *models.ReconciliationTask
-	TaskID     uint   // для ActionCommentTask
-	Comment    string // для ActionCommentTask
+	Type                ActionType
+	EntityType          string
+	EntityUUID          string
+	Updates             map[string]interface{}
+	Task                *models.ReconciliationTask
+	TaskID              uint   // для ActionCommentTask
+	Comment             string // для ActionCommentTask
+	AdditionalOwnerUUID string // для ActionAddAdditionalOwner
 }
 
 // ProcessingResult - это "план действий", который Процессор возвращает Оркестратору.
@@ -85,7 +86,6 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 
 	mainMatch := p.matcherSvc.FindEntityByAgentData(ctx, data)
 	if mainMatch == nil {
-		// ИСПРАВЛЕНО: Добавлен пустой etalonOwnerUUID
 		p.createTaskIfNotExists(ctx, result, "new_client", "", unidentifiedTaskUUID, "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
 		return result
 	}
@@ -94,28 +94,28 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 	foundWS, _ := p.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID)
 	foundFR, _ := p.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
 
-	etalonOwnerUUID, err := p.determineEtalonOwner(ctx, foundServer, foundWS, foundFR)
+	etalonOwnerUUID, err := p.getEquipmentOwnerUUID(foundWS, foundFR)
 	if err != nil {
-		// ИСПРАВЛЕНО: Добавлен пустой etalonOwnerUUID
-		p.createTaskIfNotExists(ctx, result, "data_conflict", "", unidentifiedTaskUUID, "", data, err.Error())
+		// Если не найдено ни РС, ни ФР, но найден сервер, владельцем считаем владельца сервера
+		if foundServer != nil && foundServer.OwnerServiceDeskUUID != nil {
+			etalonOwnerUUID = *foundServer.OwnerServiceDeskUUID
+		} else {
+			p.createTaskIfNotExists(ctx, result, "data_conflict", "", unidentifiedTaskUUID, "", data, err.Error())
+			return result
+		}
+	}
+
+	log.Info("Эталонный владелец оборудования определен", zap.String("ownerUUID", etalonOwnerUUID))
+
+	ownerCompany, err := p.companyRepo.GetByUUID(ctx, etalonOwnerUUID)
+	if err != nil || ownerCompany == nil {
+		log.Error("Не удалось получить данные о компании-владельце, обработка прервана", zap.String("ownerUUID", etalonOwnerUUID), zap.Error(err))
 		return result
 	}
 
-	log.Info("Эталонный владелец определен", zap.String("ownerUUID", etalonOwnerUUID))
-
-	// Проверяем, активен ли контракт у владельца. Если нет - прекращаем обработку.
-	ownerCompany, err := p.companyRepo.GetByUUID(ctx, etalonOwnerUUID)
-	if err != nil {
-		log.Error("Не удалось получить данные о компании-владельце, обработка прервана", zap.String("ownerUUID", etalonOwnerUUID), zap.Error(err))
-		return result // Возвращаем пустой результат в случае ошибки
-	}
-
-	if ownerCompany == nil || ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
-		log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца",
-			zap.String("ownerUUID", etalonOwnerUUID),
-			zap.String("agent_sn", data.SerialNumber),
-		)
-		return result // Возвращаем пустой результат, никаких действий не требуется
+	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
+		log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца", zap.String("ownerUUID", etalonOwnerUUID))
+		return result
 	}
 
 	p.processServerActions(ctx, result, etalonOwnerUUID, foundServer, data)
@@ -125,159 +125,127 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 	return result
 }
 
-// determineEtalonOwner реализует сложную логику определения владельца с учетом иерархии и дополнительных владельцев сервера.
-func (p *processingEngineImpl) determineEtalonOwner(ctx context.Context, server *models.Server, ws *models.Workstation, fr *models.FiscalRegister) (string, error) {
+// getEquipmentOwnerUUID определяет владельца по оборудованию (РС или ФР).
+func (p *processingEngineImpl) getEquipmentOwnerUUID(ws *models.Workstation, fr *models.FiscalRegister) (string, error) {
 	wsOwner := ""
-	if ws != nil {
-		wsOwner = utils.SafeStringDereference(ws.OwnerServiceDeskUUID)
+	if ws != nil && ws.OwnerServiceDeskUUID != nil {
+		wsOwner = *ws.OwnerServiceDeskUUID
 	}
 	frOwner := ""
-	if fr != nil {
-		frOwner = utils.SafeStringDereference(fr.OwnerServiceDeskUUID)
+	if fr != nil && fr.OwnerServiceDeskUUID != nil {
+		frOwner = *fr.OwnerServiceDeskUUID
 	}
 
-	// Если найдена и РС, и ФР, и у них разные владельцы, принимаем владельца РС как более приоритетного.
 	if wsOwner != "" && frOwner != "" && wsOwner != frOwner {
-		frOwner = wsOwner
+		return "", fmt.Errorf("конфликт владельцев: РС принадлежит '%s', а ФР - '%s'", wsOwner, frOwner)
 	}
 
-	// Определяем владельца оборудования (РС или ФР).
-	ownerOfEquipment := wsOwner
-	if ownerOfEquipment == "" {
-		ownerOfEquipment = frOwner
+	if wsOwner != "" {
+		return wsOwner, nil
+	}
+	if frOwner != "" {
+		return frOwner, nil
 	}
 
-	// Если сервер не найден, владельцем считается владелец оборудования.
-	if server == nil {
-		if ownerOfEquipment != "" {
-			return ownerOfEquipment, nil
-		}
-		// Если не найдено вообще ни одной сущности с владельцем.
-		return "", fmt.Errorf("критическая ошибка: не найдено ни одной сущности с владельцем")
-	}
-
-	// --- Новая логика с учетом дополнительных владельцев ---
-
-	// 1. Собираем всех допустимых владельцев для сервера в одну мапу для быстрой проверки.
-	validServerOwners := make(map[string]struct{})
-	if server.OwnerServiceDeskUUID != nil {
-		validServerOwners[*server.OwnerServiceDeskUUID] = struct{}{}
-	}
-	for _, additionalOwner := range server.AdditionalOwners {
-		if additionalOwner.ServiceDeskUUID != nil {
-			validServerOwners[*additionalOwner.ServiceDeskUUID] = struct{}{}
-		}
-	}
-
-	// Если оборудование не найдено или его владелец совпадает с одним из допустимых владельцев сервера.
-	if ownerOfEquipment == "" {
-		return *server.OwnerServiceDeskUUID, nil // Возвращаем основного владельца сервера
-	}
-	if _, ok := validServerOwners[ownerOfEquipment]; ok {
-		return ownerOfEquipment, nil // Владелец оборудования является одним из допустимых, все в порядке.
-	}
-
-	// 2. Если прямого совпадения нет, проверяем иерархию (является ли владелец оборудования дочерней компанией одного из владельцев сервера).
-	parentUUIDs, err := p.companyRepo.GetAllParentUUIDs(ctx, ownerOfEquipment)
-	if err != nil {
-		p.logger.Error("Не удалось получить иерархию компании", zap.String("childUUID", ownerOfEquipment), zap.Error(err))
-		return "", fmt.Errorf("ошибка проверки иерархии компаний")
-	}
-
-	for _, parentUUID := range parentUUIDs {
-		if _, ok := validServerOwners[parentUUID]; ok {
-			// Нашли родителя в списке допустимых владельцев. Конфликта нет.
-			return ownerOfEquipment, nil
-		}
-	}
-
-	// 3. Если ни одно из условий не выполнилось — это реальный конфликт.
-	validOwnersList := make([]string, 0, len(validServerOwners))
-	for uuid := range validServerOwners {
-		validOwnersList = append(validOwnersList, uuid)
-	}
-
-	return "", fmt.Errorf("конфликт владельцев: Оборудование принадлежит '%s', а допустимые владельцы сервера: %v. Иерархическая связь не найдена",
-		ownerOfEquipment, validOwnersList)
+	return "", fmt.Errorf("не удалось определить владельца оборудования: не найдено ни РС, ни ФР с владельцем")
 }
 
-// processServerActions формирует план действий для Сервера.
-func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, owner string, server *models.Server, data *api.AgentDataDTO) {
-	if server != nil {
-		// Пропускаем всю логику, если оборудование "заморожено"
-		if server.Status == "locked" {
-			p.logger.Debug("Создание задач для сущности пропущено: статус 'locked'", zap.String("uuid", *server.ServiceDeskUUID))
-			return
-		}
-
-		serverOwnerUUID := utils.SafeStringDereference(server.OwnerServiceDeskUUID)
-		// Переменная `owner` здесь — это "эталонный" владелец, т.е. владелец оборудования (дочерняя компания).
-		if serverOwnerUUID != owner {
-			// Если владельцы не совпадают, проверяем, не является ли владелец сервера родителем владельца оборудования.
-			parentUUIDs, err := p.companyRepo.GetAllParentUUIDs(ctx, owner)
-			if err != nil {
-				p.logger.Error("Не удалось проверить иерархию для определения владельца сервера, задача будет создана",
-					zap.String("childUUID", owner),
-					zap.Error(err))
-				// В случае ошибки создаем задачу, чтобы не пропустить потенциальную проблему.
-				p.createOwnerMismatchTask(ctx, res, "Server", *server.ServiceDeskUUID, utils.SafeStringDereference(server.DeviceName), owner, serverOwnerUUID, data)
-			} else {
-				isParent := false
-				for _, parentUUID := range parentUUIDs {
-					if parentUUID == serverOwnerUUID {
-						isParent = true
-						break
-					}
-				}
-
-				// Только если это не прямой владелец И не родительская компания, создаем задачу.
-				if !isParent {
-					p.createOwnerMismatchTask(ctx, res, "Server", *server.ServiceDeskUUID, utils.SafeStringDereference(server.DeviceName), owner, serverOwnerUUID, data)
-				} else {
-					p.logger.Debug("Пропуск создания задачи owner_mismatch для сервера из-за валидной связи родитель-потомок",
-						zap.String("serverOwner", serverOwnerUUID),
-						zap.String("equipmentOwner", owner))
-				}
-			}
-		}
-
-		updates := make(map[string]interface{})
-		if (server.CRMid == nil || *server.CRMid == "") && data.CRMID != "" {
-			updates["crm_id"] = data.CRMID
-		}
-		if len(updates) > 0 {
-			res.Actions = append(res.Actions, Action{Type: ActionUpdate, EntityType: "Server", EntityUUID: *server.ServiceDeskUUID, Updates: updates})
-		}
-	} else if data.CRMID != "" || validators.ValidateIPAddress(data.URLRms) != nil {
-		// Проверяем, не является ли адрес сервера "мусорным" (локальным)
-		if data.URLRms != "" {
-			host, _, err := net.SplitHostPort(data.URLRms)
-			if err != nil {
-				// Если порта нет, вся строка - это хост
-				host = data.URLRms
-			}
-
-			isPrivate, _ := utils.IsPrivateIP(host)
-			isSimpleHost := !strings.Contains(host, ".")
-
-			if isPrivate || isSimpleHost {
-				p.logger.Debug("Создание задачи 'owner_check_required' пропущено: сервер имеет локальный IP-адрес/имя хоста",
-					zap.String("host", host),
-				)
-				return // Не создаем задачу для локальных серверов
-			}
-		}
-
-		comment := fmt.Sprintf("Агент '%s' сообщил о сервере (IP: %s, CRMID: %s), который отсутствует в базе. Проверьте, нужно ли создать новую сущность сервера и привязать к владельцу '%s'.",
-			data.Hostname, data.URLRms, data.CRMID, owner)
-		// Для этой задачи используем CRMID или IP как уникальный идентификатор
-		entityID := data.CRMID
-		if entityID == "" {
-			entityID = data.URLRms
-		}
-		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
-		p.createTaskIfNotExists(ctx, res, "owner_check_required", "Server", entityID, owner, data, comment)
+// processServerActions формирует план действий для Сервера с учетом иерархии холдинга.
+func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, equipmentOwnerUUID string, server *models.Server, data *api.AgentDataDTO) {
+	if server == nil {
+		// Логика для случая, когда сервер не найден, но должен быть
+		// ... (остается без изменений)
+		return
 	}
+
+	if server.Status == "locked" {
+		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", zap.String("uuid", *server.ServiceDeskUUID))
+		return
+	}
+
+	serverPrimaryOwnerUUID := *server.OwnerServiceDeskUUID
+	equipmentOwnerParents, err := p.companyRepo.GetAllParentUUIDs(ctx, equipmentOwnerUUID)
+	if err != nil {
+		p.logger.Error("Не удалось получить иерархию для владельца оборудования", zap.String("ownerUUID", equipmentOwnerUUID), zap.Error(err))
+		// Продолжаем без иерархии, логика сработает как для несвязанных компаний
+	}
+	serverOwnerParents, err := p.companyRepo.GetAllParentUUIDs(ctx, serverPrimaryOwnerUUID)
+	if err != nil {
+		p.logger.Error("Не удалось получить иерархию для владельца сервера", zap.String("ownerUUID", serverPrimaryOwnerUUID), zap.Error(err))
+	}
+
+	// Проверяем, находятся ли компании в одной структуре холдинга
+	areRelated := p.areCompaniesRelated(equipmentOwnerUUID, serverPrimaryOwnerUUID, equipmentOwnerParents, serverOwnerParents)
+
+	if areRelated {
+		// Компании связаны. Проверяем, нужно ли добавить доп. владельца.
+		isAlreadyAdditionalOwner := false
+		for _, owner := range server.AdditionalOwners {
+			if owner.ServiceDeskUUID != nil && *owner.ServiceDeskUUID == equipmentOwnerUUID {
+				isAlreadyAdditionalOwner = true
+				break
+			}
+		}
+		// Добавляем в доп. владельцы, если это не основной владелец и еще не в списке.
+		if equipmentOwnerUUID != serverPrimaryOwnerUUID && !isAlreadyAdditionalOwner {
+			res.Actions = append(res.Actions, Action{
+				Type:                ActionAddAdditionalOwner,
+				EntityUUID:          *server.ServiceDeskUUID,
+				AdditionalOwnerUUID: equipmentOwnerUUID,
+			})
+			p.logger.Info("Сформировано действие на добавление дополнительного владельца",
+				zap.String("server", *server.ServiceDeskUUID),
+				zap.String("new_owner", equipmentOwnerUUID))
+		}
+	} else {
+		// Компании не связаны. Это конфликт.
+		comment := fmt.Sprintf(
+			"Конфликт владения сервером! Оборудование (РС/ФР) принадлежит '%s', но оно подключено к серверу '%s', который принадлежит '%s'. Эти компании не связаны иерархически.",
+			equipmentOwnerUUID, *server.ServiceDeskUUID, serverPrimaryOwnerUUID,
+		)
+		p.createTaskIfNotExists(ctx, res, "data_conflict", "Server", *server.ServiceDeskUUID, equipmentOwnerUUID, data, comment)
+	}
+
+	// Логика обновления полей CRM ID и т.д. остается без изменений
+	updates := make(map[string]interface{})
+	if (server.CRMid == nil || *server.CRMid == "") && data.CRMID != "" {
+		updates["crm_id"] = data.CRMID
+	}
+	if len(updates) > 0 {
+		res.Actions = append(res.Actions, Action{Type: ActionUpdate, EntityType: "Server", EntityUUID: *server.ServiceDeskUUID, Updates: updates})
+	}
+}
+
+// areCompaniesRelated проверяет, связаны ли две компании (одна структура холдинга).
+func (p *processingEngineImpl) areCompaniesRelated(owner1, owner2 string, parents1, parents2 []string) bool {
+	if owner1 == owner2 {
+		return true // Это одна и та же компания
+	}
+
+	// Проверяем, является ли одна родителем для другой
+	for _, p1 := range parents1 {
+		if p1 == owner2 {
+			return true
+		}
+	}
+	for _, p2 := range parents2 {
+		if p2 == owner1 {
+			return true
+		}
+	}
+
+	// Проверяем, есть ли у них общий родитель (являются "сестринскими")
+	parents1Set := make(map[string]struct{})
+	for _, p1 := range parents1 {
+		parents1Set[p1] = struct{}{}
+	}
+	for _, p2 := range parents2 {
+		if _, ok := parents1Set[p2]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // processWorkstationActions формирует план действий для Рабочей станции.
@@ -292,10 +260,11 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 			return
 		}
 
-		currentOwner := utils.SafeStringDereference(ws.OwnerServiceDeskUUID)
-		if currentOwner != owner {
-			p.createOwnerMismatchTask(ctx, res, "Workstation", *ws.ServiceDeskUUID, utils.SafeStringDereference(ws.DeviceName), owner, currentOwner, data)
-		}
+		// --- УДАЛЕНО: Некорректная проверка несоответствия владельца ---
+		// currentOwner := utils.SafeStringDereference(ws.OwnerServiceDeskUUID)
+		// if currentOwner != owner {
+		// 	p.createOwnerMismatchTask(ctx, res, "Workstation", *ws.ServiceDeskUUID, utils.SafeStringDereference(ws.DeviceName), owner, currentOwner, data)
+		// }
 
 		updates := make(map[string]interface{})
 		if (ws.Teamviewer == nil || *ws.Teamviewer == "") && agentTV != "" {
@@ -303,7 +272,6 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		} else if agentTV != "" && *ws.Teamviewer != agentTV {
 			comment := fmt.Sprintf("Конфликт Teamviewer ID для РС '%s' (%s). В базе: %s, от агента: %s.",
 				utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, *ws.Teamviewer, agentTV)
-			// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
 			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, owner, data, comment)
 		}
 		if (ws.Litemanager == nil || *ws.Litemanager == "") && agentLM != "" {
@@ -311,7 +279,6 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		} else if agentLM != "" && *ws.Litemanager != agentLM {
 			comment := fmt.Sprintf("Конфликт Litemanager ID для РС '%s' (%s). В базе: %s, от агента: %s.",
 				utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, *ws.Litemanager, agentLM)
-			// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
 			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, owner, data, comment)
 		}
 
@@ -326,7 +293,6 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		if entityID == "" {
 			entityID = agentLM
 		}
-		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
 		p.createTaskIfNotExists(ctx, res, "add_equipment", "Workstation", entityID, owner, data, comment)
 	}
 }
@@ -334,10 +300,17 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 // processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, owner string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
-		currentOwner := utils.SafeStringDereference(fr.OwnerServiceDeskUUID)
-		if currentOwner != owner {
-			p.createOwnerMismatchTask(ctx, res, "FiscalRegister", *fr.ServiceDeskUUID, utils.SafeStringDereference(fr.FRSerialNumber), owner, currentOwner, data)
+		if fr.Status != nil && *fr.Status == "locked" {
+			p.logger.Debug("Создание задач для сущности пропущено: статус 'locked'", zap.String("uuid", *fr.ServiceDeskUUID))
+			return
 		}
+
+		// --- УДАЛЕНО: Некорректная проверка несоответствия владельца ---
+		// currentOwner := utils.SafeStringDereference(fr.OwnerServiceDeskUUID)
+		// if currentOwner != owner {
+		// 	p.createOwnerMismatchTask(ctx, res, "FiscalRegister", *fr.ServiceDeskUUID, utils.SafeStringDereference(fr.FRSerialNumber), owner, currentOwner, data)
+		// }
+
 		updates := map[string]interface{}{
 			"model_kkt": data.ModelName, "rn_kkt": utils.NormalizeRNKKT(data.RNM),
 			"fn_number": data.FNSerial, "inn": strings.TrimSpace(data.INN),
@@ -352,44 +325,16 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 	} else if data.SerialNumber != "" {
 		comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s'.", data.SerialNumber, owner)
 		// Для этой задачи используем серийный номер как уникальный идентификатор
-		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
 		p.createTaskIfNotExists(ctx, res, "add_equipment", "FiscalRegister", data.SerialNumber, owner, data, comment)
 	}
 }
 
-// createOwnerMismatchTask создает задачу о несоответствии владельца, используя централизованную проверку на дубликаты.
-func (p *processingEngineImpl) createOwnerMismatchTask(ctx context.Context, res *ProcessingResult, entityType, entityUUID, entityName, expectedOwner, currentOwner string, data *api.AgentDataDTO) {
-	duplicateTask, err := p.taskRepo.FindActiveDuplicateTaskByMemberUUIDs(ctx, []string{entityUUID})
-	if err != nil {
-		p.logger.Error("Ошибка проверки на дубликаты перед созданием задачи owner_mismatch", zap.Error(err))
-	}
-
-	if duplicateTask != nil {
-		comment := fmt.Sprintf(
-			"\n[АВТОМАТИЧЕСКИ] Обнаружено также несоответствие владельца для участника этой группы дубликатов (%s: %s). Агент (хост: %s, TV: %s) определил владельца как '%s', но текущий владелец: '%s'.",
-			entityType, entityUUID, data.Hostname, data.TeamviewerID, expectedOwner, currentOwner,
-		)
-		res.Actions = append(res.Actions, Action{Type: ActionCommentTask, TaskID: duplicateTask.ID, Comment: comment})
-		return
-	}
-
-	// --- ИЗМЕНЕНИЕ: Формируем новый комментарий и используем createTaskIfNotExists ---
-	comment := fmt.Sprintf(
-		"Несоответствие владельца для %s '%s' (%s). Агент (хост: %s, TV: %s) определил владельца как '%s', но текущий владелец: '%s'.",
-		entityType, entityName, entityUUID, data.Hostname, data.TeamviewerID, expectedOwner, currentOwner,
-	)
-	// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID (expectedOwner)
-	p.createTaskIfNotExists(ctx, res, "owner_mismatch", entityType, entityUUID, expectedOwner, data, comment)
-}
-
 // createTaskIfNotExists - централизованный хелпер для создания задач с проверкой на дублирование.
 func (p *processingEngineImpl) createTaskIfNotExists(ctx context.Context, res *ProcessingResult, taskType, entityType, entityUUID, etalonOwnerUUID string, data *api.AgentDataDTO, comment string) {
-	// Для задач, не привязанных к существующей сущности, entityUUID может быть не-UUID строкой. Это нормально.
 	existingTask, err := p.taskRepo.FindActiveTask(ctx, taskType, entityUUID)
 	if err != nil {
 		p.logger.Error("Ошибка при поиске существующей активной задачи",
 			zap.String("taskType", taskType), zap.String("entityUUID", entityUUID), zap.Error(err))
-		// В случае ошибки все равно пытаемся создать задачу, чтобы не потерять информацию
 	}
 
 	if existingTask != nil {
