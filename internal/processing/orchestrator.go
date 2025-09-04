@@ -226,17 +226,20 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 	log := o.logger.With(zap.String("metaClass", payload.MetaClass), zap.String("uuid", payload.UUID))
 	var updates map[string]interface{}
 	var diffLog []zap.Field
-	var currentEntity interface{}
+	var currentEntity, resolvedEntityData interface{}
 	var isNewEntity bool
+	var entityType string
 	source := "servicedesk_gateway"
 
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		switch payload.MetaClass {
 		case "ou$company":
+			entityType = "Company"
 			newData, mapErr := services.DataToCompany(ctx, payload.Data, log)
 			if mapErr != nil {
 				return mapErr
 			}
+			resolvedEntityData = newData
 			currentData, getErr := o.companyRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
 				return fmt.Errorf("не удалось получить текущую компанию: %w", getErr)
@@ -250,10 +253,12 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			updates, diffLog = getCompanyDiff(currentData, newData)
 
 		case "objectBase$Server":
+			entityType = "Server"
 			newData, mapErr := services.DataToServer(payload.Data)
 			if mapErr != nil {
 				return mapErr
 			}
+			resolvedEntityData = newData
 			currentData, getErr := o.serverRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
 				return fmt.Errorf("не удалось получить текущий сервер: %w", getErr)
@@ -267,10 +272,12 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			updates, diffLog = getServerDiff(currentData, newData)
 
 		case "objectBase$Workstation":
+			entityType = "Workstation"
 			newData, mapErr := services.DataToWorkstation(payload.Data)
 			if mapErr != nil {
 				return mapErr
 			}
+			resolvedEntityData = newData
 			currentData, getErr := o.workstationRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
 				return fmt.Errorf("не удалось получить текущую станцию: %w", getErr)
@@ -284,10 +291,12 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			updates, diffLog = getWorkstationDiff(currentData, newData)
 
 		case "objectBase$FR":
+			entityType = "FiscalRegister"
 			newData, mapErr := services.DataToFiscalRegister(payload.Data)
 			if mapErr != nil {
 				return mapErr
 			}
+			resolvedEntityData = newData
 			currentData, getErr := o.frRepo.GetByUUIDUnscoped(ctx, payload.UUID)
 			if getErr != nil {
 				return fmt.Errorf("не удалось получить текущий ФР: %w", getErr)
@@ -309,10 +318,17 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		}
 		return nil
 	})
+
 	if err != nil {
 		log.Error("Ошибка в транзакции обработки обновления", zap.Error(err))
 		return
 	}
+
+	// --- НОВЫЙ БЛОК: Запуск асинхронной проверки на решение задач ---
+	if resolvedEntityData != nil {
+		go o.resolveTasksOnUpdate(context.Background(), entityType, payload.UUID, resolvedEntityData)
+	}
+
 	if isNewEntity {
 		log.Info("Новая сущность успешно создана.")
 		return
@@ -614,6 +630,85 @@ func (o *Orchestrator) handleServerPollingFailed(ctx context.Context, event even
 		log.Error("Не удалось обновить статус сервера после неудачного опроса", zap.Error(err))
 	} else {
 		log.Info("Статус сервера обновлен после неудачного опроса", zap.String("new_status", payload.NewStatus))
+	}
+}
+
+// resolveTasksOnUpdate проверяет, не решает ли создание/обновление сущности какие-либо активные задачи.
+func (o *Orchestrator) resolveTasksOnUpdate(ctx context.Context, entityType, entityUUID string, entityData interface{}) {
+	log := o.logger.With(zap.String("entityType", entityType), zap.String("entityUUID", entityUUID))
+	var tasksToResolve []models.ReconciliationTask
+	var potentialTaskUUIDs []string
+
+	// 1. Собираем все возможные идентификаторы, по которым могли быть созданы задачи
+	switch v := entityData.(type) {
+	case *models.Workstation:
+		potentialTaskUUIDs = append(potentialTaskUUIDs, *v.ServiceDeskUUID)
+		if v.Teamviewer != nil && *v.Teamviewer != "" {
+			potentialTaskUUIDs = append(potentialTaskUUIDs, *v.Teamviewer)
+		}
+		if v.Litemanager != nil && *v.Litemanager != "" {
+			potentialTaskUUIDs = append(potentialTaskUUIDs, *v.Litemanager)
+		}
+	case *models.FiscalRegister:
+		potentialTaskUUIDs = append(potentialTaskUUIDs, *v.ServiceDeskUUID)
+		if v.FRSerialNumber != nil && *v.FRSerialNumber != "" {
+			potentialTaskUUIDs = append(potentialTaskUUIDs, *v.FRSerialNumber)
+		}
+	default:
+		return // Для других типов сущностей пока нет логики авто-решения
+	}
+
+	if len(potentialTaskUUIDs) == 0 {
+		return
+	}
+
+	// 2. Ищем все активные задачи, связанные с этими идентификаторами
+	err := o.db.WithContext(ctx).
+		Where("entity_uuid IN ? AND status = 'new'", potentialTaskUUIDs).
+		Find(&tasksToResolve).Error
+	if err != nil {
+		log.Error("Ошибка при поиске задач для автоматического решения", zap.Error(err))
+		return
+	}
+
+	if len(tasksToResolve) == 0 {
+		return
+	}
+
+	// 3. Проверяем каждую найденную задачу и решаем, если условия выполнены
+	for _, task := range tasksToResolve {
+		shouldResolve := false
+		switch task.TaskType {
+		case "add_equipment":
+			// Если мы нашли задачу на добавление, а сущность уже существует, значит, задача решена.
+			shouldResolve = true
+		case "owner_mismatch":
+			// Проверяем, совпадает ли теперь владелец с тем, что был в задаче.
+			var details struct {
+				EtalonOwnerUUID string `json:"etalon_owner_uuid"`
+			}
+			if json.Unmarshal(task.Details, &details) == nil && details.EtalonOwnerUUID != "" {
+				if ws, ok := entityData.(*models.Workstation); ok && *ws.OwnerServiceDeskUUID == details.EtalonOwnerUUID {
+					shouldResolve = true
+				}
+				if fr, ok := entityData.(*models.FiscalRegister); ok && *fr.OwnerServiceDeskUUID == details.EtalonOwnerUUID {
+					shouldResolve = true
+				}
+			}
+		}
+
+		if shouldResolve {
+			err := o.db.WithContext(ctx).Model(&task).Updates(map[string]interface{}{
+				"status":  "resolved",
+				"comment": gorm.Expr("comment || ?", "\n[АВТОМАТИЧЕСКИ] Задача решена после синхронизации с ServiceDesk."),
+			}).Error
+
+			if err != nil {
+				log.Error("Не удалось автоматически обновить статус задачи", zap.Uint("taskID", task.ID), zap.Error(err))
+			} else {
+				log.Info("Задача автоматически решена", zap.Uint("taskID", task.ID), zap.String("taskType", task.TaskType))
+			}
+		}
 	}
 }
 

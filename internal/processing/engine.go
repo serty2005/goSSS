@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/validators"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
@@ -82,6 +83,17 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 	}
 	log := p.logger.With(zap.String("log_identifier", logIdentifier))
 
+	// --- НОВЫЙ ФИЛЬТР: Проверка на возраст данных ---
+	currentTime := utils.ParseAgentTime(data.CurrentTime)
+	if currentTime == nil {
+		log.Warn("Не удалось распознать 'current_time' из данных агента. Обработка прервана.")
+		return result
+	}
+	if currentTime.Before(time.Now().AddDate(0, 0, -60)) {
+		log.Info("Данные от агента пропущены, так как они старше 60 дней.", zap.Time("current_time", *currentTime))
+		return result
+	}
+
 	unidentifiedTaskUUID := fmt.Sprintf("%s@%s", data.Hostname, data.URLRms)
 
 	mainMatch := p.matcherSvc.FindEntityByAgentData(ctx, data)
@@ -96,7 +108,6 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 
 	etalonOwnerUUID, err := p.getEquipmentOwnerUUID(foundWS, foundFR)
 	if err != nil {
-		// Если не найдено ни РС, ни ФР, но найден сервер, владельцем считаем владельца сервера
 		if foundServer != nil && foundServer.OwnerServiceDeskUUID != nil {
 			etalonOwnerUUID = *foundServer.OwnerServiceDeskUUID
 		} else {
@@ -158,6 +169,16 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 		return
 	}
 
+	// --- НОВЫЙ ФИЛЬТР: Проверка на актуальность при обновлении ---
+	currentTime := utils.ParseAgentTime(data.CurrentTime)
+	if currentTime != nil && server.LastModifiedDate != nil && currentTime.Before(*server.LastModifiedDate) {
+		p.logger.Info("Обновление сервера пропущено: данные от агента старше, чем запись в БД",
+			zap.String("server_uuid", *server.ServiceDeskUUID),
+			zap.Time("agent_time", *currentTime),
+			zap.Time("db_time", *server.LastModifiedDate))
+		return
+	}
+
 	if server.Status == "locked" {
 		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", zap.String("uuid", *server.ServiceDeskUUID))
 		return
@@ -167,18 +188,15 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	equipmentOwnerParents, err := p.companyRepo.GetAllParentUUIDs(ctx, equipmentOwnerUUID)
 	if err != nil {
 		p.logger.Error("Не удалось получить иерархию для владельца оборудования", zap.String("ownerUUID", equipmentOwnerUUID), zap.Error(err))
-		// Продолжаем без иерархии, логика сработает как для несвязанных компаний
 	}
 	serverOwnerParents, err := p.companyRepo.GetAllParentUUIDs(ctx, serverPrimaryOwnerUUID)
 	if err != nil {
 		p.logger.Error("Не удалось получить иерархию для владельца сервера", zap.String("ownerUUID", serverPrimaryOwnerUUID), zap.Error(err))
 	}
 
-	// Проверяем, находятся ли компании в одной структуре холдинга
 	areRelated := p.areCompaniesRelated(equipmentOwnerUUID, serverPrimaryOwnerUUID, equipmentOwnerParents, serverOwnerParents)
 
 	if areRelated {
-		// Компании связаны. Проверяем, нужно ли добавить доп. владельца.
 		isAlreadyAdditionalOwner := false
 		for _, owner := range server.AdditionalOwners {
 			if owner.ServiceDeskUUID != nil && *owner.ServiceDeskUUID == equipmentOwnerUUID {
@@ -186,7 +204,6 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 				break
 			}
 		}
-		// Добавляем в доп. владельцы, если это не основной владелец и еще не в списке.
 		if equipmentOwnerUUID != serverPrimaryOwnerUUID && !isAlreadyAdditionalOwner {
 			res.Actions = append(res.Actions, Action{
 				Type:                ActionAddAdditionalOwner,
@@ -198,7 +215,6 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 				zap.String("new_owner", equipmentOwnerUUID))
 		}
 	} else {
-		// Компании не связаны. Это конфликт.
 		comment := fmt.Sprintf(
 			"Конфликт владения сервером! Оборудование (РС/ФР) принадлежит '%s', но оно подключено к серверу '%s', который принадлежит '%s'. Эти компании не связаны иерархически.",
 			equipmentOwnerUUID, *server.ServiceDeskUUID, serverPrimaryOwnerUUID,
@@ -206,7 +222,6 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 		p.createTaskIfNotExists(ctx, res, "data_conflict", "Server", *server.ServiceDeskUUID, equipmentOwnerUUID, data, comment)
 	}
 
-	// Логика обновления полей CRM ID и т.д. остается без изменений
 	updates := make(map[string]interface{})
 	if (server.CRMid == nil || *server.CRMid == "") && data.CRMID != "" {
 		updates["crm_id"] = data.CRMID
@@ -254,17 +269,20 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
 
 	if ws != nil {
-		// Пропускаем всю логику, если оборудование "заморожено"
+		// --- НОВЫЙ ФИЛЬТР: Проверка на актуальность при обновлении ---
+		currentTime := utils.ParseAgentTime(data.CurrentTime)
+		if currentTime != nil && ws.LastModifiedDate != nil && currentTime.Before(*ws.LastModifiedDate) {
+			p.logger.Info("Обновление рабочей станции пропущено: данные от агента старше, чем запись в БД",
+				zap.String("ws_uuid", *ws.ServiceDeskUUID),
+				zap.Time("agent_time", *currentTime),
+				zap.Time("db_time", *ws.LastModifiedDate))
+			return
+		}
+
 		if ws.Status != nil && *ws.Status == "locked" {
 			p.logger.Debug("Создание задач для сущности пропущено: статус 'locked'", zap.String("uuid", *ws.ServiceDeskUUID))
 			return
 		}
-
-		// --- УДАЛЕНО: Некорректная проверка несоответствия владельца ---
-		// currentOwner := utils.SafeStringDereference(ws.OwnerServiceDeskUUID)
-		// if currentOwner != owner {
-		// 	p.createOwnerMismatchTask(ctx, res, "Workstation", *ws.ServiceDeskUUID, utils.SafeStringDereference(ws.DeviceName), owner, currentOwner, data)
-		// }
 
 		updates := make(map[string]interface{})
 		if (ws.Teamviewer == nil || *ws.Teamviewer == "") && agentTV != "" {
@@ -288,7 +306,6 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 
 	} else if agentTV != "" || agentLM != "" {
 		comment := fmt.Sprintf("Добавить новую рабочую станцию для владельца '%s'. TV: %s, LM: %s.", owner, agentTV, agentLM)
-		// Для этой задачи используем TV или LM ID как уникальный идентификатор
 		entityID := agentTV
 		if entityID == "" {
 			entityID = agentLM
@@ -300,20 +317,26 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 // processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, owner string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
+		// --- НОВЫЙ ФИЛЬТР: Проверка на актуальность при обновлении ---
+		currentTime := utils.ParseAgentTime(data.CurrentTime)
+		if currentTime != nil && fr.LastModifiedDate != nil && currentTime.Before(*fr.LastModifiedDate) {
+			p.logger.Info("Обновление ФР пропущено: данные от агента старше, чем запись в БД",
+				zap.String("fr_uuid", *fr.ServiceDeskUUID),
+				zap.Time("agent_time", *currentTime),
+				zap.Time("db_time", *fr.LastModifiedDate))
+			return
+		}
+
 		if fr.Status != nil && *fr.Status == "locked" {
 			p.logger.Debug("Создание задач для сущности пропущено: статус 'locked'", zap.String("uuid", *fr.ServiceDeskUUID))
 			return
 		}
 
-		// --- УДАЛЕНО: Некорректная проверка несоответствия владельца ---
-		// currentOwner := utils.SafeStringDereference(fr.OwnerServiceDeskUUID)
-		// if currentOwner != owner {
-		// 	p.createOwnerMismatchTask(ctx, res, "FiscalRegister", *fr.ServiceDeskUUID, utils.SafeStringDereference(fr.FRSerialNumber), owner, currentOwner, data)
-		// }
-
 		updates := map[string]interface{}{
-			"model_kkt": data.ModelName, "rn_kkt": utils.NormalizeRNKKT(data.RNM),
-			"fn_number": data.FNSerial, "inn": strings.TrimSpace(data.INN),
+			"model_kkt":      data.ModelName,
+			"rn_kkt":         utils.NormalizeRNKKT(data.RNM),
+			"fn_number":      data.FNSerial,
+			"inn":            strings.TrimSpace(data.INN),
 			"ffd":            utils.FormatFFDVersion(data.FFDVersion),
 			"fn_expire_date": utils.ParseAgentTime(data.DateTimeEnd),
 		}
@@ -324,7 +347,6 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 
 	} else if data.SerialNumber != "" {
 		comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s'.", data.SerialNumber, owner)
-		// Для этой задачи используем серийный номер как уникальный идентификатор
 		p.createTaskIfNotExists(ctx, res, "add_equipment", "FiscalRegister", data.SerialNumber, owner, data, comment)
 	}
 }
