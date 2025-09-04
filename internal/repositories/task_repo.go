@@ -10,6 +10,7 @@ import (
 
 // TaskRepo определяет интерфейс для работы с хранилищем задач.
 type TaskRepo interface {
+	GetByID(ctx context.Context, id uint) (*models.ReconciliationTask, error) // <-- ДОБАВЛЕНО
 	FindActiveDuplicateTaskByMemberUUIDs(ctx context.Context, uuids []string) (*models.ReconciliationTask, error)
 	FindActiveTask(ctx context.Context, taskType, entityUUID string) (*models.ReconciliationTask, error)
 }
@@ -72,4 +73,14 @@ func (r *taskRepo) FindActiveDuplicateTaskByMemberUUIDs(ctx context.Context, uui
 		return nil, err
 	}
 	return &task, nil
+}
+
+// GetByID находит задачу по ее первичному ключу (ID).
+func (r *taskRepo) GetByID(ctx context.Context, id uint) (*models.ReconciliationTask, error) {
+	var task models.ReconciliationTask
+	err := r.db.WithContext(ctx).First(&task, id).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &task, err
 }

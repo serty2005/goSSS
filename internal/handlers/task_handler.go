@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"etalon-server/internal/api"
 	"etalon-server/internal/models"
+	"etalon-server/internal/services"
 	"fmt"
 	"net/http"
 	"sort"
@@ -17,15 +19,17 @@ import (
 
 // TaskHandler обрабатывает запросы, связанные с задачами сверки и поиском дубликатов.
 type TaskHandler struct {
-	logger *zap.Logger
-	db     *gorm.DB
+	logger        *zap.Logger
+	db            *gorm.DB
+	resolutionSvc services.TaskResolutionService // <-- ДОБАВЛЕНО ПОЛЕ
 }
 
 // NewTaskHandler создает новый экземпляр обработчика.
-func NewTaskHandler(logger *zap.Logger, db *gorm.DB) *TaskHandler {
+func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.TaskResolutionService) *TaskHandler {
 	return &TaskHandler{
-		logger: logger,
-		db:     db,
+		logger:        logger,
+		db:            db,
+		resolutionSvc: resolutionSvc,
 	}
 }
 
@@ -69,7 +73,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	RespondWithJSON(w, http.StatusOK, tasks)
 }
 
-// ResolveTask изменяет статус задачи.
+// ResolveTask изменяет статус задачи и выполняет связанные с решением действия.
 func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 	taskIDStr := chi.URLParam(r, "id")
 	taskID, err := strconv.ParseUint(taskIDStr, 10, 32)
@@ -78,45 +82,34 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req api.ResolveTaskRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var dto api.ResolveTaskRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		RespondWithError(w, http.StatusBadRequest, "Некорректное тело запроса")
 		return
 	}
 
-	if req.Status == "" {
+	if dto.Status == "" {
 		RespondWithError(w, http.StatusBadRequest, "Поле 'status' обязательно для заполнения")
 		return
 	}
 
-	updates := map[string]interface{}{"status": req.Status}
-	if req.Comment != "" {
-		updates["comment"] = gorm.Expr("comment || '\n' || ?", req.Comment)
-	}
-
-	var task models.ReconciliationTask
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&models.ReconciliationTask{}).Where("id = ?", taskID).Updates(updates)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		return tx.First(&task, taskID).Error
-	})
-
+	updatedTask, err := h.resolutionSvc.Resolve(r.Context(), uint(taskID), &dto)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		switch {
+		case errors.Is(err, services.ErrTaskNotFound):
 			RespondWithError(w, http.StatusNotFound, "Задача не найдена")
-		} else {
-			h.logger.Error("Ошибка обновления задачи", zap.Uint64("taskID", taskID), zap.Error(err))
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		case errors.Is(err, services.ErrTaskAlreadyDone):
+			RespondWithError(w, http.StatusConflict, "Задача уже была решена или отклонена")
+		case errors.Is(err, services.ErrInvalidPayload):
+			RespondWithError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.logger.Error("Ошибка при решении задачи", zap.Uint64("taskID", taskID), zap.Error(err))
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при решении задачи")
 		}
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, task)
+	RespondWithJSON(w, http.StatusOK, updatedTask)
 }
 
 // GetDuplicates находит и возвращает группы дубликатов в формате JSON.

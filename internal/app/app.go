@@ -122,6 +122,7 @@ func New() (*Application, error) {
 	ftpClient := services.NewFTPClient(cfg, appLogger)
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
 	authService := services.NewAuthService(cfg, userRepo)
+	taskResolutionService := services.NewTaskResolutionService(appLogger, database, taskRepo, serverRepo, workstationRepo, frRepo)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
 
 	// Создаем движок, передавая ему matcher
@@ -139,7 +140,7 @@ func New() (*Application, error) {
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
 	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
-	taskHandler := handlers.NewTaskHandler(appLogger, database)
+	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
 	authHandler := handlers.NewAuthHandler(appLogger, authService)

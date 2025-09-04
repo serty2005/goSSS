@@ -85,8 +85,8 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 
 	mainMatch := p.matcherSvc.FindEntityByAgentData(ctx, data)
 	if mainMatch == nil {
-		// Для new_client используем SN как уникальный идентификатор, чтобы избежать дублей
-		p.createTaskIfNotExists(ctx, result, "new_client", "", unidentifiedTaskUUID, data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
+		// ИСПРАВЛЕНО: Добавлен пустой etalonOwnerUUID
+		p.createTaskIfNotExists(ctx, result, "new_client", "", unidentifiedTaskUUID, "", data, "Не удалось идентифицировать оборудование. Требуется создать нового клиента и привязать оборудование.")
 		return result
 	}
 
@@ -96,7 +96,8 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, data *api.A
 
 	etalonOwnerUUID, err := p.determineEtalonOwner(ctx, foundServer, foundWS, foundFR)
 	if err != nil {
-		p.createTaskIfNotExists(ctx, result, "data_conflict", "", unidentifiedTaskUUID, data, err.Error())
+		// ИСПРАВЛЕНО: Добавлен пустой etalonOwnerUUID
+		p.createTaskIfNotExists(ctx, result, "data_conflict", "", unidentifiedTaskUUID, "", data, err.Error())
 		return result
 	}
 
@@ -274,7 +275,8 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 		if entityID == "" {
 			entityID = data.URLRms
 		}
-		p.createTaskIfNotExists(ctx, res, "owner_check_required", "Server", entityID, data, comment)
+		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
+		p.createTaskIfNotExists(ctx, res, "owner_check_required", "Server", entityID, owner, data, comment)
 	}
 }
 
@@ -301,14 +303,16 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		} else if agentTV != "" && *ws.Teamviewer != agentTV {
 			comment := fmt.Sprintf("Конфликт Teamviewer ID для РС '%s' (%s). В базе: %s, от агента: %s.",
 				utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, *ws.Teamviewer, agentTV)
-			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, data, comment)
+			// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
+			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, owner, data, comment)
 		}
 		if (ws.Litemanager == nil || *ws.Litemanager == "") && agentLM != "" {
 			updates["litemanager"] = agentLM
 		} else if agentLM != "" && *ws.Litemanager != agentLM {
 			comment := fmt.Sprintf("Конфликт Litemanager ID для РС '%s' (%s). В базе: %s, от агента: %s.",
 				utils.SafeStringDereference(ws.DeviceName), *ws.ServiceDeskUUID, *ws.Litemanager, agentLM)
-			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, data, comment)
+			// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
+			p.createTaskIfNotExists(ctx, res, "data_conflict", "Workstation", *ws.ServiceDeskUUID, owner, data, comment)
 		}
 
 		if len(updates) > 0 {
@@ -322,7 +326,8 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		if entityID == "" {
 			entityID = agentLM
 		}
-		p.createTaskIfNotExists(ctx, res, "add_equipment", "Workstation", entityID, data, comment)
+		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
+		p.createTaskIfNotExists(ctx, res, "add_equipment", "Workstation", entityID, owner, data, comment)
 	}
 }
 
@@ -347,7 +352,8 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 	} else if data.SerialNumber != "" {
 		comment := fmt.Sprintf("Добавить новый ФР (СН: %s) для владельца '%s'.", data.SerialNumber, owner)
 		// Для этой задачи используем серийный номер как уникальный идентификатор
-		p.createTaskIfNotExists(ctx, res, "add_equipment", "FiscalRegister", data.SerialNumber, data, comment)
+		// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID
+		p.createTaskIfNotExists(ctx, res, "add_equipment", "FiscalRegister", data.SerialNumber, owner, data, comment)
 	}
 }
 
@@ -372,11 +378,12 @@ func (p *processingEngineImpl) createOwnerMismatchTask(ctx context.Context, res 
 		"Несоответствие владельца для %s '%s' (%s). Агент (хост: %s, TV: %s) определил владельца как '%s', но текущий владелец: '%s'.",
 		entityType, entityName, entityUUID, data.Hostname, data.TeamviewerID, expectedOwner, currentOwner,
 	)
-	p.createTaskIfNotExists(ctx, res, "owner_mismatch", entityType, entityUUID, data, comment)
+	// ИСПРАВЛЕНО: Добавлен etalonOwnerUUID (expectedOwner)
+	p.createTaskIfNotExists(ctx, res, "owner_mismatch", entityType, entityUUID, expectedOwner, data, comment)
 }
 
 // createTaskIfNotExists - централизованный хелпер для создания задач с проверкой на дублирование.
-func (p *processingEngineImpl) createTaskIfNotExists(ctx context.Context, res *ProcessingResult, taskType, entityType, entityUUID string, data *api.AgentDataDTO, comment string) {
+func (p *processingEngineImpl) createTaskIfNotExists(ctx context.Context, res *ProcessingResult, taskType, entityType, entityUUID, etalonOwnerUUID string, data *api.AgentDataDTO, comment string) {
 	// Для задач, не привязанных к существующей сущности, entityUUID может быть не-UUID строкой. Это нормально.
 	existingTask, err := p.taskRepo.FindActiveTask(ctx, taskType, entityUUID)
 	if err != nil {
@@ -391,13 +398,19 @@ func (p *processingEngineImpl) createTaskIfNotExists(ctx context.Context, res *P
 		return
 	}
 
-	task := p.buildTask(taskType, entityType, entityUUID, data, comment)
+	task := p.buildTask(taskType, entityType, entityUUID, etalonOwnerUUID, data, comment)
 	res.Actions = append(res.Actions, Action{Type: ActionCreateTask, Task: task})
 }
 
 // buildTask - универсальный конструктор задач.
-func (p *processingEngineImpl) buildTask(taskType, entityType, entityUUID string, agentData *api.AgentDataDTO, comment string) *models.ReconciliationTask {
-	details, _ := json.Marshal(agentData)
+func (p *processingEngineImpl) buildTask(taskType, entityType, entityUUID, etalonOwnerUUID string, agentData *api.AgentDataDTO, comment string) *models.ReconciliationTask {
+	detailsMap := make(map[string]interface{})
+	detailsMap["agent_data"] = agentData
+	if etalonOwnerUUID != "" {
+		detailsMap["etalon_owner_uuid"] = etalonOwnerUUID
+	}
+
+	details, _ := json.Marshal(detailsMap)
 	return &models.ReconciliationTask{
 		TaskType:   taskType,
 		EntityType: entityType,

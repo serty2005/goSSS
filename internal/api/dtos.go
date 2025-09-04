@@ -17,8 +17,9 @@ type CompanyCreateDTO struct {
 
 // ResolveTaskRequestDTO - тело запроса для решения задачи.
 type ResolveTaskRequestDTO struct {
-	Status  string `json:"status"`
-	Comment string `json:"comment,omitempty"`
+	Status            string                 `json:"status"` // 'resolved', 'rejected', и т.д.
+	Comment           string                 `json:"comment,omitempty"`
+	ResolutionPayload map[string]interface{} `json:"resolution_payload,omitempty"` // Данные для выполнения действия
 }
 
 // DuplicateGroupDTO представляет группу дубликатов для ответа API.
