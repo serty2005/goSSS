@@ -198,6 +198,7 @@ func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context
 				case <-ctx.Done():
 					return
 				default:
+					log.Debug("Получение полных данных для сущности", zap.String("uuid", uuid))
 					details, err := g.sdClient.FetchEntityDetails(ctx, uuid, metaClass)
 					if err != nil {
 						log.Error("Не удалось получить детали для сущности", zap.String("uuid", uuid), zap.Error(err))

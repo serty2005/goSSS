@@ -3,11 +3,13 @@ package gateways
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"etalon-server/internal/api"
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/models"
 	"etalon-server/internal/services"
+	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"os"
@@ -66,6 +68,7 @@ func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
 		g.logger.Error("Не удалось прочитать директорию с кэшем, цикл прерван", zap.Error(err))
 		return
 	}
+	publishedEvents := 0
 	for _, file := range localFiles {
 		if file.IsDir() || !strings.HasSuffix(strings.ToLower(file.Name()), ".json") {
 			continue
@@ -74,42 +77,96 @@ func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			g.processFile(ctx, file.Name())
+			if g.processFile(ctx, file.Name()) {
+				publishedEvents++
+			}
 		}
 	}
-	g.logger.Info("Цикл сверки данных с FTP завершен.")
+	g.logger.Info("Цикл сверки данных с FTP завершен.", zap.Int("published_events", publishedEvents))
 }
 
-func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) {
+// processFile обрабатывает один файл из кэша.
+// Возвращает true, если было опубликовано событие, иначе false.
+func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) bool {
 	log := g.logger.With(zap.String("file", fileName))
 	localFilePath := filepath.Join(g.cfg.FTPCachePath, fileName)
 
-	if processed, err := g.isAlreadyProcessed(ctx, fileName); err != nil {
-		log.Error("Ошибка проверки статуса файла в БД", zap.Error(err))
-		return
-	} else if processed {
-		return
+	// 1. Получаем актуальную информацию о файле
+	fileInfo, err := os.Stat(localFilePath)
+	if err != nil {
+		log.Error("Не удалось получить информацию о файле в кэше", zap.Error(err))
+		return false
 	}
 
+	// 2. Получаем предыдущее сохраненное состояние файла из БД
+	var previousState models.AgentFile
+	err = g.db.WithContext(ctx).First(&previousState, "file_name = ?", fileName).Error
+	isNewRecordInDB := errors.Is(err, gorm.ErrRecordNotFound)
+	if err != nil && !isNewRecordInDB {
+		log.Error("Ошибка получения состояния файла из БД", zap.Error(err))
+		return false
+	}
+
+	// 3. Главная оптимизация: если файл не менялся с последней проверки, молча выходим
+	if !isNewRecordInDB && previousState.LastProcessedModTime.Equal(fileInfo.ModTime()) && previousState.LastProcessedFileSize == fileInfo.Size() {
+		return false
+	}
+
+	// 4. Файл новый или обновлен. Читаем и парсим его.
 	fileData, err := os.ReadFile(localFilePath)
 	if err != nil {
 		log.Error("Не удалось прочитать файл из кэша", zap.Error(err))
-		return
+		return false
 	}
 
 	var data api.AgentDataDTO
 	if err := json.Unmarshal(fileData, &data); err != nil {
-		log.Error("Не удалось распарсить JSON", zap.Error(err))
-		return
+		log.Error("Не удалось распарсить JSON, файл будет пропущен до следующего изменения", zap.Error(err))
+		// Не обновляем статус в БД, чтобы в следующий раз попытаться снова, если файл изменится.
+		return false
 	}
 
-	log.Info("Обработка файла из кэша и публикация события...")
-	g.bus.Publish(eventbus.Event{
-		Type:    events.AgentDataReceived,
-		Payload: data,
-	})
+	// 5. Сравниваем текущую иерархию с предыдущей
+	currentFRSerial := data.SerialNumber
+	currentRMSUrl := data.URLRms
+	hierarchyHasChanged := isNewRecordInDB ||
+		(utils.SafeStringDereference(previousState.LastSeenFRSerial) != currentFRSerial) ||
+		(utils.SafeStringDereference(previousState.LastSeenRMSUrl) != currentRMSUrl)
 
-	g.updateAgentFileStatus(ctx, fileName)
+	// 6. Обновляем состояние файла в БД с помощью UPSERT
+	newState := models.AgentFile{
+		FileName:              fileName,
+		LastProcessedModTime:  fileInfo.ModTime(),
+		LastProcessedFileSize: fileInfo.Size(),
+	}
+	if currentFRSerial != "" {
+		newState.LastSeenFRSerial = &currentFRSerial
+	}
+	if currentRMSUrl != "" {
+		newState.LastSeenRMSUrl = &currentRMSUrl
+	}
+	err = g.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "file_name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"last_processed_mod_time", "last_processed_file_size", "last_seen_fr_serial", "last_seen_rms_url", "updated_at"}),
+	}).Create(&newState).Error
+
+	if err != nil {
+		log.Error("Не удалось обновить статус файла в БД", zap.Error(err))
+		return false // Не публикуем событие, если не смогли сохранить состояние
+	}
+
+	// 7. Если иерархия изменилась, публикуем событие
+	if hierarchyHasChanged {
+		log.Info("Обнаружен новый файл или изменение в иерархии объектов (FR/RMS). Публикация события...")
+		g.bus.Publish(eventbus.Event{
+			Type:    events.AgentDataReceived,
+			Payload: data,
+		})
+		return true
+	}
+
+	log.Debug("Файл обновлен, но иерархия объектов не изменилась. Событие не публикуется.")
+	return false
 }
 
 // syncLocalCacheWithFTP скачивает новые или обновленные файлы с FTP-сервера в локальный кэш.
@@ -155,43 +212,4 @@ func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
 	}
 	s.logger.Info("Синхронизация локального кэша завершена.")
 	return nil
-}
-
-// isAlreadyProcessed проверяет, был ли файл с таким же именем, размером и временем модификации уже обработан.
-func (s *agentFTPGatewayImpl) isAlreadyProcessed(ctx context.Context, fileName string) (bool, error) {
-	var processedFile models.AgentFile
-	err := s.db.WithContext(ctx).First(&processedFile, "file_name = ?", fileName).Error
-	if err == gorm.ErrRecordNotFound {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	fileInfo, err := os.Stat(filepath.Join(s.cfg.FTPCachePath, fileName))
-	if err != nil {
-		return false, err
-	}
-	return processedFile.LastProcessedModTime.Equal(fileInfo.ModTime()) && processedFile.LastProcessedFileSize == fileInfo.Size(), nil
-}
-
-// updateAgentFileStatus сохраняет в БД информацию об обработанном файле.
-func (s *agentFTPGatewayImpl) updateAgentFileStatus(ctx context.Context, fileName string) {
-	localPath := filepath.Join(s.cfg.FTPCachePath, fileName)
-	fileInfo, err := os.Stat(localPath)
-	if err != nil {
-		s.logger.Error("Не удалось получить информацию о файле в кэше для обновления статуса", zap.String("file", fileName), zap.Error(err))
-		return
-	}
-	record := models.AgentFile{
-		FileName:              fileName,
-		LastProcessedModTime:  fileInfo.ModTime(),
-		LastProcessedFileSize: fileInfo.Size(),
-	}
-	err = s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "file_name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_processed_mod_time", "last_processed_file_size", "updated_at"}),
-	}).Create(&record).Error
-	if err != nil {
-		s.logger.Error("Не удалось обновить статус файла в БД", zap.String("file", fileName), zap.Error(err))
-	}
 }

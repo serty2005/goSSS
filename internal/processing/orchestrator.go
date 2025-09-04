@@ -112,6 +112,20 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 			if resWs.RowsAffected > 0 {
 				log.Info("Заморожено рабочих станций", zap.Int64("count", resWs.RowsAffected))
 			}
+
+			// Фискальные регистраторы
+			resFr := txCtx.Model(&models.FiscalRegister{}).
+				Where("owner_service_desk_uuid IN ? AND status != ?", inactiveUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status_before_lock": gorm.Expr("status"),
+					"status":             "locked",
+				})
+			if resFr.Error != nil {
+				return resFr.Error
+			}
+			if resFr.RowsAffected > 0 {
+				log.Info("Заморожено фискальных регистраторов", zap.Int64("count", resFr.RowsAffected))
+			}
 		}
 
 		// --- Шаг 3: "Разморозка" оборудования для активных компаний ---
@@ -142,6 +156,20 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 			}
 			if resWs.RowsAffected > 0 {
 				log.Info("Разморожено рабочих станций", zap.Int64("count", resWs.RowsAffected))
+			}
+
+			// Фискальные регистраторы
+			resFr := txCtx.Model(&models.FiscalRegister{}).
+				Where("owner_service_desk_uuid IN ? AND status = ? AND status_before_lock IS NOT NULL", activeUUIDs, "locked").
+				Updates(map[string]interface{}{
+					"status":             gorm.Expr("status_before_lock"),
+					"status_before_lock": nil,
+				})
+			if resFr.Error != nil {
+				return resFr.Error
+			}
+			if resFr.RowsAffected > 0 {
+				log.Info("Разморожено фискальных регистраторов", zap.Int64("count", resFr.RowsAffected))
 			}
 		}
 

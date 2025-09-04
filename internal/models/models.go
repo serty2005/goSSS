@@ -129,6 +129,8 @@ type FiscalRegister struct {
 	LastModifiedDate     *time.Time `json:"last_modified_date"`
 	FRDownloader         *string    `gorm:"type:text"`
 	DriverVersion        *string    `gorm:"type:varchar(50)"`
+	Status               *string    `gorm:"type:varchar(50);default:'offline'"`
+	StatusBeforeLock     *string    `gorm:"type:varchar(50)"`
 	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
 }
 
@@ -152,6 +154,8 @@ type AgentFile struct {
 	FileName              string    `gorm:"primaryKey;type:text"`
 	LastProcessedModTime  time.Time `gorm:"not null"`
 	LastProcessedFileSize int64     `gorm:"not null"`
+	LastSeenFRSerial      *string   `gorm:"type:text;index"`
+	LastSeenRMSUrl        *string   `gorm:"type:text"`
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
