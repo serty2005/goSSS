@@ -64,7 +64,7 @@ type Application struct {
 func New() (*Application, error) {
 	cfg := config.New()
 
-	appLogger := logger.New(cfg.LogDir, "app", cfg.DisableFileLogging)
+	appLogger := logger.New(cfg.LogDir, "app", cfg.LogLevel, cfg.DisableFileLogging)
 	appLogger.Info("Инициализация приложения etalon-server...")
 
 	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
@@ -111,13 +111,13 @@ func New() (*Application, error) {
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Создаем отдельные логгеры для каждого воркера/сервиса
-	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.DisableFileLogging)
-	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.DisableFileLogging)
-	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.DisableFileLogging)
-	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.DisableFileLogging)
-	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.DisableFileLogging)
-	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.DisableFileLogging)
-	sdEditorLogger := logger.New(cfg.LogDir, "sdesk_editor", cfg.DisableFileLogging)
+	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.LogLevel, cfg.DisableFileLogging)    // <-- ИЗМЕНЕНИЕ
+	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.LogLevel, cfg.DisableFileLogging)     // <-- ИЗМЕНЕНИЕ
+	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.LogLevel, cfg.DisableFileLogging)    // <-- ИЗМЕНЕНИЕ
+	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.LogLevel, cfg.DisableFileLogging)  // <-- ИЗМЕНЕНИЕ
+	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.LogLevel, cfg.DisableFileLogging)         // <-- ИЗМЕНЕНИЕ
+	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.LogLevel, cfg.DisableFileLogging) // <-- ИЗМЕНЕНИЕ
+	sdEditorLogger := logger.New(cfg.LogDir, "sdesk_editor", cfg.LogLevel, cfg.DisableFileLogging)
 
 	// Сервисы, шлюзы и оркестратор
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
@@ -143,7 +143,7 @@ func New() (*Application, error) {
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
 	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
-	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService)
+	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
 	authHandler := handlers.NewAuthHandler(appLogger, authService)

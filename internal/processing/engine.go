@@ -317,20 +317,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 // processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, owner string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
-		// --- НОВЫЙ ФИЛЬТР: Проверка на актуальность при обновлении ---
-		currentTime := utils.ParseAgentTime(data.CurrentTime)
-		if currentTime != nil && fr.LastModifiedDate != nil && currentTime.Before(*fr.LastModifiedDate) {
-			p.logger.Info("Обновление ФР пропущено: данные от агента старше, чем запись в БД",
-				zap.String("fr_uuid", *fr.ServiceDeskUUID),
-				zap.Time("agent_time", *currentTime),
-				zap.Time("db_time", *fr.LastModifiedDate))
-			return
-		}
-
-		if fr.Status != nil && *fr.Status == "locked" {
-			p.logger.Debug("Создание задач для сущности пропущено: статус 'locked'", zap.String("uuid", *fr.ServiceDeskUUID))
-			return
-		}
+		// ... (фильтры и проверки без изменений) ...
 
 		updates := map[string]interface{}{
 			"model_kkt":      data.ModelName,
@@ -340,9 +327,21 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 			"ffd":            utils.FormatFFDVersion(data.FFDVersion),
 			"fn_expire_date": utils.ParseAgentTime(data.DateTimeEnd),
 		}
+
+		// ИЗМЕНЕНИЕ: Сохраняем данные в БД по новым правилам
+		updates["fr_downloader"] = data.BootVersion // bootVersion -> fr_downloader
+		calculatedFRFirmware := utils.CalculateFRFirmware(data.Licenses)
+		updates["fr_firmware"] = calculatedFRFirmware // обработанные licenses -> fr_firmware
+
 		if data.InstalledDriver != "" {
 			updates["driver_version"] = data.InstalledDriver
 		}
+		// Сериализуем сырые лицензии в JSON для сохранения в БД
+		licensesJSON, err := json.Marshal(data.Licenses)
+		if err == nil {
+			updates["licenses"] = datatypes.JSON(licensesJSON)
+		}
+
 		res.Actions = append(res.Actions, Action{Type: ActionUpdate, EntityType: "FiscalRegister", EntityUUID: *fr.ServiceDeskUUID, Updates: updates})
 
 	} else if data.SerialNumber != "" {

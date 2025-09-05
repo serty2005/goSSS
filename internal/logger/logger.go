@@ -3,6 +3,7 @@ package logger
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
@@ -11,12 +12,13 @@ import (
 
 // New инициализирует логгер zap.
 // Он может писать логи как в консоль, так и в файл с ротацией.
-func New(logDir, loggerName string, disableFileLogging bool) *zap.Logger {
+func New(logDir, loggerName, logLevel string, disableFileLogging bool) *zap.Logger {
+	level := getZapLevel(logLevel)
 	// Конфигурация для логгирования в консоль
 	consoleCore := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
 		zapcore.Lock(os.Stdout),
-		zap.InfoLevel,
+		level,
 	)
 
 	cores := []zapcore.Core{consoleCore}
@@ -41,7 +43,7 @@ func New(logDir, loggerName string, disableFileLogging bool) *zap.Logger {
 			fileCore := zapcore.NewCore(
 				zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
 				fileWriter,
-				zap.InfoLevel,
+				level,
 			)
 			cores = append(cores, fileCore)
 		}
@@ -54,4 +56,22 @@ func New(logDir, loggerName string, disableFileLogging bool) *zap.Logger {
 	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel), zap.Fields(zap.String("logger", loggerName)))
 
 	return logger
+}
+
+// getZapLevel преобразует строковый уровень логирования в zapcore.Level.
+func getZapLevel(level string) zapcore.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return zap.DebugLevel
+	case "info":
+		return zap.InfoLevel
+	case "warn", "warning":
+		return zap.WarnLevel
+	case "error":
+		return zap.ErrorLevel
+	case "fatal":
+		return zap.FatalLevel
+	default:
+		return zap.InfoLevel
+	}
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"etalon-server/internal/api"
 	"etalon-server/internal/models"
+	"etalon-server/internal/repositories"
 	"etalon-server/internal/services"
+	"etalon-server/internal/utils"
 	"fmt"
 	"net/http"
 	"sort"
@@ -19,19 +21,33 @@ import (
 
 // TaskHandler обрабатывает запросы, связанные с задачами сверки и поиском дубликатов.
 type TaskHandler struct {
-	logger        *zap.Logger
-	db            *gorm.DB
-	resolutionSvc services.TaskResolutionService
-	sdEditorSvc   services.SDEditorService
+	logger          *zap.Logger
+	db              *gorm.DB
+	resolutionSvc   services.TaskResolutionService
+	sdEditorSvc     services.SDEditorService
+	serverRepo      repositories.ServerRepo         // Добавлено для получения актуальных данных
+	workstationRepo repositories.WorkstationRepo    // Добавлено для получения актуальных данных
+	frRepo          repositories.FiscalRegisterRepo // Добавлено для получения актуальных данных
 }
 
 // NewTaskHandler создает новый экземпляр обработчика.
-func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.TaskResolutionService, sdEditorSvc services.SDEditorService) *TaskHandler {
+func NewTaskHandler(
+	logger *zap.Logger,
+	db *gorm.DB,
+	resolutionSvc services.TaskResolutionService,
+	sdEditorSvc services.SDEditorService,
+	serverRepo repositories.ServerRepo,
+	workstationRepo repositories.WorkstationRepo,
+	frRepo repositories.FiscalRegisterRepo,
+) *TaskHandler {
 	return &TaskHandler{
-		logger:        logger,
-		db:            db,
-		resolutionSvc: resolutionSvc,
-		sdEditorSvc:   sdEditorSvc,
+		logger:          logger,
+		db:              db,
+		resolutionSvc:   resolutionSvc,
+		sdEditorSvc:     sdEditorSvc,
+		serverRepo:      serverRepo,
+		workstationRepo: workstationRepo,
+		frRepo:          frRepo,
 	}
 }
 
@@ -39,7 +55,7 @@ func NewTaskHandler(logger *zap.Logger, db *gorm.DB, resolutionSvc services.Task
 func (h *TaskHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/tasks", h.GetTasks)
 	r.Post("/tasks/{id}/resolve", h.ResolveTask)
-	r.Post("/tasks/{id}/create-entity-in-sd", h.createEntityFromTask) // <-- ОБНОВЛЕННЫЙ РОУТ
+	r.Post("/tasks/{id}/create-entity-in-sd", h.createEntityFromTask)
 	r.Get("/duplicates", h.GetDuplicates)
 }
 
@@ -73,7 +89,89 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, tasks)
+	// Преобразуем модели в DTO перед отправкой
+	taskDTOs := make([]api.TaskDTO, 0, len(tasks))
+	for _, task := range tasks {
+		dto := api.TaskDTO{
+			ID:         task.ID,
+			TaskType:   task.TaskType,
+			EntityType: task.EntityType,
+			EntityUUID: task.EntityUUID,
+			Status:     task.Status,
+			Comment:    task.Comment,
+			CreatedAt:  task.CreatedAt,
+			UpdatedAt:  task.UpdatedAt,
+		}
+
+		var richDetails interface{}
+
+		// Логика зависит от типа задачи
+		if task.TaskType == "add_equipment" {
+			// Для новых сущностей берем данные из JSON 'agent_data'
+			var details struct {
+				AgentData       api.AgentDataDTO `json:"agent_data"`
+				EtalonOwnerUUID string           `json:"etalon_owner_uuid"`
+			}
+			if err := json.Unmarshal(task.Details, &details); err == nil {
+				// Формируем новую, более полную структуру для Details
+				switch task.EntityType {
+				case "FiscalRegister":
+					richDetails = struct {
+						EtalonOwnerUUID  string                    `json:"etalon_owner_uuid"`
+						EquipmentData    api.FiscalRegisterRichDTO `json:"equipment_data"`
+						OrganizationName string                    `json:"organizationName"`
+						SerialNumber     string                    `json:"serialNumber"`
+						URLRms           string                    `json:"url_rms"`
+						TeamviewerID     string                    `json:"teamviewer_id"`
+						AnydeskID        string                    `json:"anydesk_id"`
+						LitemanagerID    string                    `json:"litemanager_id"`
+						AgentCurrentTime string                    `json:"agent_current_time"`
+					}{
+						EtalonOwnerUUID:  details.EtalonOwnerUUID,
+						EquipmentData:    agentDataToFiscalRegisterRichDTO(details.AgentData),
+						OrganizationName: details.AgentData.OrganizationName,
+						SerialNumber:     details.AgentData.SerialNumber,
+						URLRms:           details.AgentData.URLRms,
+						TeamviewerID:     details.AgentData.TeamviewerID,
+						AnydeskID:        details.AgentData.AnydeskID,
+						LitemanagerID:    details.AgentData.LitemanagerID,
+						AgentCurrentTime: details.AgentData.CurrentTime,
+					}
+					// Здесь можно будет добавить обработку для Workstation и т.д.
+				}
+			}
+		} else {
+			// Для существующих сущностей берем АКТУАЛЬНЫЕ данные из базы
+			switch task.EntityType {
+			case "FiscalRegister":
+				fr, _ := h.frRepo.GetByUUID(r.Context(), task.EntityUUID)
+				if fr != nil {
+					richDetails = modelToFiscalRegisterRichDTO(*fr)
+				}
+			case "Server":
+				server, _ := h.serverRepo.GetByUUID(r.Context(), task.EntityUUID)
+				if server != nil {
+					richDetails = modelToServerRichDTO(*server)
+				}
+			case "Workstation":
+				ws, _ := h.workstationRepo.GetByUUID(r.Context(), task.EntityUUID)
+				if ws != nil {
+					richDetails = modelToWorkstationRichDTO(*ws)
+				}
+			}
+		}
+
+		// Если удалось получить RichDTO, используем его. Иначе - оставляем сырой JSON.
+		if richDetails != nil {
+			dto.Details = richDetails
+		} else {
+			dto.Details = task.Details
+		}
+
+		taskDTOs = append(taskDTOs, dto)
+	}
+
+	RespondWithJSON(w, http.StatusOK, taskDTOs)
 }
 
 // ResolveTask изменяет статус задачи и выполняет связанные с решением действия.
@@ -277,5 +375,61 @@ func getLMDFromInterface(record interface{}) *time.Time {
 		return v.LastModifiedDate
 	default:
 		return nil
+	}
+}
+
+// --- Вспомогательные функции-мапперы ---
+
+// agentDataToFiscalRegisterRichDTO преобразует сырые данные от агента в компактный DTO для UI.
+func agentDataToFiscalRegisterRichDTO(data api.AgentDataDTO) api.FiscalRegisterRichDTO {
+	return api.FiscalRegisterRichDTO{
+		RNKKT:              &data.RNM,
+		ModelKKT:           &data.ModelName,
+		FNExpireDate:       utils.ParseAgentTime(data.DateTimeEnd),
+		FNRegistrationDate: utils.ParseAgentTime(data.DateTimeReg),
+		DriverVersion:      &data.InstalledDriver,
+		FRFirmware:         utils.StringPtr(utils.CalculateFRFirmware(data.Licenses)),
+		FRDownloader:       utils.StringPtr(data.BootVersion),
+	}
+}
+
+// modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI.
+func modelToFiscalRegisterRichDTO(fr models.FiscalRegister) api.FiscalRegisterRichDTO {
+	return api.FiscalRegisterRichDTO{
+		UUID:               *fr.ServiceDeskUUID,
+		RNKKT:              fr.RNKKT,
+		ModelKKT:           fr.ModelKKT,
+		FNExpireDate:       fr.FNExpireDate,
+		FNRegistrationDate: fr.KKTRegDate,
+		DriverVersion:      fr.DriverVersion,
+		FRFirmware:         fr.FRFirmware,
+		FRDownloader:       fr.FRDownloader,
+	}
+}
+
+// modelToServerRichDTO преобразует модель БД в DTO для UI.
+func modelToServerRichDTO(server models.Server) api.ServerRichDTO {
+	return api.ServerRichDTO{
+		UUID:        *server.ServiceDeskUUID,
+		DeviceName:  server.DeviceName,
+		IP:          server.IP,
+		Status:      server.Status,
+		Anydesk:     server.Anydesk,
+		Teamviewer:  server.Teamviewer,
+		RDP:         server.RDP,
+		Litemanager: server.Litemanager,
+		UniqueID:    server.UniqueID,
+	}
+}
+
+// modelToWorkstationRichDTO преобразует модель БД в DTO для UI.
+func modelToWorkstationRichDTO(ws models.Workstation) api.WorkstationRichDTO {
+	return api.WorkstationRichDTO{
+		UUID:        *ws.ServiceDeskUUID,
+		DeviceName:  ws.DeviceName,
+		Status:      ws.Status,
+		Anydesk:     ws.Anydesk,
+		Teamviewer:  ws.Teamviewer,
+		Litemanager: ws.Litemanager,
 	}
 }

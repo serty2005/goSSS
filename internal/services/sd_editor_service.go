@@ -54,42 +54,51 @@ func (s *sdEditorServiceImpl) CreateFiscalRegisterFromTask(ctx context.Context, 
 	}
 
 	agentData := details.AgentData
+	log := s.logger.With(zap.Uint("taskID", taskID)) // Логгер с контекстом задачи
 
 	// --- Подготовка данных для создания ---
+	log.Debug("Начало сборки payload для создания ФР")
 	payload := make(map[string]interface{})
 
 	// 1. Простые поля
-	payload["RNKKT"] = utils.FormatRNKKT(agentData.RNM)
-	payload["FRSerialNumber"] = strings.TrimSpace(agentData.SerialNumber)
-	payload["FNNumber"] = strings.TrimSpace(agentData.FNSerial)
+	addStringFieldToPayload(log, payload, "RNKKT", utils.FormatRNKKT(agentData.RNM))
+	addStringFieldToPayload(log, payload, "FRSerialNumber", strings.TrimSpace(agentData.SerialNumber))
+	addStringFieldToPayload(log, payload, "FNNumber", strings.TrimSpace(agentData.FNSerial))
 
+	var legalName string
 	if agentData.OrganizationName != "" && agentData.INN != "" {
-		payload["LegalName"] = fmt.Sprintf("%s ИНН:%s", strings.TrimSpace(agentData.OrganizationName), strings.TrimSpace(agentData.INN))
+		legalName = fmt.Sprintf("%s ИНН:%s", strings.TrimSpace(agentData.OrganizationName), strings.TrimSpace(agentData.INN))
 	} else {
-		payload["LegalName"] = strings.TrimSpace(agentData.OrganizationName)
+		legalName = strings.TrimSpace(agentData.OrganizationName)
 	}
+	addStringFieldToPayload(log, payload, "LegalName", legalName)
 
 	if regDate := utils.ParseAgentTime(agentData.DateTimeReg); regDate != nil {
-		payload["KKTRegDate"] = regDate.Format(utils.TimeLayoutServiceDesk)
+		addStringFieldToPayload(log, payload, "KKTRegDate", regDate.Format(utils.TimeLayoutServiceDesk))
 	}
 	if expDate := utils.ParseAgentTime(agentData.DateTimeEnd); expDate != nil {
-		payload["FNExpireDate"] = expDate.Format(utils.TimeLayoutServiceDesk)
+		addStringFieldToPayload(log, payload, "FNExpireDate", expDate.Format(utils.TimeLayoutServiceDesk))
 	}
 
-	// 2. Поля из справочников (теперь с ручным форматированием)
+	// 2. Новые поля FRFirmware и FRDownloader
+	addStringFieldToPayload(log, payload, "FRDownloader", strings.TrimSpace(agentData.BootVersion))
+	frFirmwareValue := utils.CalculateFRFirmware(agentData.Licenses)
+	addStringFieldToPayload(log, payload, "FRFirmware", frFirmwareValue)
+
+	// 3. Поля из справочников
 	modelName := strings.TrimSpace(agentData.ModelName)
 	modelUUID, err := s.sdClient.FindReferenceID(ctx, "ModeliFR", modelName, false)
 	if err != nil {
 		return "", fmt.Errorf("не удалось найти модель ККТ '%s': %w", modelName, err)
 	}
-	payload["ModelKKT"] = modelUUID
+	addStringFieldToPayload(log, payload, "ModelKKT", modelUUID)
 
 	ffdVersion := utils.FormatFFDVersion(agentData.FFDVersion)
 	ffdUUID, err := s.sdClient.FindReferenceID(ctx, "FFD", ffdVersion, false)
 	if err != nil {
 		return "", fmt.Errorf("не удалось найти версию ФФД '%s': %w", ffdVersion, err)
 	}
-	payload["FFD"] = ffdUUID
+	addStringFieldToPayload(log, payload, "FFD", ffdUUID)
 
 	srokMatches := srokFnRegex.FindStringSubmatch(agentData.FNExecution)
 	if len(srokMatches) < 2 {
@@ -99,16 +108,13 @@ func (s *sdEditorServiceImpl) CreateFiscalRegisterFromTask(ctx context.Context, 
 	if err != nil {
 		return "", fmt.Errorf("не удалось найти срок ФН '%s': %w", srokMatches[1], err)
 	}
-	payload["SrokFN"] = srokUUID
+	addStringFieldToPayload(log, payload, "SrokFN", srokUUID)
 
-	// 3. Владелец
-	payload["owner"] = details.EtalonOwnerUUID
+	// 4. Владелец
+	addStringFieldToPayload(log, payload, "owner", details.EtalonOwnerUUID)
 
 	// --- Логирование и создание сущности ---
-	s.logger.Info("Подготовлен payload для создания ФР в ServiceDesk",
-		zap.Uint("taskID", taskID),
-		zap.Any("payload", payload),
-	)
+	log.Info("Подготовлен итоговый payload для создания ФР в ServiceDesk", zap.Any("payload", payload))
 
 	response, err := s.sdClient.CreateEntity(ctx, "objectBase$FR", payload)
 	if err != nil {
@@ -116,8 +122,16 @@ func (s *sdEditorServiceImpl) CreateFiscalRegisterFromTask(ctx context.Context, 
 	}
 
 	newUUID, _ := response["UUID"].(string)
-	s.logger.Info("Фискальный регистратор успешно создан в ServiceDesk (или выполнен dry run)",
-		zap.String("newUUID", newUUID),
-	)
+	log.Info("Фискальный регистратор успешно создан в ServiceDesk (или выполнен dry run)", zap.String("newUUID", newUUID))
 	return newUUID, nil
+}
+
+// addStringFieldToPayload - хелпер для логирования и добавления непустых строковых полей в payload.
+func addStringFieldToPayload(log *zap.Logger, payload map[string]interface{}, key, value string) {
+	if value != "" {
+		log.Debug("Добавление поля в payload", zap.String("поле", key), zap.String("значение", value))
+		payload[key] = value
+	} else {
+		log.Debug("Пропуск пустого поля", zap.String("поле", key))
+	}
 }

@@ -18,6 +18,7 @@ type Config struct {
 	ServerPort         string
 	DatabaseURL        string
 	LogDir             string
+	LogLevel           string
 	DisableFileLogging bool
 	RequestTimeout     time.Duration
 	AllowedOrigins     []string
@@ -85,6 +86,7 @@ func New() *Config {
 		ServerPort:         getEnv("PORT", "8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
 		LogDir:             getEnv("LOG_DIR", "./logs"),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		DisableFileLogging: getEnvAsBool("DISABLE_FILE_LOGGING", false),
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),

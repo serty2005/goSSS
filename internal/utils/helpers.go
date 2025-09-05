@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"etalon-server/internal/api"
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,6 +18,9 @@ const TimeLayoutAgent = "2006-01-02 15:04:05"
 
 // Regex для поиска любых символов, кроме цифр.
 var nonDigitRegex = regexp.MustCompile(`\D`)
+
+// Regex для извлечения квартала и года из legacy-строки лицензии.
+var legacyLicenseRegex = regexp.MustCompile(`(\d)\s*квартала\s*(\d{4})`)
 
 // ParseServiceDeskTime парсит строку времени из ServiceDesk.
 // Возвращает nil, если строка пустая или не может быть распарсена.
@@ -94,4 +99,53 @@ func IsPrivateIP(ipStr string) (bool, error) {
 	_, private16, _ := net.ParseCIDR("192.168.0.0/16")
 
 	return private24.Contains(ip) || private20.Contains(ip) || private16.Contains(ip), nil
+}
+
+// CalculateFRFirmware вычисляет строку для поля FRFirmware на основе лицензий.
+// Обрабатывает как новый (структурированный), так и старый (строковый) формат.
+func CalculateFRFirmware(licenses api.LicensesField) string {
+	// 1. Обработка нового, структурированного формата
+	if len(licenses.Structured) > 0 {
+		var parts []string
+		now := time.Now()
+		// Устанавливаем временное окно +- 3 года от текущей даты
+		threeYearsAgo := now.AddDate(-3, 0, 0)
+		threeYearsFromNow := now.AddDate(3, 0, 0)
+
+		for id, licenseInfo := range licenses.Structured {
+			dateUntil := ParseAgentTime(licenseInfo.DateUntil)
+			if dateUntil == nil {
+				continue // Пропускаем лицензии с некорректной датой
+			}
+
+			// Проверяем, что лицензия попадает в окно +- 3 года.
+			if dateUntil.After(threeYearsAgo) && dateUntil.Before(threeYearsFromNow) {
+				// Форматируем в "ID:ДД.ММ.ГГГГ"
+				part := fmt.Sprintf("%s:%s", id, dateUntil.Format("02.01.2006"))
+				parts = append(parts, part)
+			}
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, "; ")
+	}
+
+	// 2. Обработка старого, строкового формата
+	if licenses.Legacy != "" {
+		matches := legacyLicenseRegex.FindStringSubmatch(licenses.Legacy)
+		// matches[0] - вся строка, matches[1] - квартал, matches[2] - год
+		if len(matches) == 3 {
+			return fmt.Sprintf("%s.%s", matches[1], matches[2])
+		}
+	}
+
+	return ""
+}
+
+// StringPtr создает указатель на строку.
+// Возвращает nil, если строка пустая.
+func StringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

@@ -38,27 +38,73 @@ type ErrorResponseDTO struct {
 
 // --- DTO для взаимодействия с Агентами ---
 
+// LicenseInfo описывает одну лицензию из данных агента.
+type LicenseInfo struct {
+	Name      string `json:"name"`
+	DateFrom  string `json:"dateFrom"`
+	DateUntil string `json:"dateUntil"`
+}
+
+// LicensesField - это специальный тип для поля 'licenses',
+// который может быть либо строкой (старый формат), либо картой (новый формат).
+type LicensesField struct {
+	Structured map[string]LicenseInfo
+	Legacy     string
+}
+
+// UnmarshalJSON для кастомной обработки поля 'licenses'.
+func (lf *LicensesField) UnmarshalJSON(data []byte) error {
+	// Сначала пытаемся распарсить как структурированный объект (карту).
+	var structured map[string]LicenseInfo
+	if err := json.Unmarshal(data, &structured); err == nil {
+		lf.Structured = structured
+		return nil
+	}
+
+	// Если не получилось, пытаемся распарсить как простую строку.
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		lf.Legacy = legacy
+		return nil
+	}
+
+	// Если не удалось распарсить ни как карту, ни как строку, возвращаем ошибку.
+	// Это может произойти, если в JSON, например, число или null.
+	return json.Unmarshal(data, &struct{}{}) // Возвращаем оригинальную ошибку парсинга
+}
+
+// MarshalJSON для кастомной сериализации поля 'licenses' обратно в простой JSON.
+func (lf LicensesField) MarshalJSON() ([]byte, error) {
+	if lf.Structured != nil {
+		return json.Marshal(lf.Structured)
+	}
+	// Если Structured - nil, сериализуем Legacy (даже если это пустая строка).
+	return json.Marshal(lf.Legacy)
+}
+
 // AgentDataDTO определяет структуру данных, получаемых от агента.
 type AgentDataDTO struct {
-	ModelName        string `json:"modelName"`
-	SerialNumber     string `json:"serialNumber"`
-	RNM              string `json:"RNM"`
-	INN              string `json:"INN"`
-	FNSerial         string `json:"fn_serial"`
-	DateTimeEnd      string `json:"dateTime_end"`
-	FFDVersion       string `json:"ffdVersion"`
-	FNExecution      string `json:"fnExecution"`
-	OrganizationName string `json:"organizationName"`
-	DateTimeReg      string `json:"datetime_reg"`
-	Hostname         string `json:"hostname"`
-	URLRms           string `json:"url_rms"`
-	CRMID            string `json:"crmId"`
-	TeamviewerID     string `json:"teamviewer_id"`
-	AnydeskID        string `json:"anydesk_id"`
-	LitemanagerID    string `json:"litemanager_id"`
-	CurrentTime      string `json:"current_time"`
-	AgentVersion     string `json:"agent_version"`
-	InstalledDriver  string `json:"installed_driver,omitempty"`
+	ModelName        string        `json:"modelName"`
+	SerialNumber     string        `json:"serialNumber"`
+	RNM              string        `json:"RNM"`
+	INN              string        `json:"INN"`
+	FNSerial         string        `json:"fn_serial"`
+	DateTimeEnd      string        `json:"dateTime_end"`
+	FFDVersion       string        `json:"ffdVersion"`
+	FNExecution      string        `json:"fnExecution"`
+	OrganizationName string        `json:"organizationName"`
+	DateTimeReg      string        `json:"datetime_reg"`
+	Hostname         string        `json:"hostname"`
+	URLRms           string        `json:"url_rms"`
+	CRMID            string        `json:"crmId"`
+	TeamviewerID     string        `json:"teamviewer_id"`
+	AnydeskID        string        `json:"anydesk_id"`
+	LitemanagerID    string        `json:"litemanager_id"`
+	CurrentTime      string        `json:"current_time"`
+	AgentVersion     string        `json:"agent_version"`
+	InstalledDriver  string        `json:"installed_driver,omitempty"`
+	BootVersion      string        `json:"bootVersion,omitempty"` // Версия прошивки (для FRFirmware)
+	Licenses         LicensesField `json:"licenses,omitempty"`    // Используем кастомный тип
 
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
@@ -96,6 +142,8 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "current_time")
 	delete(raw, "agent_version")
 	delete(raw, "installed_driver")
+	delete(raw, "bootVersion")
+	delete(raw, "licenses")
 
 	a.AdditionalProperties = raw
 	return nil
@@ -229,13 +277,29 @@ type WorkstationRichDTO struct {
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
+	SerialNumber       *string    `json:"serial_number,omitempty"`
+	LegalName          *string    `json:"legal_name,omitempty"`
 	UUID               string     `json:"uuid"`
 	RNKKT              *string    `json:"rn_kkt,omitempty"`
 	ModelKKT           *string    `json:"model_kkt,omitempty"`
 	FNExpireDate       *time.Time `json:"fn_expire_date,omitempty"`
 	FNRegistrationDate *time.Time `json:"fn_registration_date,omitempty"`
 	DriverVersion      *string    `json:"driver_version,omitempty"`
-	FirmwareVersion    *string    `json:"firmware_version,omitempty"`
+	FRFirmware         *string    `json:"fr_firmware,omitempty"`   // ИЗМЕНЕНИЕ: Переименовано для ясности (подписки)
+	FRDownloader       *string    `json:"fr_downloader,omitempty"` // ИЗМЕНЕНИЕ: Добавлено новое поле (загрузчик)
+}
+
+// TaskDTO - DTO для отображения задачи в UI.
+type TaskDTO struct {
+	ID         uint        `json:"id"`
+	TaskType   string      `json:"task_type"`
+	EntityType string      `json:"entity_type"`
+	EntityUUID string      `json:"entity_uuid"`
+	Details    interface{} `json:"details"` // Поле для обработанных данных
+	Status     string      `json:"status"`
+	Comment    string      `json:"comment"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 // CreateEntityInSDRequestDTO - тело запроса для создания сущности в ServiceDesk по задаче.

@@ -328,9 +328,14 @@ func DataToFiscalRegister(data map[string]interface{}) (*models.FiscalRegister, 
 		fr.FFD = &val
 	}
 
+	// ИЗМЕНЕНИЕ: Раскладываем данные из SD по новым правилам
 	if val, ok := data["FRDownloader"].(string); ok {
-		fr.FRDownloader = &val
+		fr.FRDownloader = &val // Загрузчик
 	}
+	if val, ok := data["FRFirmware"].(string); ok {
+		fr.FRFirmware = &val // Подписки
+	}
+
 	if val, ok := data["RNKKT"].(string); ok {
 		// Нормализуем РН ККТ перед сохранением
 		normalizedRNKKT := utils.NormalizeRNKKT(val)

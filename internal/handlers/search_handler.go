@@ -253,9 +253,14 @@ func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDT
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "FiscalRegister",
 				Data: api.FiscalRegisterRichDTO{
-					UUID: *fr.ServiceDeskUUID, RNKKT: fr.RNKKT, ModelKKT: fr.ModelKKT,
-					FNExpireDate: fr.FNExpireDate, FNRegistrationDate: fr.KKTRegDate,
-					DriverVersion: fr.DriverVersion, FirmwareVersion: fr.FRDownloader,
+					UUID:               *fr.ServiceDeskUUID,
+					RNKKT:              fr.RNKKT,
+					ModelKKT:           fr.ModelKKT,
+					FNExpireDate:       fr.FNExpireDate,
+					FNRegistrationDate: fr.KKTRegDate,
+					DriverVersion:      fr.DriverVersion,
+					FRFirmware:         fr.FRFirmware,   // ИЗМЕНЕНИЕ: Теперь берем обработанные подписки
+					FRDownloader:       fr.FRDownloader, // ИЗМЕНЕНИЕ: Теперь берем загрузчик
 				},
 			})
 		}

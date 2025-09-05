@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/api"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
+	"etalon-server/internal/utils"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -230,7 +231,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 				Teamviewer:           &details.AgentData.TeamviewerID,
 				Litemanager:          &details.AgentData.LitemanagerID,
 				Anydesk:              &details.AgentData.AnydeskID,
-				Status:               stringPtr("offline"),
+				Status:               utils.StringPtr("offline"),
 			}
 			err = s.workstationRepo.Create(ctx, tx, ws)
 		case "FiscalRegister":
@@ -251,8 +252,4 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 	}
 
 	return nil
-}
-
-func stringPtr(s string) *string {
-	return &s
 }

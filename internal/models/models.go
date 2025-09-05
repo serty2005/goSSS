@@ -117,21 +117,23 @@ type Workstation struct {
 // FiscalRegister представляет сущность фискального регистратора.
 type FiscalRegister struct {
 	Base
-	ModelKKT             *string    `gorm:"type:text"`
-	FFD                  *string    `gorm:"type:text"`
-	RNKKT                *string    `gorm:"column:rn_kkt;type:text;index"`
-	LegalName            *string    `gorm:"type:text"`
-	INN                  *string    `gorm:"column:inn;type:text;index"`
-	FRSerialNumber       *string    `gorm:"type:text;index"`
-	FNNumber             *string    `gorm:"type:text"`
-	KKTRegDate           *time.Time `json:"kkt_reg_date"`
-	FNExpireDate         *time.Time `json:"fn_expire_date"`
-	LastModifiedDate     *time.Time `json:"last_modified_date"`
-	FRDownloader         *string    `gorm:"type:text"`
-	DriverVersion        *string    `gorm:"type:varchar(50)"`
-	Status               *string    `gorm:"type:varchar(50);default:'offline'"`
-	StatusBeforeLock     *string    `gorm:"type:varchar(50)"`
-	OwnerServiceDeskUUID *string    `gorm:"type:text;index"` // Ссылка на Company.UUID
+	ModelKKT             *string        `gorm:"type:text"`
+	FFD                  *string        `gorm:"type:text"`
+	RNKKT                *string        `gorm:"column:rn_kkt;type:text;index"`
+	LegalName            *string        `gorm:"type:text"`
+	INN                  *string        `gorm:"column:inn;type:text;index"`
+	FRSerialNumber       *string        `gorm:"type:text;index"`
+	FNNumber             *string        `gorm:"type:text"`
+	KKTRegDate           *time.Time     `json:"kkt_reg_date"`
+	FNExpireDate         *time.Time     `json:"fn_expire_date"`
+	LastModifiedDate     *time.Time     `json:"last_modified_date"`
+	FRDownloader         *string        `gorm:"type:varchar(100)"` // Загрузчик (из bootVersion)
+	FRFirmware           *string        `gorm:"type:text"`         // Подписки (из licenses)
+	DriverVersion        *string        `gorm:"type:varchar(50)"`
+	Status               *string        `gorm:"type:varchar(50);default:'offline'"`
+	StatusBeforeLock     *string        `gorm:"type:varchar(50)"`
+	OwnerServiceDeskUUID *string        `gorm:"type:text;index"` // Ссылка на Company.UUID
+	Licenses             datatypes.JSON `gorm:"type:jsonb"`      // Сырая информация о лицензиях
 }
 
 // Agent представляет экземпляр агента, установленного на машине клиента.
