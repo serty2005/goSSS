@@ -41,7 +41,7 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone <your-repo-url>
+    git clone https://git.serty.top/serty/goSSS.git
     cd etalon-server
     ```
 
