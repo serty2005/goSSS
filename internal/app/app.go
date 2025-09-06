@@ -15,6 +15,7 @@ import (
 	"etalon-server/internal/seeder"
 	"etalon-server/internal/services"
 	"etalon-server/internal/utils"
+	"etalon-server/internal/workers"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"net/http"
@@ -57,6 +58,7 @@ type Application struct {
 	AuthSvc              services.AuthService
 	AgentSvc             services.AgentService
 	SDEditorSvc          services.SDEditorService
+	FRUpdateFounder      workers.FRUpdateFounder
 	DebugHandler         *handlers.DebugHandler
 }
 
@@ -111,23 +113,23 @@ func New() (*Application, error) {
 	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 
 	// Создаем отдельные логгеры для каждого воркера/сервиса
-	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.LogLevel, cfg.DisableFileLogging)    // <-- ИЗМЕНЕНИЕ
-	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.LogLevel, cfg.DisableFileLogging)     // <-- ИЗМЕНЕНИЕ
-	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.LogLevel, cfg.DisableFileLogging)    // <-- ИЗМЕНЕНИЕ
-	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.LogLevel, cfg.DisableFileLogging)  // <-- ИЗМЕНЕНИЕ
-	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.LogLevel, cfg.DisableFileLogging)         // <-- ИЗМЕНЕНИЕ
-	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.LogLevel, cfg.DisableFileLogging) // <-- ИЗМЕНЕНИЕ
+	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.LogLevel, cfg.DisableFileLogging)
+	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.LogLevel, cfg.DisableFileLogging)
+	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.LogLevel, cfg.DisableFileLogging)
+	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.LogLevel, cfg.DisableFileLogging)
+	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.LogLevel, cfg.DisableFileLogging)
+	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.LogLevel, cfg.DisableFileLogging)
 	sdEditorLogger := logger.New(cfg.LogDir, "sdesk_editor", cfg.LogLevel, cfg.DisableFileLogging)
+	frUpdateFounderLogger := logger.New(cfg.LogDir, "fr_update_founder", cfg.LogLevel, cfg.DisableFileLogging)
 
 	// Сервисы, шлюзы и оркестратор
 	sdClient := services.NewServiceDeskClient(cfg, appLogger)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
 	authService := services.NewAuthService(cfg, userRepo)
-	taskResolutionService := services.NewTaskResolutionService(appLogger, database, taskRepo, serverRepo, workstationRepo, frRepo)
+	taskResolutionService := services.NewTaskResolutionService(appLogger, database, bus, taskRepo, serverRepo, workstationRepo, frRepo)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
-	sdEditorService := services.NewSDEditorService(sdEditorLogger, sdClient, taskRepo)
-
+	sdEditorService := services.NewSDEditorService(sdEditorLogger, database, bus, sdClient, taskRepo, companyRepo, serverRepo, workstationRepo, frRepo)
 	// Создаем движок, передавая ему matcher
 	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
 	// --- Новая архитектура ---
@@ -138,6 +140,7 @@ func New() (*Application, error) {
 	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
 	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, processingEngine)
 	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo, companyRepo, database)
+	frUpdateFounder := workers.NewFRUpdateFounder(cfg, frUpdateFounderLogger, bus, frRepo, sdClient)
 
 	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
@@ -173,6 +176,7 @@ func New() (*Application, error) {
 		ServerActionsSvc:     serverActionsSvc,
 		AgentSvc:             agentService,
 		SDEditorSvc:          sdEditorService,
+		FRUpdateFounder:      frUpdateFounder,
 		DebugHandler:         debugHandler,
 	}, nil
 }
@@ -250,6 +254,7 @@ func (a *Application) Run() {
 
 	// Оркестратор (он только подписывается, активной работы не ведет)
 	a.Orchestrator.Start(mainCtx)
+	a.SDEditorSvc.Start(mainCtx)
 
 	// Шлюз поиска дубликатов
 	if a.Config.EnableDuplicatesGateway {
@@ -257,6 +262,14 @@ func (a *Application) Run() {
 		go func() { defer wg.Done(); a.DuplicatesGateway.Start(mainCtx) }()
 	} else {
 		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
+	}
+
+	// Воркер поиска обновлений для ФР
+	if a.Config.EnableFRDiscrepancyFinder {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.FRUpdateFounder.Start(mainCtx) }()
+	} else {
+		a.Logger.Info("Воркер поиска обновлений для ФР (FRUpdateFounder) отключен в конфигурации.")
 	}
 
 	// Шлюз для данных от агентов (FTP)

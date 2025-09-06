@@ -71,6 +71,12 @@ type Config struct {
 	// Шлюз поиска дубликатов
 	EnableDuplicatesGateway  bool
 	DuplicatesSearchInterval time.Duration
+
+	// --- Настройки фоновых воркеров ---
+
+	// Воркер поиска расхождений для ФР
+	EnableFRDiscrepancyFinder  bool
+	FRDiscrepancyCheckInterval time.Duration
 }
 
 // New загружает конфигурацию из файла .env и переменных окружения.
@@ -139,6 +145,12 @@ func New() *Config {
 		// Duplicates Gateway
 		EnableDuplicatesGateway:  getEnvAsBool("ENABLE_DUPLICATES_GATEWAY", true),
 		DuplicatesSearchInterval: time.Duration(getEnvAsInt("DUPLICATES_SEARCH_INTERVAL_HOURS", 24)) * time.Hour, // Раз в сутки по умолчанию
+
+		// --- Воркеры ---
+		// FR Discrepancy Finder
+		EnableFRDiscrepancyFinder:  getEnvAsBool("ENABLE_FR_DISCREPANCY_FINDER", true),
+		FRDiscrepancyCheckInterval: time.Duration(getEnvAsInt("FR_DISCREPANCY_CHECK_INTERVAL_HOURS", 6)) * time.Hour, // Раз в 6 часов
+
 	}
 }
 

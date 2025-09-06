@@ -3,19 +3,12 @@ package handlers
 import (
 	"context"
 	"etalon-server/internal/config"
+	"etalon-server/internal/contextkeys" // ИЗМЕНЕНИЕ: Новый импорт
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
-)
-
-// ContextKey - тип для ключей контекста, чтобы избежать коллизий.
-type ContextKey string
-
-const (
-	UserRolesContextKey ContextKey = "userRoles"
-	UserIDContextKey    ContextKey = "userID"
 )
 
 // JwtAuthMiddleware проверяет JWT токен и добавляет информацию о пользователе в контекст.
@@ -50,7 +43,8 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				ctx := r.Context()
 				// Извлекаем ID
 				if sub, ok := claims["sub"].(string); ok {
-					ctx = context.WithValue(ctx, UserIDContextKey, sub)
+					// ИЗМЕНЕНИЕ: Используем константу из contextkeys
+					ctx = context.WithValue(ctx, contextkeys.UserIDContextKey, sub)
 				} else {
 					RespondWithError(w, http.StatusUnauthorized, "Невалидный sub в токене")
 					return
@@ -63,7 +57,8 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 							rolesStr = append(rolesStr, role)
 						}
 					}
-					ctx = context.WithValue(ctx, UserRolesContextKey, rolesStr)
+					// ИЗМЕНЕНИЕ: Используем константу из contextkeys
+					ctx = context.WithValue(ctx, contextkeys.UserRolesContextKey, rolesStr)
 				} else {
 					RespondWithError(w, http.StatusUnauthorized, "Невалидные roles в токене")
 					return
@@ -80,7 +75,8 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 // AdminRequiredMiddleware проверяет, есть ли у пользователя роль "admin".
 func AdminRequiredMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		roles, ok := r.Context().Value(UserRolesContextKey).([]string)
+		// ИЗМЕНЕНИЕ: Используем константу из contextkeys
+		roles, ok := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
 		if !ok {
 			RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
 			return

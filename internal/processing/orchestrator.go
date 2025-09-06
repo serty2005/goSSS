@@ -47,6 +47,7 @@ func (o *Orchestrator) Start(ctx context.Context) {
 	o.bus.Subscribe(events.AgentDataReceived, o.handleAgentDataReceived)
 	o.bus.Subscribe(events.ServerPollingSucceeded, o.handleServerPollingSucceeded)
 	o.bus.Subscribe(events.ServerPollingFailed, o.handleServerPollingFailed)
+	o.bus.Subscribe(events.FiscalRegisterDiscrepancyFound, o.handleFiscalRegisterDiscrepancy)
 }
 
 // handleContractsStatusRecalculated обрабатывает событие о пересчете статусов контрактов.
@@ -749,6 +750,63 @@ func (o *Orchestrator) resolveTasksOnUpdate(ctx context.Context, entityType, ent
 				log.Info("Задача автоматически решена", zap.Uint("taskID", task.ID), zap.String("taskType", task.TaskType))
 			}
 		}
+	}
+}
+
+// handleFiscalRegisterDiscrepancy обрабатывает событие о расхождении данных ФР и создает задачу.
+func (o *Orchestrator) handleFiscalRegisterDiscrepancy(ctx context.Context, event eventbus.Event) {
+	payload, ok := event.Payload.(events.FiscalRegisterDiscrepancyPayload)
+	if !ok {
+		o.logger.Error("Некорректная полезная нагрузка для события FiscalRegisterDiscrepancyFound")
+		return
+	}
+
+	log := o.logger.With(zap.String("fr_uuid", payload.FRServiceDeskUUID))
+
+	// Проверяем, нет ли уже активной задачи такого типа для этого ФР.
+	existingTask, err := o.taskRepo.FindActiveTask(ctx, "need_update", payload.FRServiceDeskUUID)
+	if err != nil {
+		log.Error("Ошибка при поиске существующей задачи 'need_update'", zap.Error(err))
+		return // Не создаем новую задачу, если не уверены, что ее нет
+	}
+	if existingTask != nil {
+		log.Debug("Активная задача 'need_update' для этого ФР уже существует, новая не создается.")
+		return
+	}
+
+	// Формируем комментарий для задачи, перечисляя все расхождения.
+	var commentBuilder strings.Builder
+	commentBuilder.WriteString(fmt.Sprintf("Обнаружено расхождение данных для ФР (%s) между эталонной БД и ServiceDesk. Требуется обновить данные в ServiceDesk.\n\nРасхождения:\n", payload.FRServiceDeskUUID))
+	for field, details := range payload.Discrepancies {
+		commentBuilder.WriteString(fmt.Sprintf("- Поле '%s':\n", field))
+		commentBuilder.WriteString(fmt.Sprintf("  - Эталон: %v\n", details.EtalonValue))
+		commentBuilder.WriteString(fmt.Sprintf("  - ServiceDesk: %v\n", details.ServiceDeskValue))
+	}
+
+	detailsJSON, err := json.Marshal(payload.Discrepancies)
+	if err != nil {
+		log.Error("Не удалось сериализовать детали расхождений в JSON", zap.Error(err))
+		// Продолжаем без деталей, но с комментарием
+		detailsJSON = []byte("{}")
+	}
+
+	// Создаем задачу в транзакции.
+	err = o.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		task := models.ReconciliationTask{
+			TaskType:   "need_update",
+			EntityType: "FiscalRegister",
+			EntityUUID: payload.FRServiceDeskUUID,
+			Details:    datatypes.JSON(detailsJSON),
+			Status:     "new",
+			Comment:    commentBuilder.String(),
+		}
+		return tx.Create(&task).Error
+	})
+
+	if err != nil {
+		log.Error("Не удалось создать задачу 'need_update'", zap.Error(err))
+	} else {
+		log.Info("Успешно создана задача 'need_update' на основе расхождений данных ФР.")
 	}
 }
 

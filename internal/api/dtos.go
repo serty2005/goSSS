@@ -17,7 +17,7 @@ type CompanyCreateDTO struct {
 
 // ResolveTaskRequestDTO - тело запроса для решения задачи.
 type ResolveTaskRequestDTO struct {
-	Status            string                 `json:"status"` // 'resolved', 'rejected', и т.д.
+	Status            string                 `json:"status"` // 'resolved', 'rejected', 'pending_sd_action' и т.д.
 	Comment           string                 `json:"comment,omitempty"`
 	ResolutionPayload map[string]interface{} `json:"resolution_payload,omitempty"` // Данные для выполнения действия
 }
@@ -307,7 +307,8 @@ type CreateEntityInSDRequestDTO struct {
 	EntityType string `json:"entity_type" validate:"required"` // 'FiscalRegister', 'Workstation', 'Server'
 }
 
-// CreateEntityInSDResponseDTO - тело ответа при успешном создании сущности в ServiceDesk.
-type CreateEntityInSDResponseDTO struct {
-	ServiceDeskUUID string `json:"service_desk_uuid"`
+// AcceptedResponseDTO - стандартный ответ для асинхронных операций.
+type AcceptedResponseDTO struct {
+	Message string `json:"message"`
+	TaskID  uint   `json:"task_id"`
 }

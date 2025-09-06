@@ -315,9 +315,23 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 }
 
 // processFiscalRegisterActions формирует план действий для ФР.
+// processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, owner string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
-		// ... (фильтры и проверки без изменений) ...
+		// --- НОВЫЙ ФИЛЬТР: Проверка на актуальность при обновлении ---
+		currentTime := utils.ParseAgentTime(data.CurrentTime)
+		if currentTime != nil && fr.LastModifiedDate != nil && currentTime.Before(*fr.LastModifiedDate) {
+			p.logger.Info("Обновление фискального регистратора пропущено: данные от агента старше, чем запись в БД",
+				zap.String("fr_uuid", *fr.ServiceDeskUUID),
+				zap.Time("agent_time", *currentTime),
+				zap.Time("db_time", *fr.LastModifiedDate))
+			return
+		}
+
+		if fr.Status != nil && *fr.Status == "locked" {
+			p.logger.Debug("Создание задач для ФР пропущено: статус 'locked'", zap.String("uuid", *fr.ServiceDeskUUID))
+			return
+		}
 
 		updates := map[string]interface{}{
 			"model_kkt":      data.ModelName,
@@ -326,17 +340,16 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 			"inn":            strings.TrimSpace(data.INN),
 			"ffd":            utils.FormatFFDVersion(data.FFDVersion),
 			"fn_expire_date": utils.ParseAgentTime(data.DateTimeEnd),
+			"kkt_reg_date":   utils.ParseAgentTime(data.DateTimeReg),
 		}
 
-		// ИЗМЕНЕНИЕ: Сохраняем данные в БД по новым правилам
-		updates["fr_downloader"] = data.BootVersion // bootVersion -> fr_downloader
+		updates["fr_downloader"] = data.BootVersion
 		calculatedFRFirmware := utils.CalculateFRFirmware(data.Licenses)
-		updates["fr_firmware"] = calculatedFRFirmware // обработанные licenses -> fr_firmware
+		updates["fr_firmware"] = calculatedFRFirmware
 
 		if data.InstalledDriver != "" {
 			updates["driver_version"] = data.InstalledDriver
 		}
-		// Сериализуем сырые лицензии в JSON для сохранения в БД
 		licensesJSON, err := json.Marshal(data.Licenses)
 		if err == nil {
 			updates["licenses"] = datatypes.JSON(licensesJSON)

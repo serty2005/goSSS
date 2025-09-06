@@ -25,6 +25,13 @@ const (
 	ServerPollingFailed = "server.polling.failed"
 	// ServerPollingRequested событие для ручного запуска опроса одного сервера.
 	ServerPollingRequested = "server.polling.requested"
+
+	// ServiceDeskCreateRequested событие для асинхронного создания сущности в ServiceDesk.
+	ServiceDeskCreateRequested = "servicedesk.entity.create.requested"
+	// ServiceDeskUpdateRequested событие для асинхронного обновления сущности в ServiceDesk.
+	ServiceDeskUpdateRequested = "servicedesk.entity.update.requested"
+	// FiscalRegisterDiscrepancyFound событие возникает, когда воркер обнаружил расхождение данных ФР.
+	FiscalRegisterDiscrepancyFound = "discrepancy.fiscal_register.found"
 )
 
 // ServiceDeskEntityPayload - полезная нагрузка для события ServiceDeskEntityUpdated.
@@ -53,14 +60,15 @@ type DuplicatesFoundPayload struct {
 	Value      string   // Значение поля, которое дублируется
 	UUIDs      []string // Список ServiceDesk UUID всех сущностей в группе дубликатов
 }
+
 // ServerPollingSucceededPayload - полезная нагрузка для успешного опроса.
 type ServerPollingSucceededPayload struct {
-	ServerUUID     string
-	ServerName     string
-	ServerEdition  string
-	ServerVersion  string
-	NewStatus      string
-	LastPolledAt   time.Time
+	ServerUUID    string
+	ServerName    string
+	ServerEdition string
+	ServerVersion string
+	NewStatus     string
+	LastPolledAt  time.Time
 }
 
 // ServerPollingFailedPayload - полезная нагрузка для неудачного опроса.
@@ -74,4 +82,25 @@ type ServerPollingFailedPayload struct {
 // ServerPollingRequestedPayload - полезная нагрузка для ручного запуска.
 type ServerPollingRequestedPayload struct {
 	ServerUUID string
+}
+
+// ServiceDeskModificationPayload - общая полезная нагрузка для событий создания/обновления в ServiceDesk.
+type ServiceDeskModificationPayload struct {
+	TaskID            uint                   `json:"task_id"`
+	EntityType        string                 `json:"entity_type"`
+	EntityUUID        string                 `json:"entity_uuid,omitempty"` // Пусто для создания
+	TriggeredByUserID string                 `json:"triggered_by_user_id"`
+	PayloadForSD      map[string]interface{} `json:"payload_for_sd"` // Данные для отправки в SD
+}
+
+// DiscrepancyDetail описывает расхождение по одному полю.
+type DiscrepancyDetail struct {
+	EtalonValue      interface{} `json:"etalon_value"`
+	ServiceDeskValue interface{} `json:"service_desk_value"`
+}
+
+// FiscalRegisterDiscrepancyPayload - полезная нагрузка для события FiscalRegisterDiscrepancyFound.
+type FiscalRegisterDiscrepancyPayload struct {
+	FRServiceDeskUUID string                       `json:"fr_service_desk_uuid"`
+	Discrepancies     map[string]DiscrepancyDetail `json:"discrepancies"` // Карта: имя поля -> детали расхождения
 }

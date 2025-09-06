@@ -210,7 +210,17 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, updatedTask)
+	// Проверяем статус для корректного HTTP-ответа
+	if updatedTask.Status == "pending_sd_action" {
+		response := api.AcceptedResponseDTO{
+			Message: "Запрос на операцию в ServiceDesk принят в обработку.",
+			TaskID:  updatedTask.ID,
+		}
+		RespondWithJSON(w, http.StatusAccepted, response)
+	} else {
+		// Для всех остальных случаев (включая 'resolved', 'rejected') возвращаем 200 OK
+		RespondWithJSON(w, http.StatusOK, updatedTask)
+	}
 }
 
 // createEntityFromTask обрабатывает запрос на создание сущности в ServiceDesk на основе задачи.
@@ -229,24 +239,17 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 	}
 	// TODO: Добавить валидацию DTO
 
-	var newUUID string
-	switch dto.EntityType {
-	case "FiscalRegister":
-		newUUID, err = h.sdEditorSvc.CreateFiscalRegisterFromTask(r.Context(), uint(taskID))
-	// Сюда можно будет добавить другие типы сущностей в будущем
-	// case "Workstation":
-	// 	newUUID, err = h.sdEditorSvc.CreateWorkstationFromTask(r.Context(), uint(taskID))
-	default:
-		RespondWithError(w, http.StatusBadRequest, fmt.Sprintf("Создание сущности типа '%s' не поддерживается", dto.EntityType))
-		return
-	}
+	// Вызываем новый асинхронный метод
+	updatedTask, err := h.resolutionSvc.RequestSDEntityCreation(r.Context(), uint(taskID), dto.EntityType)
 
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTaskNotFound):
 			RespondWithError(w, http.StatusNotFound, "Задача не найдена")
+		case errors.Is(err, services.ErrTaskAlreadyDone):
+			RespondWithError(w, http.StatusConflict, "Задача уже находится в обработке или решена")
 		default:
-			h.logger.Error("Ошибка при создании сущности в ServiceDesk по задаче",
+			h.logger.Error("Ошибка при отправке запроса на создание сущности в ServiceDesk",
 				zap.Uint64("taskID", taskID),
 				zap.String("entityType", dto.EntityType),
 				zap.Error(err),
@@ -256,10 +259,12 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	response := api.CreateEntityInSDResponseDTO{
-		ServiceDeskUUID: newUUID,
+	// Отвечаем 202 Accepted
+	response := api.AcceptedResponseDTO{
+		Message: "Запрос на создание сущности в ServiceDesk принят в обработку.",
+		TaskID:  updatedTask.ID,
 	}
-	RespondWithJSON(w, http.StatusCreated, response)
+	RespondWithJSON(w, http.StatusAccepted, response)
 }
 
 // GetDuplicates находит и возвращает группы дубликатов в формате JSON.
