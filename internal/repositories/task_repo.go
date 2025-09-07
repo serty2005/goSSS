@@ -4,6 +4,7 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/models"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -13,6 +14,7 @@ type TaskRepo interface {
 	GetByID(ctx context.Context, id uint) (*models.ReconciliationTask, error) // <-- ДОБАВЛЕНО
 	FindActiveDuplicateTaskByMemberUUIDs(ctx context.Context, uuids []string) (*models.ReconciliationTask, error)
 	FindActiveTask(ctx context.Context, taskType, entityUUID string) (*models.ReconciliationTask, error)
+	FindRecentlyResolvedTask(ctx context.Context, taskType, entityUUID string, window time.Duration) (*models.ReconciliationTask, error)
 }
 
 type taskRepo struct {
@@ -83,4 +85,27 @@ func (r *taskRepo) GetByID(ctx context.Context, id uint) (*models.Reconciliation
 		return nil, nil
 	}
 	return &task, err
+}
+
+// FindRecentlyResolvedTask ищет решенную задачу в заданном временном окне.
+// Это нужно, чтобы найти исходную задачу add_equipment после того, как сущность была создана в SD и пришла через шлюз.
+func (r *taskRepo) FindRecentlyResolvedTask(ctx context.Context, taskType, entityUUID string, window time.Duration) (*models.ReconciliationTask, error) {
+	if taskType == "" || entityUUID == "" {
+		return nil, nil
+	}
+
+	var task models.ReconciliationTask
+	// Ищем задачу, которая была решена (updated_at) не так давно
+	err := r.db.WithContext(ctx).
+		Where("task_type = ? AND entity_uuid = ? AND status = 'resolved' AND updated_at > ?", taskType, entityUUID, time.Now().Add(-window)).
+		Order("updated_at DESC"). // Берем самую свежую
+		First(&task).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
 }

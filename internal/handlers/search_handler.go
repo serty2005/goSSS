@@ -250,17 +250,25 @@ func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDT
 	for _, fr := range frs {
 		if fr.OwnerServiceDeskUUID != nil {
 			ownerID := *fr.OwnerServiceDeskUUID
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "FiscalRegister",
 				Data: api.FiscalRegisterRichDTO{
 					UUID:               *fr.ServiceDeskUUID,
+					Status:             fr.Status,
 					RNKKT:              fr.RNKKT,
 					ModelKKT:           fr.ModelKKT,
-					FNExpireDate:       fr.FNExpireDate,
 					FNRegistrationDate: fr.KKTRegDate,
+					FNExpireDate:       fr.FNExpireDate,
 					DriverVersion:      fr.DriverVersion,
-					FRFirmware:         fr.FRFirmware,   // ИЗМЕНЕНИЕ: Теперь берем обработанные подписки
-					FRDownloader:       fr.FRDownloader, // ИЗМЕНЕНИЕ: Теперь берем загрузчик
+					FRFirmware:         fr.FRFirmware,
+					FRDownloader:       fr.FRDownloader,
+					OrganizationName:   fr.LegalName,
+					INN:                fr.INN,
+					SerialNumber:       fr.FRSerialNumber,
+					// --- ИСПОЛЬЗОВАНИЕ ЗАГЛУШКИ ---
+					IsMarkingActive: true,
+					IsExciseActive:  false,
 				},
 			})
 		}

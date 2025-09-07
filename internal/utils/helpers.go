@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	// Импорт остается нужным для CalculateFRFirmware
 )
 
 // TimeLayoutServiceDesk определяет формат времени, используемый в ServiceDesk.

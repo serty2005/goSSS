@@ -87,10 +87,14 @@ func (s *sdEditorServiceImpl) handleUpdateRequest(ctx context.Context, event eve
 		return
 	}
 
+	// ДОБАВЛЕНО: Логируем payload перед отправкой для трассировки.
+	log.Info("Подготовлен payload для обновления сущности в ServiceDesk", zap.Any("payload", payloadForSD))
+
 	// 2. Вызываем клиент ServiceDesk для выполнения обновления.
 	err = s.sdClient.UpdateEntity(ctx, metaClass, payload.EntityUUID, payloadForSD)
 	if err != nil {
-		log.Error("Ошибка при обновлении сущности в ServiceDesk", zap.Error(err))
+		// ИЗМЕНЕНИЕ: Добавляем payload в лог ошибки для легкой отладки.
+		log.Error("Ошибка при обновлении сущности в ServiceDesk", zap.Error(err), zap.Any("sent_payload", payloadForSD))
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка API ServiceDesk: %v", err))
 		return
 	}
@@ -143,21 +147,40 @@ func (s *sdEditorServiceImpl) buildUpdatePayload(ctx context.Context, entityType
 
 	switch entityType {
 	case "FiscalRegister":
+		// MetaClass для /edit/ не нужен, но оставляем для унификации
 		metaClass = "objectBase$FR"
 		fr, err := s.frRepo.GetByUUID(ctx, entityUUID)
 		if err != nil || fr == nil {
 			return nil, "", fmt.Errorf("не удалось найти ФР с UUID %s в локальной БД: %w", entityUUID, err)
 		}
 		// Собираем payload на основе эталонных полей
-		addStringFieldToPayload(s.logger, payload, "RNKKT", utils.FormatRNKKT(utils.SafeStringDereference(fr.RNKKT)))
-		addStringFieldToPayload(s.logger, payload, "FRFirmware", utils.SafeStringDereference(fr.FRFirmware))
-		addStringFieldToPayload(s.logger, payload, "FRDownloader", utils.SafeStringDereference(fr.FRDownloader))
-		if fr.FNExpireDate != nil {
-			addStringFieldToPayload(s.logger, payload, "FNExpireDate", fr.FNExpireDate.Format(utils.TimeLayoutServiceDesk))
+		payload["RNKKT"] = utils.FormatRNKKT(utils.SafeStringDereference(fr.RNKKT))
+		payload["FNNumber"] = utils.SafeStringDereference(fr.FNNumber)
+		payload["FRDownloader"] = utils.SafeStringDereference(fr.FRDownloader)
+
+		// Формируем LegalName с ИНН, если он есть
+		var legalName string
+		if fr.LegalName != nil && *fr.LegalName != "" {
+			legalName = *fr.LegalName
+			if fr.INN != nil && *fr.INN != "" {
+				legalName = fmt.Sprintf("%s ИНН:%s", *fr.LegalName, *fr.INN)
+			}
 		}
-	// case "Server":
-	// 	metaClass = "objectBase$Server"
-	// 	...
+		payload["LegalName"] = legalName
+
+		if fr.FNExpireDate != nil {
+			payload["FNExpireDate"] = fr.FNExpireDate.Format(utils.TimeLayoutServiceDesk)
+		}
+		if fr.KKTRegDate != nil {
+			payload["KKTRegDate"] = fr.KKTRegDate.Format(utils.TimeLayoutServiceDesk)
+		}
+		// Важно: Удаляем ключи с пустыми значениями, чтобы не отправлять их в SD
+		for k, v := range payload {
+			if strVal, ok := v.(string); ok && strVal == "" {
+				delete(payload, k)
+			}
+		}
+
 	default:
 		return nil, "", fmt.Errorf("обновление для типа сущности '%s' не поддерживается", entityType)
 	}

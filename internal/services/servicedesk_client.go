@@ -249,12 +249,11 @@ func (s *serviceDeskClientImpl) CheckAgreementActive(ctx context.Context, agreem
 }
 
 // doWithRetry выполняет HTTP-запрос с политикой повторов.
+// Теперь он корректно логирует и URL с параметрами, и тело (если оно есть).
 func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url string, body io.Reader, target interface{}, queryParams ...map[string]string) error {
 	var bodyBytes []byte
 	var err error
 
-	// Для логирования нам нужно прочитать тело. Так как io.Reader одноразовый,
-	// мы читаем его в байты, а затем создаем новый Reader для запроса.
 	if body != nil {
 		bodyBytes, err = io.ReadAll(body)
 		if err != nil {
@@ -267,7 +266,6 @@ func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url str
 			return err
 		}
 
-		// Создаем новый reader из байтов на каждой итерации
 		var requestBody io.Reader
 		if bodyBytes != nil {
 			requestBody = bytes.NewBuffer(bodyBytes)
@@ -278,6 +276,7 @@ func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url str
 			return fmt.Errorf("failed to create request: %w", reqErr)
 		}
 
+		// Формируем URL с query-параметрами
 		q := req.URL.Query()
 		q.Add("accessKey", s.apiKey)
 		if len(queryParams) > 0 {
@@ -291,11 +290,11 @@ func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url str
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		// --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ---
-		s.logger.Debug("Отправка запроса в ServiceDesk",
+		// ИЗМЕНЕНИЕ: Логируем ПОЛНЫЙ URL с параметрами
+		s.logger.Info("Отправка запроса в ServiceDesk",
 			zap.String("method", method),
-			zap.String("url", req.URL.String()),
-			zap.String("body", string(bodyBytes)),
+			zap.String("full_url", req.URL.String()),
+			zap.String("body", string(bodyBytes)), // Тело будет пустым для /edit/
 		)
 
 		resp, doErr := s.client.Do(req)
@@ -305,13 +304,18 @@ func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url str
 			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
 			continue
 		}
-
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
 			respBodyBytes, _ := io.ReadAll(resp.Body)
 			bodyString := string(respBodyBytes)
 			err = fmt.Errorf("service desk api error: status %d, body: %s", resp.StatusCode, bodyString)
+
+			s.logger.Error("Получена ошибка от ServiceDesk",
+				zap.Int("status_code", resp.StatusCode),
+				zap.String("response_body", bodyString),
+				zap.String("request_url", req.URL.String()), // Добавляем URL в лог ошибки
+			)
 
 			if resp.StatusCode == 500 && strings.Contains(bodyString, "ключ авторизации") && strings.Contains(bodyString, "не найден") {
 				s.logger.Fatal("Критическая ошибка: ключ доступа ServiceDesk невалиден. Проверьте конфигурацию.",
@@ -341,31 +345,34 @@ func (s *serviceDeskClientImpl) doWithRetry(ctx context.Context, method, url str
 	return fmt.Errorf("request failed after %d retries: %w", s.maxRetries, err)
 }
 
-// UpdateEntity обновляет существующую сущность в ServiceDesk.
+// UpdateEntity обновляет существующую сущность в ServiceDesk, отправляя данные как query-параметры.
 func (s *serviceDeskClientImpl) UpdateEntity(ctx context.Context, metaClass, uuid string, data map[string]interface{}) error {
 	if len(data) == 0 {
-		return nil
+		return nil // Нечего обновлять
 	}
 
+	// Используем UUID "как есть", без какой-либо обработки или конструирования.
+	// `uuid` - это уже полный идентификатор, например "objectBase$12345".
+
 	if s.dryRun {
-		// Сообщение стало более общим
 		s.logger.Warn("[DRY RUN] Отправка запроса на ОБНОВЛЕНИЕ в ServiceDesk пропущена.",
-			zap.String("metaClass", metaClass),
-			zap.String("uuid", uuid),
+			zap.String("fullUUID", uuid), // Логируем полный UUID для ясности
+			zap.Any("params", data),
 		)
 		return nil
 	}
 
-	entityShortName := strings.Split(metaClass, "$")[1]
-	fullUUID := fmt.Sprintf("%s$%s", entityShortName, uuid)
-	url := fmt.Sprintf("%s/update/%s", s.baseURL, fullUUID)
+	// Используем эндпоинт /edit/ с полным UUID, который пришел в аргументах.
+	url := fmt.Sprintf("%s/edit/%s", s.baseURL, uuid)
 
-	bodyBytes, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных: %w", err)
+	// Преобразуем map[string]interface{} в map[string]string для query-параметров.
+	queryParams := make(map[string]string)
+	for key, value := range data {
+		queryParams[key] = fmt.Sprintf("%v", value)
 	}
 
-	return s.doWithRetry(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes), nil)
+	// Отправляем POST-запрос БЕЗ ТЕЛА, но с параметрами в URL.
+	return s.doWithRetry(ctx, http.MethodPost, url, nil, nil, queryParams)
 }
 
 // CreateEntity создает новую сущность в ServiceDesk.

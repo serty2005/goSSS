@@ -277,16 +277,20 @@ type WorkstationRichDTO struct {
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
-	SerialNumber       *string    `json:"serial_number,omitempty"`
-	LegalName          *string    `json:"legal_name,omitempty"`
 	UUID               string     `json:"uuid"`
+	Status             *string    `json:"status,omitempty"` // Добавлено поле статуса
 	RNKKT              *string    `json:"rn_kkt,omitempty"`
 	ModelKKT           *string    `json:"model_kkt,omitempty"`
-	FNExpireDate       *time.Time `json:"fn_expire_date,omitempty"`
 	FNRegistrationDate *time.Time `json:"fn_registration_date,omitempty"`
+	FNExpireDate       *time.Time `json:"fn_expire_date,omitempty"`
 	DriverVersion      *string    `json:"driver_version,omitempty"`
-	FRFirmware         *string    `json:"fr_firmware,omitempty"`   // ИЗМЕНЕНИЕ: Переименовано для ясности (подписки)
-	FRDownloader       *string    `json:"fr_downloader,omitempty"` // ИЗМЕНЕНИЕ: Добавлено новое поле (загрузчик)
+	FRFirmware         *string    `json:"fr_firmware,omitempty"`
+	FRDownloader       *string    `json:"fr_downloader,omitempty"`
+	OrganizationName   *string    `json:"organization_name,omitempty"`
+	INN                *string    `json:"inn,omitempty"`
+	SerialNumber       *string    `json:"serial_number,omitempty"`
+	IsMarkingActive    bool       `json:"is_marking_active"`
+	IsExciseActive     bool       `json:"is_excise_active"`
 }
 
 // TaskDTO - DTO для отображения задачи в UI.

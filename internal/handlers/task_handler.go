@@ -89,7 +89,6 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Преобразуем модели в DTO перед отправкой
 	taskDTOs := make([]api.TaskDTO, 0, len(tasks))
 	for _, task := range tasks {
 		dto := api.TaskDTO{
@@ -103,10 +102,9 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:  task.UpdatedAt,
 		}
 
-		var richDetails interface{}
-
-		// Логика зависит от типа задачи
-		if task.TaskType == "add_equipment" {
+		// ИЗМЕНЕНИЕ: Используем switch для разной логики формирования поля details
+		switch task.TaskType {
+		case "add_equipment":
 			// Для новых сущностей берем данные из JSON 'agent_data'
 			var details struct {
 				AgentData       api.AgentDataDTO `json:"agent_data"`
@@ -114,6 +112,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := json.Unmarshal(task.Details, &details); err == nil {
 				// Формируем новую, более полную структуру для Details
+				var richDetails interface{}
 				switch task.EntityType {
 				case "FiscalRegister":
 					richDetails = struct {
@@ -137,11 +136,21 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 						LitemanagerID:    details.AgentData.LitemanagerID,
 						AgentCurrentTime: details.AgentData.CurrentTime,
 					}
-					// Здесь можно будет добавить обработку для Workstation и т.д.
 				}
+				dto.Details = richDetails
+			} else {
+				dto.Details = task.Details // Fallback
 			}
-		} else {
-			// Для существующих сущностей берем АКТУАЛЬНЫЕ данные из базы
+
+		case "need_update", "data_conflict", "resolve_duplicate":
+			// Для этих типов задач в `details` уже хранится вся необходимая информация о расхождениях.
+			// Просто передаем ее как есть.
+			dto.Details = task.Details
+
+		default:
+			// Для всех остальных типов задач (например, `owner_mismatch`)
+			// показываем актуальное состояние сущности из нашей БД.
+			var richDetails interface{}
 			switch task.EntityType {
 			case "FiscalRegister":
 				fr, _ := h.frRepo.GetByUUID(r.Context(), task.EntityUUID)
@@ -159,15 +168,13 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 					richDetails = modelToWorkstationRichDTO(*ws)
 				}
 			}
+			// Если удалось получить RichDTO, используем его. Иначе - оставляем сырой JSON.
+			if richDetails != nil {
+				dto.Details = richDetails
+			} else {
+				dto.Details = task.Details
+			}
 		}
-
-		// Если удалось получить RichDTO, используем его. Иначе - оставляем сырой JSON.
-		if richDetails != nil {
-			dto.Details = richDetails
-		} else {
-			dto.Details = task.Details
-		}
-
 		taskDTOs = append(taskDTOs, dto)
 	}
 
@@ -402,13 +409,20 @@ func agentDataToFiscalRegisterRichDTO(data api.AgentDataDTO) api.FiscalRegisterR
 func modelToFiscalRegisterRichDTO(fr models.FiscalRegister) api.FiscalRegisterRichDTO {
 	return api.FiscalRegisterRichDTO{
 		UUID:               *fr.ServiceDeskUUID,
+		Status:             fr.Status,
 		RNKKT:              fr.RNKKT,
 		ModelKKT:           fr.ModelKKT,
-		FNExpireDate:       fr.FNExpireDate,
 		FNRegistrationDate: fr.KKTRegDate,
+		FNExpireDate:       fr.FNExpireDate,
 		DriverVersion:      fr.DriverVersion,
 		FRFirmware:         fr.FRFirmware,
 		FRDownloader:       fr.FRDownloader,
+		OrganizationName:   fr.LegalName,
+		INN:                fr.INN,
+		SerialNumber:       fr.FRSerialNumber,
+		// --- ИСПОЛЬЗОВАНИЕ ЗАГЛУШКИ ---
+		IsMarkingActive: true,
+		IsExciseActive:  false,
 	}
 }
 

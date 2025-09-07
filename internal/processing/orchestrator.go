@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/services"
+	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"reflect"
@@ -225,6 +226,8 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		return
 	}
 	log := o.logger.With(zap.String("metaClass", payload.MetaClass), zap.String("uuid", payload.UUID))
+
+	// Переменные для хранения результатов обработки внутри транзакции
 	var updates map[string]interface{}
 	var diffLog []zap.Field
 	var currentEntity, resolvedEntityData interface{}
@@ -232,13 +235,15 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 	var entityType string
 	source := "servicedesk_gateway"
 
+	// Вся логика выполняется в одной транзакции для обеспечения целостности данных.
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := tx.WithContext(ctx)
 
-		// Функция-хелпер для проверки существования владельца внутри транзакции
+		// Функция-хелпер для проверки существования компании-владельца внутри транзакции.
+		// Это предотвращает создание "осиротевших" сущностей.
 		ownerExists := func(ownerUUID string) (bool, error) {
 			if ownerUUID == "" {
-				return false, nil // Считаем, что пустой владелец "не существует"
+				return false, nil
 			}
 			var count int64
 			if err := txCtx.Model(&models.Company{}).Where("service_desk_uuid = ?", ownerUUID).Count(&count).Error; err != nil {
@@ -247,6 +252,7 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			return count > 0, nil
 		}
 
+		// Шаг 1: Маппинг данных из SD, поиск существующей записи и вычисление изменений (diff).
 		switch payload.MetaClass {
 		case "ou$company":
 			entityType = "Company"
@@ -273,14 +279,13 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if mapErr != nil {
 				return mapErr
 			}
-			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
 			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
 			if err != nil {
 				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
 			}
 			if !exists {
 				log.Warn("Пропуск обработки Сервера, так как его владелец не найден в локальной БД.", zap.String("ownerUUID", *newData.OwnerServiceDeskUUID))
-				return nil // Корректно выходим из транзакции для этого события
+				return nil
 			}
 			resolvedEntityData = newData
 			currentData, getErr := o.serverRepo.GetByUUIDUnscoped(ctx, payload.UUID)
@@ -301,7 +306,6 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if mapErr != nil {
 				return mapErr
 			}
-			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
 			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
 			if err != nil {
 				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
@@ -329,7 +333,6 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if mapErr != nil {
 				return mapErr
 			}
-			// --- ПРОВЕРКА ВЛАДЕЛЬЦА ---
 			exists, err := ownerExists(*newData.OwnerServiceDeskUUID)
 			if err != nil {
 				return fmt.Errorf("ошибка проверки существования владельца %s: %w", *newData.OwnerServiceDeskUUID, err)
@@ -346,7 +349,33 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			if currentData == nil {
 				isNewEntity = true
 				newData.LastUpdatedBy = source
-				return o.frRepo.Create(ctx, tx, newData)
+				if err := o.frRepo.Create(ctx, tx, newData); err != nil {
+					return err
+				}
+				if newData.FRSerialNumber != nil {
+					task, _ := o.taskRepo.FindRecentlyResolvedTask(ctx, "add_equipment", *newData.FRSerialNumber, time.Hour*24)
+					if task != nil {
+						log.Info("Найдена исходная задача 'add_equipment' для нового ФР. Запускаю обогащение данных.", zap.Uint("taskID", task.ID))
+						var details struct {
+							AgentData api.AgentDataDTO `json:"agent_data"`
+						}
+						if json.Unmarshal(task.Details, &details) == nil {
+							agentUpdates := map[string]interface{}{
+								"kkt_reg_date":   utils.ParseAgentTime(details.AgentData.DateTimeReg),
+								"fr_downloader":  details.AgentData.BootVersion,
+								"fr_firmware":    utils.CalculateFRFirmware(details.AgentData.Licenses),
+								"driver_version": details.AgentData.InstalledDriver,
+								"licenses":       details.AgentData.Licenses,
+							}
+							if _, err := o.frRepo.Update(ctx, tx, payload.UUID, agentUpdates); err != nil {
+								log.Error("Не удалось обогатить новый ФР данными из задачи", zap.Error(err))
+							} else {
+								log.Info("Новый ФР успешно обогащен данными от агента.")
+							}
+						}
+					}
+				}
+				return nil
 			}
 			currentEntity = currentData
 			updates, diffLog = getFiscalRegisterDiff(currentData, newData)
@@ -354,6 +383,38 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		default:
 			return fmt.Errorf("неизвестный metaClass для обработки: %s", payload.MetaClass)
 		}
+
+		// --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ДЛЯ РАЗРЫВА ЦИКЛА СИНХРОНИЗАЦИИ ---
+		// Если сущность не новая (т.е. она обновляется), мы должны убедиться,
+		// что поле last_modified_date в нашей базе будет синхронизировано с ServiceDesk.
+		// Это необходимо, даже если содержательных изменений в других полях не найдено,
+		// чтобы ServiceDeskGateway на следующем цикле не посчитал эту сущность измененной снова.
+		if !isNewEntity {
+			var newLMD *time.Time
+			// Извлекаем last_modified_date из смапленной структуры `newData`
+			switch v := resolvedEntityData.(type) {
+			case *models.Company:
+				newLMD = v.LastModifiedDate
+			case *models.Server:
+				newLMD = v.LastModifiedDate
+			case *models.Workstation:
+				newLMD = v.LastModifiedDate
+			case *models.FiscalRegister:
+				newLMD = v.LastModifiedDate
+			}
+
+			if newLMD != nil {
+				// Если diff-функция не нашла других изменений, карта `updates` будет пустой.
+				if updates == nil {
+					updates = make(map[string]interface{})
+				}
+				// Принудительно добавляем/перезаписываем last_modified_date.
+				updates["last_modified_date"] = newLMD
+			}
+		}
+		// --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+		// Шаг 2: Применяем обновления, если они есть.
 		if len(updates) > 0 {
 			updates["last_updated_by"] = source
 			return o.performUpdate(ctx, tx, payload.MetaClass, payload.UUID, updates)
@@ -366,6 +427,7 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		return
 	}
 
+	// Шаг 3 (вне транзакции): Решаем связанные задачи и создаем новые, если нужно.
 	if resolvedEntityData != nil {
 		go o.resolveTasksOnUpdate(context.Background(), entityType, payload.UUID, resolvedEntityData)
 	}
@@ -374,21 +436,24 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		log.Info("Новая сущность успешно создана.")
 		return
 	}
+
 	if len(updates) == 0 {
-		log.Debug("Изменений не найдено, обновление не требуется. Конфликт (если был) устранен.")
+		log.Debug("Изменений не найдено, обновление не требуется.")
 		o.resolveConflictTaskIfNeeded(ctx, payload.UUID, log)
 	} else {
 		_, isRestorationOnly := updates["deleted_at"]
 		if len(updates) == 1 && isRestorationOnly {
-			log.Info("Сущность была удалена локально, но найдена в SD. Автоматически восстановлена.", diffLog...)
-		} else {
-			log.Warn("Обнаружено расхождение данных. Создание/обновление задачи.", diffLog...)
+			log.Info("Сущность была удалена локально, но найдена в SD. Автоматически восстановлена.")
+		} else if len(diffLog) > 0 {
+			log.Warn("Обнаружено критическое расхождение данных. Создание/обновление задачи.", diffLog...)
 			o.createConflictTask(ctx, payload.MetaClass, payload.UUID, currentEntity, payload.Data, diffLog, log)
+		} else {
+			log.Info("Обнаружены некритические расхождения. Данные в локальной БД обновлены без создания задачи.", zap.Any("updates", updates))
 		}
 	}
 }
 
-// handleDuplicatesFound создает или обновляет задачу на разрешение дубликатов.
+// handleDuplicatesFound создает или обновляет задачу на разрешение дубликатов с обогащенными данными.
 func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.DuplicatesFoundPayload)
 	if !ok {
@@ -402,31 +467,103 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 		zap.String("value", payload.Value),
 	)
 
-	// НОВОЕ: Проверяем владельцев, чтобы определить тип задачи
-	var owners []string
+	// --- ШАГ 1: ОБОГАЩЕНИЕ ДАННЫХ ---
+	// Внутренние структуры для формирования нового формата details
+	type duplicateEntityDetail struct {
+		UUID             string     `json:"uuid"`
+		Name             string     `json:"name"`
+		LastModifiedDate *time.Time `json:"last_modified_date,omitempty"` // ИЗМЕНЕНИЕ: Добавлено поле даты
+	}
+	type duplicateOwnerDetail struct {
+		UUID           string  `json:"uuid"`
+		Name           string  `json:"name"`
+		Address        *string `json:"address"`
+		ActiveContract bool    `json:"active_contract"`
+	}
+	type duplicateInfo struct {
+		Entity duplicateEntityDetail `json:"entity"`
+		Owner  duplicateOwnerDetail  `json:"owner"`
+	}
+
+	// 1.1 Получаем всех уникальных владельцев
+	ownerUUIDsSet := make(map[string]struct{})
+	var allOwnerUUIDs []string
+
+	var allEntitiesOwners []string
 	switch payload.EntityType {
 	case "Server":
-		o.db.Model(&models.Server{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+		o.db.Model(&models.Server{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &allEntitiesOwners)
 	case "Workstation":
-		o.db.Model(&models.Workstation{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+		o.db.Model(&models.Workstation{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &allEntitiesOwners)
 	case "FiscalRegister":
-		o.db.Model(&models.FiscalRegister{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &owners)
+		o.db.Model(&models.FiscalRegister{}).Where("service_desk_uuid IN ?", payload.UUIDs).Pluck("owner_service_desk_uuid", &allEntitiesOwners)
 	}
 
-	if len(owners) < 2 {
-		return // Недостаточно данных для анализа
-	}
-
-	// Проверяем, принадлежат ли все дубликаты одной и той же компании
-	firstOwner := owners[0]
-	allSameOwner := true
-	for _, owner := range owners[1:] {
-		if owner != firstOwner {
-			allSameOwner = false
-			break
+	for _, ownerUUID := range allEntitiesOwners {
+		if _, exists := ownerUUIDsSet[ownerUUID]; !exists && ownerUUID != "" {
+			ownerUUIDsSet[ownerUUID] = struct{}{}
+			allOwnerUUIDs = append(allOwnerUUIDs, ownerUUID)
 		}
 	}
 
+	ownerCompanies, err := o.companyRepo.GetByUUIDs(ctx, allOwnerUUIDs)
+	if err != nil {
+		log.Error("Не удалось получить данные о компаниях-владельцах для обогащения задачи", zap.Error(err))
+		return
+	}
+	ownersMap := make(map[string]models.Company)
+	for _, company := range ownerCompanies {
+		ownersMap[*company.ServiceDeskUUID] = company
+	}
+
+	// 1.2 Собираем информацию о каждой сущности-дубликате
+	var duplicatesForDetails []duplicateInfo
+	allSameOwner := len(ownerUUIDsSet) <= 1
+
+	for _, entityUUID := range payload.UUIDs {
+		var entityName string
+		var ownerUUID string
+		var lastModifiedDate *time.Time // ИЗМЕНЕНИЕ: Переменная для хранения даты
+
+		switch payload.EntityType {
+		case "Server":
+			var entity models.Server
+			if err := o.db.Where("service_desk_uuid = ?", entityUUID).First(&entity).Error; err == nil {
+				entityName = *entity.DeviceName
+				ownerUUID = *entity.OwnerServiceDeskUUID
+				lastModifiedDate = entity.LastModifiedDate // ИЗМЕНЕНИЕ: Извлекаем дату
+			}
+		case "Workstation":
+			var entity models.Workstation
+			if err := o.db.Where("service_desk_uuid = ?", entityUUID).First(&entity).Error; err == nil {
+				entityName = *entity.DeviceName
+				ownerUUID = *entity.OwnerServiceDeskUUID
+				lastModifiedDate = entity.LastModifiedDate // ИЗМЕНЕНИЕ: Извлекаем дату
+			}
+		}
+
+		owner, ownerFound := ownersMap[ownerUUID]
+		if !ownerFound {
+			log.Warn("Не найден владелец для сущности при обогащении задачи", zap.String("entityUUID", entityUUID), zap.String("ownerUUID", ownerUUID))
+			continue
+		}
+
+		duplicatesForDetails = append(duplicatesForDetails, duplicateInfo{
+			Entity: duplicateEntityDetail{
+				UUID:             entityUUID,
+				Name:             entityName,
+				LastModifiedDate: lastModifiedDate, // ИЗМЕНЕНИЕ: Добавляем дату в структуру
+			},
+			Owner: duplicateOwnerDetail{
+				UUID:           *owner.ServiceDeskUUID,
+				Name:           *owner.Title,
+				Address:        owner.Address,
+				ActiveContract: owner.ActiveContract != nil && *owner.ActiveContract,
+			},
+		})
+	}
+
+	// --- ШАГ 2: ФОРМИРОВАНИЕ ЗАДАЧИ ---
 	taskType := "resolve_duplicate"
 	comment := fmt.Sprintf(
 		"Обнаружены дубликаты (%d шт.) по полю '%s' со значением '%s' для сущности '%s'. Требуется выбрать эталонную запись, а остальные удалить.",
@@ -444,11 +581,9 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 	taskIdentifier := fmt.Sprintf("duplicate-%s-%s-%s", payload.EntityType, payload.Field, payload.Value)
 
 	detailsMap := map[string]interface{}{
-		"field":       payload.Field,
-		"value":       payload.Value,
-		"entityUUIDs": payload.UUIDs,
-		"ownerUUIDs":  owners,
-		"isSameOwner": allSameOwner,
+		"conflicting_field": payload.Field,
+		"conflicting_value": payload.Value,
+		"duplicates":        duplicatesForDetails,
 	}
 	detailsJSON, _ := json.Marshal(detailsMap)
 
@@ -858,11 +993,16 @@ func compareTimeAndLog(updates map[string]interface{}, diffs *[]zap.Field, key s
 	}
 }
 
+// getCompanyDiff сравнивает все синхронизируемые поля для компаний.
 func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
 	diffs := make([]zap.Field, 0)
+
 	compareAndLog(updates, &diffs, "title", current.Title, new.Title)
 	compareAndLog(updates, &diffs, "address", current.Address, new.Address)
+	compareAndLog(updates, &diffs, "additional_name", current.AdditionalName, new.AdditionalName)
+	compareAndLog(updates, &diffs, "parent_service_desk_uuid", current.ParentServiceDeskUUID, new.ParentServiceDeskUUID)
+
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
@@ -873,12 +1013,22 @@ func getCompanyDiff(current *models.Company, new *models.Company) (map[string]in
 	return updates, diffs
 }
 
+// getServerDiff сравнивает поля для серверов, разделяя их на критические и информационные.
 func getServerDiff(current *models.Server, new *models.Server) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
-	diffs := make([]zap.Field, 0)
+	diffs := make([]zap.Field, 0) // Сюда попадают только критические расхождения
+
+	// --- Критические поля (генерируют задачу data_conflict) ---
+	compareAndLog(updates, &diffs, "owner_service_desk_uuid", current.OwnerServiceDeskUUID, new.OwnerServiceDeskUUID)
 	compareAndLog(updates, &diffs, "unique_id", current.UniqueID, new.UniqueID)
 	compareAndLog(updates, &diffs, "rdp", current.RDP, new.RDP)
 	compareAndLog(updates, &diffs, "server_version", current.ServerVersion, new.ServerVersion)
+
+	// --- Информационные поля (тихо обновляются, не создают задачу) ---
+	tempDiffs := make([]zap.Field, 0)
+	compareAndLog(updates, &tempDiffs, "description", current.Description, new.Description)
+	// Поля IP, DeviceName, CabinetLink, Teamviewer, Anydesk, Litemanager НЕ СРАВНИВАЮТСЯ, т.к. агент/опрос - источник правды.
+
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
@@ -889,12 +1039,19 @@ func getServerDiff(current *models.Server, new *models.Server) (map[string]inter
 	return updates, diffs
 }
 
+// getWorkstationDiff сравнивает поля для рабочих станций.
 func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
 	diffs := make([]zap.Field, 0)
-	compareAndLog(updates, &diffs, "teamviewer", current.Teamviewer, new.Teamviewer)
-	compareAndLog(updates, &diffs, "anydesk", current.Anydesk, new.Anydesk)
-	compareAndLog(updates, &diffs, "litemanager", current.Litemanager, new.Litemanager)
+
+	// --- Критические поля ---
+	compareAndLog(updates, &diffs, "owner_service_desk_uuid", current.OwnerServiceDeskUUID, new.OwnerServiceDeskUUID)
+
+	// --- Информационные поля ---
+	tempDiffs := make([]zap.Field, 0)
+	compareAndLog(updates, &tempDiffs, "description", current.Description, new.Description)
+	// Поля DeviceName, Teamviewer, Anydesk, Litemanager НЕ СРАВНИВАЮТСЯ.
+
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
@@ -905,10 +1062,34 @@ func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (m
 	return updates, diffs
 }
 
+// getFiscalRegisterDiff сравнивает поля для ФР.
 func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) (map[string]interface{}, []zap.Field) {
 	updates := make(map[string]interface{})
 	diffs := make([]zap.Field, 0)
-	compareTimeAndLog(updates, &diffs, "fn_expire_date", current.FNExpireDate, new.FNExpireDate)
+
+	// --- Критические поля (с использованием нормализации) ---
+	// Сравниваем нормализованные значения, но в updates кладем "сырые"
+	currentRNKKTNorm := utils.NormalizeRNKKT(utils.SafeStringDereference(current.RNKKT))
+	newRNKKTNorm := utils.NormalizeRNKKT(utils.SafeStringDereference(new.RNKKT))
+	if currentRNKKTNorm != newRNKKTNorm {
+		updates["rn_kkt"] = new.RNKKT
+		diffs = append(diffs, zap.String("rn_kkt", fmt.Sprintf("'%s' -> '%s'", currentRNKKTNorm, newRNKKTNorm)))
+	}
+	compareAndLog(updates, &diffs, "fr_serial_number", current.FRSerialNumber, new.FRSerialNumber)
+	compareAndLog(updates, &diffs, "owner_service_desk_uuid", current.OwnerServiceDeskUUID, new.OwnerServiceDeskUUID)
+
+	// --- Информационные поля (тихо обновляются) ---
+	tempDiffs := make([]zap.Field, 0)
+	compareAndLog(updates, &tempDiffs, "model_kkt", current.ModelKKT, new.ModelKKT)
+	compareAndLog(updates, &tempDiffs, "ffd", current.FFD, new.FFD)
+	compareAndLog(updates, &tempDiffs, "legal_name", current.LegalName, new.LegalName)
+	compareAndLog(updates, &tempDiffs, "inn", current.INN, new.INN)
+	compareAndLog(updates, &tempDiffs, "fn_number", current.FNNumber, new.FNNumber)
+	compareTimeAndLog(updates, &tempDiffs, "kkt_reg_date", current.KKTRegDate, new.KKTRegDate)
+	compareTimeAndLog(updates, &tempDiffs, "fn_expire_date", current.FNExpireDate, new.FNExpireDate)
+	compareAndLog(updates, &tempDiffs, "fr_downloader", current.FRDownloader, new.FRDownloader)
+	compareAndLog(updates, &tempDiffs, "fr_firmware", current.FRFirmware, new.FRFirmware)
+
 	if len(updates) > 0 || current.DeletedAt.Valid {
 		updates["last_modified_date"] = new.LastModifiedDate
 		if current.DeletedAt.Valid {
