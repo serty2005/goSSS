@@ -1,6 +1,8 @@
+// internal/handlers/search_handler.go
 package handlers
 
 import (
+	"context"
 	"etalon-server/internal/api"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
@@ -22,6 +24,7 @@ type SearchHandler struct {
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
+	linkRepo        repositories.LinkRepo
 }
 
 // NewSearchHandler создает новый экземпляр обработчика.
@@ -31,8 +34,9 @@ func NewSearchHandler(
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
+	linkRepo repositories.LinkRepo,
 ) *SearchHandler {
-	return &SearchHandler{logger, companyRepo, serverRepo, workstationRepo, frRepo}
+	return &SearchHandler{logger, companyRepo, serverRepo, workstationRepo, frRepo, linkRepo}
 }
 
 // RegisterRoutes регистрирует роут для поиска.
@@ -55,13 +59,14 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := h.logger.With(zap.String("search_term", term))
 
-	// --- Шаг 1: Найти все сущности, напрямую совпадающие с поисковым запросом ---
+	// ИЗМЕНЕНИЕ: Добавляем логирование
+	log.Debug("Поступил поисковый запрос")
+
 	var wg sync.WaitGroup
 	var initialCompanies []models.Company
 	var initialServers []models.Server
 	var initialWorkstations []models.Workstation
 	var initialFRs []models.FiscalRegister
-
 	wg.Add(4)
 	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, true, limit, 0) }()
 	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0) }()
@@ -69,84 +74,85 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
 	wg.Wait()
 
-	// --- Шаг 2: Собрать уникальный список ID всех затронутых владельцев и их родителей ---
-	ownerUUIDs := make(map[string]bool)
+	ownerIDs := make(map[string]bool)
 	for _, company := range initialCompanies {
-		ownerUUIDs[*company.ServiceDeskUUID] = true
+		ownerIDs[company.ID] = true
 	}
 	for _, server := range initialServers {
-		if server.OwnerServiceDeskUUID != nil {
-			ownerUUIDs[*server.OwnerServiceDeskUUID] = true
+		if server.OwnerID != nil {
+			ownerIDs[*server.OwnerID] = true
 		}
 	}
 	for _, ws := range initialWorkstations {
-		if ws.OwnerServiceDeskUUID != nil {
-			ownerUUIDs[*ws.OwnerServiceDeskUUID] = true
+		if ws.OwnerID != nil {
+			ownerIDs[*ws.OwnerID] = true
 		}
 	}
 	for _, fr := range initialFRs {
-		if fr.OwnerServiceDeskUUID != nil {
-			ownerUUIDs[*fr.OwnerServiceDeskUUID] = true
+		if fr.OwnerID != nil {
+			ownerIDs[*fr.OwnerID] = true
 		}
 	}
 
-	if len(ownerUUIDs) == 0 {
-		log.Info("Не найдено совпадений или связанных владельцев.")
+	if len(ownerIDs) == 0 {
+		log.Debug("По запросу ничего не найдено")
 		RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
 		return
 	}
 
-	// НОВОЕ: Добавляем родительские компании в список для поиска
-	uuidsToEnrich := make([]string, 0, len(ownerUUIDs))
-	for uuid := range ownerUUIDs {
-		uuidsToEnrich = append(uuidsToEnrich, uuid)
+	idsToEnrich := make([]string, 0, len(ownerIDs))
+	for id := range ownerIDs {
+		idsToEnrich = append(idsToEnrich, id)
 	}
-	for _, uuid := range uuidsToEnrich {
-		parents, _ := h.companyRepo.GetAllParentUUIDs(ctx, uuid)
-		for _, parentUUID := range parents {
-			ownerUUIDs[parentUUID] = true
+	for _, id := range idsToEnrich {
+		parents, _ := h.companyRepo.GetAllParentIDs(ctx, id)
+		for _, parentID := range parents {
+			ownerIDs[parentID] = true
 		}
 	}
 
-	uuids := make([]string, 0, len(ownerUUIDs))
-	for uuid := range ownerUUIDs {
-		uuids = append(uuids, uuid)
+	allOwnerIDs := make([]string, 0, len(ownerIDs))
+	for id := range ownerIDs {
+		allOwnerIDs = append(allOwnerIDs, id)
 	}
 
-	// --- Шаг 3: Загрузить ВСЕ данные для найденных владельцев (включая родителей) ---
 	var allOwnerCompanies []models.Company
 	var allOwnerServers []models.Server
 	var allOwnerWorkstations []models.Workstation
 	var allOwnerFRs []models.FiscalRegister
-
 	wg.Add(4)
-	go func() { defer wg.Done(); allOwnerCompanies, _ = h.companyRepo.GetByUUIDs(ctx, uuids) }()
-	go func() { defer wg.Done(); allOwnerServers, _ = h.serverRepo.FindByOwnerUUIDs(ctx, uuids) }()
-	go func() { defer wg.Done(); allOwnerWorkstations, _ = h.workstationRepo.FindByOwnerUUIDs(ctx, uuids) }()
-	go func() { defer wg.Done(); allOwnerFRs, _ = h.frRepo.FindByOwnerUUIDs(ctx, uuids) }()
+	go func() { defer wg.Done(); allOwnerCompanies, _ = h.companyRepo.GetByIDs(ctx, allOwnerIDs) }()
+	go func() { defer wg.Done(); allOwnerServers, _ = h.serverRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
+	go func() { defer wg.Done(); allOwnerWorkstations, _ = h.workstationRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
+	go func() { defer wg.Done(); allOwnerFRs, _ = h.frRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
 	wg.Wait()
 
-	// --- Шаг 4: Сформировать финальную сгруппированную структуру ---
-	serversByOwner := groupServersByOwner(allOwnerServers)
-	workstationsByOwner := groupWorkstationsByOwner(allOwnerWorkstations)
-	frsByOwner := groupFRsByOwner(allOwnerFRs)
+	serversByOwner := h.groupServersByOwner(ctx, allOwnerServers)
+	workstationsByOwner := h.groupWorkstationsByOwner(ctx, allOwnerWorkstations)
+	frsByOwner := h.groupFRsByOwner(ctx, allOwnerFRs)
 
 	finalResponse := api.FinalSearchResponseDTO{}
-	initialOwnerUUIDs := make(map[string]struct{})
-	for _, uuid := range uuidsToEnrich {
-		initialOwnerUUIDs[uuid] = struct{}{}
+	initialOwnerIDs := make(map[string]struct{})
+	for _, id := range idsToEnrich {
+		initialOwnerIDs[id] = struct{}{}
 	}
 
-	// Создаем группу для каждой ИЗНАЧАЛЬНО найденной компании-владельца
 	for _, owner := range allOwnerCompanies {
-		ownerID := *owner.ServiceDeskUUID
-		if _, ok := initialOwnerUUIDs[ownerID]; !ok {
-			continue // Пропускаем родительские компании, чтобы не создавать для них отдельные группы
+		ownerID := owner.ID
+		if _, ok := initialOwnerIDs[ownerID]; !ok {
+			continue
+		}
+
+		link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", owner.ID)
+		var externalUUID *string
+		if link != nil {
+			externalUUID = &link.ExternalID
 		}
 
 		group := api.SearchGroupDTO{
 			Owner: api.OwnerFullDTO{
 				UUID:           ownerID,
+				ExternalUUID:   externalUUID, // ИСПРАВЛЕНИЕ: Теперь это поле существует
 				Name:           utils.SafeStringDereference(owner.Title),
 				Address:        owner.Address,
 				ActiveContract: owner.ActiveContract,
@@ -155,44 +161,45 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			FoundEntities: []api.FoundEntityDTO{},
 		}
 
-		// Собираем все UUID: свой, родителей, и т.д. для этой группы
-		currentAndParentUUIDs := map[string]struct{}{ownerID: {}}
-		parents, _ := h.companyRepo.GetAllParentUUIDs(ctx, ownerID)
-		for _, pUUID := range parents {
-			currentAndParentUUIDs[pUUID] = struct{}{}
+		currentAndParentIDs := map[string]struct{}{ownerID: {}}
+		parents, _ := h.companyRepo.GetAllParentIDs(ctx, ownerID)
+		for _, pID := range parents {
+			currentAndParentIDs[pID] = struct{}{}
 		}
 
-		// Добавляем оборудование, принадлежащее этой компании И ЕЕ РОДИТЕЛЯМ
-		for uuid := range currentAndParentUUIDs {
-			if servers, ok := serversByOwner[uuid]; ok {
+		for id := range currentAndParentIDs {
+			if servers, ok := serversByOwner[id]; ok {
 				group.FoundEntities = append(group.FoundEntities, servers...)
 			}
-			if workstations, ok := workstationsByOwner[uuid]; ok {
-				// Рабочие станции и ФР добавляем только для самой компании, не для родителей
-				if uuid == ownerID {
+			if id == ownerID {
+				if workstations, ok := workstationsByOwner[id]; ok {
 					group.FoundEntities = append(group.FoundEntities, workstations...)
 				}
-			}
-			if frs, ok := frsByOwner[uuid]; ok {
-				if uuid == ownerID {
+				if frs, ok := frsByOwner[id]; ok {
 					group.FoundEntities = append(group.FoundEntities, frs...)
 				}
 			}
 		}
-
 		finalResponse.SearchResults = append(finalResponse.SearchResults, group)
 	}
-
+	log.Debug("Поиск завершен, найдено групп", zap.Int("groups_count", len(finalResponse.SearchResults)))
 	RespondWithJSON(w, http.StatusOK, finalResponse)
 }
 
 // --- Вспомогательные функции-группировщики ---
 
-func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []models.Server) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, s := range servers {
-		if s.OwnerServiceDeskUUID != nil {
-			ownerID := *s.OwnerServiceDeskUUID
+		if s.OwnerID != nil {
+			ownerID := *s.OwnerID
+
+			// Обогащаем внешним ID
+			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", s.ID)
+			var externalUUID *string
+			if link != nil {
+				externalUUID = &link.ExternalID
+			}
 
 			// Формируем ссылку на партнерский кабинет
 			var partnersLink *string
@@ -211,7 +218,8 @@ func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDT
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Server",
 				Data: api.ServerRichDTO{
-					UUID:         *s.ServiceDeskUUID,
+					UUID:         s.ID,
+					ExternalUUID: externalUUID,
 					DeviceName:   s.DeviceName,
 					IP:           s.IP,
 					Status:       s.Status,
@@ -228,16 +236,29 @@ func groupServersByOwner(servers []models.Server) map[string][]api.FoundEntityDT
 	return result
 }
 
-func groupWorkstationsByOwner(workstations []models.Workstation) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstations []models.Workstation) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, ws := range workstations {
-		if ws.OwnerServiceDeskUUID != nil {
-			ownerID := *ws.OwnerServiceDeskUUID
+		if ws.OwnerID != nil {
+			ownerID := *ws.OwnerID
+
+			// Обогащаем внешним ID
+			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
+			var externalUUID *string
+			if link != nil {
+				externalUUID = &link.ExternalID
+			}
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Workstation",
 				Data: api.WorkstationRichDTO{
-					UUID: *ws.ServiceDeskUUID, DeviceName: ws.DeviceName, Status: ws.Status,
-					Anydesk: ws.Anydesk, Teamviewer: ws.Teamviewer, Litemanager: ws.Litemanager,
+					UUID:         ws.ID,
+					ExternalUUID: externalUUID,
+					DeviceName:   ws.DeviceName,
+					Status:       ws.Status,
+					Anydesk:      ws.Anydesk,
+					Teamviewer:   ws.Teamviewer,
+					Litemanager:  ws.Litemanager,
 				},
 			})
 		}
@@ -245,16 +266,24 @@ func groupWorkstationsByOwner(workstations []models.Workstation) map[string][]ap
 	return result
 }
 
-func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []models.FiscalRegister) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, fr := range frs {
-		if fr.OwnerServiceDeskUUID != nil {
-			ownerID := *fr.OwnerServiceDeskUUID
+		if fr.OwnerID != nil {
+			ownerID := *fr.OwnerID
+
+			// Обогащаем внешним ID
+			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
+			var externalUUID *string
+			if link != nil {
+				externalUUID = &link.ExternalID
+			}
 
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "FiscalRegister",
 				Data: api.FiscalRegisterRichDTO{
-					UUID:               *fr.ServiceDeskUUID,
+					UUID:               fr.ID,
+					ExternalUUID:       externalUUID,
 					Status:             fr.Status,
 					RNKKT:              fr.RNKKT,
 					ModelKKT:           fr.ModelKKT,
@@ -266,9 +295,8 @@ func groupFRsByOwner(frs []models.FiscalRegister) map[string][]api.FoundEntityDT
 					OrganizationName:   fr.LegalName,
 					INN:                fr.INN,
 					SerialNumber:       fr.FRSerialNumber,
-					// --- ИСПОЛЬЗОВАНИЕ ЗАГЛУШКИ ---
-					IsMarkingActive: true,
-					IsExciseActive:  false,
+					IsMarkingActive:    true,
+					IsExciseActive:     false,
 				},
 			})
 		}

@@ -1,3 +1,4 @@
+// internal/repositories/fr_repo.go
 package repositories
 
 import (
@@ -10,14 +11,14 @@ import (
 // FiscalRegisterRepo определяет интерфейс для работы с хранилищем фискальных регистраторов.
 type FiscalRegisterRepo interface {
 	Create(ctx context.Context, tx *gorm.DB, fr *models.FiscalRegister) error
-	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
-	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
-	GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegister, error)
-	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.FiscalRegister, error)
-	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error)
+	Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error)
+	Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error)
+	GetByID(ctx context.Context, internalID string) (*models.FiscalRegister, error)
+	GetByIDUnscoped(ctx context.Context, internalID string) (*models.FiscalRegister, error)
+	GetAllIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.FiscalRegister, error)
 	FindBySerialNumber(ctx context.Context, sn string) (*models.FiscalRegister, error)
-	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.FiscalRegister, error)
+	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]models.FiscalRegister, error)
 }
 
 // frRepo реализует интерфейс FiscalRegisterRepo.
@@ -37,54 +38,57 @@ func (r *frRepo) dbOrTx(tx *gorm.DB) *gorm.DB {
 	return r.db
 }
 
+// Create создает новый фискальный регистратор в базе данных.
 func (r *frRepo) Create(ctx context.Context, tx *gorm.DB, fr *models.FiscalRegister) error {
 	return r.dbOrTx(tx).WithContext(ctx).Create(fr).Error
 }
 
-func (r *frRepo) Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error) {
-	res := r.dbOrTx(tx).WithContext(ctx).Model(&models.FiscalRegister{}).Where("service_desk_uuid = ?", uuid).Updates(updateData)
+// Update обновляет данные фискального регистратора по его внутреннему ID.
+func (r *frRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Model(&models.FiscalRegister{}).Where("id = ?", internalID).Updates(updateData)
 	return res.RowsAffected > 0, res.Error
 }
 
-// Delete выполняет "мягкое удаление" фискального регистратора по его ServiceDesk UUID.
-func (r *frRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error) {
-	res := r.dbOrTx(tx).WithContext(ctx).Where("service_desk_uuid = ?", uuid).Delete(&models.FiscalRegister{})
+// Delete выполняет "мягкое удаление" фискального регистратора по его внутреннему ID.
+func (r *frRepo) Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Where("id = ?", internalID).Delete(&models.FiscalRegister{})
 	return res.RowsAffected > 0, res.Error
 }
 
-func (r *frRepo) GetByUUID(ctx context.Context, uuid string) (*models.FiscalRegister, error) {
+// GetByID находит фискальный регистратор по его внутреннему ID.
+func (r *frRepo) GetByID(ctx context.Context, internalID string) (*models.FiscalRegister, error) {
 	var fr models.FiscalRegister
-	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&fr).Error
+	err := r.db.WithContext(ctx).Where("id = ?", internalID).First(&fr).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &fr, err
 }
 
-// GetByUUIDUnscoped находит запись по UUID, включая "мягко удаленные".
-func (r *frRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.FiscalRegister, error) {
+// GetByIDUnscoped находит запись по внутреннему ID, включая "мягко удаленные".
+func (r *frRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*models.FiscalRegister, error) {
 	var fr models.FiscalRegister
-	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&fr).Error
+	err := r.db.WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&fr).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &fr, err
 }
 
-func (r *frRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error) {
+// GetAllIDsAndDates извлекает все внутренние ID, даты модификации и статусы удаления.
+func (r *frRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*models.FiscalRegister, error) {
 	var frs []*models.FiscalRegister
-	if err := r.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at").Find(&frs).Error; err != nil {
+	if err := r.db.WithContext(ctx).Unscoped().Select("id", "last_modified_date", "deleted_at").Find(&frs).Error; err != nil {
 		return nil, err
 	}
 	frMap := make(map[string]*models.FiscalRegister, len(frs))
 	for _, fr := range frs {
-		if fr.ServiceDeskUUID != nil {
-			frMap[*fr.ServiceDeskUUID] = fr
-		}
+		frMap[fr.ID] = fr
 	}
 	return frMap, nil
 }
 
+// Search выполняет поиск фискальных регистраторов по текстовому запросу.
 func (r *frRepo) Search(ctx context.Context, term string, limit, offset int) ([]models.FiscalRegister, error) {
 	var frs []models.FiscalRegister
 	err := r.db.WithContext(ctx).
@@ -100,19 +104,19 @@ func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*models.Fis
 		return nil, nil
 	}
 	var fr models.FiscalRegister
-	err := r.db.WithContext(ctx).Where("fr_serial_number = ?", sn).Order("last_modified_date DESC").First(&fr).Error
+	err := r.db.WithContext(ctx).Where("fr_serial_number = ?", sn).Order("updated_at DESC").First(&fr).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &fr, err
 }
 
-// FindByOwnerUUIDs находит все фискальные регистраторы, принадлежащие указанным владельцам.
-func (r *frRepo) FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.FiscalRegister, error) {
-	if len(ownerUUIDs) == 0 {
+// FindByOwnerIDs находит все фискальные регистраторы, принадлежащие указанным владельцам.
+func (r *frRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]models.FiscalRegister, error) {
+	if len(ownerIDs) == 0 {
 		return nil, nil
 	}
 	var frs []models.FiscalRegister
-	err := r.db.WithContext(ctx).Where("owner_service_desk_uuid IN ?", ownerUUIDs).Find(&frs).Error
+	err := r.db.WithContext(ctx).Where("owner_id IN ?", ownerIDs).Find(&frs).Error
 	return frs, err
 }

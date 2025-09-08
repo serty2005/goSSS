@@ -1,3 +1,4 @@
+// internal/repositories/workstation_repo.go
 package repositories
 
 import (
@@ -11,14 +12,14 @@ import (
 // WorkstationRepo определяет интерфейс для работы с хранилищем рабочих станций.
 type WorkstationRepo interface {
 	Create(ctx context.Context, tx *gorm.DB, workstation *models.Workstation) error
-	Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error)
-	Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error)
-	GetByUUID(ctx context.Context, uuid string) (*models.Workstation, error)
-	GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Workstation, error)
-	GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error)
+	Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error)
+	Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error)
+	GetByID(ctx context.Context, internalID string) (*models.Workstation, error)
+	GetByIDUnscoped(ctx context.Context, internalID string) (*models.Workstation, error)
+	GetAllIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]models.Workstation, error)
 	FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*models.Workstation, error)
-	FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Workstation, error)
+	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]models.Workstation, error)
 }
 
 // workstationRepo реализует интерфейс WorkstationRepo.
@@ -38,52 +39,57 @@ func (r *workstationRepo) dbOrTx(tx *gorm.DB) *gorm.DB {
 	return r.db
 }
 
+// Create создает новую рабочую станцию в базе данных.
 func (r *workstationRepo) Create(ctx context.Context, tx *gorm.DB, workstation *models.Workstation) error {
 	return r.dbOrTx(tx).WithContext(ctx).Create(workstation).Error
 }
 
-func (r *workstationRepo) Update(ctx context.Context, tx *gorm.DB, uuid string, updateData map[string]interface{}) (bool, error) {
-	res := r.dbOrTx(tx).WithContext(ctx).Model(&models.Workstation{}).Where("service_desk_uuid = ?", uuid).Updates(updateData)
+// Update обновляет данные рабочей станции по ее внутреннему ID.
+func (r *workstationRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Model(&models.Workstation{}).Where("id = ?", internalID).Updates(updateData)
 	return res.RowsAffected > 0, res.Error
 }
 
-// Delete выполняет "мягкое удаление" рабочей станции по ее ServiceDesk UUID.
-func (r *workstationRepo) Delete(ctx context.Context, tx *gorm.DB, uuid string) (bool, error) {
-	res := r.dbOrTx(tx).WithContext(ctx).Where("service_desk_uuid = ?", uuid).Delete(&models.Workstation{})
+// Delete выполняет "мягкое удаление" рабочей станции по ее внутреннему ID.
+func (r *workstationRepo) Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error) {
+	res := r.dbOrTx(tx).WithContext(ctx).Where("id = ?", internalID).Delete(&models.Workstation{})
 	return res.RowsAffected > 0, res.Error
 }
-func (r *workstationRepo) GetByUUID(ctx context.Context, uuid string) (*models.Workstation, error) {
+
+// GetByID находит рабочую станцию по ее внутреннему ID.
+func (r *workstationRepo) GetByID(ctx context.Context, internalID string) (*models.Workstation, error) {
 	var workstation models.Workstation
-	err := r.db.WithContext(ctx).Where("service_desk_uuid = ?", uuid).First(&workstation).Error
+	err := r.db.WithContext(ctx).Where("id = ?", internalID).First(&workstation).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &workstation, err
 }
 
-func (r *workstationRepo) GetByUUIDUnscoped(ctx context.Context, uuid string) (*models.Workstation, error) {
+// GetByIDUnscoped находит рабочую станцию по внутреннему ID, включая "мягко удаленные".
+func (r *workstationRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*models.Workstation, error) {
 	var workstation models.Workstation
-	err := r.db.WithContext(ctx).Unscoped().Where("service_desk_uuid = ?", uuid).First(&workstation).Error
+	err := r.db.WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&workstation).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &workstation, err
 }
 
-func (r *workstationRepo) GetAllUUIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error) {
+// GetAllIDsAndDates извлекает все внутренние ID, даты модификации и статусы удаления.
+func (r *workstationRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*models.Workstation, error) {
 	var workstations []*models.Workstation
-	if err := r.db.WithContext(ctx).Unscoped().Select("service_desk_uuid", "last_modified_date", "deleted_at").Find(&workstations).Error; err != nil {
+	if err := r.db.WithContext(ctx).Unscoped().Select("id", "last_modified_date", "deleted_at").Find(&workstations).Error; err != nil {
 		return nil, err
 	}
 	workstationMap := make(map[string]*models.Workstation, len(workstations))
 	for _, ws := range workstations {
-		if ws.ServiceDeskUUID != nil {
-			workstationMap[*ws.ServiceDeskUUID] = ws
-		}
+		workstationMap[ws.ID] = ws
 	}
 	return workstationMap, nil
 }
 
+// Search выполняет поиск рабочих станций по текстовому запросу.
 func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset int) ([]models.Workstation, error) {
 	var workstations []models.Workstation
 	err := r.db.WithContext(ctx).
@@ -97,7 +103,6 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 	var ws models.Workstation
 	query := r.db.WithContext(ctx).Where("status != ?", "locked")
 
-	// Динамически строим запрос, добавляя условия только для валидных ID
 	var conditions []string
 	var values []interface{}
 
@@ -114,28 +119,25 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 		values = append(values, lm)
 	}
 
-	// Если ни одного валидного ID не предоставлено, ничего не ищем
 	if len(conditions) == 0 {
 		return nil, nil
 	}
 
-	// Объединяем условия через OR
 	query = query.Where(strings.Join(conditions, " OR "), values...)
 
-	// Ищем самую свежую запись, если их несколько
-	err := query.Order("last_modified_date DESC").First(&ws).Error
+	err := query.Order("updated_at DESC").First(&ws).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	return &ws, err
 }
 
-// FindByOwnerUUIDs находит все рабочие станции, принадлежащие указанным владельцам.
-func (r *workstationRepo) FindByOwnerUUIDs(ctx context.Context, ownerUUIDs []string) ([]models.Workstation, error) {
-	if len(ownerUUIDs) == 0 {
+// FindByOwnerIDs находит все рабочие станции, принадлежащие указанным владельцам.
+func (r *workstationRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]models.Workstation, error) {
+	if len(ownerIDs) == 0 {
 		return nil, nil
 	}
 	var workstations []models.Workstation
-	err := r.db.WithContext(ctx).Where("owner_service_desk_uuid IN ?", ownerUUIDs).Find(&workstations).Error
+	err := r.db.WithContext(ctx).Where("owner_id IN ?", ownerIDs).Find(&workstations).Error
 	return workstations, err
 }

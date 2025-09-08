@@ -1,6 +1,9 @@
 package events
 
-import "time"
+import (
+	"etalon-server/internal/api"
+	"time"
+)
 
 // Константы для типов событий.
 const (
@@ -35,30 +38,31 @@ const (
 )
 
 // ServiceDeskEntityPayload - полезная нагрузка для события ServiceDeskEntityUpdated.
+// Содержит сырые данные из внешней системы.
 type ServiceDeskEntityPayload struct {
-	MetaClass string                 // Метакласс сущности, например, "ou$company"
-	UUID      string                 // UUID сущности
-	Data      map[string]interface{} // Полные данные сущности, полученные от ServiceDesk
+	EntityType   string                 // Внутренний тип сущности: "Company", "Server"
+	ExternalUUID string                 // UUID сущности во внешней системе
+	Data         map[string]interface{} // Полные данные сущности, полученные от внешней системы
 }
 
 // ServiceDeskEntityDeletePayload - полезная нагрузка для события ServiceDeskEntityDeleted.
 type ServiceDeskEntityDeletePayload struct {
-	MetaClass string // Метакласс сущности
-	UUID      string // UUID удаленной сущности
+	EntityType   string // Внутренний тип сущности
+	ExternalUUID string // UUID удаленной сущности во внешней системе
 }
 
 // ContractsStatusPayload - полезная нагрузка для события ContractsStatusRecalculated.
 type ContractsStatusPayload struct {
-	// Карта, где ключ - UUID компании, а значение - флаг, активен ли у нее контракт.
+	// Карта, где ключ - ВНУТРЕННИЙ ID компании, а значение - флаг, активен ли у нее контракт.
 	CompanyActiveContract map[string]bool
 }
 
 // DuplicatesFoundPayload - полезная нагрузка для события DuplicatesFound.
 type DuplicatesFoundPayload struct {
-	EntityType string   // 'Server', 'Workstation', 'FiscalRegister'
-	Field      string   // Поле, по которому найдены дубликаты ('ip', 'anydesk', и т.д.)
-	Value      string   // Значение поля, которое дублируется
-	UUIDs      []string // Список ServiceDesk UUID всех сущностей в группе дубликатов
+	EntityType  string   // 'Server', 'Workstation', 'FiscalRegister'
+	Field       string   // Поле, по которому найдены дубликаты ('ip', 'anydesk', и т.д.)
+	Value       string   // Значение поля, которое дублируется
+	InternalIDs []string // Список ВНУТРЕННИХ UUID всех сущностей в группе дубликатов
 }
 
 // ServerPollingSucceededPayload - полезная нагрузка для успешного опроса.
@@ -103,4 +107,10 @@ type DiscrepancyDetail struct {
 type FiscalRegisterDiscrepancyPayload struct {
 	FRServiceDeskUUID string                       `json:"fr_service_desk_uuid"`
 	Discrepancies     map[string]DiscrepancyDetail `json:"discrepancies"` // Карта: имя поля -> детали расхождения
+}
+
+// AgentDataPayload - полезная нагрузка для события AgentDataReceived.
+type AgentDataPayload struct {
+	Source string           // Источник данных: имя файла для FTP или UUID агента для API
+	Data   api.AgentDataDTO // Сами данные, полученные от агента
 }

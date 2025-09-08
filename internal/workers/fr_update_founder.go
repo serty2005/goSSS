@@ -5,9 +5,9 @@ import (
 	"context"
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/external"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
-	"etalon-server/internal/services"
 	"etalon-server/pkg/eventbus"
 	"time"
 
@@ -16,8 +16,7 @@ import (
 
 // FRUpdateFounder (Fiscal Register Update Founder) - это фоновый воркер,
 // который периодически сверяет данные о фискальных регистраторах в локальной
-// базе данных с данными в ServiceDesk. При обнаружении расхождений он
-// публикует событие в шину для последующего создания задачи оператору.
+// базе данных с данными в ServiceDesk.
 type FRUpdateFounder interface {
 	Start(ctx context.Context)
 }
@@ -27,7 +26,8 @@ type frUpdateFounderImpl struct {
 	logger   *zap.Logger
 	bus      eventbus.EventBus
 	frRepo   repositories.FiscalRegisterRepo
-	sdClient services.ServiceDeskClient
+	linkRepo repositories.LinkRepo // Новая зависимость
+	sdClient external.ExternalSystemClient
 }
 
 // NewFRUpdateFounder создает новый экземпляр воркера.
@@ -36,13 +36,15 @@ func NewFRUpdateFounder(
 	logger *zap.Logger,
 	bus eventbus.EventBus,
 	frRepo repositories.FiscalRegisterRepo,
-	sdClient services.ServiceDeskClient,
+	linkRepo repositories.LinkRepo, // Новая зависимость
+	sdClient external.ExternalSystemClient,
 ) FRUpdateFounder {
 	return &frUpdateFounderImpl{
 		cfg:      cfg,
 		logger:   logger,
 		bus:      bus,
 		frRepo:   frRepo,
+		linkRepo: linkRepo,
 		sdClient: sdClient,
 	}
 }
@@ -53,7 +55,6 @@ func (w *frUpdateFounderImpl) Start(ctx context.Context) {
 	ticker := time.NewTicker(w.cfg.FRDiscrepancyCheckInterval)
 	defer ticker.Stop()
 
-	// Первый запуск сразу после старта, чтобы не ждать интервал.
 	w.runCheckCycle(ctx)
 
 	for {
@@ -71,30 +72,31 @@ func (w *frUpdateFounderImpl) Start(ctx context.Context) {
 func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 	w.logger.Info("Начало нового цикла сверки данных ФР с ServiceDesk.")
 
-	// 1. Получаем все ФР из ServiceDesk одним запросом.
-	remoteFRsData, err := w.sdClient.FetchEntityList(ctx, "objectBase$FR", true)
+	// 1. Получаем все ФР из ServiceDesk.
+	remoteFRsData, err := w.sdClient.FetchEntityList(ctx, "FiscalRegister")
 	if err != nil {
 		w.logger.Error("Не удалось получить список ФР из ServiceDesk, цикл прерван", zap.Error(err))
 		return
 	}
 
-	// 2. Преобразуем данные из SD в мапу для быстрого доступа.
+	// 2. Преобразуем данные из SD в мапу [externalUUID] -> *models.FiscalRegister
 	remoteFRsMap := make(map[string]*models.FiscalRegister, len(remoteFRsData))
+	// MapperContext здесь не нужен, так как DataToFiscalRegister не ищет связей
+	mapperCtx := &external.MapperContext{Logger: w.logger}
 	for _, data := range remoteFRsData {
-		fr, err := services.DataToFiscalRegister(data)
+		fr, err := w.sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
 		if err != nil {
 			uuid, _ := data["UUID"].(string)
 			w.logger.Warn("Пропуск ФР из ServiceDesk из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
 			continue
 		}
-		remoteFRsMap[*fr.ServiceDeskUUID] = fr
+		externalUUID, _ := data["UUID"].(string)
+		remoteFRsMap[externalUUID] = fr
 	}
 	w.logger.Info("Из ServiceDesk загружено и обработано ФР", zap.Int("count", len(remoteFRsMap)))
 
 	// 3. Получаем все ФР из нашей локальной ("эталонной") базы.
-	// Для простоты и производительности можно получать не все объекты, а только необходимые поля.
-	// Но для начала получим целиком.
-	localFRs, err := w.frRepo.Search(ctx, "", 10000, 0) // TODO: Сделать пагинацию для >10k записей
+	localFRs, err := w.frRepo.Search(ctx, "", 10000, 0)
 	if err != nil {
 		w.logger.Error("Не удалось получить список ФР из локальной БД, цикл прерван", zap.Error(err))
 		return
@@ -104,18 +106,28 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 	publishedEvents := 0
 	// 4. Итерируем по локальным ФР и сравниваем их с данными из SD.
 	for _, localFR := range localFRs {
-		remoteFR, ok := remoteFRsMap[*localFR.ServiceDeskUUID]
+		// Находим внешний ID для нашего локального ФР
+		link, err := w.linkRepo.GetByInternalID(ctx, nil, "naumen", localFR.ID)
+		if err != nil {
+			w.logger.Error("Ошибка получения связи для ФР", zap.String("internal_id", localFR.ID), zap.Error(err))
+			continue
+		}
+		if link == nil {
+			w.logger.Debug("Пропуск ФР, для которого нет связи с внешней системой", zap.String("internal_id", localFR.ID))
+			continue
+		}
+
+		remoteFR, ok := remoteFRsMap[link.ExternalID]
 		if !ok {
-			w.logger.Debug("Пропуск ФР из локальной БД из-за отсутствия в ServiceDesk", zap.String("uuid", *localFR.ServiceDeskUUID))
+			w.logger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", zap.String("internal_id", localFR.ID))
 			continue
 		}
 
 		discrepancies := w.compareFiscalRegisters(&localFR, remoteFR)
 
 		if len(discrepancies) > 0 {
-			// Если найдены расхождения, публикуем событие.
 			payload := events.FiscalRegisterDiscrepancyPayload{
-				FRServiceDeskUUID: *localFR.ServiceDeskUUID,
+				FRServiceDeskUUID: link.ExternalID,
 				Discrepancies:     discrepancies,
 			}
 			w.bus.Publish(eventbus.Event{
@@ -130,29 +142,22 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 }
 
 // compareFiscalRegisters сравнивает два фискальных регистратора и возвращает карту расхождений.
-// В СООТВЕТСТВИИ С НОВЫМИ ТРЕБОВАНИЯМИ, задача создается ТОЛЬКО при расхождении
-// даты окончания срока действия ФН (FNExpireDate).
 func (w *frUpdateFounderImpl) compareFiscalRegisters(local, remote *models.FiscalRegister) map[string]events.DiscrepancyDetail {
 	discrepancies := make(map[string]events.DiscrepancyDetail)
 
-	// --- КЛЮЧЕВАЯ ПРОВЕРКА: Срок окончания ФН ---
-	// Сравниваем только дату, без времени, чтобы избежать ложных срабатываний из-за часовых поясов.
 	if local.FNExpireDate != nil && (remote.FNExpireDate == nil || !local.FNExpireDate.Truncate(24*time.Hour).Equal(remote.FNExpireDate.Truncate(24*time.Hour))) {
-		// ИСПРАВЛЕНИЕ: Передаем реальные значения, а не указатели, чтобы избежать вывода адресов памяти.
+		var remoteDateStr string
+		if remote.FNExpireDate != nil {
+			remoteDateStr = remote.FNExpireDate.Format("2006-01-02")
+		} else {
+			remoteDateStr = "<nil>"
+		}
+
 		discrepancies["FNExpireDate"] = events.DiscrepancyDetail{
 			EtalonValue:      local.FNExpireDate.Format("2006-01-02"),
-			ServiceDeskValue: remote.FNExpireDate.Format("2006-01-02"),
+			ServiceDeskValue: remoteDateStr,
 		}
 	}
-
-	// --- УДАЛЕННЫЕ ПРОВЕРКИ ---
-	// Поля FRFirmware и FRDownloader больше не проверяются для создания задачи,
-	// так как они слишком волатильны и создают лишний шум. Их обновление
-	// будет происходить только по задаче `data_conflict` от агента.
-
-	// --- ПРОВЕРКА RNKKT УДАЛЕНА ИЗ УСЛОВИЙ СОЗДАНИЯ ЗАДАЧИ ---
-	// Сопоставление по ServiceDeskUUID уже гарантирует, что мы сравниваем одну и ту же сущность.
-	// Расхождение в RNKKT будет обработано другим типом задач, если агент пришлет новые данные.
 
 	return discrepancies
 }

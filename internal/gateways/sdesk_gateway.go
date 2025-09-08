@@ -1,11 +1,12 @@
+// internal/gateways/sdesk_gateway.go
 package gateways
 
 import (
 	"context"
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/external"
 	"etalon-server/internal/repositories"
-	"etalon-server/internal/services"
 	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
 	"fmt"
@@ -23,15 +24,17 @@ type ServiceDeskGateway interface {
 
 // localEntityInfo - внутренняя структура для хранения минимально необходимых данных из локальной БД для сравнения.
 type localEntityInfo struct {
+	InternalID       string
 	LastModifiedDate *time.Time
 	DeletedAt        gorm.DeletedAt
 }
 
 type serviceDeskGatewayImpl struct {
 	cfg             *config.Config
-	sdClient        services.ServiceDeskClient
+	sdClient        external.ExternalSystemClient
 	bus             eventbus.EventBus
 	logger          *zap.Logger
+	db              *gorm.DB // Добавляем прямое подключение для работы со связями
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
@@ -41,12 +44,13 @@ type serviceDeskGatewayImpl struct {
 }
 
 // NewServiceDeskGateway создает новый экземпляр шлюза ServiceDesk.
-func NewServiceDeskGateway(cfg *config.Config, sdClient services.ServiceDeskClient, bus eventbus.EventBus, logger *zap.Logger, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ServiceDeskGateway {
+func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger *zap.Logger, db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ServiceDeskGateway {
 	return &serviceDeskGatewayImpl{
 		cfg:             cfg,
 		sdClient:        sdClient,
 		bus:             bus,
 		logger:          logger,
+		db:              db, // Инициализируем
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
@@ -73,6 +77,7 @@ func (g *serviceDeskGatewayImpl) Start(ctx context.Context) {
 	}
 }
 
+// runSyncCycle выполняет один полный цикл синхронизации.
 func (g *serviceDeskGatewayImpl) runSyncCycle(ctx context.Context) {
 	g.mu.Lock()
 	if g.isSyncing {
@@ -91,38 +96,39 @@ func (g *serviceDeskGatewayImpl) runSyncCycle(ctx context.Context) {
 
 	g.logger.Info("Начало нового цикла получения данных из ServiceDesk.")
 
-	metaClasses := []string{"ou$company", "objectBase$Server", "objectBase$Workstation", "objectBase$FR"}
-	for _, metaClass := range metaClasses {
+	entityTypes := []string{"Company", "Server", "Workstation", "FiscalRegister"}
+	for _, entityType := range entityTypes {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			g.processEntityType(ctx, metaClass)
+			g.processEntityType(ctx, entityType)
 		}
 	}
 	g.logger.Info("Цикл получения данных из ServiceDesk завершен.")
 }
 
 // processEntityType выполняет инкрементальную синхронизацию для одного типа сущности.
-func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, metaClass string) {
-	log := g.logger.With(zap.String("metaClass", metaClass))
+func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityType string) {
+	log := g.logger.With(zap.String("entityType", entityType))
 	log.Info("Начало синхронизации типа сущности")
 
-	// Шаг 1: Получаем списки сущностей (минимальные данные) из SD и локальной БД.
-	remoteList, err := g.sdClient.FetchEntityList(ctx, metaClass, false)
+	// 1. Получаем КРАТКИЙ список сущностей из внешней системы.
+	remoteList, err := g.sdClient.FetchEntitySummaries(ctx, entityType)
 	if err != nil {
 		log.Error("Не удалось получить список сущностей из ServiceDesk", zap.Error(err))
 		return
 	}
 
-	localMap, err := g.getLocalEntities(ctx, metaClass)
+	// 2. Получаем все существующие связи для этого типа сущности.
+	localMap, err := g.getLocalEntityLinks(ctx, entityType)
 	if err != nil {
-		log.Error("Не удалось получить локальные сущности", zap.Error(err))
+		log.Error("Не удалось получить локальные связи для сущностей", zap.Error(err))
 		return
 	}
 
-	// Шаг 2: Сравниваем списки и формируем задачи на создание, обновление и удаление.
-	remoteUUIDs := make(map[string]struct{}, len(remoteList))
+	// 3. Сравниваем списки и формируем задачи на создание, обновление и удаление.
+	remoteExternalIDs := make(map[string]struct{}, len(remoteList))
 	var toCreate, toUpdate, toDelete []string
 
 	for _, remoteItem := range remoteList {
@@ -130,23 +136,23 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, metaClas
 		if remoteUUID == "" {
 			continue
 		}
-		remoteUUIDs[remoteUUID] = struct{}{}
+		remoteExternalIDs[remoteUUID] = struct{}{}
 		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
 		if remoteLMD == nil {
-			continue
+			continue // Пропускаем сущности без даты модификации (можно добавить creationDate?)
 		}
 
-		localEntity, exists := localMap[remoteUUID]
+		localLink, exists := localMap[remoteUUID]
 		if !exists {
 			toCreate = append(toCreate, remoteUUID)
-		} else if localEntity.DeletedAt.Valid || (localEntity.LastModifiedDate != nil && remoteLMD.After(*localEntity.LastModifiedDate)) {
+		} else if localLink.DeletedAt.Valid || (localLink.LastModifiedDate != nil && remoteLMD.After(*localLink.LastModifiedDate)) {
 			toUpdate = append(toUpdate, remoteUUID)
 		}
 	}
 
-	for uuid, localInfo := range localMap {
-		if _, exists := remoteUUIDs[uuid]; !exists && !localInfo.DeletedAt.Valid {
-			toDelete = append(toDelete, uuid)
+	for externalUUID, localLink := range localMap {
+		if _, exists := remoteExternalIDs[externalUUID]; !exists && !localLink.DeletedAt.Valid {
+			toDelete = append(toDelete, externalUUID)
 		}
 	}
 
@@ -158,36 +164,36 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, metaClas
 		zap.Int("to_delete", len(toDelete)),
 	)
 
-	// Шаг 3: Обрабатываем задачи и публикуем события.
+	// 4. Обрабатываем задачи и публикуем события.
 	if len(toDelete) > 0 {
-		g.publishDeleteEvents(metaClass, toDelete, log)
+		g.publishDeleteEvents(entityType, toDelete, log)
 	}
 
 	if len(toCreate) > 0 || len(toUpdate) > 0 {
 		uuidsToFetch := append(toCreate, toUpdate...)
-		g.fetchAndPublishUpdateEvents(ctx, metaClass, uuidsToFetch, log)
+		g.fetchAndPublishUpdateEvents(ctx, entityType, uuidsToFetch, log)
 	}
 }
 
 // publishDeleteEvents публикует события об удалении сущностей.
-func (g *serviceDeskGatewayImpl) publishDeleteEvents(metaClass string, uuids []string, log *zap.Logger) {
-	log.Info("Публикация событий об удалении...", zap.Int("count", len(uuids)))
-	for _, uuid := range uuids {
+func (g *serviceDeskGatewayImpl) publishDeleteEvents(entityType string, externalUUIDs []string, log *zap.Logger) {
+	log.Info("Публикация событий об удалении...", zap.Int("count", len(externalUUIDs)))
+	for _, uuid := range externalUUIDs {
 		g.bus.Publish(eventbus.Event{
 			Type: events.ServiceDeskEntityDeleted,
 			Payload: events.ServiceDeskEntityDeletePayload{
-				MetaClass: metaClass,
-				UUID:      uuid,
+				EntityType:   entityType,
+				ExternalUUID: uuid,
 			},
 		})
 	}
 }
 
 // fetchAndPublishUpdateEvents получает полные данные для сущностей и публикует события.
-func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context, metaClass string, uuids []string, log *zap.Logger) {
-	log.Info("Получение полных данных для новых/обновленных сущностей...", zap.Int("count", len(uuids)))
+func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context, entityType string, externalUUIDs []string, log *zap.Logger) {
+	log.Info("Получение полных данных для новых/обновленных сущностей...", zap.Int("count", len(externalUUIDs)))
 	var wg sync.WaitGroup
-	tasks := make(chan string, len(uuids))
+	tasks := make(chan string, len(externalUUIDs))
 
 	for i := 0; i < g.cfg.ConcurrentRequests; i++ {
 		wg.Add(1)
@@ -198,18 +204,17 @@ func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context
 				case <-ctx.Done():
 					return
 				default:
-					log.Debug("Получение полных данных для сущности", zap.String("uuid", uuid))
-					details, err := g.sdClient.FetchEntityDetails(ctx, uuid, metaClass)
+					details, err := g.sdClient.FetchEntityDetails(ctx, uuid, entityType)
 					if err != nil {
-						log.Error("Не удалось получить детали для сущности", zap.String("uuid", uuid), zap.Error(err))
+						log.Error("Не удалось получить детали для сущности", zap.String("external_uuid", uuid), zap.Error(err))
 						continue
 					}
 					g.bus.Publish(eventbus.Event{
 						Type: events.ServiceDeskEntityUpdated,
 						Payload: events.ServiceDeskEntityPayload{
-							MetaClass: metaClass,
-							UUID:      uuid,
-							Data:      details,
+							EntityType:   entityType,
+							ExternalUUID: uuid,
+							Data:         details,
 						},
 					})
 				}
@@ -217,52 +222,60 @@ func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context
 		}()
 	}
 
-	for _, uuid := range uuids {
+	for _, uuid := range externalUUIDs {
 		tasks <- uuid
 	}
 	close(tasks)
 	wg.Wait()
 }
 
-// getLocalEntities извлекает из БД мапу с минимальной информацией о локальных сущностях.
-func (g *serviceDeskGatewayImpl) getLocalEntities(ctx context.Context, metaClass string) (map[string]localEntityInfo, error) {
-	infoMap := make(map[string]localEntityInfo)
-	var err error
-	switch metaClass {
-	case "ou$company":
-		entities, e := g.companyRepo.GetAllUUIDsAndDates(ctx)
-		err = e
-		if err == nil {
-			for uuid, entity := range entities {
-				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
-			}
-		}
-	case "objectBase$Server":
-		entities, e := g.serverRepo.GetAllUUIDsAndDates(ctx)
-		err = e
-		if err == nil {
-			for uuid, entity := range entities {
-				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
-			}
-		}
-	case "objectBase$Workstation":
-		entities, e := g.workstationRepo.GetAllUUIDsAndDates(ctx)
-		err = e
-		if err == nil {
-			for uuid, entity := range entities {
-				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
-			}
-		}
-	case "objectBase$FR":
-		entities, e := g.frRepo.GetAllUUIDsAndDates(ctx)
-		err = e
-		if err == nil {
-			for uuid, entity := range entities {
-				infoMap[uuid] = localEntityInfo{LastModifiedDate: entity.LastModifiedDate, DeletedAt: entity.DeletedAt}
-			}
-		}
-	default:
-		return nil, fmt.Errorf("неизвестный metaClass: %s", metaClass)
+// getLocalEntityLinks извлекает из БД мапу с информацией о связях для данного типа сущности.
+func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entityType string) (map[string]localEntityInfo, error) {
+
+	type result struct {
+		ExternalID       string
+		InternalID       string
+		LastModifiedDate *time.Time
+		DeletedAt        gorm.DeletedAt
 	}
-	return infoMap, err
+
+	var results []result
+	var err error
+
+	// Выбираем таблицу для JOIN в зависимости от entityType
+	var tableName string
+	switch entityType {
+	case "Company":
+		tableName = "companies"
+	case "Server":
+		tableName = "servers"
+	case "Workstation":
+		tableName = "workstations"
+	case "FiscalRegister":
+		tableName = "fiscal_registers"
+	default:
+		return nil, fmt.Errorf("неизвестный тип сущности для получения связей: %s", entityType)
+	}
+
+	// Выполняем запрос с JOIN
+	err = g.db.WithContext(ctx).Table("external_system_links as l").
+		Select("l.external_id, l.internal_id, t.last_modified_date, t.deleted_at").
+		Joins(fmt.Sprintf("JOIN %s as t ON l.internal_id = t.id", tableName)).
+		Where("l.system_name = ? AND l.entity_type = ?", "naumen", entityType).
+		Scan(&results).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	infoMap := make(map[string]localEntityInfo, len(results))
+	for _, res := range results {
+		infoMap[res.ExternalID] = localEntityInfo{
+			InternalID:       res.InternalID,
+			LastModifiedDate: res.LastModifiedDate,
+			DeletedAt:        res.DeletedAt,
+		}
+	}
+
+	return infoMap, nil
 }

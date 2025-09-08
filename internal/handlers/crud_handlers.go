@@ -30,19 +30,18 @@ func NewCrudHandler(logger *zap.Logger, db *gorm.DB, companyRepo repositories.Co
 // RegisterRoutes регистрирует CRUD роуты.
 func (h *CrudHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/companies", func(r chi.Router) {
-		r.Get("/{uuid}", h.GetCompany)
+		r.Get("/{id}", h.GetCompany)
 		r.Post("/", h.CreateCompany)
-		r.Put("/{uuid}", h.UpdateCompany)
-		r.Delete("/{uuid}", h.DeleteCompany)
+		r.Put("/{id}", h.UpdateCompany)
+		r.Delete("/{id}", h.DeleteCompany)
 	})
-	// Аналогичные роуты для других сущностей могут быть добавлены здесь
 }
 
 func (h *CrudHandler) GetCompany(w http.ResponseWriter, r *http.Request) {
-	uuid := chi.URLParam(r, "uuid")
-	company, err := h.companyRepo.GetByUUID(r.Context(), uuid)
+	id := chi.URLParam(r, "id")
+	company, err := h.companyRepo.GetByID(r.Context(), id)
 	if err != nil {
-		h.logger.Error("Failed to get company", zap.String("uuid", uuid), zap.Error(err))
+		h.logger.Error("Failed to get company", zap.String("id", id), zap.Error(err))
 		RespondWithError(w, http.StatusInternalServerError, "Failed to retrieve company")
 		return
 	}
@@ -60,12 +59,11 @@ func (h *CrudHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Добавить валидацию DTO
 	company := &models.Company{
-		Title:                 dto.Title,
-		Address:               dto.Address,
-		AdditionalName:        dto.AdditionalName,
-		ParentServiceDeskUUID: dto.ParentServiceDeskUUID,
+		Title:          dto.Title,
+		Address:        dto.Address,
+		AdditionalName: dto.AdditionalName,
+		// ParentID: dto.ParentID // Предполагаем, что DTO тоже будет обновлен для передачи ParentID
 	}
 	company.MetaClass = "ou$company"
 
@@ -81,14 +79,13 @@ func (h *CrudHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CrudHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
-	uuid := chi.URLParam(r, "uuid")
+	id := chi.URLParam(r, "id")
 	var updateData map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
 		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	// Удаляем поля, которые не должны обновляться вручную через API
-	delete(updateData, "uuid")
 	delete(updateData, "id")
 	delete(updateData, "meta_class")
 	delete(updateData, "created_at")
@@ -98,11 +95,11 @@ func (h *CrudHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 	var updated bool
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var txErr error
-		updated, txErr = h.companyRepo.Update(r.Context(), tx, uuid, updateData)
+		updated, txErr = h.companyRepo.Update(r.Context(), tx, id, updateData)
 		return txErr
 	})
 	if err != nil {
-		h.logger.Error("Failed to update company", zap.String("uuid", uuid), zap.Error(err))
+		h.logger.Error("Failed to update company", zap.String("id", id), zap.Error(err))
 		RespondWithError(w, http.StatusInternalServerError, "Failed to update company")
 		return
 	}
@@ -114,16 +111,16 @@ func (h *CrudHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CrudHandler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
-	uuid := chi.URLParam(r, "uuid")
+	id := chi.URLParam(r, "id")
 	var deleted bool
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var txErr error
-		deleted, txErr = h.companyRepo.Delete(r.Context(), tx, uuid)
+		deleted, txErr = h.companyRepo.Delete(r.Context(), tx, id)
 		return txErr
 	})
 
 	if err != nil {
-		h.logger.Error("Failed to delete company", zap.String("uuid", uuid), zap.Error(err))
+		h.logger.Error("Failed to delete company", zap.String("id", id), zap.Error(err))
 		RespondWithError(w, http.StatusInternalServerError, "Failed to delete company")
 		return
 	}

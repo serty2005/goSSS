@@ -86,19 +86,16 @@ func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
 }
 
 // processFile обрабатывает один файл из кэша.
-// Возвращает true, если было опубликовано событие, иначе false.
 func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) bool {
 	log := g.logger.With(zap.String("file", fileName))
 	localFilePath := filepath.Join(g.cfg.FTPCachePath, fileName)
 
-	// 1. Получаем актуальную информацию о файле
 	fileInfo, err := os.Stat(localFilePath)
 	if err != nil {
 		log.Error("Не удалось получить информацию о файле в кэше", zap.Error(err))
 		return false
 	}
 
-	// 2. Получаем предыдущее сохраненное состояние файла из БД
 	var previousState models.AgentFile
 	err = g.db.WithContext(ctx).First(&previousState, "file_name = ?", fileName).Error
 	isNewRecordInDB := errors.Is(err, gorm.ErrRecordNotFound)
@@ -107,12 +104,10 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 		return false
 	}
 
-	// 3. Главная оптимизация: если файл не менялся с последней проверки, молча выходим
 	if !isNewRecordInDB && previousState.LastProcessedModTime.Equal(fileInfo.ModTime()) && previousState.LastProcessedFileSize == fileInfo.Size() {
 		return false
 	}
 
-	// 4. Файл новый или обновлен. Читаем и парсим его.
 	fileData, err := os.ReadFile(localFilePath)
 	if err != nil {
 		log.Error("Не удалось прочитать файл из кэша", zap.Error(err))
@@ -122,18 +117,15 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 	var data api.AgentDataDTO
 	if err := json.Unmarshal(fileData, &data); err != nil {
 		log.Error("Не удалось распарсить JSON, файл будет пропущен до следующего изменения", zap.Error(err))
-		// Не обновляем статус в БД, чтобы в следующий раз попытаться снова, если файл изменится.
 		return false
 	}
 
-	// 5. Сравниваем текущую иерархию с предыдущей
 	currentFRSerial := data.SerialNumber
 	currentRMSUrl := data.URLRms
 	hierarchyHasChanged := isNewRecordInDB ||
 		(utils.SafeStringDereference(previousState.LastSeenFRSerial) != currentFRSerial) ||
 		(utils.SafeStringDereference(previousState.LastSeenRMSUrl) != currentRMSUrl)
 
-	// 6. Обновляем состояние файла в БД с помощью UPSERT
 	newState := models.AgentFile{
 		FileName:              fileName,
 		LastProcessedModTime:  fileInfo.ModTime(),
@@ -152,15 +144,21 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 
 	if err != nil {
 		log.Error("Не удалось обновить статус файла в БД", zap.Error(err))
-		return false // Не публикуем событие, если не смогли сохранить состояние
+		return false
 	}
 
-	// 7. Если иерархия изменилась, публикуем событие
 	if hierarchyHasChanged {
-		log.Info("Обнаружен новый файл или изменение в иерархии объектов (FR/RMS). Публикация события...")
+		log.Info("Обнаружен новый файл или изменение в иерархии объектов. Публикация события...")
+
+		// ИЗМЕНЕНИЕ: Формируем новую полезную нагрузку
+		payload := events.AgentDataPayload{
+			Source: fileName,
+			Data:   data,
+		}
+
 		g.bus.Publish(eventbus.Event{
 			Type:    events.AgentDataReceived,
-			Payload: data,
+			Payload: payload,
 		})
 		return true
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/api"
@@ -25,9 +26,10 @@ type TaskHandler struct {
 	db              *gorm.DB
 	resolutionSvc   services.TaskResolutionService
 	sdEditorSvc     services.SDEditorService
-	serverRepo      repositories.ServerRepo         // Добавлено для получения актуальных данных
-	workstationRepo repositories.WorkstationRepo    // Добавлено для получения актуальных данных
-	frRepo          repositories.FiscalRegisterRepo // Добавлено для получения актуальных данных
+	serverRepo      repositories.ServerRepo
+	workstationRepo repositories.WorkstationRepo
+	frRepo          repositories.FiscalRegisterRepo
+	linkRepo        repositories.LinkRepo
 }
 
 // NewTaskHandler создает новый экземпляр обработчика.
@@ -39,6 +41,7 @@ func NewTaskHandler(
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
+	linkRepo repositories.LinkRepo,
 ) *TaskHandler {
 	return &TaskHandler{
 		logger:          logger,
@@ -48,6 +51,7 @@ func NewTaskHandler(
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
 		frRepo:          frRepo,
+		linkRepo:        linkRepo,
 	}
 }
 
@@ -59,7 +63,7 @@ func (h *TaskHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/duplicates", h.GetDuplicates)
 }
 
-// GetTasks возвращает список задач сверки с фильтрацией и пагинацией.
+// GetTasks возвращает список задач сверки с фильтрацией, пагинацией и обогащенными данными.
 func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	limitStr := r.URL.Query().Get("limit")
@@ -69,7 +73,6 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	if err != nil || limit <= 0 {
 		limit = 50
 	}
-
 	offset, err := strconv.Atoi(offsetStr)
 	if err != nil || offset < 0 {
 		offset = 0
@@ -77,11 +80,9 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 
 	var tasks []models.ReconciliationTask
 	query := h.db.Model(&models.ReconciliationTask{})
-
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
-
 	err = query.Limit(limit).Offset(offset).Order("created_at desc").Find(&tasks).Error
 	if err != nil {
 		h.logger.Error("Не удалось получить задачи из БД", zap.Error(err))
@@ -92,31 +93,23 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	taskDTOs := make([]api.TaskDTO, 0, len(tasks))
 	for _, task := range tasks {
 		dto := api.TaskDTO{
-			ID:         task.ID,
-			TaskType:   task.TaskType,
-			EntityType: task.EntityType,
-			EntityUUID: task.EntityUUID,
-			Status:     task.Status,
-			Comment:    task.Comment,
-			CreatedAt:  task.CreatedAt,
-			UpdatedAt:  task.UpdatedAt,
+			ID: task.ID, TaskType: task.TaskType, EntityType: task.EntityType,
+			EntityUUID: task.EntityUUID, Status: task.Status, Comment: task.Comment,
+			CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
 		}
+		var detailsObject interface{}
 
-		// ИЗМЕНЕНИЕ: Используем switch для разной логики формирования поля details
 		switch task.TaskType {
 		case "add_equipment":
-			// Для новых сущностей берем данные из JSON 'agent_data'
 			var details struct {
 				AgentData       api.AgentDataDTO `json:"agent_data"`
-				EtalonOwnerUUID string           `json:"etalon_owner_uuid"`
+				EtalonOwnerUUID string           `json:"etalon_owner_id"` // Имя поля исправлено
 			}
 			if err := json.Unmarshal(task.Details, &details); err == nil {
-				// Формируем новую, более полную структуру для Details
 				var richDetails interface{}
-				switch task.EntityType {
-				case "FiscalRegister":
+				if task.EntityType == "FiscalRegister" {
 					richDetails = struct {
-						EtalonOwnerUUID  string                    `json:"etalon_owner_uuid"`
+						EtalonOwnerID    string                    `json:"etalon_owner_id"`
 						EquipmentData    api.FiscalRegisterRichDTO `json:"equipment_data"`
 						OrganizationName string                    `json:"organizationName"`
 						SerialNumber     string                    `json:"serialNumber"`
@@ -126,7 +119,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 						LitemanagerID    string                    `json:"litemanager_id"`
 						AgentCurrentTime string                    `json:"agent_current_time"`
 					}{
-						EtalonOwnerUUID:  details.EtalonOwnerUUID,
+						EtalonOwnerID:    details.EtalonOwnerUUID, // Используем внутренний ID
 						EquipmentData:    agentDataToFiscalRegisterRichDTO(details.AgentData),
 						OrganizationName: details.AgentData.OrganizationName,
 						SerialNumber:     details.AgentData.SerialNumber,
@@ -137,47 +130,56 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 						AgentCurrentTime: details.AgentData.CurrentTime,
 					}
 				}
-				dto.Details = richDetails
+				detailsObject = richDetails
 			} else {
-				dto.Details = task.Details // Fallback
+				detailsObject = task.Details
 			}
-
 		case "need_update", "data_conflict", "resolve_duplicate":
-			// Для этих типов задач в `details` уже хранится вся необходимая информация о расхождениях.
-			// Просто передаем ее как есть.
-			dto.Details = task.Details
-
+			detailsObject = task.Details
 		default:
-			// Для всех остальных типов задач (например, `owner_mismatch`)
-			// показываем актуальное состояние сущности из нашей БД.
 			var richDetails interface{}
 			switch task.EntityType {
 			case "FiscalRegister":
-				fr, _ := h.frRepo.GetByUUID(r.Context(), task.EntityUUID)
-				if fr != nil {
-					richDetails = modelToFiscalRegisterRichDTO(*fr)
+				if fr, _ := h.frRepo.GetByID(r.Context(), task.EntityUUID); fr != nil {
+					richDetails = h.modelToFiscalRegisterRichDTO(r.Context(), *fr)
 				}
 			case "Server":
-				server, _ := h.serverRepo.GetByUUID(r.Context(), task.EntityUUID)
-				if server != nil {
-					richDetails = modelToServerRichDTO(*server)
+				if server, _ := h.serverRepo.GetByID(r.Context(), task.EntityUUID); server != nil {
+					richDetails = h.modelToServerRichDTO(r.Context(), *server)
 				}
 			case "Workstation":
-				ws, _ := h.workstationRepo.GetByUUID(r.Context(), task.EntityUUID)
-				if ws != nil {
-					richDetails = modelToWorkstationRichDTO(*ws)
+				if ws, _ := h.workstationRepo.GetByID(r.Context(), task.EntityUUID); ws != nil {
+					richDetails = h.modelToWorkstationRichDTO(r.Context(), *ws)
 				}
 			}
-			// Если удалось получить RichDTO, используем его. Иначе - оставляем сырой JSON.
 			if richDetails != nil {
-				dto.Details = richDetails
+				detailsObject = richDetails
 			} else {
-				dto.Details = task.Details
+				detailsObject = task.Details
 			}
 		}
+
+		var detailsMap map[string]interface{}
+		detailsBytes, err := json.Marshal(detailsObject)
+		if err == nil {
+			json.Unmarshal(detailsBytes, &detailsMap)
+		} else if rawJson, ok := detailsObject.(json.RawMessage); ok {
+			json.Unmarshal(rawJson, &detailsMap)
+		}
+		if detailsMap == nil {
+			detailsMap = make(map[string]interface{})
+		}
+
+		// Добавляем externalUUID в details для задач, связанных с существующими сущностями.
+		if task.EntityType != "" && task.EntityUUID != "" && task.TaskType != "add_equipment" {
+			link, _ := h.linkRepo.GetByInternalID(r.Context(), nil, "naumen", task.EntityUUID)
+			if link != nil {
+				detailsMap["externalUUID"] = link.ExternalID
+			}
+		}
+		dto.Details = detailsMap
 		taskDTOs = append(taskDTOs, dto)
 	}
-
 	RespondWithJSON(w, http.StatusOK, taskDTOs)
 }
 
@@ -406,9 +408,10 @@ func agentDataToFiscalRegisterRichDTO(data api.AgentDataDTO) api.FiscalRegisterR
 }
 
 // modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI.
-func modelToFiscalRegisterRichDTO(fr models.FiscalRegister) api.FiscalRegisterRichDTO {
-	return api.FiscalRegisterRichDTO{
-		UUID:               *fr.ServiceDeskUUID,
+// modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
+func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr models.FiscalRegister) api.FiscalRegisterRichDTO {
+	dto := api.FiscalRegisterRichDTO{
+		UUID:               fr.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
 		Status:             fr.Status,
 		RNKKT:              fr.RNKKT,
 		ModelKKT:           fr.ModelKKT,
@@ -420,16 +423,20 @@ func modelToFiscalRegisterRichDTO(fr models.FiscalRegister) api.FiscalRegisterRi
 		OrganizationName:   fr.LegalName,
 		INN:                fr.INN,
 		SerialNumber:       fr.FRSerialNumber,
-		// --- ИСПОЛЬЗОВАНИЕ ЗАГЛУШКИ ---
-		IsMarkingActive: true,
-		IsExciseActive:  false,
+		IsMarkingActive:    true,
+		IsExciseActive:     false,
 	}
+	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
+	if err == nil && link != nil {
+		dto.ExternalUUID = &link.ExternalID
+	}
+	return dto
 }
 
-// modelToServerRichDTO преобразует модель БД в DTO для UI.
-func modelToServerRichDTO(server models.Server) api.ServerRichDTO {
-	return api.ServerRichDTO{
-		UUID:        *server.ServiceDeskUUID,
+// modelToServerRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
+func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Server) api.ServerRichDTO {
+	dto := api.ServerRichDTO{
+		UUID:        server.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
 		DeviceName:  server.DeviceName,
 		IP:          server.IP,
 		Status:      server.Status,
@@ -439,16 +446,26 @@ func modelToServerRichDTO(server models.Server) api.ServerRichDTO {
 		Litemanager: server.Litemanager,
 		UniqueID:    server.UniqueID,
 	}
+	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", server.ID)
+	if err == nil && link != nil {
+		dto.ExternalUUID = &link.ExternalID
+	}
+	return dto
 }
 
-// modelToWorkstationRichDTO преобразует модель БД в DTO для UI.
-func modelToWorkstationRichDTO(ws models.Workstation) api.WorkstationRichDTO {
-	return api.WorkstationRichDTO{
-		UUID:        *ws.ServiceDeskUUID,
+// modelToWorkstationRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
+func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws models.Workstation) api.WorkstationRichDTO {
+	dto := api.WorkstationRichDTO{
+		UUID:        ws.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
 		DeviceName:  ws.DeviceName,
 		Status:      ws.Status,
 		Anydesk:     ws.Anydesk,
 		Teamviewer:  ws.Teamviewer,
 		Litemanager: ws.Litemanager,
 	}
+	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
+	if err == nil && link != nil {
+		dto.ExternalUUID = &link.ExternalID
+	}
+	return dto
 }

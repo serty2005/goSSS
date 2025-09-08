@@ -57,14 +57,16 @@ func (g *serverPollingGatewayImpl) handlePollingRequest(ctx context.Context, eve
 	if !ok {
 		return
 	}
+	// Payload.ServerUUID здесь уже является внутренним ID
 	log := g.logger.With(zap.String("trigger", "manual"), zap.String("uuid", payload.ServerUUID))
 	log.Info("Обработка ручного запроса на опрос сервера")
-	server, err := g.serverRepo.GetByUUID(ctx, payload.ServerUUID)
+
+	// Используем новый метод GetByID
+	server, err := g.serverRepo.GetByID(ctx, payload.ServerUUID)
 	if err != nil || server == nil {
 		log.Error("Не удалось найти сервер для ручного опроса", zap.Error(err))
 		return
 	}
-	// Запускаем обработку в новой горутине, чтобы не блокировать шину
 	go g.processServer(context.Background(), *server)
 }
 
@@ -94,10 +96,11 @@ func (g *serverPollingGatewayImpl) runCycle(ctx context.Context) {
 
 // processServer обрабатывает один сервер и публикует событие.
 func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server models.Server) {
-	log := g.logger.With(zap.String("server_uuid", utils.SafeStringDereference(server.ServiceDeskUUID)), zap.String("server_ip", utils.SafeStringDereference(server.IP)))
+	log := g.logger.With(zap.String("server_id", server.ID), zap.String("server_ip", utils.SafeStringDereference(server.IP)))
 	if server.IP == nil || *server.IP == "" {
-		return // Пропускаем серверы без IP
+		return
 	}
+
 	var url string
 	parts := strings.SplitN(*server.IP, ":", 2)
 	host := parts[0]
@@ -117,7 +120,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 		g.bus.Publish(eventbus.Event{
 			Type: events.ServerPollingFailed,
 			Payload: events.ServerPollingFailedPayload{
-				ServerUUID:   *server.ServiceDeskUUID,
+				ServerUUID:   server.ID, // ИЗМЕНЕНИЕ: Используем внутренний ID
 				NewStatus:    status,
 				ErrorMessage: err.Error(),
 				LastPolledAt: time.Now(),
@@ -128,12 +131,12 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 		g.bus.Publish(eventbus.Event{
 			Type: events.ServerPollingSucceeded,
 			Payload: events.ServerPollingSucceededPayload{
-				ServerUUID:     *server.ServiceDeskUUID,
-				ServerName:     info.ServerName,
-				ServerEdition:  info.Edition,
-				ServerVersion:  shortenVersion(info.Version),
-				NewStatus:      mapServerStateToStatus(info.ServerState),
-				LastPolledAt:   time.Now(),
+				ServerUUID:    server.ID, // ИЗМЕНЕНИЕ: Используем внутренний ID
+				ServerName:    info.ServerName,
+				ServerEdition: info.Edition,
+				ServerVersion: shortenVersion(info.Version),
+				NewStatus:     mapServerStateToStatus(info.ServerState),
+				LastPolledAt:  time.Now(),
 			},
 		})
 	}
@@ -152,7 +155,6 @@ func mapServerStateToStatus(state string) string {
 		return "unknown"
 	}
 }
-
 
 // shortenVersion обрезает версию до формата X.Y.Z
 func shortenVersion(fullVersion string) string {

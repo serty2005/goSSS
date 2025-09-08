@@ -4,100 +4,109 @@ package seeder
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/external"
 	"etalon-server/internal/models"
-	"etalon-server/internal/services"
+	"etalon-server/internal/utils"
+	"etalon-server/internal/validators"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
 
 // MockServiceDeskClient имитирует клиент ServiceDesk для чтения данных из локальных файлов.
 type MockServiceDeskClient struct {
 	logger   *zap.Logger
 	dataPath string
+	mapper   external.Mapper
 }
 
 // NewMockServiceDeskClient создает новый мок-клиент.
-func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) services.ServiceDeskClient {
+func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) external.ExternalSystemClient {
 	return &MockServiceDeskClient{
 		logger:   logger,
 		dataPath: dataPath,
+		mapper:   newMockMapper(logger),
 	}
 }
 
-// FetchEntityList читает список сущностей из JSON-файла.
-func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, metaClass string, full bool) ([]map[string]interface{}, error) {
+func (m *MockServiceDeskClient) Mapper() external.Mapper {
+	return m.mapper
+}
+
+func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, entityType string) ([]map[string]interface{}, error) {
 	var fileName string
-	switch metaClass {
-	case "ou$company":
+	switch entityType {
+	case "Company":
 		fileName = "companies.json"
-	case "objectBase$Server":
+	case "Server":
 		fileName = "servers.json"
-	case "objectBase$Workstation":
+	case "Workstation":
 		fileName = "workstations.json"
-	case "objectBase$FR":
+	case "FiscalRegister":
 		fileName = "fiscal_registers.json"
-	case "agreement$agreement":
+	case "Contract":
 		fileName = "agreements.json"
 	default:
-		return nil, fmt.Errorf("неизвестный metaClass для мок-клиента: %s", metaClass)
+		return nil, fmt.Errorf("неизвестный entityType для мок-клиента: %s", entityType)
 	}
-
 	fullPath := filepath.Join(m.dataPath, fileName)
-	m.logger.Info("Чтение мок-данных из файла", zap.String("path", fullPath))
-
 	file, err := os.ReadFile(fullPath)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать файл с мок-данными %s: %w", fullPath, err)
+		return nil, err
 	}
-
 	var responseList []map[string]interface{}
 	if err := json.Unmarshal(file, &responseList); err != nil {
-		return nil, fmt.Errorf("не удалось декодировать JSON из файла %s: %w", fullPath, err)
+		return nil, err
 	}
-
 	return responseList, nil
 }
 
-// FetchAgreementDetails не используется в seeder'е, но является частью интерфейса.
-func (m *MockServiceDeskClient) FetchAgreementDetails(ctx context.Context, agreementUUID string) (*services.AgreementDetailsDTO, error) {
-	return nil, fmt.Errorf("метод FetchAgreementDetails не должен вызываться в мок-клиенте для seeder'а")
+// --- Заглушки для методов интерфейса, не используемых в сидере ---
+func (m *MockServiceDeskClient) FetchEntitySummaries(ctx context.Context, entityType string) ([]map[string]interface{}, error) {
+	return m.FetchEntityList(ctx, entityType)
+}
+func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, externalID string, entityType string) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *MockServiceDeskClient) FetchCompanyContractStates(ctx context.Context) (map[string]external.ContractState, error) {
+	return nil, nil
+}
+func (m *MockServiceDeskClient) UpdateEntity(ctx context.Context, externalID string, entityType string, data map[string]interface{}) error {
+	return nil
+}
+func (m *MockServiceDeskClient) CreateEntity(ctx context.Context, entityType string, data map[string]interface{}) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *MockServiceDeskClient) FindReferenceID(ctx context.Context, referenceType, title string, useSubstringSearch bool) (string, error) {
+	return "", nil
 }
 
-// FetchEntityDetails не используется в режиме наполнения, но является частью интерфейса.
-func (m *MockServiceDeskClient) FetchEntityDetails(ctx context.Context, uuid string, metaClass string) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("метод FetchEntityDetails не реализован для мок-клиента")
+// --- Мок-реализация маппера специально для сидера ---
+type mockMapper struct {
+	logger *zap.Logger
 }
 
-// UpdateEntity - заглушка для соответствия интерфейсу.
-func (m *MockServiceDeskClient) UpdateEntity(ctx context.Context, metaClass, uuid string, data map[string]interface{}) error {
-	return fmt.Errorf("метод UpdateEntity не реализован для мок-клиента")
-}
+func newMockMapper(logger *zap.Logger) external.Mapper { return &mockMapper{logger: logger} }
 
-// CreateEntity - заглушка для соответствия интерфейсу.
-func (m *MockServiceDeskClient) CreateEntity(ctx context.Context, metaClass string, data map[string]interface{}) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("метод CreateEntity не реализован для мок-клиента")
-}
+var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
 
-// FindReferenceID - заглушка для соответствия интерфейсу.
-func (m *MockServiceDeskClient) FindReferenceID(ctx context.Context, metaClass, title string, useSubstringSearch bool) (string, error) {
-	return "", fmt.Errorf("метод FindReferenceID не реализован для мок-клиента")
-}
-
-// DataToCompanyForSeeder - это специальная версия маппера для seeder'а.
-// ИСПРАВЛЕНИЕ: Удалена вся логика, связанная с ContractInfo.
-func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, agreementsCache map[string]map[string]interface{}, logger *zap.Logger) (*models.Company, error) {
-	uuid, _ := data["UUID"].(string)
-	if uuid == "" {
-		return nil, fmt.Errorf("в данных компании отсутствует UUID")
+func getOwnerUUID(data map[string]interface{}) string {
+	if owner, ok := data["owner"].(map[string]interface{}); ok {
+		if oUUID, oOk := owner["UUID"].(string); oOk {
+			return oUUID
+		}
 	}
+	return ""
+}
 
+func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Company, error) {
 	company := &models.Company{}
-	company.ServiceDeskUUID = &uuid
 	company.MetaClass = "ou$company"
-
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
 	}
@@ -105,10 +114,165 @@ func DataToCompanyForSeeder(ctx context.Context, data map[string]interface{}, ag
 		company.Address = &address
 	}
 	if addName, ok := data["additionalName"].(string); ok {
-		if addName != "" {
-			company.AdditionalName = &addName
+		company.AdditionalName = &addName
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		company.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+	}
+	if parent, ok := data["parent"].(map[string]interface{}); ok {
+		if parentUUID, p_ok := parent["UUID"].(string); p_ok {
+			company.MetaClass = parentUUID
 		}
 	}
-
 	return company, nil
+}
+
+func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Server, error) {
+	server := &models.Server{}
+	server.MetaClass = "objectBase$Server"
+	ownerExtID := getOwnerUUID(data)
+	server.OwnerID = &ownerExtID
+	rawUniqueID, _ := data["UniqueID"].(string)
+	server.UniqueID = validators.ValidateUniqueID(rawUniqueID)
+	rawTeamviewer, _ := data["Teamviewer"].(string)
+	server.Teamviewer = validators.ValidateRemoteAccessID(rawTeamviewer)
+	rawAnydesk, _ := data["AnyDesk"].(string)
+	server.Anydesk = validators.ValidateRemoteAccessID(rawAnydesk)
+	rawIP, _ := data["IP"].(string)
+	server.IP = validators.ValidateIPAddress(rawIP)
+	if rawRDP, ok := data["RDP"].(string); ok && rawRDP != "" {
+		server.RDP = &rawRDP
+	}
+	if rawDeviceName, ok := data["DeviceName"].(string); ok && rawDeviceName != "" {
+		server.DeviceName = &rawDeviceName
+	}
+	if rawIikoVersion, ok := data["iikoVersion"].(string); ok && rawIikoVersion != "" {
+		server.ServerVersion = &rawIikoVersion
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		server.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+	}
+	return server, nil
+}
+
+func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Workstation, error) {
+	ws := &models.Workstation{}
+	ws.MetaClass = "objectBase$Workstation"
+	ownerExtID := getOwnerUUID(data)
+	ws.OwnerID = &ownerExtID
+	if tv, ok := data["Teamviewer"].(string); ok {
+		ws.Teamviewer = validators.ValidateRemoteAccessID(tv)
+	}
+	if ad, ok := data["AnyDesk"].(string); ok {
+		ws.Anydesk = validators.ValidateRemoteAccessID(ad)
+	}
+	if dn, ok := data["DeviceName"].(string); ok {
+		ws.DeviceName = &dn
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		ws.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+	}
+	return ws, nil
+}
+
+func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.FiscalRegister, error) {
+	fr := &models.FiscalRegister{}
+	fr.MetaClass = "objectBase$FR"
+	ownerExtID := getOwnerUUID(data)
+	fr.OwnerID = &ownerExtID
+	if val, ok := data["ModelKKT"].(map[string]interface{}); ok {
+		if title, ok2 := val["title"].(string); ok2 {
+			fr.ModelKKT = &title
+		}
+	} else if val, ok := data["ModelKKT"].(string); ok {
+		fr.ModelKKT = &val
+	}
+	if val, ok := data["RNKKT"].(string); ok {
+		normalizedRNKKT := utils.NormalizeRNKKT(val)
+		fr.RNKKT = &normalizedRNKKT
+	}
+	if val, ok := data["LegalName"].(string); ok {
+		if matches := innRegex.FindStringSubmatch(val); len(matches) > 1 {
+			inn := matches[1]
+			fr.INN = &inn
+			cleanName := strings.TrimSpace(innRegex.ReplaceAllString(val, ""))
+			fr.LegalName = &cleanName
+		} else {
+			fr.LegalName = &val
+		}
+	}
+	if val, ok := data["FRSerialNumber"].(string); ok {
+		fr.FRSerialNumber = &val
+	}
+	if val, ok := data["FNNumber"].(string); ok {
+		fr.FNNumber = &val
+	}
+	if val, ok := data["KKTRegDate"].(string); ok {
+		fr.KKTRegDate = utils.ParseServiceDeskTime(val)
+	}
+	if val, ok := data["FNExpireDate"].(string); ok {
+		fr.FNExpireDate = utils.ParseServiceDeskTime(val)
+	}
+	if val, ok := data["lastModifiedDate"].(string); ok {
+		fr.LastModifiedDate = utils.ParseServiceDeskTime(val)
+	}
+	return fr, nil
+}
+
+func (m *mockMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Contract, error) {
+	contract := &models.Contract{}
+	contract.MetaClass = "agreement$agreement"
+	if state, ok := data["state"].(string); ok {
+		contract.State = &state
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		contract.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+	}
+	if sst, ok := data["stateStartTime"].(string); ok {
+		contract.StateStartTime = utils.ParseServiceDeskTime(sst)
+	}
+	var serviceTitles []string
+	if services, ok := data["services"].([]interface{}); ok {
+		for _, item := range services {
+			if m, _ := item.(map[string]interface{}); m != nil {
+				if t, _ := m["title"].(string); t != "" {
+					serviceTitles = append(serviceTitles, t)
+				}
+			}
+		}
+		if j, err := json.Marshal(serviceTitles); err == nil {
+			contract.Services = datatypes.JSON(j)
+		}
+	}
+	contract.ServiceLevel = m.determineServiceLevel(serviceTitles)
+	if recipients, ok := data["recipientsOU"].([]interface{}); ok {
+		var recipientUUIDs []string
+		for _, item := range recipients {
+			if m, _ := item.(map[string]interface{}); m != nil {
+				if u, _ := m["UUID"].(string); u != "" {
+					recipientUUIDs = append(recipientUUIDs, u)
+				}
+			}
+		}
+		if j, err := json.Marshal(recipientUUIDs); err == nil {
+			contract.Recipients = datatypes.JSON(j)
+		}
+	}
+	return contract, nil
+}
+
+func (m *mockMapper) determineServiceLevel(serviceTitles []string) int { return -1 }
+
+func (m *mockMapper) GetCompanyUUIDsFromContract(data map[string]interface{}) []string {
+	var uuids []string
+	if recipients, ok := data["recipientsOU"].([]interface{}); ok {
+		for _, r := range recipients {
+			if rMap, rOk := r.(map[string]interface{}); rOk {
+				if uuid, uuidOk := rMap["UUID"].(string); uuidOk {
+					uuids = append(uuids, uuid)
+				}
+			}
+		}
+	}
+	return uuids
 }

@@ -1,3 +1,4 @@
+// internal/services/entity_matcher_service.go
 package services
 
 import (
@@ -14,7 +15,7 @@ import (
 type MatchedEntity struct {
 	Entity     interface{} // Найденная сущность (*models.Server, *models.Workstation, etc.)
 	EntityType string      // 'Server', 'Workstation', 'FiscalRegister'
-	OwnerUUID  string
+	OwnerUUID  string      // Внутренний ID владельца
 }
 
 // EntityMatcherService определяет интерфейс для сервиса идентификации сущностей по данным от агента.
@@ -51,31 +52,31 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 
 	// Приоритет 1: Поиск по Серверу
 	if server, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(normalizedIP)); server != nil {
-		log.Info("Найдено совпадение по Серверу", zap.String("uuid", *server.ServiceDeskUUID))
+		log.Info("Найдено совпадение по Серверу", zap.String("internal_id", server.ID))
 		return &MatchedEntity{
 			Entity:     server,
 			EntityType: "Server",
-			OwnerUUID:  utils.SafeStringDereference(server.OwnerServiceDeskUUID),
+			OwnerUUID:  utils.SafeStringDereference(server.OwnerID),
 		}
 	}
 
-	// Приоритет 2: Поиск по Рабочей станции (БЕЗ ANYDESK)
+	// Приоритет 2: Поиск по Рабочей станции
 	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID); ws != nil {
-		log.Info("Найдено совпадение по Рабочей станции", zap.String("uuid", *ws.ServiceDeskUUID))
+		log.Info("Найдено совпадение по Рабочей станции", zap.String("internal_id", ws.ID))
 		return &MatchedEntity{
 			Entity:     ws,
 			EntityType: "Workstation",
-			OwnerUUID:  utils.SafeStringDereference(ws.OwnerServiceDeskUUID),
+			OwnerUUID:  utils.SafeStringDereference(ws.OwnerID),
 		}
 	}
 
-	// Приоритет 3: Поиск по Фискальному регистратору (используем только серийный номер)
+	// Приоритет 3: Поиск по Фискальному регистратору
 	if fr, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber); fr != nil {
-		log.Info("Найдено совпадение по Фискальному регистратору", zap.String("uuid", *fr.ServiceDeskUUID))
+		log.Info("Найдено совпадение по Фискальному регистратору", zap.String("internal_id", fr.ID))
 		return &MatchedEntity{
 			Entity:     fr,
 			EntityType: "FiscalRegister",
-			OwnerUUID:  utils.SafeStringDereference(fr.OwnerServiceDeskUUID),
+			OwnerUUID:  utils.SafeStringDereference(fr.OwnerID),
 		}
 	}
 

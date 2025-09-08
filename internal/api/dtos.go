@@ -237,6 +237,7 @@ type SearchGroupDTO struct {
 // OwnerFullDTO содержит расширенную информацию о компании-владельце.
 type OwnerFullDTO struct {
 	UUID           string  `json:"uuid"`
+	ExternalUUID   *string `json:"externalUUID,omitempty"`
 	Name           string  `json:"name"`
 	Address        *string `json:"address,omitempty"`
 	ActiveContract *bool   `json:"active_contract,omitempty"`
@@ -253,7 +254,8 @@ type FoundEntityDTO struct {
 
 // ServerRichDTO содержит полный набор полей Сервера для UI.
 type ServerRichDTO struct {
-	UUID         string  `json:"uuid"`
+	UUID         string  `json:"uuid"`                   // Внутренний ID
+	ExternalUUID *string `json:"externalUUID,omitempty"` // Внешний ID (для ссылок)
 	DeviceName   *string `json:"device_name,omitempty"`
 	IP           *string `json:"ip,omitempty"`
 	Status       string  `json:"status,omitempty"`
@@ -266,19 +268,22 @@ type ServerRichDTO struct {
 }
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
+// WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
 type WorkstationRichDTO struct {
-	UUID        string  `json:"uuid"`
-	DeviceName  *string `json:"device_name,omitempty"`
-	Status      *string `json:"status,omitempty"`
-	Anydesk     *string `json:"anydesk,omitempty"`
-	Teamviewer  *string `json:"teamviewer,omitempty"`
-	Litemanager *string `json:"litemanager,omitempty"`
+	UUID         string  `json:"uuid"`
+	ExternalUUID *string `json:"externalUUID,omitempty"`
+	DeviceName   *string `json:"device_name,omitempty"`
+	Status       *string `json:"status,omitempty"`
+	Anydesk      *string `json:"anydesk,omitempty"`
+	Teamviewer   *string `json:"teamviewer,omitempty"`
+	Litemanager  *string `json:"litemanager,omitempty"`
 }
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
 	UUID               string     `json:"uuid"`
-	Status             *string    `json:"status,omitempty"` // Добавлено поле статуса
+	ExternalUUID       *string    `json:"externalUUID,omitempty"`
+	Status             *string    `json:"status,omitempty"`
 	RNKKT              *string    `json:"rn_kkt,omitempty"`
 	ModelKKT           *string    `json:"model_kkt,omitempty"`
 	FNRegistrationDate *time.Time `json:"fn_registration_date,omitempty"`
@@ -298,8 +303,8 @@ type TaskDTO struct {
 	ID         uint        `json:"id"`
 	TaskType   string      `json:"task_type"`
 	EntityType string      `json:"entity_type"`
-	EntityUUID string      `json:"entity_uuid"`
-	Details    interface{} `json:"details"` // Поле для обработанных данных
+	EntityUUID string      `json:"entity_uuid"` // Может быть внутренним ID или другим идентификатором (СН)
+	Details    interface{} `json:"details"`
 	Status     string      `json:"status"`
 	Comment    string      `json:"comment"`
 	CreatedAt  time.Time   `json:"created_at"`

@@ -1,3 +1,4 @@
+// internal/services/server_actions_service.go
 package services
 
 import (
@@ -26,10 +27,10 @@ const (
 
 // ServerActionsService определяет интерфейс для ручных действий над серверами.
 type ServerActionsService interface {
-	PollSingleServer(ctx context.Context, serverUUID string) error
-	InstallLicense(ctx context.Context, serverUUID, uniqueID string) error
-	AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
-	RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error
+	PollSingleServer(ctx context.Context, serverID string) error
+	InstallLicense(ctx context.Context, serverID, uniqueID string) error
+	AddAdditionalOwner(ctx context.Context, serverID, companyID string) error
+	RemoveAdditionalOwner(ctx context.Context, serverID, companyID string) error
 }
 
 type serverActionsServiceImpl struct {
@@ -56,12 +57,13 @@ func NewServerActionsService(logger *zap.Logger, bus eventbus.EventBus, serverRe
 }
 
 // PollSingleServer запускает асинхронную задачу опроса через событие, с проверкой rate limit.
-func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverUUID string) error {
-	if !s.checkRateLimit(serverUUID) {
+// Принимает внутренний ID сервера.
+func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverID string) error {
+	if !s.checkRateLimit(serverID) {
 		return ErrRateLimitExceeded
 	}
 
-	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера из БД: %w", err)
 	}
@@ -69,25 +71,25 @@ func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverU
 		return gorm.ErrRecordNotFound
 	}
 
-	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", zap.String("uuid", serverUUID))
+	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", zap.String("serverID", serverID))
 
 	s.bus.Publish(eventbus.Event{
 		Type: events.ServerPollingRequested,
 		Payload: events.ServerPollingRequestedPayload{
-			ServerUUID: serverUUID,
+			ServerUUID: serverID, // Поле в событии называется UUID, но мы передаем внутренний ID
 		},
 	})
 
 	return nil
 }
 
-// checkRateLimit проверяет, можно ли выполнить запрос для данного serverUUID.
-func (s *serverActionsServiceImpl) checkRateLimit(serverUUID string) bool {
+// checkRateLimit проверяет, можно ли выполнить запрос для данного serverID.
+func (s *serverActionsServiceImpl) checkRateLimit(serverID string) bool {
 	s.rateLimiter.Lock()
 	defer s.rateLimiter.Unlock()
 	now := time.Now()
 	limitWindowStart := now.Add(-rateLimitWindow)
-	stamps := s.requestStamps[serverUUID]
+	stamps := s.requestStamps[serverID]
 	recentStamps := make([]time.Time, 0, len(stamps))
 	for _, stamp := range stamps {
 		if stamp.After(limitWindowStart) {
@@ -95,18 +97,19 @@ func (s *serverActionsServiceImpl) checkRateLimit(serverUUID string) bool {
 		}
 	}
 	if len(recentStamps) >= rateLimitCount {
-		s.logger.Warn("Превышен лимит запросов на опрос для сервера", zap.String("uuid", serverUUID))
-		s.requestStamps[serverUUID] = recentStamps
+		s.logger.Warn("Превышен лимит запросов на опрос для сервера", zap.String("serverID", serverID))
+		s.requestStamps[serverID] = recentStamps
 		return false
 	}
 	recentStamps = append(recentStamps, now)
-	s.requestStamps[serverUUID] = recentStamps
+	s.requestStamps[serverID] = recentStamps
 	return true
 }
 
 // InstallLicense - метод-заглушка для ручного запуска установки лицензии.
-func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverUUID, uniqueID string) error {
-	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+// Принимает внутренний ID сервера.
+func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID, uniqueID string) error {
+	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
@@ -114,16 +117,16 @@ func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverUUI
 		return gorm.ErrRecordNotFound
 	}
 	s.logger.Info("ЗАГЛУШКА: Запущена установка лицензии",
-		zap.String("server_uuid", serverUUID),
+		zap.String("server_id", serverID),
 		zap.String("unique_id", uniqueID),
 	)
-	// В будущем здесь тоже может быть публикация события, например, `license.installation.requested`
 	return nil
 }
 
 // AddAdditionalOwner добавляет компанию в список дополнительных владельцев сервера.
-func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
-	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+// Принимает внутренние ID сервера и компании.
+func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverID, companyID string) error {
+	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
@@ -131,28 +134,28 @@ func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serve
 		return gorm.ErrRecordNotFound
 	}
 
-	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	company, err := s.companyRepo.GetByID(ctx, companyID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения компании: %w", err)
 	}
 	if company == nil {
-		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+		return fmt.Errorf("компания с ID %s не найдена: %w", companyID, gorm.ErrRecordNotFound)
 	}
 
-	// Используем GORM Association для добавления связи
 	err = s.db.Model(server).Association("AdditionalOwners").Append(company)
 	if err != nil {
 		s.logger.Error("Не удалось добавить дополнительного владельца", zap.Error(err))
 		return fmt.Errorf("ошибка добавления связи в БД: %w", err)
 	}
 
-	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
+	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", zap.String("server_id", serverID), zap.String("company_id", companyID))
 	return nil
 }
 
 // RemoveAdditionalOwner удаляет компанию из списка дополнительных владельцев сервера.
-func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverUUID, companyUUID string) error {
-	server, err := s.serverRepo.GetByUUID(ctx, serverUUID)
+// Принимает внутренние ID сервера и компании.
+func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverID, companyID string) error {
+	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
@@ -160,21 +163,20 @@ func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, se
 		return gorm.ErrRecordNotFound
 	}
 
-	company, err := s.companyRepo.GetByUUID(ctx, companyUUID)
+	company, err := s.companyRepo.GetByID(ctx, companyID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения компании: %w", err)
 	}
 	if company == nil {
-		return fmt.Errorf("компания с UUID %s не найдена: %w", companyUUID, gorm.ErrRecordNotFound)
+		return fmt.Errorf("компания с ID %s не найдена: %w", companyID, gorm.ErrRecordNotFound)
 	}
 
-	// Используем GORM Association для удаления связи
 	err = s.db.Model(server).Association("AdditionalOwners").Delete(company)
 	if err != nil {
 		s.logger.Error("Не удалось удалить дополнительного владельца", zap.Error(err))
 		return fmt.Errorf("ошибка удаления связи из БД: %w", err)
 	}
 
-	s.logger.Info("Дополнительный владелец успешно удален с сервера", zap.String("server_uuid", serverUUID), zap.String("company_uuid", companyUUID))
+	s.logger.Info("Дополнительный владелец успешно удален с сервера", zap.String("server_id", serverID), zap.String("company_id", companyID))
 	return nil
 }

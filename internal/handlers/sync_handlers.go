@@ -2,8 +2,6 @@
 package handlers
 
 import (
-	"context"
-	"etalon-server/internal/gateways" // Добавляем импорт services
 	"etalon-server/internal/seeder"
 	"net/http"
 
@@ -11,29 +9,28 @@ import (
 	"go.uber.org/zap"
 )
 
-// SyncHandler обрабатывает запросы, связанные с синхронизацией и наполнением базы.
+// SyncHandler обрабатывает запросы, связанные с наполнением базы.
 type SyncHandler struct {
-	logger          *zap.Logger
-	seeder          *seeder.Seeder
-	seederKey       string
-	contractGtw gateways.ContractGateway // Новая зависимость
+	logger    *zap.Logger
+	seeder    *seeder.Seeder
+	seederKey string
 }
 
 // NewSyncHandler создает новый обработчик синхронизации.
-func NewSyncHandler(logger *zap.Logger, seeder *seeder.Seeder, seederKey string, contractGtw gateways.ContractGateway) *SyncHandler {
+func NewSyncHandler(logger *zap.Logger, seeder *seeder.Seeder, seederKey string) *SyncHandler {
 	return &SyncHandler{
-		logger:          logger,
-		seeder:          seeder,
-		seederKey:       seederKey,
-		contractGtw: contractGtw,
+		logger:    logger,
+		seeder:    seeder,
+		seederKey: seederKey,
 	}
 }
 
 // RegisterRoutes регистрирует роуты для этого обработчика.
 func (h *SyncHandler) RegisterRoutes(router chi.Router) {
 	router.Post("/seed", h.TriggerSeed)
-	router.Post("/contracts", h.TriggerContractSync)
+	// router.Post("/contracts", h.TriggerContractSync) // ИЗМЕНЕНИЕ: Удаляем ручку
 }
+
 // TriggerSeed запускает фоновое наполнение базы данных из мок-файлов.
 func (h *SyncHandler) TriggerSeed(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
@@ -54,26 +51,5 @@ func (h *SyncHandler) TriggerSeed(w http.ResponseWriter, r *http.Request) {
 
 	RespondWithJSON(w, http.StatusAccepted, map[string]string{
 		"message": "Наполнение базы данных запущено в фоновом режиме",
-	})
-}
-// TriggerContractSync запускает фоновую синхронизацию контрактов.
-func (h *SyncHandler) TriggerContractSync(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
-	if key == "" || key != h.seederKey {
-		RespondWithError(w, http.StatusUnauthorized, "Неверный или отсутствует ключ доступа")
-		return
-	}
-
-	go func() {
-		h.logger.Info("Запуск синхронизации контрактов через API...")
-		if err := h.contractGtw.RunSyncCycle(context.Background()); err != nil {
-			h.logger.Error("Процесс синхронизации контрактов завершился с ошибкой", zap.Error(err))
-		} else {
-			h.logger.Info("Процесс синхронизации контрактов, запущенный через API, успешно завершен.")
-		}
-	}()
-
-	RespondWithJSON(w, http.StatusAccepted, map[string]string{
-		"message": "Синхронизация контрактов запущена в фоновом режиме",
 	})
 }

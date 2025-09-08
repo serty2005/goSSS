@@ -1,3 +1,4 @@
+// internal/gateways/duplicates_gateway.go
 package gateways
 
 import (
@@ -7,7 +8,6 @@ import (
 	"etalon-server/internal/models"
 	"etalon-server/pkg/eventbus"
 	"fmt"
-
 	"sync"
 	"time"
 
@@ -39,14 +39,11 @@ func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus
 
 // Start запускает периодический поиск дубликатов.
 func (g *duplicatesGatewayImpl) Start(ctx context.Context) {
-	// Для поиска дубликатов не нужен слишком частый интервал.
-	// Возьмем интервал опроса серверов как ориентир.
-	interval := g.cfg.ServerPollingInterval
+	interval := g.cfg.DuplicatesSearchInterval
 	g.logger.Info("Запуск шлюза поиска дубликатов", zap.Duration("interval", interval))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Первый запуск сразу
 	g.runSearchCycle(ctx)
 
 	for {
@@ -113,24 +110,24 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 	log.Info("Найдено групп дубликатов", zap.Int("count", len(duplicateValues)))
 
 	for _, item := range duplicateValues {
-		var uuids []string
+		var internalIDs []string
 		err := g.db.WithContext(ctx).Model(model).
 			Where(fmt.Sprintf("%s = ?", field), item.Value).
-			Pluck("service_desk_uuid", &uuids).Error
+			Pluck("id", &internalIDs).Error
 
 		if err != nil {
-			log.Error("Не удалось получить UUID для группы дубликатов", zap.String("value", item.Value), zap.Error(err))
+			log.Error("Не удалось получить внутренние ID для группы дубликатов", zap.String("value", item.Value), zap.Error(err))
 			continue
 		}
 
-		if len(uuids) > 1 {
+		if len(internalIDs) > 1 {
 			g.bus.Publish(eventbus.Event{
 				Type: events.DuplicatesFound,
 				Payload: events.DuplicatesFoundPayload{
-					EntityType: entityType,
-					Field:      field,
-					Value:      item.Value,
-					UUIDs:      uuids,
+					EntityType:  entityType,
+					Field:       field,
+					Value:       item.Value,
+					InternalIDs: internalIDs,
 				},
 			})
 		}

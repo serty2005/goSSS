@@ -65,17 +65,22 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		Version:       req.AgentVersion,
 		LastHeartbeat: time.Now(),
 		Type:          "workstation",
-		Status:        models.StatusPendingOwner, // Владелец будет определен Оркестратором
+		Status:        models.StatusPendingOwner,
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		return nil, fmt.Errorf("не удалось создать агента в БД: %w", err)
 	}
 
+	payload := events.AgentDataPayload{
+		Source: req.AgentUUID,
+		Data:   req.InitialData,
+	}
+
 	// Публикуем событие для Оркестратора, чтобы он запустил логику сверки и определения владельца.
 	s.bus.Publish(eventbus.Event{
 		Type:    events.AgentDataReceived,
-		Payload: req.InitialData,
+		Payload: payload,
 	})
 	s.logger.Info("Новый агент зарегистрирован, событие на обработку данных отправлено", zap.String("uuid", req.AgentUUID))
 
@@ -100,10 +105,14 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		s.logger.Error("Не удалось обновить heartbeat агента", zap.String("uuid", agentUUID), zap.Error(err))
 	}
 
-	// Просто публикуем событие, вся логика сверки будет выполняться в Оркестраторе.
+	payload := events.AgentDataPayload{
+		Source: agentUUID,
+		Data:   *data,
+	}
+	// Просто публикуем событие, вся логика сверки  выполняeтся в Оркестраторе.
 	s.bus.Publish(eventbus.Event{
 		Type:    events.AgentDataReceived,
-		Payload: *data,
+		Payload: payload,
 	})
 	s.logger.Info("Данные от агента получены, событие на обработку отправлено", zap.String("uuid", agentUUID))
 

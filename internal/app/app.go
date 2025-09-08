@@ -10,6 +10,7 @@ import (
 	"etalon-server/internal/handlers"
 	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
+	"etalon-server/internal/plugins/naumen"
 	"etalon-server/internal/processing"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/seeder"
@@ -42,7 +43,6 @@ type Application struct {
 	EventBus             eventbus.EventBus
 	Orchestrator         *processing.Orchestrator
 	SDeskGateway         gateways.ServiceDeskGateway
-	ContractGateway      gateways.ContractGateway
 	DuplicatesGateway    gateways.DuplicatesGateway
 	PollingGateway       gateways.ServerPollingGateway
 	AgentFTPGateway      gateways.AgentFTPGateway
@@ -85,7 +85,7 @@ func New() (*Application, error) {
 		&models.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
-		&models.User{},
+		&models.User{}, &models.ExternalSystemLink{},
 	)
 	if err != nil {
 		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
@@ -98,7 +98,6 @@ func New() (*Application, error) {
 		return nil, err
 	}
 
-	// --- Инициализация компонентов ---
 	bus := eventbus.NewInMemoryEventBus(1000)
 
 	// Репозитории
@@ -110,12 +109,11 @@ func New() (*Application, error) {
 	contractRepo := repositories.NewContractRepo(database)
 	taskRepo := repositories.NewTaskRepo(database)
 	userRepo := repositories.NewUserRepo(database)
-	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
+	linkRepo := repositories.NewLinkRepo(database)
 
-	// Создаем отдельные логгеры для каждого воркера/сервиса
+	// Логгеры
 	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.LogLevel, cfg.DisableFileLogging)
 	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.LogLevel, cfg.DisableFileLogging)
-	contractSyncLogger := logger.New(cfg.LogDir, "contract_sync", cfg.LogLevel, cfg.DisableFileLogging)
 	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.LogLevel, cfg.DisableFileLogging)
 	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.LogLevel, cfg.DisableFileLogging)
 	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.LogLevel, cfg.DisableFileLogging)
@@ -123,30 +121,32 @@ func New() (*Application, error) {
 	frUpdateFounderLogger := logger.New(cfg.LogDir, "fr_update_founder", cfg.LogLevel, cfg.DisableFileLogging)
 
 	// Сервисы, шлюзы и оркестратор
-	sdClient := services.NewServiceDeskClient(cfg, appLogger)
+	sdClient := naumen.NewNaumenClient(cfg, appLogger, database, linkRepo)
 	ftpClient := services.NewFTPClient(cfg, appLogger)
+	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
 	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
 	authService := services.NewAuthService(cfg, userRepo)
 	taskResolutionService := services.NewTaskResolutionService(appLogger, database, bus, taskRepo, serverRepo, workstationRepo, frRepo)
 	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
-	sdEditorService := services.NewSDEditorService(sdEditorLogger, database, bus, sdClient, taskRepo, companyRepo, serverRepo, workstationRepo, frRepo)
-	// Создаем движок, передавая ему matcher
+	sdEditorService := services.NewSDEditorService(sdEditorLogger, database, bus, sdClient, taskRepo, linkRepo, companyRepo, serverRepo, workstationRepo, frRepo)
 	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
-	// --- Новая архитектура ---
-	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	contractGateway := gateways.NewContractGateway(cfg, database, sdClient, contractRepo, bus, contractSyncLogger)
+
+	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
 	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
 	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
-	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, processingEngine)
+
+	// ВАЖНО: Конструктор Оркестратора пока остается старым! Мы отрефакторим его на следующем шаге.
+	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, linkRepo, processingEngine)
+
 	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo, companyRepo, database)
-	frUpdateFounder := workers.NewFRUpdateFounder(cfg, frUpdateFounderLogger, bus, frRepo, sdClient)
+	frUpdateFounder := workers.NewFRUpdateFounder(cfg, frUpdateFounderLogger, bus, frRepo, linkRepo, sdClient)
 
 	// Обработчики
 	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
-	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey, contractGateway)
-	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo)
+	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo, linkRepo)
+	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
+	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo, linkRepo)
 	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
 	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
 	authHandler := handlers.NewAuthHandler(appLogger, authService)
@@ -160,7 +160,6 @@ func New() (*Application, error) {
 		EventBus:             bus,
 		Orchestrator:         orchestrator,
 		SDeskGateway:         sdeskGateway,
-		ContractGateway:      contractGateway,
 		DuplicatesGateway:    duplicatesGateway,
 		PollingGateway:       pollingGateway,
 		AgentFTPGateway:      agentFTPGateway,
@@ -294,14 +293,6 @@ func (a *Application) Run() {
 		go func() { defer wg.Done(); a.SDeskGateway.Start(mainCtx) }()
 	} else {
 		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
-	}
-
-	// Шлюз синхронизации контрактов
-	if a.Config.EnableContractGateway {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.ContractGateway.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Шлюз синхронизации контрактов отключен в конфигурации.")
 	}
 
 	// HTTP-сервер

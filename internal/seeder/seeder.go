@@ -3,18 +3,19 @@ package seeder
 
 import (
 	"context"
+	"etalon-server/internal/external"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
-	"etalon-server/internal/services"
 	"fmt"
+	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-const batchSize = 100 // Размер пакета для вставки в БД
+const batchSize = 100
 
-// Seeder отвечает за наполнение базы данных.
 type Seeder struct {
 	logger          *zap.Logger
 	db              *gorm.DB
@@ -25,330 +26,251 @@ type Seeder struct {
 	contractRepo    repositories.ContractRepo
 }
 
-// NewSeeder создает новый экземпляр Seeder.
 func NewSeeder(
-	logger *zap.Logger,
-	db *gorm.DB,
-	companyRepo repositories.CompanyRepo,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
-	contractRepo repositories.ContractRepo,
+	logger *zap.Logger, db *gorm.DB, companyRepo repositories.CompanyRepo,
+	serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo,
+	frRepo repositories.FiscalRegisterRepo, contractRepo repositories.ContractRepo,
 ) *Seeder {
 	return &Seeder{
-		logger:          logger,
-		db:              db,
-		companyRepo:     companyRepo,
-		serverRepo:      serverRepo,
-		workstationRepo: workstationRepo,
-		frRepo:          frRepo,
-		contractRepo:    contractRepo,
+		logger, db, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo,
 	}
 }
 
-// SeedDatabase выполняет полный цикл наполнения.
-func (s *Seeder) SeedDatabase(sdClient services.ServiceDeskClient) error {
+func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	s.logger.Info("Начало процесса наполнения базы данных...")
 
-	s.logger.Info("Шаг 1: Очистка таблиц...")
 	if err := s.clearDatabase(); err != nil {
 		return err
 	}
-	s.logger.Info("База данных успешно очищена.")
+
+	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
+	err := s.db.AutoMigrate(
+		&models.Company{}, &models.Server{}, &models.Workstation{},
+		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
+		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
+		&models.User{}, &models.ExternalSystemLink{},
+	)
+	if err != nil {
+		s.logger.Error("Не удалось выполнить миграцию схемы БД", zap.Error(err))
+		return err
+	}
+	s.logger.Info("Схема базы данных успешно создана.")
 
 	ctx := context.Background()
+	mapperCtx := (*external.MapperContext)(nil)
 
-	s.logger.Info("Шаг 2: Загрузка и вставка Компаний (в 2 прохода)...")
-	if err := s.seedCompanies(ctx, sdClient); err != nil {
-		return err
-	}
-
-	s.logger.Info("Шаг 3: Загрузка и вставка Контрактов и их связей...")
-	if err := s.seedContractsAndLinks(ctx, sdClient); err != nil {
-		return err
-	}
-
-	s.logger.Info("Шаг 4: Пересчет статусов ActiveContract для всех компаний...")
-	if err := s.recalculateAllCompanyStatuses(ctx, sdClient); err != nil {
-		return err
-	}
-
-	s.logger.Info("Получение UUID всех загруженных компаний для проверки связей оборудования...")
-	companyUUIDs, err := s.getAllCompanyUUIDs()
+	companyData, err := sdClient.FetchEntityList(ctx, "Company")
 	if err != nil {
 		return err
 	}
-	s.logger.Info("UUID компаний получены", zap.Int("count", len(companyUUIDs)))
-
-	s.logger.Info("Шаг 5: Загрузка и вставка Серверов...")
-	s.seedServers(ctx, sdClient, companyUUIDs)
-
-	s.logger.Info("Шаг 6: Загрузка и вставка Рабочих станций...")
-	s.seedWorkstations(ctx, sdClient, companyUUIDs)
-
-	s.logger.Info("Шаг 7: Загрузка и вставка Фискальных регистраторов...")
-	s.seedFiscalRegisters(ctx, sdClient, companyUUIDs)
-
-	s.logger.Info("Процесс наполнения базы данных завершен.")
-	return nil
-}
-
-// clearDatabase удаляет все данные из таблиц в правильном порядке.
-func (s *Seeder) clearDatabase() error {
-	tables := []string{
-		"company_contracts",
-		"reconciliation_tasks",
-		"agent_files",
-		"fiscal_registers",
-		"workstations",
-		"servers",
-		"contracts",
-		"companies",
-	}
-
-	for _, table := range tables {
-		s.logger.Info("Очистка таблицы...", zap.String("table", table))
-		if err := s.db.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
-			return fmt.Errorf("ошибка при очистке таблицы %s: %w", table, err)
-		}
-	}
-	return nil
-}
-
-// seedCompanies загружает и сохраняет компании в два прохода.
-func (s *Seeder) seedCompanies(ctx context.Context, sdClient services.ServiceDeskClient) error {
-	remoteList, err := sdClient.FetchEntityList(ctx, "ou$company", true)
+	serverData, err := sdClient.FetchEntityList(ctx, "Server")
 	if err != nil {
-		s.logger.Error("Не удалось получить список компаний из мок-данных", zap.Error(err))
 		return err
 	}
-
-	var companiesWithParent, companiesWithoutParent []models.Company
-	for _, data := range remoteList {
-		company, err := services.DataToCompany(ctx, data, s.logger)
-		if err != nil {
-			s.logger.Warn("Пропуск компании из-за ошибки маппинга", zap.Error(err))
-			continue
-		}
-		if company.ParentServiceDeskUUID != nil && *company.ParentServiceDeskUUID != "" {
-			companiesWithParent = append(companiesWithParent, *company)
-		} else {
-			companiesWithoutParent = append(companiesWithoutParent, *company)
-		}
-	}
-
-	// 1. Вставляем компании БЕЗ родителей
-	if len(companiesWithoutParent) > 0 {
-		if err := s.db.CreateInBatches(companiesWithoutParent, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке компаний без родителей", zap.Error(err))
-			return err
-		}
-		s.logger.Info("Успешно вставлено компаний без родителей", zap.Int("count", len(companiesWithoutParent)))
-	}
-
-	// 2. Вставляем компании С родителями
-	if len(companiesWithParent) > 0 {
-		if err := s.db.CreateInBatches(companiesWithParent, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке компаний с родителями", zap.Error(err))
-			return err
-		}
-		s.logger.Info("Успешно вставлено компаний с родителями", zap.Int("count", len(companiesWithParent)))
-	}
-	return nil
-}
-
-// seedContractsAndLinks загружает, сохраняет контракты и связи с компаниями.
-func (s *Seeder) seedContractsAndLinks(ctx context.Context, sdClient services.ServiceDeskClient) error {
-	remoteList, err := sdClient.FetchEntityList(ctx, "agreement$agreement", true)
+	wsData, err := sdClient.FetchEntityList(ctx, "Workstation")
 	if err != nil {
-		s.logger.Error("Не удалось получить список контрактов из мок-данных", zap.Error(err))
 		return err
 	}
-
-	var contractsToCreate []models.Contract
-	var linksToCreate []models.CompanyContract
-
-	for _, data := range remoteList {
-		contract, err := services.DataToContract(data)
-		if err != nil {
-			s.logger.Warn("Пропуск контракта из-за ошибки маппинга", zap.Error(err))
-			continue
-		}
-		contractsToCreate = append(contractsToCreate, *contract)
-
-		companyUUIDs := services.GetCompanyUUIDsFromContract(data)
-		for _, compUUID := range companyUUIDs {
-			linksToCreate = append(linksToCreate, models.CompanyContract{
-				CompanyServiceDeskUUID:  compUUID,
-				ContractServiceDeskUUID: *contract.ServiceDeskUUID,
-			})
-		}
+	frData, err := sdClient.FetchEntityList(ctx, "FiscalRegister")
+	if err != nil {
+		return err
 	}
-
-	// Вставляем контракты
-	if len(contractsToCreate) > 0 {
-		if err := s.db.CreateInBatches(contractsToCreate, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке контрактов", zap.Error(err))
-			return err
-		}
-		s.logger.Info("Успешно вставлено контрактов", zap.Int("count", len(contractsToCreate)))
-	}
-
-	// Вставляем связи
-	if len(linksToCreate) > 0 {
-		if err := s.db.Table("company_contracts").CreateInBatches(linksToCreate, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при вставке связей компаний и контрактов", zap.Error(err))
-			return err
-		}
-		s.logger.Info("Успешно вставлено связей компаний и контрактов", zap.Int("count", len(linksToCreate)))
-	}
-	return nil
-}
-
-// recalculateAllCompanyStatuses пересчитывает статусы ActiveContract для всех компаний.
-func (s *Seeder) recalculateAllCompanyStatuses(ctx context.Context, sdClient services.ServiceDeskClient) error {
-	s.logger.Info("Пересчет статусов ActiveContract для всех компаний...")
-
-	remoteContracts, err := sdClient.FetchEntityList(ctx, "agreement$agreement", true)
+	contractData, err := sdClient.FetchEntityList(ctx, "Contract")
 	if err != nil {
 		return err
 	}
 
-	activeCompanyUUIDs := make(map[string]struct{})
-	for _, contractData := range remoteContracts {
-		state, _ := contractData["state"].(string)
-		if state == "active" {
-			companyUUIDs := services.GetCompanyUUIDsFromContract(contractData)
-			for _, uuid := range companyUUIDs {
-				activeCompanyUUIDs[uuid] = struct{}{}
-			}
-		}
-	}
+	extToIntID := make(map[string]string)
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		activeUUIDsList := make([]string, 0, len(activeCompanyUUIDs))
-		for uuid := range activeCompanyUUIDs {
-			activeUUIDsList = append(activeUUIDsList, uuid)
-		}
-
-		if len(activeUUIDsList) > 0 {
-			res := tx.WithContext(ctx).Model(&models.Company{}).Where("service_desk_uuid IN ?", activeUUIDsList).Update("active_contract", true)
-			if res.Error != nil {
-				return res.Error
+		s.logger.Info("Создание Компаний...")
+		for _, data := range companyData {
+			extID, _ := data["UUID"].(string)
+			if extID == "" {
+				continue
 			}
-			s.logger.Info("Установлен статус ActiveContract=true для компаний", zap.Int("count", int(res.RowsAffected)))
+			company, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
+			if err := tx.Create(company).Error; err != nil {
+				continue
+			}
+			extToIntID[extID] = company.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: company.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Company", LastSyncedAt: time.Now()})
 		}
 
-		res := tx.WithContext(ctx).Model(&models.Company{}).Where("service_desk_uuid NOT IN ?", activeUUIDsList).Update("active_contract", false)
-		if res.Error != nil {
-			return res.Error
+		s.logger.Info("Установка родительских связей для Компаний...")
+		for _, data := range companyData {
+			extID, _ := data["UUID"].(string)
+			companyModel, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
+			parentExtID := companyModel.MetaClass
+			if parentExtID != "ou$company" {
+				childIntID := extToIntID[extID]
+				parentIntID := extToIntID[parentExtID]
+				if childIntID != "" && parentIntID != "" {
+					tx.Model(&models.Company{}).Where("id = ?", childIntID).Update("parent_id", parentIntID)
+				}
+			}
+			tx.Model(&models.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", "ou$company")
 		}
-		s.logger.Info("Установлен статус ActiveContract=false для компаний", zap.Int("count", int(res.RowsAffected)))
+
+		s.logger.Info("Создание Оборудования...")
+		for _, data := range serverData {
+			extID, _ := data["UUID"].(string)
+			if extID == "" {
+				continue
+			}
+			server, _ := sdClient.Mapper().DataToServer(ctx, mapperCtx, data)
+			if server != nil {
+				if server.OwnerID != nil && *server.OwnerID != "" {
+					if ownerIntID, ok := extToIntID[*server.OwnerID]; ok {
+						server.OwnerID = &ownerIntID
+					} else {
+						server.OwnerID = nil
+					}
+				} else {
+					server.OwnerID = nil
+				}
+
+				tx.Create(server)
+				extToIntID[extID] = server.ID
+				// ИСПРАВЛЕНИЕ: Добавляем создание связи
+				tx.Create(&models.ExternalSystemLink{InternalID: server.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Server", LastSyncedAt: time.Now()})
+			}
+		}
+		for _, data := range wsData {
+			extID, _ := data["UUID"].(string)
+			if extID == "" {
+				continue
+			}
+			ws, _ := sdClient.Mapper().DataToWorkstation(ctx, mapperCtx, data)
+			if ws != nil {
+				if ws.OwnerID != nil && *ws.OwnerID != "" {
+					if ownerIntID, ok := extToIntID[*ws.OwnerID]; ok {
+						ws.OwnerID = &ownerIntID
+					} else {
+						ws.OwnerID = nil
+					}
+				} else {
+					ws.OwnerID = nil
+				}
+
+				tx.Create(ws)
+				extToIntID[extID] = ws.ID
+				// ИСПРАВЛЕНИЕ: Добавляем создание связи
+				tx.Create(&models.ExternalSystemLink{InternalID: ws.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Workstation", LastSyncedAt: time.Now()})
+			}
+		}
+		for _, data := range frData {
+			extID, _ := data["UUID"].(string)
+			if extID == "" {
+				continue
+			}
+			fr, _ := sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
+			if fr != nil {
+				if fr.OwnerID != nil && *fr.OwnerID != "" {
+					if ownerIntID, ok := extToIntID[*fr.OwnerID]; ok {
+						fr.OwnerID = &ownerIntID
+					} else {
+						fr.OwnerID = nil
+					}
+				} else {
+					fr.OwnerID = nil
+				}
+
+				tx.Create(fr)
+				extToIntID[extID] = fr.ID
+				// ИСПРАВЛЕНИЕ: Добавляем создание связи
+				tx.Create(&models.ExternalSystemLink{InternalID: fr.ID, SystemName: "naumen", ExternalID: extID, EntityType: "FiscalRegister", LastSyncedAt: time.Now()})
+			}
+		}
+
+		s.logger.Info("Создание Контрактов и связей...")
+		var linksToCreate []models.CompanyContract
+		for _, data := range contractData {
+			extID, _ := data["UUID"].(string)
+			if extID == "" {
+				continue
+			}
+			contract, _ := sdClient.Mapper().DataToContract(ctx, mapperCtx, data)
+			tx.Create(contract)
+			extToIntID[extID] = contract.ID
+			// ИСПРАВЛЕНИЕ: Добавляем создание связи
+			tx.Create(&models.ExternalSystemLink{InternalID: contract.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Contract", LastSyncedAt: time.Now()})
+
+			companyExtIDs := sdClient.Mapper().GetCompanyUUIDsFromContract(data)
+			for _, compExtID := range companyExtIDs {
+				if compIntID, ok := extToIntID[compExtID]; ok {
+					linksToCreate = append(linksToCreate, models.CompanyContract{CompanyID: compIntID, ContractID: contract.ID})
+				}
+			}
+		}
+		if len(linksToCreate) > 0 {
+			if err := tx.Table("company_contracts").CreateInBatches(linksToCreate, batchSize).Error; err != nil {
+				return err
+			}
+		}
+
+		s.logger.Info("Пересчет статусов контрактов...")
+		activeCompanyExtIDs := make(map[string]struct{})
+		for _, data := range contractData {
+			if state, _ := data["state"].(string); state == "active" {
+				for _, compExtID := range sdClient.Mapper().GetCompanyUUIDsFromContract(data) {
+					activeCompanyExtIDs[compExtID] = struct{}{}
+				}
+			}
+		}
+
+		var activeCompanyIntIDs []string
+		for extID, intID := range extToIntID {
+			if _, isActive := activeCompanyExtIDs[extID]; isActive {
+				var count int64
+				tx.Model(&models.Company{}).Where("id = ?", intID).Count(&count)
+				if count > 0 {
+					activeCompanyIntIDs = append(activeCompanyIntIDs, intID)
+				}
+			}
+		}
+
+		if err := tx.Model(&models.Company{}).Session(&gorm.Session{AllowGlobalUpdate: true}).Update("active_contract", false).Error; err != nil {
+			return err
+		}
+		if len(activeCompanyIntIDs) > 0 {
+			if err := tx.Model(&models.Company{}).Where("id IN ?", activeCompanyIntIDs).Update("active_contract", true).Error; err != nil {
+				return err
+			}
+		}
 
 		return nil
 	})
 }
 
-// getAllCompanyUUIDs извлекает все UUID из таблицы companies в виде map для быстрой проверки.
-func (s *Seeder) getAllCompanyUUIDs() (map[string]struct{}, error) {
-	var companyUUIDs []string
-	result := s.db.Model(&models.Company{}).Pluck("service_desk_uuid", &companyUUIDs)
-	if result.Error != nil {
-		return nil, result.Error
+// clearDatabase удаляет все таблицы для полного пересоздания базы.
+func (s *Seeder) clearDatabase() error {
+	tables := []string{
+		"server_additional_owners", "company_contracts", "external_system_links",
+		"reconciliation_tasks", "agent_files", "fiscal_registers", "workstations",
+		"servers", "contracts", "companies", "users",
 	}
-	uuidSet := make(map[string]struct{}, len(companyUUIDs))
-	for _, uuid := range companyUUIDs {
-		uuidSet[uuid] = struct{}{}
+	s.logger.Info("Удаление существующих таблиц...")
+	for _, table := range tables {
+		if err := s.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table)).Error; err != nil {
+			// Мы не считаем ошибкой, если таблицы не существует, но логируем другие ошибки
+			if !strings.Contains(err.Error(), "does not exist") {
+				s.logger.Warn("Не удалось удалить таблицу (возможно, ее не было)", zap.String("table", table), zap.Error(err))
+			}
+		}
 	}
-	return uuidSet, nil
+	return nil
 }
 
-// seedServers загружает и сохраняет серверы.
-func (s *Seeder) seedServers(ctx context.Context, sdClient services.ServiceDeskClient, companyUUIDs map[string]struct{}) {
-	remoteList, err := sdClient.FetchEntityList(ctx, "objectBase$Server", true)
-	if err != nil {
-		s.logger.Error("Не удалось получить список серверов из мок-данных", zap.Error(err))
-		return
-	}
-	servers := make([]models.Server, 0, len(remoteList))
-	for _, data := range remoteList {
-		server, err := services.DataToServer(data)
-		if err != nil {
-			uuid, _ := data["UUID"].(string)
-			s.logger.Warn("Пропуск сервера из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
-			continue
-		}
-		if _, ok := companyUUIDs[*server.OwnerServiceDeskUUID]; !ok {
-			s.logger.Warn("Пропуск сервера, т.к. его владелец отсутствует в БД", zap.String("server_uuid", *server.ServiceDeskUUID), zap.String("owner_uuid", *server.OwnerServiceDeskUUID))
-			continue
-		}
-		servers = append(servers, *server)
-	}
-	if len(servers) > 0 {
-		if err := s.db.CreateInBatches(servers, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке серверов", zap.Error(err))
-		} else {
-			s.logger.Info("Успешно вставлено серверов", zap.Int("count", len(servers)))
-		}
-	}
-}
-
-// seedWorkstations загружает и сохраняет рабочие станции.
-func (s *Seeder) seedWorkstations(ctx context.Context, sdClient services.ServiceDeskClient, companyUUIDs map[string]struct{}) {
-	remoteList, err := sdClient.FetchEntityList(ctx, "objectBase$Workstation", true)
-	if err != nil {
-		s.logger.Error("Не удалось получить список рабочих станций из мок-данных", zap.Error(err))
-		return
-	}
-	workstations := make([]models.Workstation, 0, len(remoteList))
-	for _, data := range remoteList {
-		ws, err := services.DataToWorkstation(data)
-		if err != nil {
-			uuid, _ := data["UUID"].(string)
-			s.logger.Warn("Пропуск рабочей станции из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
-			continue
-		}
-		if _, ok := companyUUIDs[*ws.OwnerServiceDeskUUID]; !ok {
-			s.logger.Warn("Пропуск рабочей станции, т.к. ее владелец отсутствует в БД", zap.String("workstation_uuid", *ws.ServiceDeskUUID), zap.String("owner_uuid", *ws.OwnerServiceDeskUUID))
-			continue
-		}
-		workstations = append(workstations, *ws)
-	}
-	if len(workstations) > 0 {
-		if err := s.db.CreateInBatches(workstations, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке рабочих станций", zap.Error(err))
-		} else {
-			s.logger.Info("Успешно вставлено рабочих станций", zap.Int("count", len(workstations)))
-		}
-	}
-}
-
-// seedFiscalRegisters загружает и сохраняет фискальные регистраторы.
-func (s *Seeder) seedFiscalRegisters(ctx context.Context, sdClient services.ServiceDeskClient, companyUUIDs map[string]struct{}) {
-	remoteList, err := sdClient.FetchEntityList(ctx, "objectBase$FR", true)
-	if err != nil {
-		s.logger.Error("Не удалось получить список ФР из мок-данных", zap.Error(err))
-		return
-	}
-	frs := make([]models.FiscalRegister, 0, len(remoteList))
-	for _, data := range remoteList {
-		fr, err := services.DataToFiscalRegister(data)
-		if err != nil {
-			uuid, _ := data["UUID"].(string)
-			s.logger.Warn("Пропуск ФР из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
-			continue
-		}
-		if _, ok := companyUUIDs[*fr.OwnerServiceDeskUUID]; !ok {
-			s.logger.Warn("Пропуск ФР, т.к. его владелец отсутствует в БД", zap.String("fr_uuid", *fr.ServiceDeskUUID), zap.String("owner_uuid", *fr.OwnerServiceDeskUUID))
-			continue
-		}
-		frs = append(frs, *fr)
-	}
-	if len(frs) > 0 {
-		if err := s.db.CreateInBatches(frs, batchSize).Error; err != nil {
-			s.logger.Error("Ошибка при пакетной вставке ФР", zap.Error(err))
-		} else {
-			s.logger.Info("Успешно вставлено фискальных регистраторов", zap.Int("count", len(frs)))
-		}
+func (s *Seeder) getModelForType(entityType string) interface{} {
+	switch entityType {
+	case "Server":
+		return &models.Server{}
+	case "Workstation":
+		return &models.Workstation{}
+	case "FiscalRegister":
+		return &models.FiscalRegister{}
+	default:
+		return nil
 	}
 }
