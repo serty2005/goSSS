@@ -108,6 +108,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 			Type: events.ServerPollingFailed,
 			Payload: events.ServerPollingFailedPayload{
 				ServerUUID:   server.ID,
+				RequestID:    requestID,
 				NewStatus:    "undefined",
 				ErrorMessage: "IP-адрес сервера отсутствует",
 				LastPolledAt: time.Now(),
@@ -129,6 +130,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 				Type: events.ServerPollingFailed,
 				Payload: events.ServerPollingFailedPayload{
 					ServerUUID:   server.ID,
+					RequestID:    requestID,
 					NewStatus:    "undefined",
 					ErrorMessage: "Ошибка проверки IP-адреса: " + err.Error(),
 					LastPolledAt: time.Now(),
@@ -142,6 +144,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 				Type: events.ServerPollingFailed,
 				Payload: events.ServerPollingFailedPayload{
 					ServerUUID:   server.ID,
+					RequestID:    requestID,
 					NewStatus:    "undefined",
 					ErrorMessage: "IP-адрес сервера является локальным",
 					LastPolledAt: time.Now(),
@@ -168,6 +171,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 			Type: events.ServerPollingFailed,
 			Payload: events.ServerPollingFailedPayload{
 				ServerUUID:   server.ID, // ИЗМЕНЕНИЕ: Используем внутренний ID
+				RequestID:    requestID,
 				NewStatus:    status,
 				ErrorMessage: err.Error(),
 				LastPolledAt: time.Now(),
@@ -179,6 +183,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server mod
 			Type: events.ServerPollingSucceeded,
 			Payload: events.ServerPollingSucceededPayload{
 				ServerUUID:    server.ID, // ИЗМЕНЕНИЕ: Используем внутренний ID
+				RequestID:     requestID,
 				ServerName:    info.ServerName,
 				ServerEdition: info.Edition,
 				ServerVersion: shortenVersion(info.Version),

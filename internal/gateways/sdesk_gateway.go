@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/external"
 	"etalon-server/internal/logger"
+	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
@@ -257,14 +258,25 @@ func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entity
 		return nil, fmt.Errorf("неизвестный тип сущности для получения связей: %s", entityType)
 	}
 
+	g.logger.Info("Получение локальных связей", "entityType", entityType, "tableName", tableName)
+
+	// Проверяем существование таблицы external_system_links
+	if !g.db.Migrator().HasTable(&models.ExternalSystemLink{}) {
+		g.logger.Error("Таблица external_system_links не существует", "entityType", entityType)
+		return nil, fmt.Errorf("таблица external_system_links не существует")
+	}
+
 	// Выполняем запрос с JOIN
 	err = g.db.WithContext(ctx).Table("external_system_links as l").
-		Select("l.external_id, l.internal_id, t.last_modified_date, t.deleted_at").
+		Select("l.service_desk_uuid as external_id, l.internal_id, t.last_modified_date, t.deleted_at").
 		Joins(fmt.Sprintf("JOIN %s as t ON l.internal_id = t.id", tableName)).
 		Where("l.system_name = ? AND l.entity_type = ?", "naumen", entityType).
 		Scan(&results).Error
 
+	g.logger.Info("Результат запроса связей", "entityType", entityType, "results_count", len(results), "error", err)
+
 	if err != nil {
+		g.logger.Error("Ошибка при запросе связей", "entityType", entityType, "error", err)
 		return nil, err
 	}
 

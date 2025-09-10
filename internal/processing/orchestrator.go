@@ -291,7 +291,7 @@ func (o *Orchestrator) handleServerPollingSucceeded(ctx context.Context, event e
 	if !ok {
 		return
 	}
-	log := o.logger.With("internalServerUUID", payload.ServerUUID)
+	log := o.logger.With("request_id", payload.RequestID)
 	updates := map[string]interface{}{
 		"server_name":     payload.ServerName,
 		"server_edition":  payload.ServerEdition,
@@ -313,7 +313,7 @@ func (o *Orchestrator) handleServerPollingFailed(ctx context.Context, event even
 	if !ok {
 		return
 	}
-	log := o.logger.With("internalServerUUID", payload.ServerUUID)
+	log := o.logger.With("request_id", payload.RequestID)
 	updates := map[string]interface{}{
 		"status":          payload.NewStatus,
 		"last_polled_at":  payload.LastPolledAt,
