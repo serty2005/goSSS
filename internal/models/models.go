@@ -12,11 +12,11 @@ import (
 
 // ExternalSystemLink хранит связь между нашей внутренней сущностью и ее ID во внешней системе.
 type ExternalSystemLink struct {
-	InternalID   string `gorm:"primaryKey;type:text"`        // UUID нашей сущности (из поля Base.ID)
-	SystemName   string `gorm:"primaryKey;type:varchar(50)"` // Название внешней системы, например, "servicedesk", "zabbix"
-	ExternalID   string `gorm:"type:text;unique;not null"`   // ID сущности во внешней системе
-	EntityType   string `gorm:"type:varchar(50);not null"`   // Тип нашей сущности: "Company", "Server" и т.д.
-	LastSyncedAt time.Time
+	InternalID       string `gorm:"primaryKey;type:text"`        // UUID нашей сущности (из поля Base.ID)
+	SystemName       string `gorm:"primaryKey;type:varchar(50)"` // Название внешней системы, например, "servicedesk", "zabbix"
+	ServiceDeskUUID  string `gorm:"type:text;unique;not null"`   // ID сущности во внешней системе ServiceDesk
+	EntityType       string `gorm:"type:varchar(50);not null"`   // Тип нашей сущности: "Company", "Server" и т.д.
+	LastSyncedAt     time.Time
 }
 
 // Константы для статусов агента

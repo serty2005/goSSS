@@ -4,20 +4,20 @@ package seeder
 import (
 	"context"
 	"etalon-server/internal/external"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"fmt"
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 const batchSize = 100
 
 type Seeder struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
@@ -27,7 +27,7 @@ type Seeder struct {
 }
 
 func NewSeeder(
-	logger *zap.Logger, db *gorm.DB, companyRepo repositories.CompanyRepo,
+	logger logger.LoggerInterface, db *gorm.DB, companyRepo repositories.CompanyRepo,
 	serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo, contractRepo repositories.ContractRepo,
 ) *Seeder {
@@ -51,7 +51,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 		&models.User{}, &models.ExternalSystemLink{},
 	)
 	if err != nil {
-		s.logger.Error("Не удалось выполнить миграцию схемы БД", zap.Error(err))
+		s.logger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
 		return err
 	}
 	s.logger.Info("Схема базы данных успешно создана.")
@@ -94,7 +94,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 				continue
 			}
 			extToIntID[extID] = company.ID
-			tx.Create(&models.ExternalSystemLink{InternalID: company.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Company", LastSyncedAt: time.Now()})
+			tx.Create(&models.ExternalSystemLink{InternalID: company.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Company", LastSyncedAt: time.Now()})
 		}
 
 		s.logger.Info("Установка родительских связей для Компаний...")
@@ -133,7 +133,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 				tx.Create(server)
 				extToIntID[extID] = server.ID
 				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: server.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Server", LastSyncedAt: time.Now()})
+				tx.Create(&models.ExternalSystemLink{InternalID: server.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Server", LastSyncedAt: time.Now()})
 			}
 		}
 		for _, data := range wsData {
@@ -156,7 +156,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 				tx.Create(ws)
 				extToIntID[extID] = ws.ID
 				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: ws.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Workstation", LastSyncedAt: time.Now()})
+				tx.Create(&models.ExternalSystemLink{InternalID: ws.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Workstation", LastSyncedAt: time.Now()})
 			}
 		}
 		for _, data := range frData {
@@ -179,7 +179,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 				tx.Create(fr)
 				extToIntID[extID] = fr.ID
 				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: fr.ID, SystemName: "naumen", ExternalID: extID, EntityType: "FiscalRegister", LastSyncedAt: time.Now()})
+				tx.Create(&models.ExternalSystemLink{InternalID: fr.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "FiscalRegister", LastSyncedAt: time.Now()})
 			}
 		}
 
@@ -194,7 +194,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 			tx.Create(contract)
 			extToIntID[extID] = contract.ID
 			// ИСПРАВЛЕНИЕ: Добавляем создание связи
-			tx.Create(&models.ExternalSystemLink{InternalID: contract.ID, SystemName: "naumen", ExternalID: extID, EntityType: "Contract", LastSyncedAt: time.Now()})
+			tx.Create(&models.ExternalSystemLink{InternalID: contract.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Contract", LastSyncedAt: time.Now()})
 
 			companyExtIDs := sdClient.Mapper().GetCompanyUUIDsFromContract(data)
 			for _, compExtID := range companyExtIDs {
@@ -255,7 +255,7 @@ func (s *Seeder) clearDatabase() error {
 		if err := s.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table)).Error; err != nil {
 			// Мы не считаем ошибкой, если таблицы не существует, но логируем другие ошибки
 			if !strings.Contains(err.Error(), "does not exist") {
-				s.logger.Warn("Не удалось удалить таблицу (возможно, ее не было)", zap.String("table", table), zap.Error(err))
+				s.logger.Warn("Не удалось удалить таблицу (возможно, ее не было)", "table", table, "error", err)
 			}
 		}
 	}

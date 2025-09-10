@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/api"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/external"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
@@ -16,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,7 @@ type SDEditorService interface {
 
 // sdEditorServiceImpl реализует интерфейс SDEditorService.
 type sdEditorServiceImpl struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB
 	bus             eventbus.EventBus
 	sdClient        external.ExternalSystemClient
@@ -41,7 +41,7 @@ type sdEditorServiceImpl struct {
 
 // NewSDEditorService создает новый экземпляр воркера SDEditorService.
 func NewSDEditorService(
-	logger *zap.Logger,
+	logger logger.LoggerInterface,
 	db *gorm.DB,
 	bus eventbus.EventBus,
 	sdClient external.ExternalSystemClient,
@@ -80,14 +80,14 @@ func (s *sdEditorServiceImpl) handleUpdateRequest(ctx context.Context, event eve
 		return
 	}
 
-	log := s.logger.With(zap.Uint("taskID", payload.TaskID), zap.String("internalUUID", payload.EntityUUID))
+	log := s.logger.With("taskID", payload.TaskID, "internalUUID", payload.EntityUUID)
 	log.Info("Получен запрос на обновление сущности в ServiceDesk")
 
 	// 1. Находим внешний ID по внутреннему ID.
 	link, err := s.linkRepo.GetByInternalID(ctx, nil, "naumen", payload.EntityUUID)
 	if err != nil || link == nil {
 		msg := fmt.Sprintf("Не найдена связь с ServiceDesk для сущности с внутренним ID %s", payload.EntityUUID)
-		log.Error(msg, zap.Error(err))
+		log.Error(msg, "error", err)
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", msg)
 		return
 	}
@@ -95,16 +95,16 @@ func (s *sdEditorServiceImpl) handleUpdateRequest(ctx context.Context, event eve
 	// 2. Собираем payload для ServiceDesk на основе эталонных данных из нашей БД.
 	payloadForSD, err := s.buildUpdatePayload(ctx, payload.EntityType, payload.EntityUUID)
 	if err != nil {
-		log.Error("Не удалось собрать payload для обновления", zap.Error(err))
+		log.Error("Не удалось собрать payload для обновления", "error", err)
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка сборки данных для SD: %v", err))
 		return
 	}
-	log.Info("Подготовлен payload для обновления сущности в ServiceDesk", zap.Any("payload", payloadForSD))
+	log.Info("Подготовлен payload для обновления сущности в ServiceDesk", "payload", payloadForSD)
 
 	// 3. Выполняем обновление, используя внешний ID.
-	err = s.sdClient.UpdateEntity(ctx, link.ExternalID, payload.EntityType, payloadForSD)
+	err = s.sdClient.UpdateEntity(ctx, link.ServiceDeskUUID, payload.EntityType, payloadForSD)
 	if err != nil {
-		log.Error("Ошибка при обновлении сущности в ServiceDesk", zap.Error(err), zap.Any("sent_payload", payloadForSD))
+		log.Error("Ошибка при обновлении сущности в ServiceDesk", "error", err, "sent_payload", payloadForSD)
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка API ServiceDesk: %v", err))
 		return
 	}
@@ -120,7 +120,7 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 	if !ok {
 		return
 	}
-	log := s.logger.With(zap.Uint("taskID", payload.TaskID))
+	log := s.logger.With("taskID", payload.TaskID)
 	log.Info("Получен запрос на создание сущности в ServiceDesk")
 
 	var newExternalUUID string
@@ -134,7 +134,7 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 	}
 
 	if err != nil {
-		log.Error("Ошибка при создании сущности в ServiceDesk", zap.Error(err))
+		log.Error("Ошибка при создании сущности в ServiceDesk", "error", err)
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка API ServiceDesk: %v", err))
 		return
 	}
@@ -155,11 +155,11 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 
 		if internalID != "" {
 			newLink := models.ExternalSystemLink{
-				InternalID: internalID, SystemName: "naumen", ExternalID: newExternalUUID,
+				InternalID: internalID, SystemName: "naumen", ServiceDeskUUID: newExternalUUID,
 				EntityType: task.EntityType, LastSyncedAt: time.Now(),
 			}
 			if err := s.linkRepo.Create(ctx, nil, &newLink); err != nil {
-				log.Error("Критическая ошибка: сущность в SD создана, но не удалось создать для нее связь в локальной БД", zap.Error(err))
+				log.Error("Критическая ошибка: сущность в SD создана, но не удалось создать для нее связь в локальной БД", "error", err)
 				// Статус задачи не меняем на resolved, чтобы оператор увидел проблему
 				s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Создано в SD (extUUID: %s), но не удалось создать связь в БД!", newExternalUUID))
 				return
@@ -167,7 +167,7 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 		}
 	}
 
-	log.Info("Сущность в ServiceDesk успешно создана и связана", zap.String("newExternalUUID", newExternalUUID))
+	log.Info("Сущность в ServiceDesk успешно создана и связана", "newExternalUUID", newExternalUUID)
 	s.updateTaskStatus(ctx, payload.TaskID, "resolved", fmt.Sprintf("Сущность успешно создана в ServiceDesk с UUID: %s", newExternalUUID))
 }
 
@@ -230,7 +230,7 @@ func (s *sdEditorServiceImpl) createFiscalRegisterFromTask(ctx context.Context, 
 	}
 
 	agentData := details.AgentData
-	log := s.logger.With(zap.Uint("taskID", taskID))
+	log := s.logger.With("taskID", taskID)
 	log.Debug("Начало сборки payload для создания ФР")
 	payload := make(map[string]interface{})
 
@@ -289,7 +289,7 @@ func (s *sdEditorServiceImpl) createFiscalRegisterFromTask(ctx context.Context, 
 	// 4. Владелец сущности
 	addStringFieldToPayload(log, payload, "owner", details.EtalonOwnerUUID)
 
-	log.Info("Подготовлен итоговый payload для создания ФР в ServiceDesk", zap.Any("payload", payload))
+	log.Info("Подготовлен итоговый payload для создания ФР в ServiceDesk", "payload", payload)
 
 	// 5. Вызов клиента для создания сущности
 	response, err := s.sdClient.CreateEntity(ctx, "FiscalRegister", payload)
@@ -319,9 +319,9 @@ func (s *sdEditorServiceImpl) updateTaskStatus(ctx context.Context, taskID uint,
 	})
 	if err != nil {
 		s.logger.Error("Критическая ошибка: не удалось обновить статус задачи после операции с SD",
-			zap.Uint("taskID", taskID),
-			zap.String("newStatus", newStatus),
-			zap.Error(err),
+			"taskID", taskID,
+			"newStatus", newStatus,
+			"error", err,
 		)
 	}
 }
@@ -330,11 +330,11 @@ func (s *sdEditorServiceImpl) updateTaskStatus(ctx context.Context, taskID uint,
 var srokFnRegex = regexp.MustCompile(`(13|15|36)`)
 
 // addStringFieldToPayload - хелпер для логирования и добавления непустых строковых полей в payload.
-func addStringFieldToPayload(log *zap.Logger, payload map[string]interface{}, key, value string) {
+func addStringFieldToPayload(log logger.LoggerInterface, payload map[string]interface{}, key, value string) {
 	if value != "" {
-		log.Debug("Добавление поля в payload", zap.String("поле", key), zap.String("значение", value))
+		log.Debug("Добавление поля в payload", "поле", key, "значение", value)
 		payload[key] = value
 	} else {
-		log.Debug("Пропуск пустого поля", zap.String("поле", key))
+		log.Debug("Пропуск пустого поля", "поле", key)
 	}
 }

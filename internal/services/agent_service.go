@@ -6,13 +6,13 @@ import (
 	"errors"
 	"etalon-server/internal/api"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -30,7 +30,7 @@ type AgentService interface {
 }
 
 type agentServiceImpl struct {
-	logger      *zap.Logger
+	logger      logger.LoggerInterface
 	agentRepo   repositories.AgentRepo
 	companyRepo repositories.CompanyRepo
 	db          *gorm.DB
@@ -38,7 +38,7 @@ type agentServiceImpl struct {
 }
 
 // NewAgentService создает новый экземпляр сервиса агентов.
-func NewAgentService(logger *zap.Logger, agentRepo repositories.AgentRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, bus eventbus.EventBus) AgentService {
+func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, bus eventbus.EventBus) AgentService {
 	return &agentServiceImpl{
 		logger:      logger,
 		agentRepo:   agentRepo,
@@ -82,7 +82,7 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		Type:    events.AgentDataReceived,
 		Payload: payload,
 	})
-	s.logger.Info("Новый агент зарегистрирован, событие на обработку данных отправлено", zap.String("uuid", req.AgentUUID))
+	s.logger.Info("Новый агент зарегистрирован, событие на обработку данных отправлено", "uuid", req.AgentUUID)
 
 	return agent, nil
 }
@@ -102,7 +102,7 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		agent.Version = data.AgentVersion
 	}
 	if err := s.agentRepo.Update(ctx, agent); err != nil {
-		s.logger.Error("Не удалось обновить heartbeat агента", zap.String("uuid", agentUUID), zap.Error(err))
+		s.logger.Error("Не удалось обновить heartbeat агента", "uuid", agentUUID, "error", err)
 	}
 
 	payload := events.AgentDataPayload{
@@ -114,7 +114,7 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		Type:    events.AgentDataReceived,
 		Payload: payload,
 	})
-	s.logger.Info("Данные от агента получены, событие на обработку отправлено", zap.String("uuid", agentUUID))
+	s.logger.Info("Данные от агента получены, событие на обработку отправлено", "uuid", agentUUID)
 
 	return nil
 }

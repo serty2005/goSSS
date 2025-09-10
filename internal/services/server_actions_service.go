@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/repositories"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -34,7 +34,7 @@ type ServerActionsService interface {
 }
 
 type serverActionsServiceImpl struct {
-	logger        *zap.Logger
+	logger        logger.LoggerInterface
 	bus           eventbus.EventBus
 	serverRepo    repositories.ServerRepo
 	companyRepo   repositories.CompanyRepo
@@ -44,7 +44,7 @@ type serverActionsServiceImpl struct {
 }
 
 // NewServerActionsService создает новый экземпляр сервиса.
-func NewServerActionsService(logger *zap.Logger, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB) ServerActionsService {
+func NewServerActionsService(logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB) ServerActionsService {
 	return &serverActionsServiceImpl{
 		logger:        logger,
 		bus:           bus,
@@ -71,7 +71,7 @@ func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverI
 		return gorm.ErrRecordNotFound
 	}
 
-	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", zap.String("serverID", serverID))
+	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", "serverID", serverID)
 
 	s.bus.Publish(eventbus.Event{
 		Type: events.ServerPollingRequested,
@@ -97,7 +97,7 @@ func (s *serverActionsServiceImpl) checkRateLimit(serverID string) bool {
 		}
 	}
 	if len(recentStamps) >= rateLimitCount {
-		s.logger.Warn("Превышен лимит запросов на опрос для сервера", zap.String("serverID", serverID))
+		s.logger.Warn("Превышен лимит запросов на опрос для сервера", "serverID", serverID)
 		s.requestStamps[serverID] = recentStamps
 		return false
 	}
@@ -117,8 +117,8 @@ func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID,
 		return gorm.ErrRecordNotFound
 	}
 	s.logger.Info("ЗАГЛУШКА: Запущена установка лицензии",
-		zap.String("server_id", serverID),
-		zap.String("unique_id", uniqueID),
+		"server_id", serverID,
+		"unique_id", uniqueID,
 	)
 	return nil
 }
@@ -144,11 +144,11 @@ func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serve
 
 	err = s.db.Model(server).Association("AdditionalOwners").Append(company)
 	if err != nil {
-		s.logger.Error("Не удалось добавить дополнительного владельца", zap.Error(err))
+		s.logger.Error("Не удалось добавить дополнительного владельца", "error", err)
 		return fmt.Errorf("ошибка добавления связи в БД: %w", err)
 	}
 
-	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", zap.String("server_id", serverID), zap.String("company_id", companyID))
+	s.logger.Info("Дополнительный владелец успешно добавлен к серверу", "server_id", serverID, "company_id", companyID)
 	return nil
 }
 
@@ -173,10 +173,10 @@ func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, se
 
 	err = s.db.Model(server).Association("AdditionalOwners").Delete(company)
 	if err != nil {
-		s.logger.Error("Не удалось удалить дополнительного владельца", zap.Error(err))
+		s.logger.Error("Не удалось удалить дополнительного владельца", "error", err)
 		return fmt.Errorf("ошибка удаления связи из БД: %w", err)
 	}
 
-	s.logger.Info("Дополнительный владелец успешно удален с сервера", zap.String("server_id", serverID), zap.String("company_id", companyID))
+	s.logger.Info("Дополнительный владелец успешно удален с сервера", "server_id", serverID, "company_id", companyID)
 	return nil
 }

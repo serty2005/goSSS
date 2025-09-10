@@ -4,22 +4,22 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/services"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 // ServerActionsHandler обрабатывает специфичные действия над серверами.
 type ServerActionsHandler struct {
-	logger     *zap.Logger
+	logger     logger.LoggerInterface
 	actionsSvc services.ServerActionsService
 }
 
 // NewServerActionsHandler создает новый экземпляр обработчика.
-func NewServerActionsHandler(logger *zap.Logger, actionsSvc services.ServerActionsService) *ServerActionsHandler {
+func NewServerActionsHandler(logger logger.LoggerInterface, actionsSvc services.ServerActionsService) *ServerActionsHandler {
 	return &ServerActionsHandler{
 		logger:     logger,
 		actionsSvc: actionsSvc,
@@ -62,7 +62,7 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		} else {
-			h.logger.Error("Ошибка при вызове заглушки установки лицензии", zap.String("serverID", serverID), zap.Error(err))
+			h.logger.Error("Ошибка при вызове заглушки установки лицензии", "serverID", serverID, "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
@@ -86,7 +86,7 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		default:
-			h.logger.Error("Ошибка при запуске принудительного опроса", zap.String("serverID", serverID), zap.Error(err))
+			h.logger.Error("Ошибка при запуске принудительного опроса", "serverID", serverID, "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
@@ -116,7 +116,7 @@ func (h *ServerActionsHandler) addAdditionalOwner(w http.ResponseWriter, r *http
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
-			h.logger.Error("Ошибка при добавлении дополнительного владельца", zap.Error(err))
+			h.logger.Error("Ошибка при добавлении дополнительного владельца", "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
@@ -139,7 +139,7 @@ func (h *ServerActionsHandler) removeAdditionalOwner(w http.ResponseWriter, r *h
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
-			h.logger.Error("Ошибка при удалении дополнительного владельца", zap.Error(err))
+			h.logger.Error("Ошибка при удалении дополнительного владельца", "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/api"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/services"
@@ -13,7 +14,6 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
@@ -47,7 +47,7 @@ type ProcessingEngine interface {
 }
 
 type processingEngineImpl struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -58,7 +58,7 @@ type processingEngineImpl struct {
 
 // NewProcessingEngine создает новый экземпляр движка.
 func NewProcessingEngine(
-	logger *zap.Logger,
+	logger logger.LoggerInterface,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
@@ -74,7 +74,7 @@ func NewProcessingEngine(
 // ProcessAgentData - главный метод, реализующий согласованную логику.
 func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source string, data *api.AgentDataDTO) *ProcessingResult {
 	result := &ProcessingResult{Actions: []Action{}}
-	log := p.logger.With(zap.String("source", source))
+	log := p.logger.With("source", source)
 
 	currentTime := utils.ParseAgentTime(data.CurrentTime)
 	if currentTime == nil {
@@ -82,7 +82,7 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 		return result
 	}
 	if currentTime.Before(time.Now().AddDate(0, 0, -60)) {
-		log.Info("Данные от агента пропущены, так как они старше 60 дней.", zap.Time("current_time", *currentTime))
+		log.Info("Данные от агента пропущены, так как они старше 60 дней.", "current_time", *currentTime)
 		return result
 	}
 
@@ -108,16 +108,16 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 		}
 	}
 
-	log.Info("Эталонный владелец оборудования определен", zap.String("ownerID", etalonOwnerID))
+	log.Info("Эталонный владелец оборудования определен", "ownerID", etalonOwnerID)
 
 	ownerCompany, err := p.companyRepo.GetByID(ctx, etalonOwnerID)
 	if err != nil || ownerCompany == nil {
-		log.Error("Не удалось получить данные о компании-владельце, обработка прервана", zap.String("ownerID", etalonOwnerID), zap.Error(err))
+		log.Error("Не удалось получить данные о компании-владельце, обработка прервана", "ownerID", etalonOwnerID, "error", err)
 		return result
 	}
 
 	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
-		log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца", zap.String("ownerID", etalonOwnerID))
+		log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца", "ownerID", etalonOwnerID)
 		return result
 	}
 
@@ -158,11 +158,11 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	}
 	currentTime := utils.ParseAgentTime(data.CurrentTime)
 	if currentTime != nil && server.LastModifiedDate != nil && currentTime.Before(*server.LastModifiedDate) {
-		p.logger.Info("Обновление сервера пропущено: данные от агента старше, чем запись в БД", zap.String("server_id", server.ID), zap.Time("agent_time", *currentTime), zap.Time("db_time", *server.LastModifiedDate))
+		p.logger.Info("Обновление сервера пропущено: данные от агента старше, чем запись в БД", "server_id", server.ID, "agent_time", *currentTime, "db_time", *server.LastModifiedDate)
 		return
 	}
 	if server.Status == "locked" {
-		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", zap.String("id", server.ID))
+		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", "id", server.ID)
 		return
 	}
 

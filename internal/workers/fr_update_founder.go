@@ -6,12 +6,11 @@ import (
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/external"
+	loggerPkg "etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/pkg/eventbus"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // FRUpdateFounder (Fiscal Register Update Founder) - это фоновый воркер,
@@ -23,7 +22,7 @@ type FRUpdateFounder interface {
 
 type frUpdateFounderImpl struct {
 	cfg      *config.Config
-	logger   *zap.Logger
+	logger   loggerPkg.LoggerInterface
 	bus      eventbus.EventBus
 	frRepo   repositories.FiscalRegisterRepo
 	linkRepo repositories.LinkRepo // Новая зависимость
@@ -33,7 +32,7 @@ type frUpdateFounderImpl struct {
 // NewFRUpdateFounder создает новый экземпляр воркера.
 func NewFRUpdateFounder(
 	cfg *config.Config,
-	logger *zap.Logger,
+	logger loggerPkg.LoggerInterface,
 	bus eventbus.EventBus,
 	frRepo repositories.FiscalRegisterRepo,
 	linkRepo repositories.LinkRepo, // Новая зависимость
@@ -51,7 +50,7 @@ func NewFRUpdateFounder(
 
 // Start запускает воркер в фоновом режиме.
 func (w *frUpdateFounderImpl) Start(ctx context.Context) {
-	w.logger.Info("Запуск воркера поиска обновлений для ФР (FRUpdateFounder)", zap.Duration("interval", w.cfg.FRDiscrepancyCheckInterval))
+	w.logger.Info("Запуск воркера поиска обновлений для ФР (FRUpdateFounder)", "interval", w.cfg.FRDiscrepancyCheckInterval)
 	ticker := time.NewTicker(w.cfg.FRDiscrepancyCheckInterval)
 	defer ticker.Stop()
 
@@ -75,7 +74,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 	// 1. Получаем все ФР из ServiceDesk.
 	remoteFRsData, err := w.sdClient.FetchEntityList(ctx, "FiscalRegister")
 	if err != nil {
-		w.logger.Error("Не удалось получить список ФР из ServiceDesk, цикл прерван", zap.Error(err))
+		w.logger.Error("Не удалось получить список ФР из ServiceDesk, цикл прерван", "error", err)
 		return
 	}
 
@@ -87,21 +86,21 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 		fr, err := w.sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
 		if err != nil {
 			uuid, _ := data["UUID"].(string)
-			w.logger.Warn("Пропуск ФР из ServiceDesk из-за ошибки маппинга", zap.String("uuid", uuid), zap.Error(err))
+			w.logger.Warn("Пропуск ФР из ServiceDesk из-за ошибки маппинга", "uuid", uuid, "error", err)
 			continue
 		}
 		externalUUID, _ := data["UUID"].(string)
 		remoteFRsMap[externalUUID] = fr
 	}
-	w.logger.Info("Из ServiceDesk загружено и обработано ФР", zap.Int("count", len(remoteFRsMap)))
+	w.logger.Info("Из ServiceDesk загружено и обработано ФР", "count", len(remoteFRsMap))
 
 	// 3. Получаем все ФР из нашей локальной ("эталонной") базы.
 	localFRs, err := w.frRepo.Search(ctx, "", 10000, 0)
 	if err != nil {
-		w.logger.Error("Не удалось получить список ФР из локальной БД, цикл прерван", zap.Error(err))
+		w.logger.Error("Не удалось получить список ФР из локальной БД, цикл прерван", "error", err)
 		return
 	}
-	w.logger.Info("Из локальной БД загружено ФР для сверки", zap.Int("count", len(localFRs)))
+	w.logger.Info("Из локальной БД загружено ФР для сверки", "count", len(localFRs))
 
 	publishedEvents := 0
 	// 4. Итерируем по локальным ФР и сравниваем их с данными из SD.
@@ -109,17 +108,17 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 		// Находим внешний ID для нашего локального ФР
 		link, err := w.linkRepo.GetByInternalID(ctx, nil, "naumen", localFR.ID)
 		if err != nil {
-			w.logger.Error("Ошибка получения связи для ФР", zap.String("internal_id", localFR.ID), zap.Error(err))
+			w.logger.Error("Ошибка получения связи для ФР", "internal_id", localFR.ID, "error", err)
 			continue
 		}
 		if link == nil {
-			w.logger.Debug("Пропуск ФР, для которого нет связи с внешней системой", zap.String("internal_id", localFR.ID))
+			w.logger.Debug("Пропуск ФР, для которого нет связи с внешней системой", "internal_id", localFR.ID)
 			continue
 		}
 
-		remoteFR, ok := remoteFRsMap[link.ExternalID]
+		remoteFR, ok := remoteFRsMap[link.ServiceDeskUUID]
 		if !ok {
-			w.logger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", zap.String("internal_id", localFR.ID))
+			w.logger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", "internal_id", localFR.ID)
 			continue
 		}
 
@@ -127,7 +126,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 
 		if len(discrepancies) > 0 {
 			payload := events.FiscalRegisterDiscrepancyPayload{
-				FRServiceDeskUUID: link.ExternalID,
+				FRServiceDeskUUID: link.ServiceDeskUUID,
 				Discrepancies:     discrepancies,
 			}
 			w.bus.Publish(eventbus.Event{
@@ -138,7 +137,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 		}
 	}
 
-	w.logger.Info("Цикл сверки данных ФР завершен.", zap.Int("published_events", publishedEvents))
+	w.logger.Info("Цикл сверки данных ФР завершен.", "published_events", publishedEvents)
 }
 
 // compareFiscalRegisters сравнивает два фискальных регистратора и возвращает карту расхождений.

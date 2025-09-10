@@ -41,14 +41,14 @@ const (
 // Содержит сырые данные из внешней системы.
 type ServiceDeskEntityPayload struct {
 	EntityType   string                 // Внутренний тип сущности: "Company", "Server"
-	ExternalUUID string                 // UUID сущности во внешней системе
+	ServiceDeskUUID string                 // UUID сущности во внешней системе
 	Data         map[string]interface{} // Полные данные сущности, полученные от внешней системы
 }
 
 // ServiceDeskEntityDeletePayload - полезная нагрузка для события ServiceDeskEntityDeleted.
 type ServiceDeskEntityDeletePayload struct {
 	EntityType   string // Внутренний тип сущности
-	ExternalUUID string // UUID удаленной сущности во внешней системе
+	ServiceDeskUUID string // UUID удаленной сущности во внешней системе
 }
 
 // ContractsStatusPayload - полезная нагрузка для события ContractsStatusRecalculated.
@@ -78,7 +78,7 @@ type ServerPollingSucceededPayload struct {
 // ServerPollingFailedPayload - полезная нагрузка для неудачного опроса.
 type ServerPollingFailedPayload struct {
 	ServerUUID   string
-	NewStatus    string // 'offline' или 'archived'
+	NewStatus    string // 'offline', 'archived' или 'undefined'
 	ErrorMessage string
 	LastPolledAt time.Time
 }

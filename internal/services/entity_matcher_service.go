@@ -4,11 +4,10 @@ package services
 import (
 	"context"
 	"etalon-server/internal/api"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
-
-	"go.uber.org/zap"
 )
 
 // MatchedEntity результат работы EntityMatcherService.
@@ -24,7 +23,7 @@ type EntityMatcherService interface {
 }
 
 type entityMatcherServiceImpl struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -32,7 +31,7 @@ type entityMatcherServiceImpl struct {
 
 // NewEntityMatcherService создает новый экземпляр сервиса.
 func NewEntityMatcherService(
-	logger *zap.Logger,
+	logger logger.LoggerInterface,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
@@ -46,13 +45,13 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 	if logIdentifier == "" {
 		logIdentifier = data.TeamviewerID
 	}
-	log := s.logger.With(zap.String("log_identifier", logIdentifier))
+	log := s.logger.With("log_identifier", logIdentifier)
 
 	normalizedIP := validators.ValidateIPAddress(data.URLRms)
 
 	// Приоритет 1: Поиск по Серверу
 	if server, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(normalizedIP)); server != nil {
-		log.Info("Найдено совпадение по Серверу", zap.String("internal_id", server.ID))
+		log.Info("Найдено совпадение по Серверу", "internal_id", server.ID)
 		return &MatchedEntity{
 			Entity:     server,
 			EntityType: "Server",
@@ -62,7 +61,7 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 
 	// Приоритет 2: Поиск по Рабочей станции
 	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID); ws != nil {
-		log.Info("Найдено совпадение по Рабочей станции", zap.String("internal_id", ws.ID))
+		log.Info("Найдено совпадение по Рабочей станции", "internal_id", ws.ID)
 		return &MatchedEntity{
 			Entity:     ws,
 			EntityType: "Workstation",
@@ -72,7 +71,7 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 
 	// Приоритет 3: Поиск по Фискальному регистратору
 	if fr, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber); fr != nil {
-		log.Info("Найдено совпадение по Фискальному регистратору", zap.String("internal_id", fr.ID))
+		log.Info("Найдено совпадение по Фискальному регистратору", "internal_id", fr.ID)
 		return &MatchedEntity{
 			Entity:     fr,
 			EntityType: "FiscalRegister",

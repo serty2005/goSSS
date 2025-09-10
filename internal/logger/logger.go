@@ -1,77 +1,188 @@
 package logger
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/natefinch/lumberjack"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// New инициализирует логгер zap.
-// Он может писать логи как в консоль, так и в файл с ротацией.
-func New(logDir, loggerName, logLevel string, disableFileLogging bool) *zap.Logger {
-	level := getZapLevel(logLevel)
-	// Конфигурация для логгирования в консоль
-	consoleCore := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
-		zapcore.Lock(os.Stdout),
-		level,
-	)
+// SimpleConsoleHandler - кастомный обработчик для упрощенного консольного вывода
+type SimpleConsoleHandler struct {
+	level     slog.Level
+	component string
+}
 
-	cores := []zapcore.Core{consoleCore}
+func (h *SimpleConsoleHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= h.level
+}
 
-	// Конфигурация для логгирования в файл с ротацией
+func (h *SimpleConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Получаем время
+	timeStr := r.Time.Format("2006-01-02T15:04:05.000-07:00")
+
+	// Получаем уровень
+	levelStr := r.Level.String()
+
+	// Используем сохраненный компонент или ищем в атрибутах
+	component := h.component
+	if component == "" {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "component" {
+				component = a.Value.String()
+				return false
+			}
+			return true
+		})
+	}
+
+	// Получаем сообщение
+	msg := r.Message
+
+	// Форматируем вывод
+	if component != "" {
+		fmt.Printf("%s %s %s: %q\n", timeStr, levelStr, component, msg)
+	} else {
+		fmt.Printf("%s %s %q\n", timeStr, levelStr, msg)
+	}
+
+	return nil
+}
+
+func (h *SimpleConsoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	// Создаем новый обработчик с атрибутами
+	newHandler := &SimpleConsoleHandler{
+		level: h.level,
+	}
+
+	// Сохраняем атрибуты для использования в Handle
+	for _, attr := range attrs {
+		if attr.Key == "component" {
+			newHandler.component = attr.Value.String()
+		}
+	}
+
+	return newHandler
+}
+
+func (h *SimpleConsoleHandler) WithGroup(name string) slog.Handler {
+	// Для простоты не поддерживаем WithGroup в кастомном обработчике
+	return h
+}
+
+// NewSlogLogger инициализирует логгер slog.
+// Он может писать логи как в консоль (читаемый формат), так и в файл (JSON для парсинга).
+func NewSlogLogger(logDir, loggerName, logLevel string, disableFileLogging bool) LoggerInterface {
+	level := getSlogLevel(logLevel)
+
+	// Кастомный обработчик для консоли с упрощенным форматом
+	consoleHandler := &SimpleConsoleHandler{
+		level: level,
+	}
+
+	var handlers []slog.Handler
+	handlers = append(handlers, consoleHandler)
+
+	// Обработчик для файла (JSON)
 	if !disableFileLogging {
 		// Создаем директорию для логов, если ее нет
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			// В случае ошибки просто не будем писать в файл
-			consoleLogger := zap.New(consoleCore)
-			consoleLogger.Error("Не удалось создать директорию для логов, файловое логирование отключено.", zap.String("dir", logDir), zap.Error(err))
+			slog.Error("Не удалось создать директорию для логов, файловое логирование отключено.", "dir", logDir, "error", err)
 		} else {
 			logPath := filepath.Join(logDir, loggerName+".log")
-			fileWriter := zapcore.AddSync(&lumberjack.Logger{
+			fileWriter := &lumberjack.Logger{
 				Filename:   logPath,
 				MaxSize:    10, // megabytes
 				MaxBackups: 3,
 				MaxAge:     28, // days
 				Compress:   true,
-			})
+			}
 
-			fileCore := zapcore.NewCore(
-				zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
-				fileWriter,
-				level,
-			)
-			cores = append(cores, fileCore)
+			fileHandler := slog.NewJSONHandler(fileWriter, &slog.HandlerOptions{
+				Level:     level,
+				AddSource: true,
+			})
+			handlers = append(handlers, fileHandler)
 		}
 	}
 
-	// Объединяем ядра для вывода в несколько мест
-	core := zapcore.NewTee(cores...)
+	// Объединяем обработчики
+	var handler slog.Handler
+	if len(handlers) == 1 {
+		handler = handlers[0]
+	} else {
+		handler = &TeeHandler{handlers: handlers}
+	}
 
-	// Создаем логгер с опцией AddCaller для вывода имени файла и строки
-	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel), zap.Fields(zap.String("logger", loggerName)))
+	// Создаем логгер с полем component
+	slogLogger := slog.New(handler).With("component", loggerName)
 
-	return logger
+	return NewSlogAdapter(slogLogger)
 }
 
-// getZapLevel преобразует строковый уровень логирования в zapcore.Level.
-func getZapLevel(level string) zapcore.Level {
+// TeeHandler объединяет несколько обработчиков
+type TeeHandler struct {
+	handlers []slog.Handler
+}
+
+func (t *TeeHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range t.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *TeeHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range t.handlers {
+		if h.Enabled(ctx, r.Level) {
+			if err := h.Handle(ctx, r); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (t *TeeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandlers := make([]slog.Handler, len(t.handlers))
+	for i, h := range t.handlers {
+		newHandlers[i] = h.WithAttrs(attrs)
+	}
+	return &TeeHandler{handlers: newHandlers}
+}
+
+func (t *TeeHandler) WithGroup(name string) slog.Handler {
+	newHandlers := make([]slog.Handler, len(t.handlers))
+	for i, h := range t.handlers {
+		newHandlers[i] = h.WithGroup(name)
+	}
+	return &TeeHandler{handlers: newHandlers}
+}
+
+// getSlogLevel преобразует строковый уровень логирования в slog.Level.
+func getSlogLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug":
-		return zap.DebugLevel
+		return slog.LevelDebug
 	case "info":
-		return zap.InfoLevel
+		return slog.LevelInfo
 	case "warn", "warning":
-		return zap.WarnLevel
+		return slog.LevelWarn
 	case "error":
-		return zap.ErrorLevel
-	case "fatal":
-		return zap.FatalLevel
+		return slog.LevelError
 	default:
-		return zap.InfoLevel
+		return slog.LevelInfo
 	}
+}
+
+// Устаревшая функция для совместимости, но теперь использует slog
+func New(logDir, loggerName, logLevel string, disableFileLogging bool) LoggerInterface {
+	return NewSlogLogger(logDir, loggerName, logLevel, disableFileLogging)
 }

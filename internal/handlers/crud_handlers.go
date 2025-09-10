@@ -3,18 +3,18 @@ package handlers
 import (
 	"encoding/json"
 	"etalon-server/internal/api"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 // CrudHandler обрабатывает CRUD-запросы.
 type CrudHandler struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
@@ -23,7 +23,7 @@ type CrudHandler struct {
 }
 
 // NewCrudHandler создает новый экземпляр обработчика.
-func NewCrudHandler(logger *zap.Logger, db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) *CrudHandler {
+func NewCrudHandler(logger logger.LoggerInterface, db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) *CrudHandler {
 	return &CrudHandler{logger, db, companyRepo, serverRepo, workstationRepo, frRepo}
 }
 
@@ -41,7 +41,7 @@ func (h *CrudHandler) GetCompany(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	company, err := h.companyRepo.GetByID(r.Context(), id)
 	if err != nil {
-		h.logger.Error("Failed to get company", zap.String("id", id), zap.Error(err))
+		h.logger.Error("Failed to get company", "id", id, "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Failed to retrieve company")
 		return
 	}
@@ -71,7 +71,7 @@ func (h *CrudHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 		return h.companyRepo.Create(r.Context(), tx, company)
 	})
 	if err != nil {
-		h.logger.Error("Failed to create company", zap.Error(err))
+		h.logger.Error("Failed to create company", "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Failed to create company")
 		return
 	}
@@ -99,7 +99,7 @@ func (h *CrudHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 		return txErr
 	})
 	if err != nil {
-		h.logger.Error("Failed to update company", zap.String("id", id), zap.Error(err))
+		h.logger.Error("Failed to update company", "id", id, "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Failed to update company")
 		return
 	}
@@ -120,7 +120,7 @@ func (h *CrudHandler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		h.logger.Error("Failed to delete company", zap.String("id", id), zap.Error(err))
+		h.logger.Error("Failed to delete company", "id", id, "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Failed to delete company")
 		return
 	}

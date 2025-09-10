@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/external"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/utils"
 	"etalon-server/internal/validators"
@@ -14,19 +15,18 @@ import (
 	"regexp"
 	"strings"
 
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
 // MockServiceDeskClient имитирует клиент ServiceDesk для чтения данных из локальных файлов.
 type MockServiceDeskClient struct {
-	logger   *zap.Logger
+	logger   logger.LoggerInterface
 	dataPath string
 	mapper   external.Mapper
 }
 
 // NewMockServiceDeskClient создает новый мок-клиент.
-func NewMockServiceDeskClient(logger *zap.Logger, dataPath string) external.ExternalSystemClient {
+func NewMockServiceDeskClient(logger logger.LoggerInterface, dataPath string) external.ExternalSystemClient {
 	return &MockServiceDeskClient{
 		logger:   logger,
 		dataPath: dataPath,
@@ -88,10 +88,12 @@ func (m *MockServiceDeskClient) FindReferenceID(ctx context.Context, referenceTy
 
 // --- Мок-реализация маппера специально для сидера ---
 type mockMapper struct {
-	logger *zap.Logger
+	logger logger.LoggerInterface
 }
 
-func newMockMapper(logger *zap.Logger) external.Mapper { return &mockMapper{logger: logger} }
+func newMockMapper(logger logger.LoggerInterface) external.Mapper {
+	return &mockMapper{logger: logger}
+}
 
 var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
 
@@ -124,6 +126,17 @@ func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperConte
 			company.MetaClass = parentUUID
 		}
 	}
+
+	// Логи для диагностики проблем с парсингом
+	extID, _ := data["UUID"].(string)
+	m.logger.Info("Парсинг компании", "extID", extID)
+
+	if rawAdditionalName, ok := data["additionalName"].(string); ok && rawAdditionalName != "" {
+		m.logger.Info("Найден additionalName", "additionalName", rawAdditionalName)
+	} else {
+		m.logger.Warn("additionalName отсутствует или пустой", "extID", extID)
+	}
+
 	return company, nil
 }
 
@@ -152,6 +165,40 @@ func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContex
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
 		server.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
+
+	// Логи для диагностики проблем с парсингом
+	extID, _ := data["UUID"].(string)
+	m.logger.Info("Парсинг сервера", "extID", extID)
+
+	if rawCabinetLink, ok := data["CabinetLink"].(string); ok && rawCabinetLink != "" {
+		m.logger.Info("Найден CabinetLink", "cabinetLink", rawCabinetLink)
+		link := validators.ValidateCabinetLink(rawCabinetLink, "")
+		server.CabinetLink = &link
+	} else {
+		m.logger.Warn("CabinetLink отсутствует или пустой", "extID", extID)
+	}
+
+	if rawDescription, ok := data["description"].(string); ok && rawDescription != "" {
+		m.logger.Info("Найдено description", "description", rawDescription)
+		server.Description = &rawDescription
+	} else {
+		m.logger.Warn("description отсутствует или пустое", "extID", extID)
+	}
+
+	if rawNameForClient, ok := data["nameforclient"].(string); ok && rawNameForClient != "" {
+		m.logger.Info("Найдено nameforclient", "nameforclient", rawNameForClient)
+		server.ServerName = &rawNameForClient
+	} else {
+		m.logger.Warn("nameforclient отсутствует или пустое", "extID", extID)
+	}
+
+	if rawLitemanager, ok := data["litemanagerID"].(string); ok && rawLitemanager != "" {
+		m.logger.Info("Найден litemanagerID", "litemanagerID", rawLitemanager)
+		server.Litemanager = &rawLitemanager
+	} else {
+		m.logger.Warn("litemanagerID отсутствует или пустой", "extID", extID)
+	}
+
 	return server, nil
 }
 
@@ -172,6 +219,25 @@ func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperC
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
 		ws.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
+
+	// Логи для диагностики проблем с парсингом
+	extID, _ := data["UUID"].(string)
+	m.logger.Info("Парсинг рабочей станции", "extID", extID)
+
+	if rawCommentariy, ok := data["Commentariy"].(string); ok && rawCommentariy != "" {
+		m.logger.Info("Найден Commentariy", "commentariy", rawCommentariy)
+		ws.Description = &rawCommentariy
+	} else {
+		m.logger.Warn("Commentariy отсутствует или пустой", "extID", extID)
+	}
+
+	if rawLitemanager, ok := data["litemanagerID"].(string); ok && rawLitemanager != "" {
+		m.logger.Info("Найден litemanagerID", "litemanagerID", rawLitemanager)
+		ws.Litemanager = &rawLitemanager
+	} else {
+		m.logger.Warn("litemanagerID отсутствует или пустой", "extID", extID)
+	}
+
 	return ws, nil
 }
 
@@ -216,6 +282,43 @@ func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.Mapp
 	if val, ok := data["lastModifiedDate"].(string); ok {
 		fr.LastModifiedDate = utils.ParseServiceDeskTime(val)
 	}
+
+	// Логи для диагностики проблем с парсингом
+	extID, _ := data["UUID"].(string)
+	m.logger.Info("Парсинг фискального регистратора", "extID", extID)
+
+	if rawFFD, ok := data["FFD"]; ok {
+		if ffdMap, ok2 := rawFFD.(map[string]interface{}); ok2 {
+			if title, ok3 := ffdMap["title"].(string); ok3 {
+				m.logger.Info("Найден FFD", "ffd", title)
+				fr.FFD = &title
+			} else {
+				m.logger.Warn("FFD найден, но title отсутствует", "extID", extID)
+			}
+		} else if ffdStr, ok2 := rawFFD.(string); ok2 {
+			m.logger.Info("Найден FFD (строка)", "ffd", ffdStr)
+			fr.FFD = &ffdStr
+		} else {
+			m.logger.Warn("FFD найден, но не является map или string", "extID", extID)
+		}
+	} else {
+		m.logger.Warn("FFD отсутствует", "extID", extID)
+	}
+
+	if rawFRDownloader, ok := data["FRDownloader"].(string); ok && rawFRDownloader != "" {
+		m.logger.Info("Найден FRDownloader", "frDownloader", rawFRDownloader)
+		fr.FRDownloader = &rawFRDownloader
+	} else {
+		m.logger.Warn("FRDownloader отсутствует или пустой", "extID", extID)
+	}
+
+	if rawFRFirmware, ok := data["FRFirmware"].(string); ok && rawFRFirmware != "" {
+		m.logger.Info("Найден FRFirmware", "frFirmware", rawFRFirmware)
+		fr.FRFirmware = &rawFRFirmware
+	} else {
+		m.logger.Warn("FRFirmware отсутствует или пустой", "extID", extID)
+	}
+
 	return fr, nil
 }
 

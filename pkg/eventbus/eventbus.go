@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"go.uber.org/zap"
+	"etalon-server/internal/logger"
 )
 
 // Event представляет собой событие, передаваемое по шине.
@@ -18,16 +18,16 @@ type EventHandler func(ctx context.Context, event Event)
 
 // DebugInfo содержит отладочную информацию о состоянии шины.
 type DebugInfo struct {
-	QueueLength    int                 `json:"queue_length"`
-	QueueCapacity  int                 `json:"queue_capacity"`
-	Subscribers    map[string]int      `json:"subscribers"` // Карта: eventType -> count of handlers
+	QueueLength   int            `json:"queue_length"`
+	QueueCapacity int            `json:"queue_capacity"`
+	Subscribers   map[string]int `json:"subscribers"` // Карта: eventType -> count of handlers
 }
 
 // EventBus определяет интерфейс для асинхронной шины событий.
 type EventBus interface {
 	Publish(event Event)
 	Subscribe(eventType string, handler EventHandler)
-	Start(ctx context.Context, logger *zap.Logger)
+	Start(ctx context.Context, logger logger.LoggerInterface)
 	GetDebugInfo() DebugInfo
 }
 
@@ -36,7 +36,7 @@ type InMemoryEventBus struct {
 	mu          sync.RWMutex
 	subscribers map[string][]EventHandler
 	events      chan Event
-	logger      *zap.Logger
+	logger      logger.LoggerInterface
 }
 
 // NewInMemoryEventBus создает новый экземпляр InMemoryEventBus.
@@ -52,9 +52,9 @@ func (b *InMemoryEventBus) Publish(event Event) {
 	// Логируем событие ПЕРЕД отправкой в канал
 	if b.logger != nil {
 		b.logger.Debug("Публикация события в шину",
-			zap.String("type", event.Type),
-			zap.Int("queue_len", len(b.events)),      // Текущая длина очереди
-			zap.Int("queue_cap", cap(b.events)),      // Вместимость очереди
+			"type", event.Type,
+			"queue_len", len(b.events), // Текущая длина очереди
+			"queue_cap", cap(b.events), // Вместимость очереди
 		)
 	}
 	b.events <- event
@@ -78,21 +78,21 @@ func (b *InMemoryEventBus) GetDebugInfo() DebugInfo {
 	}
 
 	return DebugInfo{
-		QueueLength:    len(b.events),
-		QueueCapacity:  cap(b.events),
-		Subscribers:    subs,
+		QueueLength:   len(b.events),
+		QueueCapacity: cap(b.events),
+		Subscribers:   subs,
 	}
 }
 
 // Start запускает основной цикл обработки событий.
-func (b *InMemoryEventBus) Start(ctx context.Context, logger *zap.Logger) {
+func (b *InMemoryEventBus) Start(ctx context.Context, logger logger.LoggerInterface) {
 	b.logger = logger // Сохраняем логгер
 	logger.Info("Шина событий запущена и готова к обработке.")
 	for {
 		select {
 		case event := <-b.events:
-			b.logger.Debug("Шина извлекла событие из очереди для обработки", zap.String("type", event.Type))
-			
+			b.logger.Debug("Шина извлекла событие из очереди для обработки", "type", event.Type)
+
 			b.mu.RLock()
 			handlers, ok := b.subscribers[event.Type]
 			b.mu.RUnlock()

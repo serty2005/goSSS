@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/api"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/services"
@@ -16,13 +17,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 // TaskHandler обрабатывает запросы, связанные с задачами сверки и поиском дубликатов.
 type TaskHandler struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB
 	resolutionSvc   services.TaskResolutionService
 	sdEditorSvc     services.SDEditorService
@@ -34,7 +34,7 @@ type TaskHandler struct {
 
 // NewTaskHandler создает новый экземпляр обработчика.
 func NewTaskHandler(
-	logger *zap.Logger,
+	logger logger.LoggerInterface,
 	db *gorm.DB,
 	resolutionSvc services.TaskResolutionService,
 	sdEditorSvc services.SDEditorService,
@@ -85,7 +85,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	err = query.Limit(limit).Offset(offset).Order("created_at desc").Find(&tasks).Error
 	if err != nil {
-		h.logger.Error("Не удалось получить задачи из БД", zap.Error(err))
+		h.logger.Error("Не удалось получить задачи из БД", "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка задач")
 		return
 	}
@@ -174,7 +174,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 		if task.EntityType != "" && task.EntityUUID != "" && task.TaskType != "add_equipment" {
 			link, _ := h.linkRepo.GetByInternalID(r.Context(), nil, "naumen", task.EntityUUID)
 			if link != nil {
-				detailsMap["externalUUID"] = link.ExternalID
+				detailsMap["externalUUID"] = link.ServiceDeskUUID
 			}
 		}
 		dto.Details = detailsMap
@@ -213,7 +213,7 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, services.ErrInvalidPayload):
 			RespondWithError(w, http.StatusBadRequest, err.Error())
 		default:
-			h.logger.Error("Ошибка при решении задачи", zap.Uint64("taskID", taskID), zap.Error(err))
+			h.logger.Error("Ошибка при решении задачи", "taskID", taskID, "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при решении задачи")
 		}
 		return
@@ -259,9 +259,9 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 			RespondWithError(w, http.StatusConflict, "Задача уже находится в обработке или решена")
 		default:
 			h.logger.Error("Ошибка при отправке запроса на создание сущности в ServiceDesk",
-				zap.Uint64("taskID", taskID),
-				zap.String("entityType", dto.EntityType),
-				zap.Error(err),
+				"taskID", taskID,
+				"entityType", dto.EntityType,
+				"error", err,
 			)
 			RespondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Внутренняя ошибка: %v", err))
 		}
@@ -284,7 +284,7 @@ func (h *TaskHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 	for _, field := range wsFields {
 		groups, err := h.findDuplicateGroups(field, "Workstation")
 		if err != nil {
-			h.logger.Error("Ошибка поиска дубликатов Workstation", zap.String("field", field), zap.Error(err))
+			h.logger.Error("Ошибка поиска дубликатов Workstation", "field", field, "error", err)
 			RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
 			return
 		}
@@ -293,7 +293,7 @@ func (h *TaskHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 
 	serverGroups, err := h.findDuplicateGroups("ip", "Server")
 	if err != nil {
-		h.logger.Error("Ошибка поиска дубликатов Server", zap.String("field", "ip"), zap.Error(err))
+		h.logger.Error("Ошибка поиска дубликатов Server", "field", "ip", "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
 		return
 	}
@@ -428,7 +428,7 @@ func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr model
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
 	if err == nil && link != nil {
-		dto.ExternalUUID = &link.ExternalID
+		dto.ServiceDeskUUID = &link.ServiceDeskUUID
 	}
 	return dto
 }
@@ -448,7 +448,7 @@ func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Se
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", server.ID)
 	if err == nil && link != nil {
-		dto.ExternalUUID = &link.ExternalID
+		dto.ServiceDeskUUID = &link.ServiceDeskUUID
 	}
 	return dto
 }
@@ -465,7 +465,7 @@ func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws models.W
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 	if err == nil && link != nil {
-		dto.ExternalUUID = &link.ExternalID
+		dto.ServiceDeskUUID = &link.ServiceDeskUUID
 	}
 	return dto
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/config"
 	"etalon-server/internal/external"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
@@ -19,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -47,7 +47,7 @@ type naumenClientImpl struct {
 	baseURL        string
 	apiKey         string
 	limiter        *rate.Limiter
-	logger         *zap.Logger
+	logger         logger.LoggerInterface
 	maxRetries     int
 	dryRun         bool
 	referenceCache map[string]string
@@ -57,7 +57,7 @@ type naumenClientImpl struct {
 
 // NewNaumenClient создает новый клиент для Naumen ServiceDesk.
 // Возвращает тип интерфейса external.ExternalSystemClient.
-func NewNaumenClient(cfg *config.Config, logger *zap.Logger, db *gorm.DB, linkRepo repositories.LinkRepo) external.ExternalSystemClient {
+func NewNaumenClient(cfg *config.Config, logger logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) external.ExternalSystemClient {
 	transport := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		MaxIdleConns:          100,
@@ -165,8 +165,8 @@ func (s *naumenClientImpl) UpdateEntity(ctx context.Context, externalID string, 
 	}
 	if s.dryRun {
 		s.logger.Warn("[DRY RUN] Отправка запроса на ОБНОВЛЕНИЕ в Naumen SD пропущена.",
-			zap.String("externalID", externalID),
-			zap.Any("params", data),
+			"externalID", externalID,
+			"params", data,
 		)
 		return nil
 	}
@@ -185,7 +185,7 @@ func (s *naumenClientImpl) CreateEntity(ctx context.Context, entityType string, 
 		return nil, fmt.Errorf("неизвестный тип сущности для Naumen: %s", entityType)
 	}
 	if s.dryRun {
-		s.logger.Warn("[DRY RUN] Отправка запроса на СОЗДАНИЕ в Naumen SD пропущена.", zap.String("metaClass", metaClass))
+		s.logger.Warn("[DRY RUN] Отправка запроса на СОЗДАНИЕ в Naumen SD пропущена.", "metaClass", metaClass)
 		return map[string]interface{}{"UUID": "dry-run-fake-uuid"}, nil
 	}
 	url := fmt.Sprintf("%s/create-m2m/%s", s.baseURL, metaClass)
@@ -239,8 +239,8 @@ func (s *naumenClientImpl) FindReferenceID(ctx context.Context, referenceType, t
 		if match {
 			if foundUUID != "" {
 				s.logger.Warn("Найдено несколько значений в справочнике, будет использовано первое",
-					zap.String("metaClass", metaClass), zap.String("title", title),
-					zap.String("found1", foundTitle), zap.String("found2", itemTitle))
+					"metaClass", metaClass, "title", title,
+					"found1", foundTitle, "found2", itemTitle)
 				break
 			}
 			foundUUID = itemUUID
@@ -299,15 +299,15 @@ func (s *naumenClientImpl) doWithRetry(ctx context.Context, method, url string, 
 		urlToLog.RawQuery = qLog.Encode()
 
 		s.logger.Info("Отправка запроса в Naumen ServiceDesk",
-			zap.String("метод", method),
-			zap.String("url", urlToLog.String()),
-			zap.String("тело", string(bodyBytes)),
+			"метод", method,
+			"url", urlToLog.String(),
+			"тело", string(bodyBytes),
 		)
 
 		resp, doErr := s.client.Do(req)
 		if doErr != nil {
 			err = fmt.Errorf("ошибка выполнения запроса: %w", doErr)
-			s.logger.Warn("Запрос не удался, повторная попытка...", zap.Error(err), zap.Int("попытка", i+1))
+			s.logger.Warn("Запрос не удался, повторная попытка...", "error", err, "попытка", i+1)
 			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
 			continue
 		}
@@ -318,20 +318,20 @@ func (s *naumenClientImpl) doWithRetry(ctx context.Context, method, url string, 
 			bodyString := string(respBodyBytes)
 			err = fmt.Errorf("API Naumen SD вернуло ошибку: статус %d, тело: %s", resp.StatusCode, bodyString)
 			s.logger.Error("Получена ошибка от Naumen ServiceDesk",
-				zap.Int("статус", resp.StatusCode),
-				zap.String("ответ", bodyString),
-				zap.String("url_запроса", urlToLog.String()),
+				"статус", resp.StatusCode,
+				"ответ", bodyString,
+				"url_запроса", urlToLog.String(),
 			)
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 				// Ошибка авторизации, нет смысла повторять
 				return err
 			}
 			if resp.StatusCode == 500 && strings.Contains(bodyString, "ключ авторизации") && strings.Contains(bodyString, "не найден") {
-				s.logger.Fatal("Критическая ошибка: ключ доступа ServiceDesk (accessKey) невалиден. Проверьте конфигурацию.",
-					zap.String("sd_ответ", bodyString),
+				s.logger.Error("Критическая ошибка: ключ доступа ServiceDesk (accessKey) невалиден. Проверьте конфигурацию.",
+					"sd_ответ", bodyString,
 				)
 			}
-			s.logger.Warn("Ошибка сервера Naumen ServiceDesk, повторная попытка...", zap.Error(err), zap.Int("попытка", i+1))
+			s.logger.Warn("Ошибка сервера Naumen ServiceDesk, повторная попытка...", "error", err, "попытка", i+1)
 			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
 			continue
 		}
@@ -351,11 +351,11 @@ func (s *naumenClientImpl) doWithRetry(ctx context.Context, method, url string, 
 type naumenMapper struct {
 	db       *gorm.DB
 	linkRepo repositories.LinkRepo
-	logger   *zap.Logger
+	logger   logger.LoggerInterface
 }
 
 // newNaumenMapper создает новый экземпляр маппера для Naumen.
-func newNaumenMapper(db *gorm.DB, linkRepo repositories.LinkRepo, logger *zap.Logger) external.Mapper {
+func newNaumenMapper(db *gorm.DB, linkRepo repositories.LinkRepo, logger logger.LoggerInterface) external.Mapper {
 	return &naumenMapper{
 		db:       db,
 		linkRepo: linkRepo,
@@ -399,7 +399,7 @@ func (m *naumenMapper) DataToCompany(ctx context.Context, mc *external.MapperCon
 			if parentInternalID != "" {
 				company.ParentID = &parentInternalID
 			} else {
-				m.logger.Warn("Родительская компания не найдена в локальной БД, связь не будет установлена", zap.String("parent_external_uuid", parentUUID))
+				m.logger.Warn("Родительская компания не найдена в локальной БД, связь не будет установлена", "parent_external_uuid", parentUUID)
 			}
 		}
 	}

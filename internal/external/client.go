@@ -2,10 +2,10 @@ package external
 
 import (
 	"context"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -21,7 +21,7 @@ type ContractState struct {
 type MapperContext struct {
 	DB       *gorm.DB
 	LinkRepo repositories.LinkRepo
-	Logger   *zap.Logger
+	Logger   logger.LoggerInterface
 }
 
 // Mapper определяет интерфейс для преобразования данных из формата внешней системы в наши внутренние модели.

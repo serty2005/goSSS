@@ -5,13 +5,13 @@ import (
 	"context"
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -24,11 +24,11 @@ type duplicatesGatewayImpl struct {
 	cfg    *config.Config
 	db     *gorm.DB
 	bus    eventbus.EventBus
-	logger *zap.Logger
+	logger logger.LoggerInterface
 }
 
 // NewDuplicatesGateway создает новый экземпляр шлюза.
-func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus, logger *zap.Logger) DuplicatesGateway {
+func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus, logger logger.LoggerInterface) DuplicatesGateway {
 	return &duplicatesGatewayImpl{
 		cfg:    cfg,
 		db:     db,
@@ -40,7 +40,7 @@ func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus
 // Start запускает периодический поиск дубликатов.
 func (g *duplicatesGatewayImpl) Start(ctx context.Context) {
 	interval := g.cfg.DuplicatesSearchInterval
-	g.logger.Info("Запуск шлюза поиска дубликатов", zap.Duration("interval", interval))
+	g.logger.Info("Запуск шлюза поиска дубликатов", "interval", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -87,7 +87,7 @@ func (g *duplicatesGatewayImpl) runSearchCycle(ctx context.Context) {
 
 // findAndPublish находит дубликаты для конкретной модели/поля и публикует события.
 func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interface{}, entityType, field string) {
-	log := g.logger.With(zap.String("entityType", entityType), zap.String("field", field))
+	log := g.logger.With("entityType", entityType, "field", field)
 
 	var duplicateValues []struct{ Value string }
 	err := g.db.WithContext(ctx).Model(model).
@@ -99,7 +99,7 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 		Find(&duplicateValues).Error
 
 	if err != nil {
-		log.Error("Ошибка при поиске групп дубликатов", zap.Error(err))
+		log.Error("Ошибка при поиске групп дубликатов", "error", err)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 		return
 	}
 
-	log.Info("Найдено групп дубликатов", zap.Int("count", len(duplicateValues)))
+	log.Info("Найдено групп дубликатов", "count", len(duplicateValues))
 
 	for _, item := range duplicateValues {
 		var internalIDs []string
@@ -116,7 +116,7 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 			Pluck("id", &internalIDs).Error
 
 		if err != nil {
-			log.Error("Не удалось получить внутренние ID для группы дубликатов", zap.String("value", item.Value), zap.Error(err))
+			log.Error("Не удалось получить внутренние ID для группы дубликатов", "value", item.Value, "error", err)
 			continue
 		}
 

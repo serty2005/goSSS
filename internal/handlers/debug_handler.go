@@ -1,21 +1,21 @@
 package handlers
 
 import (
+	"etalon-server/internal/logger"
 	"etalon-server/pkg/eventbus"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 )
 
 // DebugHandler обрабатывает запросы к отладочным эндпоинтам.
 type DebugHandler struct {
-	logger *zap.Logger
+	logger logger.LoggerInterface
 	bus    eventbus.EventBus
 }
 
 // NewDebugHandler создает новый экземпляр обработчика.
-func NewDebugHandler(logger *zap.Logger, bus eventbus.EventBus) *DebugHandler {
+func NewDebugHandler(logger logger.LoggerInterface, bus eventbus.EventBus) *DebugHandler {
 	return &DebugHandler{
 		logger: logger,
 		bus:    bus,

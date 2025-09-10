@@ -236,12 +236,12 @@ type SearchGroupDTO struct {
 
 // OwnerFullDTO содержит расширенную информацию о компании-владельце.
 type OwnerFullDTO struct {
-	UUID           string  `json:"uuid"`
-	ExternalUUID   *string `json:"externalUUID,omitempty"`
-	Name           string  `json:"name"`
-	Address        *string `json:"address,omitempty"`
-	ActiveContract *bool   `json:"active_contract,omitempty"`
-	AdditionalInfo *string `json:"additional_info,omitempty"`
+	UUID            string  `json:"uuid"`
+	ServiceDeskUUID *string `json:"externalUUID,omitempty"`
+	Name            string  `json:"name"`
+	Address         *string `json:"address,omitempty"`
+	ActiveContract  *bool   `json:"active_contract,omitempty"`
+	AdditionalInfo  *string `json:"additional_info,omitempty"`
 }
 
 // FoundEntityDTO представляет одну найденную сущность внутри группы.
@@ -254,35 +254,35 @@ type FoundEntityDTO struct {
 
 // ServerRichDTO содержит полный набор полей Сервера для UI.
 type ServerRichDTO struct {
-	UUID         string  `json:"uuid"`                   // Внутренний ID
-	ExternalUUID *string `json:"externalUUID,omitempty"` // Внешний ID (для ссылок)
-	DeviceName   *string `json:"device_name,omitempty"`
-	IP           *string `json:"ip,omitempty"`
-	Status       string  `json:"status,omitempty"`
-	Anydesk      *string `json:"anydesk,omitempty"`
-	Teamviewer   *string `json:"teamviewer,omitempty"`
-	RDP          *string `json:"rdp,omitempty"`
-	Litemanager  *string `json:"litemanager,omitempty"`
-	UniqueID     *string `json:"unique_id,omitempty"`
-	PartnersLink *string `json:"partners_link,omitempty"`
+	UUID            string  `json:"uuid"`                   // Внутренний ID
+	ServiceDeskUUID *string `json:"externalUUID,omitempty"` // Внешний ID (для ссылок)
+	DeviceName      *string `json:"device_name,omitempty"`
+	IP              *string `json:"ip,omitempty"`
+	Status          string  `json:"status,omitempty"`
+	Anydesk         *string `json:"anydesk,omitempty"`
+	Teamviewer      *string `json:"teamviewer,omitempty"`
+	RDP             *string `json:"rdp,omitempty"`
+	Litemanager     *string `json:"litemanager,omitempty"`
+	UniqueID        *string `json:"unique_id,omitempty"`
+	PartnersLink    *string `json:"partners_link,omitempty"`
 }
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
 type WorkstationRichDTO struct {
-	UUID         string  `json:"uuid"`
-	ExternalUUID *string `json:"externalUUID,omitempty"`
-	DeviceName   *string `json:"device_name,omitempty"`
-	Status       *string `json:"status,omitempty"`
-	Anydesk      *string `json:"anydesk,omitempty"`
-	Teamviewer   *string `json:"teamviewer,omitempty"`
-	Litemanager  *string `json:"litemanager,omitempty"`
+	UUID            string  `json:"uuid"`
+	ServiceDeskUUID *string `json:"externalUUID,omitempty"`
+	DeviceName      *string `json:"device_name,omitempty"`
+	Status          *string `json:"status,omitempty"`
+	Anydesk         *string `json:"anydesk,omitempty"`
+	Teamviewer      *string `json:"teamviewer,omitempty"`
+	Litemanager     *string `json:"litemanager,omitempty"`
 }
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
 	UUID               string     `json:"uuid"`
-	ExternalUUID       *string    `json:"externalUUID,omitempty"`
+	ServiceDeskUUID    *string    `json:"externalUUID,omitempty"`
 	Status             *string    `json:"status,omitempty"`
 	RNKKT              *string    `json:"rn_kkt,omitempty"`
 	ModelKKT           *string    `json:"model_kkt,omitempty"`

@@ -29,7 +29,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -37,7 +36,7 @@ import (
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
 	Config               *config.Config
-	Logger               *zap.Logger
+	Logger               logger.LoggerInterface
 	DB                   *gorm.DB
 	ProcessingEngine     processing.ProcessingEngine
 	EventBus             eventbus.EventBus
@@ -66,21 +65,23 @@ type Application struct {
 func New() (*Application, error) {
 	cfg := config.New()
 
-	appLogger := logger.New(cfg.LogDir, "app", cfg.LogLevel, cfg.DisableFileLogging)
-	appLogger.Info("Инициализация приложения etalon-server...")
+	// Создаем основной логгер на основе slog
+	mainLogger := logger.NewSlogLogger(cfg.LogDir, "app", cfg.LogLevel, cfg.DisableFileLogging)
+	mainLogger.Info("Инициализация приложения etalon-server...")
 
 	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
-		appLogger.Fatal("Не удалось создать директорию для кэша FTP", zap.Error(err))
+		mainLogger.Error("Не удалось создать директорию для кэша FTP", "error", err)
+		os.Exit(1)
 	}
 
 	database, err := db.NewConnection(cfg)
 	if err != nil {
-		appLogger.Fatal("Не удалось подключиться к базе данных", zap.Error(err))
+		mainLogger.Error("Не удалось подключиться к базе данных", "error", err)
 		return nil, err
 	}
-	appLogger.Info("Подключение к базе данных установлено")
+	mainLogger.Info("Подключение к базе данных установлено")
 
-	appLogger.Info("Запуск миграций базы данных...")
+	mainLogger.Info("Запуск миграций базы данных...")
 	err = database.AutoMigrate(
 		&models.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
@@ -88,13 +89,13 @@ func New() (*Application, error) {
 		&models.User{}, &models.ExternalSystemLink{},
 	)
 	if err != nil {
-		appLogger.Fatal("Не удалось выполнить миграцию схемы БД", zap.Error(err))
+		mainLogger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
 		return nil, err
 	}
-	appLogger.Info("Миграции базы данных успешно завершены.")
+	mainLogger.Info("Миграции базы данных успешно завершены.")
 
-	if err := seedAdminUser(cfg, database, appLogger); err != nil {
-		appLogger.Fatal("Не удалось создать пользователя-администратора", zap.Error(err))
+	if err := seedAdminUser(cfg, database, mainLogger); err != nil {
+		mainLogger.Error("Не удалось создать пользователя-администратора", "error", err)
 		return nil, err
 	}
 
@@ -111,25 +112,25 @@ func New() (*Application, error) {
 	userRepo := repositories.NewUserRepo(database)
 	linkRepo := repositories.NewLinkRepo(database)
 
-	// Логгеры
-	sdeskGatewayLogger := logger.New(cfg.LogDir, "sdesk_gateway", cfg.LogLevel, cfg.DisableFileLogging)
-	orchestratorLogger := logger.New(cfg.LogDir, "orchestrator", cfg.LogLevel, cfg.DisableFileLogging)
-	serverPollingLogger := logger.New(cfg.LogDir, "server_polling", cfg.LogLevel, cfg.DisableFileLogging)
-	reconcilerLogger := logger.New(cfg.LogDir, "reconciler", cfg.LogLevel, cfg.DisableFileLogging)
-	duplicatesLogger := logger.New(cfg.LogDir, "duplicates_gateway", cfg.LogLevel, cfg.DisableFileLogging)
-	sdEditorLogger := logger.New(cfg.LogDir, "sdesk_editor", cfg.LogLevel, cfg.DisableFileLogging)
-	frUpdateFounderLogger := logger.New(cfg.LogDir, "fr_update_founder", cfg.LogLevel, cfg.DisableFileLogging)
+	// Создаем логеры с контекстом от основного логгера
+	sdeskGatewayLogger := mainLogger.With("component", "sdesk_gateway")
+	orchestratorLogger := mainLogger.With("component", "orchestrator")
+	serverPollingLogger := mainLogger.With("component", "server_polling")
+	reconcilerLogger := mainLogger.With("component", "reconciler")
+	duplicatesLogger := mainLogger.With("component", "duplicates_gateway")
+	sdEditorLogger := mainLogger.With("component", "sdesk_editor")
+	frUpdateFounderLogger := mainLogger.With("component", "fr_update_founder")
 
 	// Сервисы, шлюзы и оркестратор
-	sdClient := naumen.NewNaumenClient(cfg, appLogger, database, linkRepo)
-	ftpClient := services.NewFTPClient(cfg, appLogger)
-	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, appLogger)
-	agentService := services.NewAgentService(appLogger, agentRepo, companyRepo, database, bus)
-	authService := services.NewAuthService(cfg, userRepo)
-	taskResolutionService := services.NewTaskResolutionService(appLogger, database, bus, taskRepo, serverRepo, workstationRepo, frRepo)
-	dbSeeder := seeder.NewSeeder(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
+	sdClient := naumen.NewNaumenClient(cfg, mainLogger, database, linkRepo)
+	ftpClient := services.NewFTPClient(cfg, mainLogger)
+	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, mainLogger)
+	agentService := services.NewAgentService(mainLogger, agentRepo, companyRepo, database, bus)
+	authService := services.NewAuthService(cfg, userRepo, mainLogger.With("component", "auth_service"))
+	taskResolutionService := services.NewTaskResolutionService(mainLogger, database, bus, taskRepo, serverRepo, workstationRepo, frRepo)
+	dbSeeder := seeder.NewSeeder(mainLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
 	sdEditorService := services.NewSDEditorService(sdEditorLogger, database, bus, sdClient, taskRepo, linkRepo, companyRepo, serverRepo, workstationRepo, frRepo)
-	processingEngine := processing.NewProcessingEngine(appLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(appLogger, serverRepo, workstationRepo, frRepo))
+	processingEngine := processing.NewProcessingEngine(mainLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(mainLogger, serverRepo, workstationRepo, frRepo))
 
 	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
 	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
@@ -139,22 +140,22 @@ func New() (*Application, error) {
 	// ВАЖНО: Конструктор Оркестратора пока остается старым! Мы отрефакторим его на следующем шаге.
 	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, linkRepo, processingEngine)
 
-	serverActionsSvc := services.NewServerActionsService(appLogger, bus, serverRepo, companyRepo, database)
+	serverActionsSvc := services.NewServerActionsService(mainLogger.With("component", "server_actions"), bus, serverRepo, companyRepo, database)
 	frUpdateFounder := workers.NewFRUpdateFounder(cfg, frUpdateFounderLogger, bus, frRepo, linkRepo, sdClient)
 
 	// Обработчики
-	crudHandler := handlers.NewCrudHandler(appLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
-	searchHandler := handlers.NewSearchHandler(appLogger, companyRepo, serverRepo, workstationRepo, frRepo, linkRepo)
-	syncHandler := handlers.NewSyncHandler(appLogger, dbSeeder, cfg.SeederKey)
-	taskHandler := handlers.NewTaskHandler(appLogger, database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo, linkRepo)
-	agentHandler := handlers.NewAgentHandler(appLogger, agentService)
-	serverActionsHandler := handlers.NewServerActionsHandler(appLogger, serverActionsSvc)
-	authHandler := handlers.NewAuthHandler(appLogger, authService)
-	debugHandler := handlers.NewDebugHandler(appLogger, bus)
+	crudHandler := handlers.NewCrudHandler(mainLogger.With("component", "crud_handler"), database, companyRepo, serverRepo, workstationRepo, frRepo)
+	searchHandler := handlers.NewSearchHandler(mainLogger.With("component", "search_handler"), companyRepo, serverRepo, workstationRepo, frRepo, linkRepo)
+	syncHandler := handlers.NewSyncHandler(mainLogger.With("component", "sync_handler"), dbSeeder, cfg.SeederKey)
+	taskHandler := handlers.NewTaskHandler(mainLogger.With("component", "task_handler"), database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo, linkRepo)
+	agentHandler := handlers.NewAgentHandler(mainLogger.With("component", "agent_handler"), agentService)
+	serverActionsHandler := handlers.NewServerActionsHandler(mainLogger.With("component", "server_actions_handler"), serverActionsSvc)
+	authHandler := handlers.NewAuthHandler(mainLogger.With("component", "auth_handler"), authService)
+	debugHandler := handlers.NewDebugHandler(mainLogger.With("component", "debug_handler"), bus)
 
 	return &Application{
 		Config:               cfg,
-		Logger:               appLogger,
+		Logger:               mainLogger,
 		DB:                   database,
 		ProcessingEngine:     processingEngine,
 		EventBus:             bus,
@@ -182,7 +183,6 @@ func New() (*Application, error) {
 
 // Run запускает приложение (HTTP-сервер и фоновые службы).
 func (a *Application) Run() {
-	defer a.Logger.Sync()
 
 	r := chi.NewRouter()
 
@@ -300,7 +300,7 @@ func (a *Application) Run() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			a.Logger.Error("Не удалось запустить сервер", zap.String("port", a.Config.ServerPort), zap.Error(err))
+			a.Logger.Error("Не удалось запустить сервер", "port", a.Config.ServerPort, "error", err)
 			stop()
 		}
 	}()
@@ -313,7 +313,8 @@ func (a *Application) Run() {
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		a.Logger.Fatal("Принудительная остановка сервера:", zap.Error(err))
+		a.Logger.Error("Принудительная остановка сервера:", "error", err)
+		os.Exit(1)
 	}
 
 	wg.Wait()
@@ -325,14 +326,15 @@ func (a *Application) SeedDBAndExit() {
 	a.Logger.Info("Запуск в режиме наполнения базы данных (seeding)...")
 	mockClient := seeder.NewMockServiceDeskClient(a.Logger, "./tools/seeder/mock_data")
 	if err := a.Seeder.SeedDatabase(mockClient); err != nil {
-		a.Logger.Fatal("Ошибка при наполнении базы данных", zap.Error(err))
+		a.Logger.Error("Ошибка при наполнении базы данных", "error", err)
+		os.Exit(1)
 	}
 	a.Logger.Info("Наполнение базы данных успешно завершено. Программа завершает работу.")
 	os.Exit(0)
 }
 
 // Новая функция для сидинга админа
-func seedAdminUser(cfg *config.Config, db *gorm.DB, logger *zap.Logger) error {
+func seedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterface) error {
 	var count int64
 	db.Model(&models.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
 
@@ -356,6 +358,6 @@ func seedAdminUser(cfg *config.Config, db *gorm.DB, logger *zap.Logger) error {
 		return err
 	}
 
-	logger.Info("Пользователь-администратор успешно создан.", zap.String("username", cfg.AdminUsername))
+	logger.Info("Пользователь-администратор успешно создан.", "username", cfg.AdminUsername)
 	return nil
 }

@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"etalon-server/internal/api"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
@@ -14,12 +15,11 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 )
 
 // SearchHandler обрабатывает поисковые запросы.
 type SearchHandler struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
@@ -29,7 +29,7 @@ type SearchHandler struct {
 
 // NewSearchHandler создает новый экземпляр обработчика.
 func NewSearchHandler(
-	logger *zap.Logger,
+	logger logger.LoggerInterface,
 	companyRepo repositories.CompanyRepo,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
@@ -46,21 +46,26 @@ func (h *SearchHandler) RegisterRoutes(r chi.Router) {
 
 // Search выполняет финальный, UI-ориентированный, owner-centric поиск.
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Получен поисковый запрос", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+
 	term := r.URL.Query().Get("term")
 	if term == "" {
+		h.logger.Warn("Попытка поиска с пустым запросом", "remote_addr", r.RemoteAddr)
 		RespondWithError(w, http.StatusBadRequest, "Поисковый запрос не может быть пустым")
 		return
 	}
+
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
-	ctx := r.Context()
-	log := h.logger.With(zap.String("search_term", term))
+	h.logger.Debug("Параметры поиска", "search_term", term, "limit", limit)
 
-	// ИЗМЕНЕНИЕ: Добавляем логирование
-	log.Debug("Поступил поисковый запрос")
+	ctx := r.Context()
+	log := h.logger.With("search_term", term, "limit", limit)
+
+	log.Info("Начало выполнения поискового запроса")
 
 	var wg sync.WaitGroup
 	var initialCompanies []models.Company
@@ -95,7 +100,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(ownerIDs) == 0 {
-		log.Debug("По запросу ничего не найдено")
+		log.Info("Поисковый запрос выполнен, результатов не найдено", "search_term", term)
 		RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
 		return
 	}
@@ -146,17 +151,17 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", owner.ID)
 		var externalUUID *string
 		if link != nil {
-			externalUUID = &link.ExternalID
+			externalUUID = &link.ServiceDeskUUID
 		}
 
 		group := api.SearchGroupDTO{
 			Owner: api.OwnerFullDTO{
-				UUID:           ownerID,
-				ExternalUUID:   externalUUID, // ИСПРАВЛЕНИЕ: Теперь это поле существует
-				Name:           utils.SafeStringDereference(owner.Title),
-				Address:        owner.Address,
-				ActiveContract: owner.ActiveContract,
-				AdditionalInfo: owner.AdditionalName,
+				UUID:            ownerID,
+				ServiceDeskUUID: externalUUID, // ИСПРАВЛЕНИЕ: Теперь это поле существует
+				Name:            utils.SafeStringDereference(owner.Title),
+				Address:         owner.Address,
+				ActiveContract:  owner.ActiveContract,
+				AdditionalInfo:  owner.AdditionalName,
 			},
 			FoundEntities: []api.FoundEntityDTO{},
 		}
@@ -182,7 +187,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		}
 		finalResponse.SearchResults = append(finalResponse.SearchResults, group)
 	}
-	log.Debug("Поиск завершен, найдено групп", zap.Int("groups_count", len(finalResponse.SearchResults)))
+	log.Info("Поиск завершен успешно", "groups_count", len(finalResponse.SearchResults), "search_term", term)
 	RespondWithJSON(w, http.StatusOK, finalResponse)
 }
 
@@ -198,7 +203,7 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []model
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", s.ID)
 			var externalUUID *string
 			if link != nil {
-				externalUUID = &link.ExternalID
+				externalUUID = &link.ServiceDeskUUID
 			}
 
 			// Формируем ссылку на партнерский кабинет
@@ -218,17 +223,17 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []model
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Server",
 				Data: api.ServerRichDTO{
-					UUID:         s.ID,
-					ExternalUUID: externalUUID,
-					DeviceName:   s.DeviceName,
-					IP:           s.IP,
-					Status:       s.Status,
-					Anydesk:      s.Anydesk,
-					Teamviewer:   s.Teamviewer,
-					RDP:          s.RDP,
-					Litemanager:  s.Litemanager,
-					UniqueID:     s.UniqueID,
-					PartnersLink: partnersLink,
+					UUID:            s.ID,
+					ServiceDeskUUID: externalUUID,
+					DeviceName:      s.DeviceName,
+					IP:              s.IP,
+					Status:          s.Status,
+					Anydesk:         s.Anydesk,
+					Teamviewer:      s.Teamviewer,
+					RDP:             s.RDP,
+					Litemanager:     s.Litemanager,
+					UniqueID:        s.UniqueID,
+					PartnersLink:    partnersLink,
 				},
 			})
 		}
@@ -246,19 +251,19 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 			var externalUUID *string
 			if link != nil {
-				externalUUID = &link.ExternalID
+				externalUUID = &link.ServiceDeskUUID
 			}
 
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Workstation",
 				Data: api.WorkstationRichDTO{
-					UUID:         ws.ID,
-					ExternalUUID: externalUUID,
-					DeviceName:   ws.DeviceName,
-					Status:       ws.Status,
-					Anydesk:      ws.Anydesk,
-					Teamviewer:   ws.Teamviewer,
-					Litemanager:  ws.Litemanager,
+					UUID:            ws.ID,
+					ServiceDeskUUID: externalUUID,
+					DeviceName:      ws.DeviceName,
+					Status:          ws.Status,
+					Anydesk:         ws.Anydesk,
+					Teamviewer:      ws.Teamviewer,
+					Litemanager:     ws.Litemanager,
 				},
 			})
 		}
@@ -276,14 +281,14 @@ func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []models.Fiscal
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
 			var externalUUID *string
 			if link != nil {
-				externalUUID = &link.ExternalID
+				externalUUID = &link.ServiceDeskUUID
 			}
 
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "FiscalRegister",
 				Data: api.FiscalRegisterRichDTO{
 					UUID:               fr.ID,
-					ExternalUUID:       externalUUID,
+					ServiceDeskUUID:    externalUUID,
 					Status:             fr.Status,
 					RNKKT:              fr.RNKKT,
 					ModelKKT:           fr.ModelKKT,

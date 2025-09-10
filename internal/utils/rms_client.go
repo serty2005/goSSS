@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"go.uber.org/zap"
+	"etalon-server/internal/logger"
 )
 
 // ServerInfoXML структура для парсинга XML-ответа от сервера iikoRMS
@@ -30,11 +30,11 @@ type RMSClient interface {
 
 type rmsClientImpl struct {
 	httpClient *http.Client
-	logger     *zap.Logger
+	logger     logger.LoggerInterface
 }
 
 // NewRMSClient создает новый экземпляр клиента для RMS.
-func NewRMSClient(timeout time.Duration, logger *zap.Logger) RMSClient {
+func NewRMSClient(timeout time.Duration, logger logger.LoggerInterface) RMSClient {
 	return &rmsClientImpl{
 		httpClient: &http.Client{
 			Timeout: timeout,
@@ -69,7 +69,7 @@ func (c *rmsClientImpl) GetServerMonitoringInfo(ctx context.Context, serverURL s
 	var info ServerInfoXML
 	if err := xml.Unmarshal(body, &info); err != nil {
 		// Попытка fallback на JSON, если XML не удался
-		c.logger.Warn("Не удалось распарсить XML, попытка распарсить как JSON", zap.String("server_url", serverURL), zap.Error(err))
+		c.logger.Warn("Не удалось распарсить XML, попытка распарсить как JSON", "server_url", serverURL, "error", err)
 		var jsonInfo struct {
 			ServerName  string `json:"serverName"`
 			Edition     string `json:"edition"`

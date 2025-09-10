@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/config"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/external"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
@@ -13,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -33,7 +33,7 @@ type serviceDeskGatewayImpl struct {
 	cfg             *config.Config
 	sdClient        external.ExternalSystemClient
 	bus             eventbus.EventBus
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB // Добавляем прямое подключение для работы со связями
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
@@ -44,7 +44,7 @@ type serviceDeskGatewayImpl struct {
 }
 
 // NewServiceDeskGateway создает новый экземпляр шлюза ServiceDesk.
-func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger *zap.Logger, db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ServiceDeskGateway {
+func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger logger.LoggerInterface, db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ServiceDeskGateway {
 	return &serviceDeskGatewayImpl{
 		cfg:             cfg,
 		sdClient:        sdClient,
@@ -60,7 +60,7 @@ func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemC
 
 // Start запускает воркер в фоновом режиме.
 func (g *serviceDeskGatewayImpl) Start(ctx context.Context) {
-	g.logger.Info("Запуск шлюза ServiceDesk", zap.Duration("interval", g.cfg.SDeskSyncInterval))
+	g.logger.Info("Запуск шлюза ServiceDesk", "interval", g.cfg.SDeskSyncInterval)
 	ticker := time.NewTicker(g.cfg.SDeskSyncInterval)
 	defer ticker.Stop()
 
@@ -110,20 +110,20 @@ func (g *serviceDeskGatewayImpl) runSyncCycle(ctx context.Context) {
 
 // processEntityType выполняет инкрементальную синхронизацию для одного типа сущности.
 func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityType string) {
-	log := g.logger.With(zap.String("entityType", entityType))
+	log := g.logger.With("entityType", entityType)
 	log.Info("Начало синхронизации типа сущности")
 
 	// 1. Получаем КРАТКИЙ список сущностей из внешней системы.
 	remoteList, err := g.sdClient.FetchEntitySummaries(ctx, entityType)
 	if err != nil {
-		log.Error("Не удалось получить список сущностей из ServiceDesk", zap.Error(err))
+		log.Error("Не удалось получить список сущностей из ServiceDesk", "error", err)
 		return
 	}
 
 	// 2. Получаем все существующие связи для этого типа сущности.
 	localMap, err := g.getLocalEntityLinks(ctx, entityType)
 	if err != nil {
-		log.Error("Не удалось получить локальные связи для сущностей", zap.Error(err))
+		log.Error("Не удалось получить локальные связи для сущностей", "error", err)
 		return
 	}
 
@@ -157,11 +157,11 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityTy
 	}
 
 	log.Info("Сравнение завершено",
-		zap.Int("remote_count", len(remoteList)),
-		zap.Int("local_count", len(localMap)),
-		zap.Int("to_create", len(toCreate)),
-		zap.Int("to_update", len(toUpdate)),
-		zap.Int("to_delete", len(toDelete)),
+		"remote_count", len(remoteList),
+		"local_count", len(localMap),
+		"to_create", len(toCreate),
+		"to_update", len(toUpdate),
+		"to_delete", len(toDelete),
 	)
 
 	// 4. Обрабатываем задачи и публикуем события.
@@ -176,22 +176,22 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityTy
 }
 
 // publishDeleteEvents публикует события об удалении сущностей.
-func (g *serviceDeskGatewayImpl) publishDeleteEvents(entityType string, externalUUIDs []string, log *zap.Logger) {
-	log.Info("Публикация событий об удалении...", zap.Int("count", len(externalUUIDs)))
+func (g *serviceDeskGatewayImpl) publishDeleteEvents(entityType string, externalUUIDs []string, log logger.LoggerInterface) {
+	log.Info("Публикация событий об удалении...", "count", len(externalUUIDs))
 	for _, uuid := range externalUUIDs {
 		g.bus.Publish(eventbus.Event{
 			Type: events.ServiceDeskEntityDeleted,
 			Payload: events.ServiceDeskEntityDeletePayload{
-				EntityType:   entityType,
-				ExternalUUID: uuid,
+				EntityType:      entityType,
+				ServiceDeskUUID: uuid,
 			},
 		})
 	}
 }
 
 // fetchAndPublishUpdateEvents получает полные данные для сущностей и публикует события.
-func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context, entityType string, externalUUIDs []string, log *zap.Logger) {
-	log.Info("Получение полных данных для новых/обновленных сущностей...", zap.Int("count", len(externalUUIDs)))
+func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context, entityType string, externalUUIDs []string, log logger.LoggerInterface) {
+	log.Info("Получение полных данных для новых/обновленных сущностей...", "count", len(externalUUIDs))
 	var wg sync.WaitGroup
 	tasks := make(chan string, len(externalUUIDs))
 
@@ -206,15 +206,15 @@ func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context
 				default:
 					details, err := g.sdClient.FetchEntityDetails(ctx, uuid, entityType)
 					if err != nil {
-						log.Error("Не удалось получить детали для сущности", zap.String("external_uuid", uuid), zap.Error(err))
+						log.Error("Не удалось получить детали для сущности", "external_uuid", uuid, "error", err)
 						continue
 					}
 					g.bus.Publish(eventbus.Event{
 						Type: events.ServiceDeskEntityUpdated,
 						Payload: events.ServiceDeskEntityPayload{
-							EntityType:   entityType,
-							ExternalUUID: uuid,
-							Data:         details,
+							EntityType:      entityType,
+							ServiceDeskUUID: uuid,
+							Data:            details,
 						},
 					})
 				}

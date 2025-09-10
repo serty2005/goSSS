@@ -8,13 +8,13 @@ import (
 	"etalon-server/internal/api"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"etalon-server/internal/repositories"
 	"etalon-server/internal/utils"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -37,7 +37,7 @@ type TaskResolutionService interface {
 }
 
 type taskResolutionServiceImpl struct {
-	logger          *zap.Logger
+	logger          logger.LoggerInterface
 	db              *gorm.DB
 	bus             eventbus.EventBus
 	taskRepo        repositories.TaskRepo
@@ -47,7 +47,7 @@ type taskResolutionServiceImpl struct {
 }
 
 // NewTaskResolutionService создает новый экземпляр сервиса.
-func NewTaskResolutionService(logger *zap.Logger, db *gorm.DB, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) TaskResolutionService {
+func NewTaskResolutionService(logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) TaskResolutionService {
 	return &taskResolutionServiceImpl{
 		logger:          logger,
 		db:              db,
@@ -149,7 +149,7 @@ func (s *taskResolutionServiceImpl) RequestSDEntityCreation(ctx context.Context,
 			Type:    events.ServiceDeskCreateRequested,
 			Payload: payload,
 		})
-		s.logger.Info("Опубликовано событие на создание сущности в ServiceDesk", zap.Uint("taskID", task.ID))
+		s.logger.Info("Опубликовано событие на создание сущности в ServiceDesk", "taskID", task.ID)
 
 		updatedTask = task
 		return nil
@@ -174,7 +174,7 @@ func (s *taskResolutionServiceImpl) handleUpdateInSD(ctx context.Context, task *
 		Type:    events.ServiceDeskUpdateRequested,
 		Payload: payload,
 	})
-	s.logger.Info("Опубликовано событие на обновление сущности в ServiceDesk", zap.Uint("taskID", task.ID), zap.String("entityUUID", task.EntityUUID))
+	s.logger.Info("Опубликовано событие на обновление сущности в ServiceDesk", "taskID", task.ID, "entityUUID", task.EntityUUID)
 	return nil
 }
 
@@ -199,7 +199,7 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 			_, err = s.workstationRepo.Delete(ctx, tx, uuid)
 		}
 		if err != nil {
-			s.logger.Error("Ошибка 'мягкого удаления' дубликата", zap.String("uuid", uuid), zap.Error(err))
+			s.logger.Error("Ошибка 'мягкого удаления' дубликата", "uuid", uuid, "error", err)
 		}
 	}
 	return nil
@@ -236,7 +236,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 		EtalonOwnerUUID string           `json:"etalon_owner_id"` // Это должен быть внутренний ID
 	}
 	if err := json.Unmarshal(task.Details, &details); err != nil || details.EtalonOwnerUUID == "" {
-		s.logger.Error("Не удалось извлечь agent_data или etalon_owner_id из деталей задачи", zap.Uint("task_id", task.ID))
+		s.logger.Error("Не удалось извлечь agent_data или etalon_owner_id из деталей задачи", "task_id", task.ID)
 		return ErrInternalExecution
 	}
 

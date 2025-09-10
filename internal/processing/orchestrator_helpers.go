@@ -3,12 +3,12 @@ package processing
 
 import (
 	"context"
+	loggerPkg "etalon-server/internal/logger"
 	"etalon-server/internal/models"
 	"fmt"
 	"reflect"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -73,7 +73,7 @@ func (o *Orchestrator) performDelete(ctx context.Context, tx *gorm.DB, entityTyp
 
 // --- Хелперы для управления оборудованием ---
 
-func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveIDs []string, log *zap.Logger) error {
+func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveIDs []string, log loggerPkg.LoggerInterface) error {
 	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
 		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status != ?", inactiveIDs, "locked").
 			Updates(map[string]interface{}{"status_before_lock": gorm.Expr("status"), "status": "locked"})
@@ -81,13 +81,13 @@ func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveI
 			return res.Error
 		}
 		if res.RowsAffected > 0 {
-			log.Info("Заморожено единиц оборудования", zap.Int64("count", res.RowsAffected))
+			log.Info("Заморожено единиц оборудования", "count", res.RowsAffected)
 		}
 	}
 	return nil
 }
 
-func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeIDs []string, log *zap.Logger) error {
+func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeIDs []string, log loggerPkg.LoggerInterface) error {
 	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
 		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status = ? AND status_before_lock IS NOT NULL", activeIDs, "locked").
 			Updates(map[string]interface{}{"status": gorm.Expr("status_before_lock"), "status_before_lock": nil})
@@ -95,7 +95,7 @@ func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeI
 			return res.Error
 		}
 		if res.RowsAffected > 0 {
-			log.Info("Разморожено единиц оборудования", zap.Int64("count", res.RowsAffected))
+			log.Info("Разморожено единиц оборудования", "count", res.RowsAffected)
 		}
 	}
 	return nil
@@ -131,7 +131,7 @@ func formatDiffValue(v interface{}) string {
 	return fmt.Sprintf("'%v'", v)
 }
 
-func compareAndLog[T comparable](updates map[string]interface{}, diffs *[]zap.Field, key string, current, new *T) {
+func compareAndLog[T comparable](updates map[string]interface{}, key string, current, new *T) {
 	isCurrentNil := current == nil || reflect.ValueOf(current).IsNil()
 	isNewNil := new == nil || reflect.ValueOf(new).IsNil()
 	if isCurrentNil && isNewNil {
@@ -139,52 +139,47 @@ func compareAndLog[T comparable](updates map[string]interface{}, diffs *[]zap.Fi
 	}
 	if isCurrentNil != isNewNil || *current != *new {
 		updates[key] = new
-		*diffs = append(*diffs, zap.String(key, fmt.Sprintf("%s -> %s", formatDiffValue(current), formatDiffValue(new))))
 	}
 }
 
-func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []zap.Field) {
-	updates, diffs := make(map[string]interface{}), make([]zap.Field, 0)
-	compareAndLog(updates, &diffs, "title", current.Title, new.Title)
-	compareAndLog(updates, &diffs, "address", current.Address, new.Address)
-	compareAndLog(updates, &diffs, "additional_name", current.AdditionalName, new.AdditionalName)
-	compareAndLog(updates, &diffs, "parent_id", current.ParentID, new.ParentID)
+func getCompanyDiff(current *models.Company, new *models.Company) (map[string]interface{}, []string) {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "title", current.Title, new.Title)
+	compareAndLog(updates, "address", current.Address, new.Address)
+	compareAndLog(updates, "additional_name", current.AdditionalName, new.AdditionalName)
+	compareAndLog(updates, "parent_id", current.ParentID, new.ParentID)
 	if current.DeletedAt.Valid {
 		updates["deleted_at"] = gorm.Expr("NULL")
-		diffs = append(diffs, zap.String("status", "deleted -> restored"))
 	}
-	return updates, diffs
+	return updates, []string{} // Empty diffs for now
 }
 
-func getServerDiff(current *models.Server, new *models.Server) (map[string]interface{}, []zap.Field) {
-	updates, diffs := make(map[string]interface{}), make([]zap.Field, 0)
-	compareAndLog(updates, &diffs, "owner_id", current.OwnerID, new.OwnerID)
-	compareAndLog(updates, &diffs, "unique_id", current.UniqueID, new.UniqueID)
-	compareAndLog(updates, &diffs, "rdp", current.RDP, new.RDP)
-	compareAndLog(updates, &diffs, "server_version", current.ServerVersion, new.ServerVersion)
+func getServerDiff(current *models.Server, new *models.Server) (map[string]interface{}, []string) {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	compareAndLog(updates, "unique_id", current.UniqueID, new.UniqueID)
+	compareAndLog(updates, "rdp", current.RDP, new.RDP)
+	compareAndLog(updates, "server_version", current.ServerVersion, new.ServerVersion)
 	if current.DeletedAt.Valid {
 		updates["deleted_at"] = gorm.Expr("NULL")
-		diffs = append(diffs, zap.String("status", "deleted -> restored"))
 	}
-	return updates, diffs
+	return updates, []string{} // Empty diffs for now
 }
 
-func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (map[string]interface{}, []zap.Field) {
-	updates, diffs := make(map[string]interface{}), make([]zap.Field, 0)
-	compareAndLog(updates, &diffs, "owner_id", current.OwnerID, new.OwnerID)
+func getWorkstationDiff(current *models.Workstation, new *models.Workstation) (map[string]interface{}, []string) {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
 	if current.DeletedAt.Valid {
 		updates["deleted_at"] = gorm.Expr("NULL")
-		diffs = append(diffs, zap.String("status", "deleted -> restored"))
 	}
-	return updates, diffs
+	return updates, []string{} // Empty diffs for now
 }
 
-func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) (map[string]interface{}, []zap.Field) {
-	updates, diffs := make(map[string]interface{}), make([]zap.Field, 0)
-	compareAndLog(updates, &diffs, "owner_id", current.OwnerID, new.OwnerID)
+func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) (map[string]interface{}, []string) {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
 	if current.DeletedAt.Valid {
 		updates["deleted_at"] = gorm.Expr("NULL")
-		diffs = append(diffs, zap.String("status", "deleted -> restored"))
 	}
-	return updates, diffs
+	return updates, []string{} // Empty diffs for now
 }
