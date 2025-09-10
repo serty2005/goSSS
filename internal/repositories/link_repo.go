@@ -37,7 +37,7 @@ func (r *linkRepo) dbOrTx(tx *gorm.DB) *gorm.DB {
 func (r *linkRepo) GetByExternalID(ctx context.Context, tx *gorm.DB, systemName, externalID string) (*models.ExternalSystemLink, error) {
 	var link models.ExternalSystemLink
 	err := r.dbOrTx(tx).WithContext(ctx).
-		Where("system_name = ? AND external_id = ?", systemName, externalID).
+		Where("system_name = ? AND service_desk_uuid = ?", systemName, externalID).
 		First(&link).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
@@ -73,7 +73,7 @@ func (r *linkRepo) DeleteByInternalID(ctx context.Context, tx *gorm.DB, systemNa
 func (r *linkRepo) FindInternalIDByExternalID(ctx context.Context, tx *gorm.DB, systemName, externalID string) (string, error) {
 	var internalID string
 	err := r.dbOrTx(tx).WithContext(ctx).Model(&models.ExternalSystemLink{}).
-		Where("system_name = ? AND external_id = ?", systemName, externalID).
+		Where("system_name = ? AND service_desk_uuid = ?", systemName, externalID).
 		Pluck("internal_id", &internalID).Error
 	if err == gorm.ErrRecordNotFound {
 		return "", nil // Возвращаем пустую строку, а не ошибку, если не найдено

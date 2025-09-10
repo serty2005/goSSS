@@ -58,7 +58,7 @@ func (g *serverPollingGatewayImpl) handlePollingRequest(ctx context.Context, eve
 		return
 	}
 	// Payload.ServerUUID здесь уже является внутренним ID
-	log := g.logger.With("trigger", "manual", "uuid", payload.ServerUUID)
+	log := g.logger.With("request_id", payload.ServerUUID, "trigger", "manual")
 	log.Info("Обработка ручного запроса на опрос сервера")
 
 	// Используем новый метод GetByID
@@ -96,7 +96,12 @@ func (g *serverPollingGatewayImpl) runCycle(ctx context.Context) {
 
 // processServer обрабатывает один сервер и публикует событие.
 func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server models.Server) {
-	log := g.logger.With("server_id", server.ID, "server_ip", utils.SafeStringDereference(server.IP))
+	serverIP := utils.SafeStringDereference(server.IP)
+	requestID := server.ID
+	if serverIP != "" {
+		requestID = server.ID + "@" + serverIP
+	}
+	log := g.logger.With("request_id", requestID)
 	if server.IP == nil || *server.IP == "" {
 		log.Warn("IP-адрес сервера отсутствует, устанавливаем статус undefined")
 		g.bus.Publish(eventbus.Event{

@@ -171,7 +171,7 @@ func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContex
 	m.logger.Info("Парсинг сервера", "extID", extID)
 
 	if rawCabinetLink, ok := data["CabinetLink"].(string); ok && rawCabinetLink != "" {
-		m.logger.Info("Найден CabinetLink", "cabinetLink", rawCabinetLink)
+		m.logger.Debug("Найден CabinetLink", "cabinetLink", rawCabinetLink)
 		link := validators.ValidateCabinetLink(rawCabinetLink, "")
 		server.CabinetLink = &link
 	} else {
@@ -179,24 +179,24 @@ func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContex
 	}
 
 	if rawDescription, ok := data["description"].(string); ok && rawDescription != "" {
-		m.logger.Info("Найдено description", "description", rawDescription)
+		m.logger.Debug("Найдено description", "description", rawDescription)
 		server.Description = &rawDescription
 	} else {
-		m.logger.Warn("description отсутствует или пустое", "extID", extID)
+		m.logger.Debug("description отсутствует или пустое", "extID", extID)
 	}
 
 	if rawNameForClient, ok := data["nameforclient"].(string); ok && rawNameForClient != "" {
-		m.logger.Info("Найдено nameforclient", "nameforclient", rawNameForClient)
+		m.logger.Debug("Найдено nameforclient", "nameforclient", rawNameForClient)
 		server.ServerName = &rawNameForClient
 	} else {
-		m.logger.Warn("nameforclient отсутствует или пустое", "extID", extID)
+		m.logger.Debug("nameforclient отсутствует или пустое", "extID", extID)
 	}
 
 	if rawLitemanager, ok := data["litemanagerID"].(string); ok && rawLitemanager != "" {
-		m.logger.Info("Найден litemanagerID", "litemanagerID", rawLitemanager)
+		m.logger.Debug("Найден litemanagerID", "litemanagerID", rawLitemanager)
 		server.Litemanager = &rawLitemanager
 	} else {
-		m.logger.Warn("litemanagerID отсутствует или пустой", "extID", extID)
+		m.logger.Debug("litemanagerID отсутствует или пустой", "extID", extID)
 	}
 
 	return server, nil
@@ -225,17 +225,17 @@ func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperC
 	m.logger.Info("Парсинг рабочей станции", "extID", extID)
 
 	if rawCommentariy, ok := data["Commentariy"].(string); ok && rawCommentariy != "" {
-		m.logger.Info("Найден Commentariy", "commentariy", rawCommentariy)
+		m.logger.Debug("Найден Commentariy", "commentariy", rawCommentariy)
 		ws.Description = &rawCommentariy
 	} else {
-		m.logger.Warn("Commentariy отсутствует или пустой", "extID", extID)
+		m.logger.Debug("Commentariy отсутствует или пустой", "extID", extID)
 	}
 
 	if rawLitemanager, ok := data["litemanagerID"].(string); ok && rawLitemanager != "" {
-		m.logger.Info("Найден litemanagerID", "litemanagerID", rawLitemanager)
+		m.logger.Debug("Найден litemanagerID", "litemanagerID", rawLitemanager)
 		ws.Litemanager = &rawLitemanager
 	} else {
-		m.logger.Warn("litemanagerID отсутствует или пустой", "extID", extID)
+		m.logger.Debug("litemanagerID отсутствует или пустой", "extID", extID)
 	}
 
 	return ws, nil
@@ -290,33 +290,33 @@ func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.Mapp
 	if rawFFD, ok := data["FFD"]; ok {
 		if ffdMap, ok2 := rawFFD.(map[string]interface{}); ok2 {
 			if title, ok3 := ffdMap["title"].(string); ok3 {
-				m.logger.Info("Найден FFD", "ffd", title)
+				m.logger.Debug("Найден FFD", "ffd", title)
 				fr.FFD = &title
 			} else {
 				m.logger.Warn("FFD найден, но title отсутствует", "extID", extID)
 			}
 		} else if ffdStr, ok2 := rawFFD.(string); ok2 {
-			m.logger.Info("Найден FFD (строка)", "ffd", ffdStr)
+			m.logger.Debug("Найден FFD (строка)", "ffd", ffdStr)
 			fr.FFD = &ffdStr
 		} else {
 			m.logger.Warn("FFD найден, но не является map или string", "extID", extID)
 		}
 	} else {
-		m.logger.Warn("FFD отсутствует", "extID", extID)
+		m.logger.Debug("FFD отсутствует", "extID", extID)
 	}
 
 	if rawFRDownloader, ok := data["FRDownloader"].(string); ok && rawFRDownloader != "" {
-		m.logger.Info("Найден FRDownloader", "frDownloader", rawFRDownloader)
+		m.logger.Debug("Найден FRDownloader", "frDownloader", rawFRDownloader)
 		fr.FRDownloader = &rawFRDownloader
 	} else {
-		m.logger.Warn("FRDownloader отсутствует или пустой", "extID", extID)
+		m.logger.Debug("FRDownloader отсутствует или пустой", "extID", extID)
 	}
 
 	if rawFRFirmware, ok := data["FRFirmware"].(string); ok && rawFRFirmware != "" {
-		m.logger.Info("Найден FRFirmware", "frFirmware", rawFRFirmware)
+		m.logger.Debug("Найден FRFirmware", "frFirmware", rawFRFirmware)
 		fr.FRFirmware = &rawFRFirmware
 	} else {
-		m.logger.Warn("FRFirmware отсутствует или пустой", "extID", extID)
+		m.logger.Debug("FRFirmware отсутствует или пустой", "extID", extID)
 	}
 
 	return fr, nil

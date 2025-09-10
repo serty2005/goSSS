@@ -11,6 +11,8 @@ import (
 	"etalon-server/internal/repositories"
 	"etalon-server/pkg/eventbus"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // FRUpdateFounder (Fiscal Register Update Founder) - это фоновый воркер,
@@ -69,38 +71,41 @@ func (w *frUpdateFounderImpl) Start(ctx context.Context) {
 
 // runCheckCycle выполняет один полный цикл сверки данных.
 func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
-	w.logger.Info("Начало нового цикла сверки данных ФР с ServiceDesk.")
+	requestID := uuid.New().String()
+	cycleLogger := w.logger.With("request_id", requestID)
+
+	cycleLogger.Info("Начало нового цикла сверки данных ФР с ServiceDesk.")
 
 	// 1. Получаем все ФР из ServiceDesk.
 	remoteFRsData, err := w.sdClient.FetchEntityList(ctx, "FiscalRegister")
 	if err != nil {
-		w.logger.Error("Не удалось получить список ФР из ServiceDesk, цикл прерван", "error", err)
+		cycleLogger.Error("Не удалось получить список ФР из ServiceDesk, цикл прерван", "error", err)
 		return
 	}
 
 	// 2. Преобразуем данные из SD в мапу [externalUUID] -> *models.FiscalRegister
 	remoteFRsMap := make(map[string]*models.FiscalRegister, len(remoteFRsData))
 	// MapperContext здесь не нужен, так как DataToFiscalRegister не ищет связей
-	mapperCtx := &external.MapperContext{Logger: w.logger}
+	mapperCtx := &external.MapperContext{Logger: cycleLogger}
 	for _, data := range remoteFRsData {
 		fr, err := w.sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
 		if err != nil {
 			uuid, _ := data["UUID"].(string)
-			w.logger.Warn("Пропуск ФР из ServiceDesk из-за ошибки маппинга", "uuid", uuid, "error", err)
+			cycleLogger.Warn("Пропуск ФР из ServiceDesk из-за ошибки маппинга", "uuid", uuid, "error", err)
 			continue
 		}
 		externalUUID, _ := data["UUID"].(string)
 		remoteFRsMap[externalUUID] = fr
 	}
-	w.logger.Info("Из ServiceDesk загружено и обработано ФР", "count", len(remoteFRsMap))
+	cycleLogger.Info("Из ServiceDesk загружено и обработано ФР", "count", len(remoteFRsMap))
 
 	// 3. Получаем все ФР из нашей локальной ("эталонной") базы.
 	localFRs, err := w.frRepo.Search(ctx, "", 10000, 0)
 	if err != nil {
-		w.logger.Error("Не удалось получить список ФР из локальной БД, цикл прерван", "error", err)
+		cycleLogger.Error("Не удалось получить список ФР из локальной БД, цикл прерван", "error", err)
 		return
 	}
-	w.logger.Info("Из локальной БД загружено ФР для сверки", "count", len(localFRs))
+	cycleLogger.Info("Из локальной БД загружено ФР для сверки", "count", len(localFRs))
 
 	publishedEvents := 0
 	// 4. Итерируем по локальным ФР и сравниваем их с данными из SD.
@@ -108,17 +113,17 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 		// Находим внешний ID для нашего локального ФР
 		link, err := w.linkRepo.GetByInternalID(ctx, nil, "naumen", localFR.ID)
 		if err != nil {
-			w.logger.Error("Ошибка получения связи для ФР", "internal_id", localFR.ID, "error", err)
+			cycleLogger.Error("Ошибка получения связи для ФР", "internal_id", localFR.ID, "error", err)
 			continue
 		}
 		if link == nil {
-			w.logger.Debug("Пропуск ФР, для которого нет связи с внешней системой", "internal_id", localFR.ID)
+			cycleLogger.Debug("Пропуск ФР, для которого нет связи с внешней системой", "internal_id", localFR.ID)
 			continue
 		}
 
 		remoteFR, ok := remoteFRsMap[link.ServiceDeskUUID]
 		if !ok {
-			w.logger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", "internal_id", localFR.ID)
+			cycleLogger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", "internal_id", localFR.ID)
 			continue
 		}
 
@@ -137,7 +142,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 		}
 	}
 
-	w.logger.Info("Цикл сверки данных ФР завершен.", "published_events", publishedEvents)
+	cycleLogger.Info("Цикл сверки данных ФР завершен.", "published_events", publishedEvents)
 }
 
 // compareFiscalRegisters сравнивает два фискальных регистратора и возвращает карту расхождений.

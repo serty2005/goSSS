@@ -15,6 +15,7 @@ import (
 type SimpleConsoleHandler struct {
 	level     slog.Level
 	component string
+	requestID string
 }
 
 func (h *SimpleConsoleHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -30,11 +31,14 @@ func (h *SimpleConsoleHandler) Handle(ctx context.Context, r slog.Record) error 
 
 	// Используем сохраненный компонент или ищем в атрибутах
 	component := h.component
-	if component == "" {
+	requestID := h.requestID
+	if component == "" || requestID == "" {
 		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == "component" {
+			if a.Key == "component" && component == "" {
 				component = a.Value.String()
-				return false
+			}
+			if a.Key == "request_id" && requestID == "" {
+				requestID = a.Value.String()
 			}
 			return true
 		})
@@ -44,8 +48,12 @@ func (h *SimpleConsoleHandler) Handle(ctx context.Context, r slog.Record) error 
 	msg := r.Message
 
 	// Форматируем вывод
-	if component != "" {
+	if component != "" && requestID != "" {
+		fmt.Printf("%s %s %s[%s]: %q\n", timeStr, levelStr, component, requestID, msg)
+	} else if component != "" {
 		fmt.Printf("%s %s %s: %q\n", timeStr, levelStr, component, msg)
+	} else if requestID != "" {
+		fmt.Printf("%s %s [%s]: %q\n", timeStr, levelStr, requestID, msg)
 	} else {
 		fmt.Printf("%s %s %q\n", timeStr, levelStr, msg)
 	}
@@ -56,13 +64,18 @@ func (h *SimpleConsoleHandler) Handle(ctx context.Context, r slog.Record) error 
 func (h *SimpleConsoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	// Создаем новый обработчик с атрибутами
 	newHandler := &SimpleConsoleHandler{
-		level: h.level,
+		level:     h.level,
+		component: h.component,
+		requestID: h.requestID,
 	}
 
 	// Сохраняем атрибуты для использования в Handle
 	for _, attr := range attrs {
 		if attr.Key == "component" {
 			newHandler.component = attr.Value.String()
+		}
+		if attr.Key == "request_id" {
+			newHandler.requestID = attr.Value.String()
 		}
 	}
 
@@ -105,7 +118,7 @@ func NewSlogLogger(logDir, loggerName, logLevel string, disableFileLogging bool)
 
 			fileHandler := slog.NewJSONHandler(fileWriter, &slog.HandlerOptions{
 				Level:     level,
-				AddSource: true,
+				AddSource: false,
 			})
 			handlers = append(handlers, fileHandler)
 		}

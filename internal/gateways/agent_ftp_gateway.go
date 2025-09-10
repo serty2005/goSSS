@@ -222,7 +222,7 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 	startTime := time.Now()
 	fileType := getFileTypeDescription(fileName)
 	log := g.logger.With(
-		"file", fileName,
+		"request_id", fileName,
 		"file_type", fileType,
 		"is_fr_data", isFileNameNumeric(fileName),
 	)
