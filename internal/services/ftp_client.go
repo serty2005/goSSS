@@ -2,8 +2,8 @@ package services
 
 import (
 	"bytes"
-	"etalon-server/internal/config"
-	"etalon-server/internal/logger"
+	"etalon-server/internal/infra/config"
+	"etalon-server/internal/infra/logger"
 	"fmt"
 	"io"
 	"time"

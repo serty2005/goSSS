@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"etalon-server/internal/logger"
+	"etalon-server/internal/infra/logger"
 )
 
 // Event представляет собой событие, передаваемое по шине.

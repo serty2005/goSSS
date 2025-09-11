@@ -1,14 +1,17 @@
-// internal/services/server_actions_service.go
+// Файл: internal/services/server_actions_service.go
 package services
 
 import (
 	"context"
 	"errors"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/logger"
-	"etalon-server/internal/repositories"
+	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/config"
+	"etalon-server/internal/infra/iiko"
+	"etalon-server/internal/infra/logger"
 	"etalon-server/pkg/eventbus"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +19,6 @@ import (
 )
 
 var (
-	// ErrRateLimitExceeded возвращается, когда превышен лимит запросов на опрос для одного сервера.
 	ErrRateLimitExceeded = errors.New("слишком много запросов на опрос сервера")
 )
 
@@ -25,7 +27,6 @@ const (
 	rateLimitWindow = 2 * time.Minute
 )
 
-// ServerActionsService определяет интерфейс для ручных действий над серверами.
 type ServerActionsService interface {
 	PollSingleServer(ctx context.Context, serverID string) error
 	InstallLicense(ctx context.Context, serverID, uniqueID string) error
@@ -34,30 +35,31 @@ type ServerActionsService interface {
 }
 
 type serverActionsServiceImpl struct {
+	cfg           *config.Config
 	logger        logger.LoggerInterface
 	bus           eventbus.EventBus
 	serverRepo    repositories.ServerRepo
 	companyRepo   repositories.CompanyRepo
 	db            *gorm.DB
+	iikoClient    iiko.IikoClient
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
-// NewServerActionsService создает новый экземпляр сервиса.
-func NewServerActionsService(logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB) ServerActionsService {
+func NewServerActionsService(cfg *config.Config, logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, iikoClient iiko.IikoClient) ServerActionsService {
 	return &serverActionsServiceImpl{
+		cfg:           cfg,
 		logger:        logger,
 		bus:           bus,
 		serverRepo:    serverRepo,
 		companyRepo:   companyRepo,
 		db:            db,
+		iikoClient:    iikoClient,
 		rateLimiter:   &sync.Mutex{},
 		requestStamps: make(map[string][]time.Time),
 	}
 }
 
-// PollSingleServer запускает асинхронную задачу опроса через событие, с проверкой rate limit.
-// Принимает внутренний ID сервера.
 func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverID string) error {
 	if !s.checkRateLimit(serverID) {
 		return ErrRateLimitExceeded
@@ -76,14 +78,13 @@ func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverI
 	s.bus.Publish(eventbus.Event{
 		Type: events.ServerPollingRequested,
 		Payload: events.ServerPollingRequestedPayload{
-			ServerUUID: serverID, // Поле в событии называется UUID, но мы передаем внутренний ID
+			ServerUUID: serverID,
 		},
 	})
 
 	return nil
 }
 
-// checkRateLimit проверяет, можно ли выполнить запрос для данного serverID.
 func (s *serverActionsServiceImpl) checkRateLimit(serverID string) bool {
 	s.rateLimiter.Lock()
 	defer s.rateLimiter.Unlock()
@@ -106,8 +107,7 @@ func (s *serverActionsServiceImpl) checkRateLimit(serverID string) bool {
 	return true
 }
 
-// InstallLicense - метод-заглушка для ручного запуска установки лицензии.
-// Принимает внутренний ID сервера.
+// InstallLicense выполняет установку лицензии на iiko-сервер.
 func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID, uniqueID string) error {
 	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
@@ -116,15 +116,32 @@ func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID,
 	if server == nil {
 		return gorm.ErrRecordNotFound
 	}
-	s.logger.Info("ЗАГЛУШКА: Запущена установка лицензии",
-		"server_id", serverID,
-		"unique_id", uniqueID,
-	)
+	if server.IP == nil || *server.IP == "" {
+		return fmt.Errorf("у сервера отсутствует IP-адрес для подключения")
+	}
+
+	serverURL := fmt.Sprintf("http://%s", *server.IP)
+	if strings.Contains(*server.IP, ":443") {
+		serverURL = fmt.Sprintf("https://%s", strings.Split(*server.IP, ":")[0])
+	}
+
+	log := s.logger.With("server_id", serverID, "server_url", serverURL, "uid", uniqueID)
+	log.Info("Запуск установки лицензии")
+
+	success, err := s.iikoClient.InstallLicense(ctx, serverURL, s.cfg.RMSLogin, s.cfg.RMSPassword1, s.cfg.RMSPassword2, uniqueID)
+	if err != nil {
+		log.Error("Ошибка при установке лицензии", "error", err)
+		return fmt.Errorf("не удалось установить лицензию: %w", err)
+	}
+	if !success {
+		log.Warn("Установка лицензии завершилась неуспешно (без ошибки)")
+		return fmt.Errorf("установка лицензии завершилась неуспешно")
+	}
+
+	log.Info("Установка лицензии успешно завершена")
 	return nil
 }
 
-// AddAdditionalOwner добавляет компанию в список дополнительных владельцев сервера.
-// Принимает внутренние ID сервера и компании.
 func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverID, companyID string) error {
 	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
@@ -152,8 +169,6 @@ func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serve
 	return nil
 }
 
-// RemoveAdditionalOwner удаляет компанию из списка дополнительных владельцев сервера.
-// Принимает внутренние ID сервера и компании.
 func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverID, companyID string) error {
 	server, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {

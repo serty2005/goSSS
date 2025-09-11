@@ -1,22 +1,22 @@
-// internal/app/app.go
+// Файл: internal/app/app.go
 package app
 
 import (
 	"context"
-	"encoding/json"
-	"etalon-server/internal/config"
-	"etalon-server/internal/db"
-	"etalon-server/internal/gateways"
-	"etalon-server/internal/handlers"
-	"etalon-server/internal/logger"
-	"etalon-server/internal/models"
-	"etalon-server/internal/plugins/naumen"
-	"etalon-server/internal/processing"
-	"etalon-server/internal/repositories"
-	"etalon-server/internal/seeder"
+	"etalon-server/internal/core/gateways"
+	"etalon-server/internal/core/processing"
+	"etalon-server/internal/core/workers"
+	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/config"
+	"etalon-server/internal/infra/db"
+	"etalon-server/internal/infra/external"
+	"etalon-server/internal/infra/iiko"
+	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/infra/plugins/naumen"
+	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/services"
-	"etalon-server/internal/utils"
-	"etalon-server/internal/workers"
+	"etalon-server/internal/transport/http/handlers"
+	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"net/http"
@@ -27,25 +27,28 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chi_middleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
 // Application хранит все зависимости приложения (DI-контейнер).
 type Application struct {
-	Config               *config.Config
-	Logger               logger.LoggerInterface
-	DB                   *gorm.DB
-	ProcessingEngine     processing.ProcessingEngine
-	EventBus             eventbus.EventBus
-	Orchestrator         *processing.Orchestrator
-	SDeskGateway         gateways.ServiceDeskGateway
-	DuplicatesGateway    gateways.DuplicatesGateway
-	PollingGateway       gateways.ServerPollingGateway
-	AgentFTPGateway      gateways.AgentFTPGateway
-	Seeder               *seeder.Seeder
+	Config   *config.Config
+	Logger   logger.LoggerInterface
+	DB       *gorm.DB
+	EventBus eventbus.EventBus
+	Seeder   *seeder.Seeder
+
+	// Gateways & Workers
+	SDeskGateway      gateways.ServiceDeskGateway
+	DuplicatesGateway gateways.DuplicatesGateway
+	PollingGateway    gateways.ServerPollingGateway
+	AgentFTPGateway   gateways.AgentFTPGateway
+	FRUpdateFounder   workers.FRUpdateFounder
+	SDEditor          workers.SDEditorWorker
+
+	// Handlers
 	CrudHandler          *handlers.CrudHandler
 	SearchHandler        *handlers.SearchHandler
 	SyncHandler          *handlers.SyncHandler
@@ -53,249 +56,61 @@ type Application struct {
 	AgentHandler         *handlers.AgentHandler
 	ServerActionsHandler *handlers.ServerActionsHandler
 	AuthHandler          *handlers.AuthHandler
-	ServerActionsSvc     services.ServerActionsService
-	AuthSvc              services.AuthService
-	AgentSvc             services.AgentService
-	SDEditorSvc          services.SDEditorService
-	FRUpdateFounder      workers.FRUpdateFounder
+	ContractHandler      *handlers.ContractHandler
+	UserHandler          *handlers.UserHandler
 	DebugHandler         *handlers.DebugHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
 func New() (*Application, error) {
-	cfg := config.New()
+	app := &Application{}
+	var err error
 
-	// Создаем основной логгер на основе slog
-	mainLogger := logger.NewSlogLogger(cfg.LogDir, "app", cfg.LogLevel, cfg.DisableFileLogging)
-	mainLogger.Info("Инициализация приложения etalon-server...")
+	app.Config = config.New()
+	app.Logger = logger.NewSlogLogger(app.Config.LogDir, "app", app.Config.LogLevel, app.Config.DisableFileLogging)
+	app.Logger.Info("Инициализация приложения etalon-server...")
 
-	if err := os.MkdirAll(cfg.FTPCachePath, 0755); err != nil {
-		mainLogger.Error("Не удалось создать директорию для кэша FTP", "error", err)
-		os.Exit(1)
+	if err = os.MkdirAll(app.Config.FTPCachePath, 0755); err != nil {
+		app.Logger.Fatal("Не удалось создать директорию для кэша FTP", "error", err)
 	}
 
-	database, err := db.NewConnection(cfg)
+	app.DB, err = setupDatabase(app.Config, app.Logger)
 	if err != nil {
-		mainLogger.Error("Не удалось подключиться к базе данных", "error", err)
-		return nil, err
-	}
-	mainLogger.Info("Подключение к базе данных установлено")
-
-	mainLogger.Info("Запуск миграций базы данных...")
-	err = database.AutoMigrate(
-		&models.Company{}, &models.Server{}, &models.Workstation{},
-		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
-		&models.User{}, &models.ExternalSystemLink{},
-	)
-	if err != nil {
-		mainLogger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
-		return nil, err
-	}
-	mainLogger.Info("Миграции базы данных успешно завершены.")
-
-	if err := seedAdminUser(cfg, database, mainLogger); err != nil {
-		mainLogger.Error("Не удалось создать пользователя-администратора", "error", err)
 		return nil, err
 	}
 
-	bus := eventbus.NewInMemoryEventBus(1000)
+	app.EventBus = eventbus.NewInMemoryEventBus(1000)
 
-	// Репозитории
-	companyRepo := repositories.NewCompanyRepo(database)
-	serverRepo := repositories.NewServerRepo(database)
-	workstationRepo := repositories.NewWorkstationRepo(database)
-	frRepo := repositories.NewFiscalRegisterRepo(database)
-	agentRepo := repositories.NewAgentRepo(database)
-	contractRepo := repositories.NewContractRepo(database)
-	taskRepo := repositories.NewTaskRepo(database)
-	userRepo := repositories.NewUserRepo(database)
-	linkRepo := repositories.NewLinkRepo(database)
+	// Инициализация слоев
+	repos := setupRepositories(app.DB)
+	clients := setupExternalClients(app.Config, app.Logger, app.DB, repos.LinkRepo)
 
-	// Создаем логеры с контекстом от основного логгера
-	sdeskGatewayLogger := mainLogger.With("component", "sdesk_gateway")
-	orchestratorLogger := mainLogger.With("component", "orchestrator")
-	serverPollingLogger := mainLogger.With("component", "server_polling")
-	reconcilerLogger := mainLogger.With("component", "reconciler")
-	duplicatesLogger := mainLogger.With("component", "duplicates_gateway")
-	sdEditorLogger := mainLogger.With("component", "sdesk_editor")
-	frUpdateFounderLogger := mainLogger.With("component", "fr_update_founder")
+	app.Seeder = seeder.NewSeeder(app.Logger, app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.ContractRepo)
 
-	// Сервисы, шлюзы и оркестратор
-	sdClient := naumen.NewNaumenClient(cfg, mainLogger, database, linkRepo)
-	ftpClient := services.NewFTPClient(cfg, mainLogger)
-	rmsClient := utils.NewRMSClient(cfg.RequestTimeout, mainLogger)
-	agentService := services.NewAgentService(mainLogger, agentRepo, companyRepo, database, bus)
-	authService := services.NewAuthService(cfg, userRepo, mainLogger.With("component", "auth_service"))
-	taskResolutionService := services.NewTaskResolutionService(mainLogger, database, bus, taskRepo, serverRepo, workstationRepo, frRepo)
-	dbSeeder := seeder.NewSeeder(mainLogger, database, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo)
-	sdEditorService := services.NewSDEditorService(sdEditorLogger, database, bus, sdClient, taskRepo, linkRepo, companyRepo, serverRepo, workstationRepo, frRepo)
-	processingEngine := processing.NewProcessingEngine(mainLogger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, services.NewEntityMatcherService(mainLogger, serverRepo, workstationRepo, frRepo))
+	services := setupServices(app, repos, clients)
+	setupBackgroundServices(app, repos, clients, services)
+	setupHandlers(app, repos, services)
 
-	sdeskGateway := gateways.NewServiceDeskGateway(cfg, sdClient, bus, sdeskGatewayLogger, database, companyRepo, serverRepo, workstationRepo, frRepo)
-	duplicatesGateway := gateways.NewDuplicatesGateway(cfg, database, bus, duplicatesLogger)
-	pollingGateway := gateways.NewServerPollingGateway(cfg, serverPollingLogger, serverRepo, rmsClient, bus)
-	agentFTPGateway := gateways.NewAgentFTPGateway(cfg, reconcilerLogger, database, ftpClient, bus)
-
-	// ВАЖНО: Конструктор Оркестратора пока остается старым! Мы отрефакторим его на следующем шаге.
-	orchestrator := processing.NewOrchestrator(orchestratorLogger, database, bus, sdClient, companyRepo, serverRepo, workstationRepo, frRepo, taskRepo, linkRepo, processingEngine)
-
-	serverActionsSvc := services.NewServerActionsService(mainLogger.With("component", "server_actions"), bus, serverRepo, companyRepo, database)
-	frUpdateFounder := workers.NewFRUpdateFounder(cfg, frUpdateFounderLogger, bus, frRepo, linkRepo, sdClient)
-
-	// Обработчики
-	crudHandler := handlers.NewCrudHandler(mainLogger.With("component", "crud_handler"), database, companyRepo, serverRepo, workstationRepo, frRepo)
-	searchHandler := handlers.NewSearchHandler(mainLogger.With("component", "search_handler"), companyRepo, serverRepo, workstationRepo, frRepo, linkRepo)
-	syncHandler := handlers.NewSyncHandler(mainLogger.With("component", "sync_handler"), dbSeeder, cfg.SeederKey)
-	taskHandler := handlers.NewTaskHandler(mainLogger.With("component", "task_handler"), database, taskResolutionService, sdEditorService, serverRepo, workstationRepo, frRepo, linkRepo)
-	agentHandler := handlers.NewAgentHandler(mainLogger.With("component", "agent_handler"), agentService)
-	serverActionsHandler := handlers.NewServerActionsHandler(mainLogger.With("component", "server_actions_handler"), serverActionsSvc)
-	authHandler := handlers.NewAuthHandler(mainLogger.With("component", "auth_handler"), authService)
-	debugHandler := handlers.NewDebugHandler(mainLogger.With("component", "debug_handler"), bus)
-
-	return &Application{
-		Config:               cfg,
-		Logger:               mainLogger,
-		DB:                   database,
-		ProcessingEngine:     processingEngine,
-		EventBus:             bus,
-		Orchestrator:         orchestrator,
-		SDeskGateway:         sdeskGateway,
-		DuplicatesGateway:    duplicatesGateway,
-		PollingGateway:       pollingGateway,
-		AgentFTPGateway:      agentFTPGateway,
-		Seeder:               dbSeeder,
-		CrudHandler:          crudHandler,
-		SearchHandler:        searchHandler,
-		SyncHandler:          syncHandler,
-		TaskHandler:          taskHandler,
-		AgentHandler:         agentHandler,
-		ServerActionsHandler: serverActionsHandler,
-		AuthHandler:          authHandler,
-		AuthSvc:              authService,
-		ServerActionsSvc:     serverActionsSvc,
-		AgentSvc:             agentService,
-		SDEditorSvc:          sdEditorService,
-		FRUpdateFounder:      frUpdateFounder,
-		DebugHandler:         debugHandler,
-	}, nil
+	return app, nil
 }
 
 // Run запускает приложение (HTTP-сервер и фоновые службы).
 func (a *Application) Run() {
-
-	r := chi.NewRouter()
-
-	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   a.Config.AllowedOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	})
-	r.Use(corsMiddleware.Handler)
-
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
-	// Публичные роуты для аутентификации
-	r.Route("/api/auth", func(r chi.Router) {
-		a.AuthHandler.RegisterRoutes(r)
-	})
-
-	// Роуты для агентов со своей аутентификацией
-	r.Route("/api/agents", func(r chi.Router) {
-		r.Use(handlers.AgentAuthMiddleware(a.Config.AgentAPIKey))
-		a.AgentHandler.RegisterRoutes(r)
-	})
-
-	// Защищенная группа роутов для UI
-	r.Route("/api", func(r chi.Router) {
-		// Применяем middleware для проверки JWT
-		r.Use(handlers.JwtAuthMiddleware(a.Config))
-
-		// Регистрируем все защищенные хендлеры
-		a.CrudHandler.RegisterRoutes(r)
-		a.SearchHandler.RegisterRoutes(r)
-		a.TaskHandler.RegisterRoutes(r)
-		a.ServerActionsHandler.RegisterRoutes(r)
-
-		// Пример группы роутов только для админов
-		r.Route("/users", func(r chi.Router) {
-			r.Use(handlers.AdminRequiredMiddleware)
-			// Здесь будут регистрироваться роуты для UserHandler
-			// a.UserHandler.RegisterRoutes(r)
-		})
-	})
-	r.Route("/sync", func(r chi.Router) {
-		a.SyncHandler.RegisterRoutes(r)
-	})
-	r.Route("/debug", func(r chi.Router) {
-		a.DebugHandler.RegisterRoutes(r)
-	})
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to Etalon Server"))
-	})
-
 	server := &http.Server{
 		Addr:    ":" + a.Config.ServerPort,
-		Handler: r,
+		Handler: a.setupRouter(),
 	}
 
 	mainCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
+
+	// Запуск фоновых служб
+	a.runBackgroundServices(mainCtx, &wg)
+
+	// Запуск HTTP-сервера
 	wg.Add(1)
-
-	// --- Запуск компонентов новой архитектуры ---
-	// Шина событий
-	go func() { defer wg.Done(); a.EventBus.Start(mainCtx, a.Logger) }()
-
-	// Оркестратор (он только подписывается, активной работы не ведет)
-	a.Orchestrator.Start(mainCtx)
-	a.SDEditorSvc.Start(mainCtx)
-
-	// Шлюз поиска дубликатов
-	if a.Config.EnableDuplicatesGateway {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.DuplicatesGateway.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
-	}
-
-	// Воркер поиска обновлений для ФР
-	if a.Config.EnableFRDiscrepancyFinder {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.FRUpdateFounder.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Воркер поиска обновлений для ФР (FRUpdateFounder) отключен в конфигурации.")
-	}
-
-	// Шлюз для данных от агентов (FTP)
-	if a.Config.EnableAgentFTPGateway {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.AgentFTPGateway.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Шлюз агентов (FTP) отключен в конфигурации.")
-	}
-
-	// Шлюз опроса статусов серверов
-	if a.Config.EnablePollingGateway {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.PollingGateway.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Шлюз опроса статусов серверов отключен в конфигурации.")
-	}
-
-	// Шлюз синхронизации сущностей с ServiceDesk
-	if a.Config.EnableSDeskGateway {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.SDeskGateway.Start(mainCtx) }()
-	} else {
-		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
-	}
-
-	// HTTP-сервер
 	go func() {
 		defer wg.Done()
 		a.Logger.Info(fmt.Sprintf("Сервер запущен и слушает порт %s", a.Config.ServerPort))
@@ -314,7 +129,6 @@ func (a *Application) Run() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		a.Logger.Error("Принудительная остановка сервера:", "error", err)
-		os.Exit(1)
 	}
 
 	wg.Wait()
@@ -326,38 +140,215 @@ func (a *Application) SeedDBAndExit() {
 	a.Logger.Info("Запуск в режиме наполнения базы данных (seeding)...")
 	mockClient := seeder.NewMockServiceDeskClient(a.Logger, "./tools/seeder/mock_data")
 	if err := a.Seeder.SeedDatabase(mockClient); err != nil {
-		a.Logger.Error("Ошибка при наполнении базы данных", "error", err)
-		os.Exit(1)
+		a.Logger.Fatal("Ошибка при наполнении базы данных", "error", err)
 	}
 	a.Logger.Info("Наполнение базы данных успешно завершено. Программа завершает работу.")
 	os.Exit(0)
 }
 
-// Новая функция для сидинга админа
-func seedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterface) error {
-	var count int64
-	db.Model(&models.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
+// --- Функции-строители для декомпозиции New() ---
 
-	if count > 0 {
-		logger.Info("Пользователь-администратор уже существует, пропуск создания.")
-		return nil
+func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, error) {
+	database, err := db.NewConnection(cfg)
+	if err != nil {
+		log.Fatal("Не удалось подключиться к базе данных", "error", err)
+	}
+	log.Info("Подключение к базе данных установлено")
+
+	log.Info("Запуск миграций базы данных...")
+	if err := db.Migrate(database); err != nil {
+		log.Fatal("Не удалось выполнить миграцию схемы БД", "error", err)
+	}
+	log.Info("Миграции базы данных успешно завершены.")
+
+	if err := db.SeedAdminUser(cfg, database, log); err != nil {
+		log.Fatal("Не удалось создать пользователя-администратора", "error", err)
 	}
 
-	logger.Info("Создание пользователя-администратора по умолчанию...")
-	rolesJSON, _ := json.Marshal([]string{"admin"})
-	admin := &models.User{
-		Username: cfg.AdminUsername,
-		FullName: cfg.AdminFullName,
-		Roles:    datatypes.JSON(rolesJSON),
+	return database, nil
+}
+
+type Repositories struct {
+	CompanyRepo     repositories.CompanyRepo
+	ServerRepo      repositories.ServerRepo
+	WorkstationRepo repositories.WorkstationRepo
+	FRRepo          repositories.FiscalRegisterRepo
+	AgentRepo       repositories.AgentRepo
+	ContractRepo    repositories.ContractRepo
+	TaskRepo        repositories.TaskRepo
+	UserRepo        repositories.UserRepo
+	LinkRepo        repositories.LinkRepo
+}
+
+func setupRepositories(db *gorm.DB) Repositories {
+	return Repositories{
+		CompanyRepo:     repositories.NewCompanyRepo(db),
+		ServerRepo:      repositories.NewServerRepo(db),
+		WorkstationRepo: repositories.NewWorkstationRepo(db),
+		FRRepo:          repositories.NewFiscalRegisterRepo(db),
+		AgentRepo:       repositories.NewAgentRepo(db),
+		ContractRepo:    repositories.NewContractRepo(db),
+		TaskRepo:        repositories.NewTaskRepo(db),
+		UserRepo:        repositories.NewUserRepo(db),
+		LinkRepo:        repositories.NewLinkRepo(db),
 	}
-	if err := admin.HashPassword(cfg.AdminPassword); err != nil {
-		return err
+}
+
+type ExternalClients struct {
+	SDClient   external.ExternalSystemClient
+	FTPClient  services.FTPClient
+	IikoClient iiko.IikoClient
+}
+
+func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) ExternalClients {
+	return ExternalClients{
+		SDClient:   naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
+		FTPClient:  services.NewFTPClient(cfg, log.With("component", "ftp_client")),
+		IikoClient: iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+	}
+}
+
+type Services struct {
+	AuthService           services.AuthService
+	AgentService          services.AgentService
+	TaskResolutionService services.TaskResolutionService
+	ServerActionsService  services.ServerActionsService
+	EntityMatcherService  services.EntityMatcherService
+}
+
+func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
+	return Services{
+		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
+		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
+		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
+		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+	}
+}
+
+func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
+	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.TaskRepo, srvs.EntityMatcherService)
+	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
+	orchestrator.Start(context.Background()) // Оркестратор только подписывается, активной работы не ведет
+
+	app.SDeskGateway = gateways.NewServiceDeskGateway(app.Config, clients.SDClient, app.EventBus, app.Logger.With("component", "sdesk_gateway"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
+	app.PollingGateway = gateways.NewServerPollingGateway(app.Config, app.Logger.With("component", "iiko_polling_gateway"), repos.ServerRepo, clients.IikoClient, app.EventBus)
+	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, app.EventBus)
+	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, clients.SDClient)
+	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+}
+
+func setupHandlers(app *Application, repos Repositories, srvs Services) {
+	app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
+	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
+	app.TaskHandler = handlers.NewTaskHandler(app.DB, srvs.TaskResolutionService, app.SDEditor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
+	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService)
+	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
+	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
+	app.ContractHandler = handlers.NewContractHandler(app.DB, repos.ContractRepo)
+	app.UserHandler = handlers.NewUserHandler(app.DB, srvs.AuthService, repos.UserRepo)
+	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
+}
+
+// --- Функции-хелперы для Run() ---
+
+func (a *Application) setupRouter() *chi.Mux {
+	r := chi.NewRouter()
+
+	corsMiddleware := cors.New(cors.Options{
+		AllowedOrigins:   a.Config.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	})
+	r.Use(corsMiddleware.Handler)
+	// Сначала RequestID, чтобы он был доступен для логгера
+	r.Use(chi_middleware.RequestID)
+	// Затем наш LoggerInjector
+	r.Use(middleware.LoggerInjector(a.Logger))
+	// Стандартные middleware от chi
+	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
+	r.Use(chi_middleware.Timeout(60 * time.Second))
+
+	// Публичные роуты
+	r.Route("/api/auth", func(r chi.Router) {
+		a.AuthHandler.RegisterRoutes(r)
+	})
+	r.Route("/api/agents", func(r chi.Router) {
+		r.Use(middleware.AgentAuthMiddleware(a.Config.AgentAPIKey))
+		a.AgentHandler.RegisterRoutes(r)
+	})
+
+	// Защищенная группа роутов для UI
+	r.Route("/api", func(r chi.Router) {
+		r.Use(middleware.JwtAuthMiddleware(a.Config))
+		a.CrudHandler.RegisterRoutes(r)
+		a.SearchHandler.RegisterRoutes(r)
+		a.TaskHandler.RegisterRoutes(r)
+		a.ServerActionsHandler.RegisterRoutes(r)
+		a.ContractHandler.RegisterRoutes(r)
+
+		r.Route("/users", func(r chi.Router) {
+			r.Use(middleware.AdminRequiredMiddleware)
+			a.UserHandler.RegisterRoutes(r)
+		})
+	})
+
+	// Системные и отладочные роуты
+	r.Route("/sync", func(r chi.Router) {
+		a.SyncHandler.RegisterRoutes(r)
+	})
+	r.Route("/debug", func(r chi.Router) {
+		a.DebugHandler.RegisterRoutes(r)
+	})
+
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Welcome to Etalon Server"))
+	})
+	return r
+}
+
+func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() { defer wg.Done(); a.EventBus.Start(ctx, a.Logger) }()
+
+	a.SDEditor.Start(ctx)
+
+	if a.Config.EnableDuplicatesGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.DuplicatesGateway.Start(ctx) }()
+	} else {
+		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
 	}
 
-	if err := db.Create(admin).Error; err != nil {
-		return err
+	if a.Config.EnableFRDiscrepancyFinder {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.FRUpdateFounder.Start(ctx) }()
+	} else {
+		a.Logger.Info("Воркер поиска обновлений для ФР (FRUpdateFounder) отключен в конфигурации.")
 	}
 
-	logger.Info("Пользователь-администратор успешно создан.", "username", cfg.AdminUsername)
-	return nil
+	if a.Config.EnableAgentFTPGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.AgentFTPGateway.Start(ctx) }()
+	} else {
+		a.Logger.Info("Шлюз агентов (FTP) отключен в конфигурации.")
+	}
+
+	if a.Config.EnablePollingGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.PollingGateway.Start(ctx) }()
+	} else {
+		a.Logger.Info("Шлюз опроса статусов iiko-серверов отключен в конфигурации.")
+	}
+
+	if a.Config.EnableSDeskGateway {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.SDeskGateway.Start(ctx) }()
+	} else {
+		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
+	}
 }

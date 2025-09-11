@@ -1,64 +1,66 @@
-// internal/services/sd_editor_service.go
-package services
+// Файл: internal/core/workers/sd_editor_worker.go
+package workers
 
 import (
 	"context"
 	"encoding/json"
-	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/infra/external"
-	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/external"
+	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
-	"etalon-server/pkg/eventbus"
+	"etalon-server/internal/transport/http/dtos" // Для доступа к ключам контекста
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
+	"etalon-server/pkg/eventbus"
+
 	"gorm.io/gorm"
 )
 
-// SDEditorService определяет интерфейс для сервиса, который асинхронно изменяет данные в ServiceDesk.
-type SDEditorService interface {
+// SDEditorWorker определяет интерфейс для воркера, который асинхронно изменяет данные в ServiceDesk.
+type SDEditorWorker interface {
 	Start(ctx context.Context)
 }
 
-// sdEditorServiceImpl реализует интерфейс SDEditorService.
-type sdEditorServiceImpl struct {
+// sdEditorWorkerImpl реализует интерфейс SDEditorWorker.
+type sdEditorWorkerImpl struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
 	bus             eventbus.EventBus
 	sdClient        external.ExternalSystemClient
 	taskRepo        repositories.TaskRepo
-	linkRepo        repositories.LinkRepo // Новая зависимость
+	linkRepo        repositories.LinkRepo
 	companyRepo     repositories.CompanyRepo
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
 }
 
-// NewSDEditorService создает новый экземпляр воркера SDEditorService.
-func NewSDEditorService(
+// NewSDEditorWorker создает новый экземпляр воркера SDEditorWorker.
+func NewSDEditorWorker(
 	logger logger.LoggerInterface,
 	db *gorm.DB,
 	bus eventbus.EventBus,
 	sdClient external.ExternalSystemClient,
 	taskRepo repositories.TaskRepo,
-	linkRepo repositories.LinkRepo, // Новая зависимость
+	linkRepo repositories.LinkRepo,
 	companyRepo repositories.CompanyRepo,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
-) SDEditorService {
-	return &sdEditorServiceImpl{
+) SDEditorWorker {
+	return &sdEditorWorkerImpl{
 		logger:          logger,
 		db:              db,
 		bus:             bus,
 		sdClient:        sdClient,
 		taskRepo:        taskRepo,
-		linkRepo:        linkRepo, // Инициализация
+		linkRepo:        linkRepo,
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
@@ -67,14 +69,14 @@ func NewSDEditorService(
 }
 
 // Start запускает воркер и подписывает его на события.
-func (s *sdEditorServiceImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера SDEditorService")
+func (s *sdEditorWorkerImpl) Start(ctx context.Context) {
+	s.logger.Info("Запуск воркера SDEditorWorker")
 	s.bus.Subscribe(events.ServiceDeskCreateRequested, s.handleCreateRequest)
 	s.bus.Subscribe(events.ServiceDeskUpdateRequested, s.handleUpdateRequest)
 }
 
 // handleUpdateRequest обрабатывает запрос на обновление сущности в ServiceDesk.
-func (s *sdEditorServiceImpl) handleUpdateRequest(ctx context.Context, event eventbus.Event) {
+func (s *sdEditorWorkerImpl) handleUpdateRequest(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServiceDeskModificationPayload)
 	if !ok {
 		return
@@ -115,7 +117,7 @@ func (s *sdEditorServiceImpl) handleUpdateRequest(ctx context.Context, event eve
 }
 
 // handleCreateRequest обрабатывает запрос на создание сущности в ServiceDesk.
-func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eventbus.Event) {
+func (s *sdEditorWorkerImpl) handleCreateRequest(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServiceDeskModificationPayload)
 	if !ok {
 		return
@@ -127,7 +129,7 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 	var err error
 
 	switch payload.EntityType {
-	case "FiscalRegister":
+	case string(domain.FiscalRegister):
 		newExternalUUID, err = s.createFiscalRegisterFromTask(ctx, payload.TaskID)
 	default:
 		err = fmt.Errorf("создание сущности типа '%s' не поддерживается", payload.EntityType)
@@ -139,14 +141,11 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 		return
 	}
 
-	// После успешного создания в SD, нам нужно связать наш внутренний объект с новым внешним.
 	task, _ := s.taskRepo.GetByID(ctx, payload.TaskID)
 	if task != nil {
-		// EntityUUID в задаче типа add_equipment - это уникальный идентификатор оборудования (например, серийный номер).
-		// Нам нужно найти внутренний объект по этому идентификатору.
 		var internalID string
 		switch task.EntityType {
-		case "FiscalRegister":
+		case string(domain.FiscalRegister):
 			fr, _ := s.frRepo.FindBySerialNumber(ctx, task.EntityUUID)
 			if fr != nil {
 				internalID = fr.ID
@@ -155,12 +154,14 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 
 		if internalID != "" {
 			newLink := models.ExternalSystemLink{
-				InternalID: internalID, SystemName: "naumen", ServiceDeskUUID: newExternalUUID,
-				EntityType: task.EntityType, LastSyncedAt: time.Now(),
+				InternalID:      internalID,
+				SystemName:      "naumen",
+				ServiceDeskUUID: newExternalUUID,
+				EntityType:      task.EntityType,
+				LastSyncedAt:    time.Now(),
 			}
 			if err := s.linkRepo.Create(ctx, nil, &newLink); err != nil {
 				log.Error("Критическая ошибка: сущность в SD создана, но не удалось создать для нее связь в локальной БД", "error", err)
-				// Статус задачи не меняем на resolved, чтобы оператор увидел проблему
 				s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Создано в SD (extUUID: %s), но не удалось создать связь в БД!", newExternalUUID))
 				return
 			}
@@ -171,12 +172,11 @@ func (s *sdEditorServiceImpl) handleCreateRequest(ctx context.Context, event eve
 	s.updateTaskStatus(ctx, payload.TaskID, "resolved", fmt.Sprintf("Сущность успешно создана в ServiceDesk с UUID: %s", newExternalUUID))
 }
 
-// buildUpdatePayload формирует map[string]interface{} для обновления сущности в SD.
-func (s *sdEditorServiceImpl) buildUpdatePayload(ctx context.Context, entityType, internalID string) (map[string]interface{}, error) {
+func (s *sdEditorWorkerImpl) buildUpdatePayload(ctx context.Context, entityType, internalID string) (map[string]interface{}, error) {
 	payload := make(map[string]interface{})
 
 	switch entityType {
-	case "FiscalRegister":
+	case string(domain.FiscalRegister):
 		fr, err := s.frRepo.GetByID(ctx, internalID)
 		if err != nil || fr == nil {
 			return nil, fmt.Errorf("не удалось найти ФР с ID %s в локальной БД: %w", internalID, err)
@@ -214,27 +214,30 @@ func (s *sdEditorServiceImpl) buildUpdatePayload(ctx context.Context, entityType
 	return payload, nil
 }
 
-// createFiscalRegisterFromTask извлекает данные из задачи и создает ФР в ServiceDesk.
-func (s *sdEditorServiceImpl) createFiscalRegisterFromTask(ctx context.Context, taskID uint) (string, error) {
+func (s *sdEditorWorkerImpl) createFiscalRegisterFromTask(ctx context.Context, taskID uint) (string, error) {
 	task, err := s.taskRepo.GetByID(ctx, taskID)
 	if err != nil || task == nil {
 		return "", fmt.Errorf("ошибка получения задачи %d: %w", taskID, err)
 	}
 
 	var details struct {
-		AgentData       api.AgentDataDTO `json:"agent_data"`
-		EtalonOwnerUUID string           `json:"etalon_owner_uuid"` // Здесь все еще внешний ID владельца
+		AgentData       dtos.AgentDataDTO `json:"agent_data"`
+		EtalonOwnerUUID string            `json:"etalon_owner_id"` // Это внутренний ID владельца
 	}
 	if err := json.Unmarshal(task.Details, &details); err != nil {
 		return "", err
+	}
+
+	// Нам нужен внешний ID владельца для отправки в SD
+	ownerLink, err := s.linkRepo.GetByInternalID(ctx, nil, "naumen", details.EtalonOwnerUUID)
+	if err != nil || ownerLink == nil {
+		return "", fmt.Errorf("не удалось найти внешний ID для владельца с внутренним ID %s", details.EtalonOwnerUUID)
 	}
 
 	agentData := details.AgentData
 	log := s.logger.With("taskID", taskID)
 	log.Debug("Начало сборки payload для создания ФР")
 	payload := make(map[string]interface{})
-
-	addStringFieldToPayload(log, payload, "owner", details.EtalonOwnerUUID)
 
 	// 1. Простые текстовые и временные поля
 	addStringFieldToPayload(log, payload, "RNKKT", utils.FormatRNKKT(agentData.RNM))
@@ -287,7 +290,7 @@ func (s *sdEditorServiceImpl) createFiscalRegisterFromTask(ctx context.Context, 
 	addStringFieldToPayload(log, payload, "SrokFN", srokUUID)
 
 	// 4. Владелец сущности
-	addStringFieldToPayload(log, payload, "owner", details.EtalonOwnerUUID)
+	addStringFieldToPayload(log, payload, "owner", ownerLink.ServiceDeskUUID)
 
 	log.Info("Подготовлен итоговый payload для создания ФР в ServiceDesk", "payload", payload)
 
@@ -301,11 +304,8 @@ func (s *sdEditorServiceImpl) createFiscalRegisterFromTask(ctx context.Context, 
 	return newUUID, nil
 }
 
-// updateTaskStatus обновляет статус и комментарий задачи. Выполняется в отдельной транзакции
-// для обеспечения атомарности и независимости от основного контекста операции.
-func (s *sdEditorServiceImpl) updateTaskStatus(ctx context.Context, taskID uint, newStatus, commentText string) {
+func (s *sdEditorWorkerImpl) updateTaskStatus(ctx context.Context, taskID uint, newStatus, commentText string) {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Используем .WithContext(ctx) внутри транзакции для передачи таймаутов, если они есть
 		task, err := s.taskRepo.GetByID(ctx, taskID)
 		if err != nil {
 			return err
@@ -314,7 +314,7 @@ func (s *sdEditorServiceImpl) updateTaskStatus(ctx context.Context, taskID uint,
 			return fmt.Errorf("задача с ID %d не найдена для обновления статуса", taskID)
 		}
 		task.Status = newStatus
-		task.Comment = fmt.Sprintf("%s\n[SD_WORKER] %s", task.Comment, commentText)
+		task.Comment = fmt.Sprintf("%s\\n[SD_WORKER] %s", task.Comment, commentText)
 		return tx.Save(task).Error
 	})
 	if err != nil {
@@ -326,10 +326,8 @@ func (s *sdEditorServiceImpl) updateTaskStatus(ctx context.Context, taskID uint,
 	}
 }
 
-// srokFnRegex - регулярное выражение для извлечения срока действия ФН (13, 15 или 36 месяцев).
 var srokFnRegex = regexp.MustCompile(`(13|15|36)`)
 
-// addStringFieldToPayload - хелпер для логирования и добавления непустых строковых полей в payload.
 func addStringFieldToPayload(log logger.LoggerInterface, payload map[string]interface{}, key, value string) {
 	if value != "" {
 		log.Debug("Добавление поля в payload", "поле", key, "значение", value)

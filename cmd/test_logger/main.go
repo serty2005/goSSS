@@ -1,7 +1,7 @@
 package main
 
 import (
-	"etalon-server/internal/logger"
+	"etalon-server/internal/infra/logger"
 )
 
 func main() {

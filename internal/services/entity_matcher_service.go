@@ -1,13 +1,12 @@
-// internal/services/entity_matcher_service.go
 package services
 
 import (
 	"context"
-	"etalon-server/internal/api"
-	"etalon-server/internal/logger"
-	"etalon-server/internal/repositories"
-	"etalon-server/internal/utils"
-	"etalon-server/internal/validators"
+	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
+	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
 )
 
 // MatchedEntity результат работы EntityMatcherService.

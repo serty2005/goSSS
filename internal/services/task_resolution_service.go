@@ -1,19 +1,19 @@
-// internal/services/task_resolution_service.go
 package services
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"etalon-server/internal/api"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/logger"
-	"etalon-server/internal/models"
-	"etalon-server/internal/repositories"
-	"etalon-server/internal/utils"
-	"etalon-server/pkg/eventbus"
+	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
+	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
+
+	"etalon-server/pkg/eventbus"
 
 	"gorm.io/gorm"
 )

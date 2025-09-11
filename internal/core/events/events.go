@@ -1,7 +1,7 @@
 package events
 
 import (
-	"etalon-server/internal/api"
+	api "etalon-server/internal/transport/http/dtos"
 	"time"
 )
 
