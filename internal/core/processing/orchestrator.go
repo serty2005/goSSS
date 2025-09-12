@@ -258,7 +258,7 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 	}
 }
 
-// handleDuplicatesFound создает или обновляет задачу на разрешение дубликатов.
+// handleDuplicatesFound обновляет статус для сущностей-дубликатов.
 func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.DuplicatesFoundPayload)
 	if !ok {
@@ -270,24 +270,144 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 		"value", payload.Value,
 	)
 
-	taskIdentifier := fmt.Sprintf("duplicate-%s-%s-%s", payload.EntityType, payload.Field, payload.Value)
-	existingTask, err := o.taskRepo.FindActiveTask(ctx, "resolve_duplicate", taskIdentifier)
-	if err != nil || existingTask != nil {
-		if err != nil {
-			log.Error("Ошибка проверки существующей задачи на дубликат", "error", err)
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		txCtx := context.WithValue(ctx, transactionKey, tx)
+
+		// 1. Получаем все модели дубликатов одним запросом
+		var entities interface{}
+		switch payload.EntityType {
+		case "Server":
+			var srvs []models.Server
+			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&srvs).Error; err != nil {
+				return err
+			}
+			entities = srvs
+		case "Workstation":
+			var wss []models.Workstation
+			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&wss).Error; err != nil {
+				return err
+			}
+			entities = wss
+		default:
+			return fmt.Errorf("неподдерживаемый тип для обработки дубликатов: %s", payload.EntityType)
 		}
-		return
+
+		// 2. Обогащаем данные для каждой сущности
+		enrichedDuplicates := make([]map[string]interface{}, 0)
+		switch v := entities.(type) {
+		case []models.Server:
+			for _, srv := range v {
+				if data, err := o.getEnrichmentDataForEntity(txCtx, "Server", srv.ID); err == nil {
+					enrichedDuplicates = append(enrichedDuplicates, data)
+				}
+			}
+		case []models.Workstation:
+			for _, ws := range v {
+				if data, err := o.getEnrichmentDataForEntity(txCtx, "Workstation", ws.ID); err == nil {
+					enrichedDuplicates = append(enrichedDuplicates, data)
+				}
+			}
+		}
+
+		if len(enrichedDuplicates) == 0 {
+			log.Warn("Не удалось обогатить данные ни для одного из дубликатов, обновление статуса отменено")
+			return nil
+		}
+
+		// 3. Формируем StatusDetails и обновляем каждую сущность
+		statusDetails := map[string]interface{}{
+			"type":       "duplicate_found",
+			"field":      payload.Field,
+			"value":      payload.Value,
+			"timestamp":  time.Now().UTC().Format(time.RFC3339),
+			"source":     "duplicates_gateway",
+			"duplicates": enrichedDuplicates,
+		}
+
+		detailsJSON, err := json.Marshal(statusDetails)
+		if err != nil {
+			return fmt.Errorf("ошибка сериализации status_details для дубликатов: %w", err)
+		}
+
+		updates := map[string]interface{}{
+			"health_status":  "attention_required",
+			"status_details": datatypes.JSON(detailsJSON),
+		}
+
+		for _, internalID := range payload.InternalIDs {
+			if err := o.performUpdate(ctx, tx, payload.EntityType, internalID, updates); err != nil {
+				log.Error("Не удалось обновить статус для сущности-дубликата", "internalID", internalID, "error", err)
+				return err // Откатываем транзакцию
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Error("Ошибка транзакции при обновлении статусов для дубликатов", "error", err)
+	} else {
+		log.Info("Статусы для группы дубликатов успешно обновлены.", "count", len(payload.InternalIDs))
+	}
+}
+
+// getEnrichmentDataForEntity собирает полную информацию о сущности для записи в StatusDetails.
+func (o *Orchestrator) getEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error) {
+	var ownerID string
+	var lmd *time.Time
+
+	switch entityType {
+	case "Server":
+		entity, err := o.serverRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти сервер с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	case "Workstation":
+		entity, err := o.workstationRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти РС с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	case "FiscalRegister":
+		entity, err := o.frRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти ФР с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	default:
+		return nil, fmt.Errorf("неподдерживаемый тип сущности: %s", entityType)
 	}
 
-	detailsJSON, _ := json.Marshal(map[string]interface{}{"uuids": payload.InternalIDs})
-	comment := fmt.Sprintf("Обнаружены дубликаты (%d шт.) по полю '%s'. Требуется выбрать эталонную запись.", len(payload.InternalIDs), payload.Field)
-	task := models.ReconciliationTask{
-		TaskType: "resolve_duplicate", EntityType: payload.EntityType, EntityUUID: taskIdentifier,
-		Details: datatypes.JSON(detailsJSON), Status: "new", Comment: comment,
+	link, _ := o.linkRepo.GetByInternalID(ctx, nil, "naumen", entityID)
+	owner, _ := o.companyRepo.GetByID(ctx, ownerID)
+
+	var externalID string
+	if link != nil {
+		externalID = link.ServiceDeskUUID
 	}
-	if err := o.db.WithContext(ctx).Create(&task).Error; err != nil {
-		log.Error("Не удалось создать задачу на разрешение дубликатов", "error", err)
+
+	var ownerTitle string
+	var ownerActiveContract bool
+	if owner != nil {
+		ownerTitle = *owner.Title
+		if owner.ActiveContract != nil {
+			ownerActiveContract = *owner.ActiveContract
+		}
 	}
+
+	return map[string]interface{}{
+		"internal_id":        entityID,
+		"external_id":        externalID,
+		"last_modified_date": lmd,
+		"owner_info": map[string]interface{}{
+			"id":              ownerID,
+			"title":           ownerTitle,
+			"active_contract": ownerActiveContract,
+		},
+	}, nil
 }
 
 // handleServerPollingSucceeded обрабатывает успешный результат опроса сервера.

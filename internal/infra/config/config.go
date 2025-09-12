@@ -77,6 +77,10 @@ type Config struct {
 	// Воркер поиска расхождений для ФР
 	EnableFRDiscrepancyFinder  bool
 	FRDiscrepancyCheckInterval time.Duration
+
+	// Воркер проверки актуальности статусов
+	EnableStatusWorker   bool
+	StatusWorkerInterval time.Duration
 }
 
 // New загружает конфигурацию из файла .env и переменных окружения.
@@ -151,6 +155,9 @@ func New() *Config {
 		EnableFRDiscrepancyFinder:  getEnvAsBool("ENABLE_FR_DISCREPANCY_FINDER", true),
 		FRDiscrepancyCheckInterval: time.Duration(getEnvAsInt("FR_DISCREPANCY_CHECK_INTERVAL_HOURS", 6)) * time.Hour, // Раз в 6 часов
 
+		// Status Actuality Worker
+		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", true),
+		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
 	}
 }
 

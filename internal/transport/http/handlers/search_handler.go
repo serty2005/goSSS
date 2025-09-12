@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/pkg/utils"
@@ -141,6 +142,9 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		initialOwnerIDs[id] = struct{}{}
 	}
 
+	// Кэшируем информацию о родителях, чтобы не делать лишних запросов к БД
+	parentCompanyCache := make(map[string]*models.Company)
+
 	for _, owner := range allOwnerCompanies {
 		ownerID := owner.ID
 		if _, ok := initialOwnerIDs[ownerID]; !ok {
@@ -153,14 +157,32 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			externalUUID = &link.ServiceDeskUUID
 		}
 
+		var parentInfo *api.ParentInfo
+		if owner.ParentID != nil && *owner.ParentID != "" {
+			parent, exists := parentCompanyCache[*owner.ParentID]
+			if !exists {
+				parent, _ = h.companyRepo.GetByID(ctx, *owner.ParentID)
+				if parent != nil {
+					parentCompanyCache[*owner.ParentID] = parent
+				}
+			}
+			if parent != nil {
+				parentInfo = &api.ParentInfo{
+					UUID: parent.ID,
+					Name: *parent.Title,
+				}
+			}
+		}
+
 		group := api.SearchGroupDTO{
 			Owner: api.OwnerFullDTO{
 				UUID:            ownerID,
-				ServiceDeskUUID: externalUUID, // ИСПРАВЛЕНИЕ: Теперь это поле существует
+				ServiceDeskUUID: externalUUID,
 				Name:            utils.SafeStringDereference(owner.Title),
 				Address:         owner.Address,
 				ActiveContract:  owner.ActiveContract,
 				AdditionalInfo:  owner.AdditionalName,
+				ParentInfo:      parentInfo,
 			},
 			FoundEntities: []api.FoundEntityDTO{},
 		}
@@ -198,14 +220,12 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []model
 		if s.OwnerID != nil {
 			ownerID := *s.OwnerID
 
-			// Обогащаем внешним ID
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", s.ID)
 			var externalUUID *string
 			if link != nil {
 				externalUUID = &link.ServiceDeskUUID
 			}
 
-			// Формируем ссылку на партнерский кабинет
 			var partnersLink *string
 			clientIdStr := utils.SafeStringDereference(s.CabinetLink)
 			if clientIdStr != "" && clientIdStr != "N/A" {
@@ -219,20 +239,30 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []model
 				partnersLink = &link
 			}
 
+			var statusDetails interface{}
+			_ = json.Unmarshal(s.StatusDetails, &statusDetails)
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Server",
 				Data: api.ServerRichDTO{
-					UUID:            s.ID,
-					ServiceDeskUUID: externalUUID,
-					DeviceName:      s.DeviceName,
-					IP:              s.IP,
-					Status:          s.Status,
-					Anydesk:         s.Anydesk,
-					Teamviewer:      s.Teamviewer,
-					RDP:             s.RDP,
-					Litemanager:     s.Litemanager,
-					UniqueID:        s.UniqueID,
-					PartnersLink:    partnersLink,
+					UUID:              s.ID,
+					ServiceDeskUUID:   externalUUID,
+					DeviceName:        s.DeviceName,
+					IP:                s.IP,
+					OperationalStatus: s.Status,
+					HealthStatus:      s.HealthStatus,
+					StatusDetails:     statusDetails,
+					Anydesk:           s.Anydesk,
+					Teamviewer:        s.Teamviewer,
+					RDP:               s.RDP,
+					Litemanager:       s.Litemanager,
+					UniqueID:          s.UniqueID,
+					CRMid:             s.CRMid,
+					PartnersLink:      partnersLink,
+					ServerName:        s.ServerName,
+					ServerVersion:     s.ServerVersion,
+					ServerEdition:     s.ServerEdition,
+					LastPolledAt:      s.LastPolledAt,
 				},
 			})
 		}
@@ -246,12 +276,14 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 		if ws.OwnerID != nil {
 			ownerID := *ws.OwnerID
 
-			// Обогащаем внешним ID
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 			var externalUUID *string
 			if link != nil {
 				externalUUID = &link.ServiceDeskUUID
 			}
+
+			var statusDetails interface{}
+			_ = json.Unmarshal(ws.StatusDetails, &statusDetails)
 
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "Workstation",
@@ -259,7 +291,8 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 					UUID:            ws.ID,
 					ServiceDeskUUID: externalUUID,
 					DeviceName:      ws.DeviceName,
-					Status:          ws.Status,
+					HealthStatus:    ws.HealthStatus,
+					StatusDetails:   statusDetails,
 					Anydesk:         ws.Anydesk,
 					Teamviewer:      ws.Teamviewer,
 					Litemanager:     ws.Litemanager,
@@ -276,21 +309,26 @@ func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []models.Fiscal
 		if fr.OwnerID != nil {
 			ownerID := *fr.OwnerID
 
-			// Обогащаем внешним ID
 			link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
 			var externalUUID *string
 			if link != nil {
 				externalUUID = &link.ServiceDeskUUID
 			}
 
+			var statusDetails interface{}
+			_ = json.Unmarshal(fr.StatusDetails, &statusDetails)
+
 			result[ownerID] = append(result[ownerID], api.FoundEntityDTO{
 				EntityType: "FiscalRegister",
 				Data: api.FiscalRegisterRichDTO{
 					UUID:               fr.ID,
 					ServiceDeskUUID:    externalUUID,
-					Status:             fr.Status,
+					HealthStatus:       fr.HealthStatus,
+					StatusDetails:      statusDetails,
 					RNKKT:              fr.RNKKT,
 					ModelKKT:           fr.ModelKKT,
+					SerialNumber:       fr.FRSerialNumber,
+					FNNumber:           fr.FNNumber,
 					FNRegistrationDate: fr.KKTRegDate,
 					FNExpireDate:       fr.FNExpireDate,
 					DriverVersion:      fr.DriverVersion,
@@ -298,9 +336,6 @@ func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []models.Fiscal
 					FRDownloader:       fr.FRDownloader,
 					OrganizationName:   fr.LegalName,
 					INN:                fr.INN,
-					SerialNumber:       fr.FRSerialNumber,
-					IsMarkingActive:    true,
-					IsExciseActive:     false,
 				},
 			})
 		}

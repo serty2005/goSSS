@@ -41,12 +41,13 @@ type Application struct {
 	Seeder   *seeder.Seeder
 
 	// Gateways & Workers
-	SDeskGateway      gateways.ServiceDeskGateway
-	DuplicatesGateway gateways.DuplicatesGateway
-	PollingGateway    gateways.ServerPollingGateway
-	AgentFTPGateway   gateways.AgentFTPGateway
-	FRUpdateFounder   workers.FRUpdateFounder
-	SDEditor          workers.SDEditorWorker
+	SDeskGateway          gateways.ServiceDeskGateway
+	DuplicatesGateway     gateways.DuplicatesGateway
+	PollingGateway        gateways.ServerPollingGateway
+	AgentFTPGateway       gateways.AgentFTPGateway
+	FRUpdateFounder       workers.FRUpdateFounder
+	SDEditor              workers.SDEditorWorker
+	StatusActualityWorker workers.StatusActualityWorker
 
 	// Handlers
 	CrudHandler          *handlers.CrudHandler
@@ -227,7 +228,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 }
 
 func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
-	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.TaskRepo, srvs.EntityMatcherService)
+	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.TaskRepo, srvs.EntityMatcherService, repos.LinkRepo)
 	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
 	orchestrator.Start(context.Background()) // Оркестратор только подписывается, активной работы не ведет
 
@@ -237,6 +238,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, app.EventBus)
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, clients.SDClient)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
@@ -342,13 +344,20 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.PollingGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Шлюз опроса статусов iiko-серверов отключен в конфигурации.")
+		a.Logger.Info("Опрос статусов RMS-серверов отключен в конфигурации.")
 	}
 
 	if a.Config.EnableSDeskGateway {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.SDeskGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Шлюз синхронизации сущностей с ServiceDesk отключен в конфигурации.")
+		a.Logger.Info("Синхронизация сущностей с ServiceDesk отключена в конфигурации.")
+	}
+
+	if a.Config.EnableStatusWorker {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.StatusActualityWorker.Start(ctx) }()
+	} else {
+		a.Logger.Info("Проверка актуальности статусов отключена в конфигурации.")
 	}
 }

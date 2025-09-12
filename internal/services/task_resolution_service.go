@@ -9,7 +9,6 @@ import (
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/logger"
-	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 
@@ -245,12 +244,12 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 	switch task.EntityType {
 	case "Workstation":
 		ws := &models.Workstation{
-			OwnerID:     &details.EtalonOwnerUUID,
-			DeviceName:  &details.AgentData.Hostname,
-			Teamviewer:  &details.AgentData.TeamviewerID,
-			Litemanager: &details.AgentData.LitemanagerID,
-			Anydesk:     &details.AgentData.AnydeskID,
-			Status:      utils.StringPtr("offline"),
+			OwnerID:      &details.EtalonOwnerUUID,
+			DeviceName:   &details.AgentData.Hostname,
+			Teamviewer:   &details.AgentData.TeamviewerID,
+			Litemanager:  &details.AgentData.LitemanagerID,
+			Anydesk:      &details.AgentData.AnydeskID,
+			HealthStatus: "",
 		}
 		err = s.workstationRepo.Create(ctx, tx, ws)
 	case "FiscalRegister":

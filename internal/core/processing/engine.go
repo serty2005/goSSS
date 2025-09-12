@@ -53,6 +53,7 @@ type processingEngineImpl struct {
 	companyRepo     repositories.CompanyRepo
 	taskRepo        repositories.TaskRepo
 	matcherSvc      services.EntityMatcherService
+	linkRepo        repositories.LinkRepo
 }
 
 // NewProcessingEngine создает новый экземпляр движка.
@@ -64,9 +65,10 @@ func NewProcessingEngine(
 	companyRepo repositories.CompanyRepo,
 	taskRepo repositories.TaskRepo,
 	matcherSvc services.EntityMatcherService,
+	linkRepo repositories.LinkRepo,
 ) ProcessingEngine {
 	return &processingEngineImpl{
-		logger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, matcherSvc,
+		logger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, matcherSvc, linkRepo,
 	}
 }
 
@@ -155,12 +157,23 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	if server == nil {
 		return
 	}
+
+	ownerCompany, err := p.companyRepo.GetByID(ctx, *server.OwnerID)
+	if err != nil || ownerCompany == nil {
+		p.logger.Error("Не удалось получить компанию-владельца сервера для проверки контракта", "server_id", server.ID, "owner_id", *server.OwnerID, "error", err)
+		return
+	}
+	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
+		p.logger.Info("Обработка сервера пропущена: неактивный контракт у владельца", "server_id", server.ID, "owner_id", ownerCompany.ID)
+		return
+	}
+
 	currentTime := utils.ParseAgentTime(data.CurrentTime)
 	if currentTime != nil && server.LastModifiedDate != nil && currentTime.Before(*server.LastModifiedDate) {
 		p.logger.Info("Обновление сервера пропущено: данные от агента старше, чем запись в БД", "server_id", server.ID, "agent_time", *currentTime, "db_time", *server.LastModifiedDate)
 		return
 	}
-	if server.Status == "locked" {
+	if server.HealthStatus == "locked" {
 		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", "id", server.ID)
 		return
 	}
@@ -173,8 +186,57 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	if areRelated {
 		// Логика добавления доп. владельца (уже работает с внутренними ID, но нужно проверить)
 	} else {
-		comment := fmt.Sprintf("Конфликт владения сервером! Оборудование принадлежит '%s', но оно подключено к серверу '%s', который принадлежит '%s'.", equipmentOwnerID, server.ID, serverPrimaryOwnerID)
-		p.createTaskIfNotExists(ctx, res, "data_conflict", "Server", server.ID, equipmentOwnerID, data, comment)
+		// Обогащаем данные для обеих конфликтующих сторон
+		serverInfo, errSrv := p.getEnrichmentDataForEntity(ctx, "Server", server.ID)
+		if errSrv != nil {
+			p.logger.Error("Не удалось обогатить данные для сервера в конфликте", "server_id", server.ID, "error", errSrv)
+			return
+		}
+
+		mainMatch := p.matcherSvc.FindEntityByAgentData(ctx, data)
+		var equipmentInfo map[string]interface{}
+		var errEq error
+		if mainMatch != nil {
+			var entityID string
+			switch e := mainMatch.Entity.(type) {
+			case *models.Server:
+				entityID = e.ID
+			case *models.Workstation:
+				entityID = e.ID
+			case *models.FiscalRegister:
+				entityID = e.ID
+			}
+			equipmentInfo, errEq = p.getEnrichmentDataForEntity(ctx, mainMatch.EntityType, entityID)
+			if errEq != nil {
+				p.logger.Error("Не удалось обогатить данные для оборудования в конфликте", "equipment_id", entityID, "error", errEq)
+				return
+			}
+		}
+
+		statusDetails := map[string]interface{}{
+			"type":           "owner_mismatch",
+			"reason":         "Оборудование (ФР/РС) принадлежит одному клиенту, но подключено к серверу другого, не связанного клиента.",
+			"timestamp":      time.Now().UTC().Format(time.RFC3339),
+			"source":         "agent_processing",
+			"server_info":    serverInfo,
+			"equipment_info": equipmentInfo,
+		}
+
+		detailsJSON, err := json.Marshal(statusDetails)
+		if err != nil {
+			p.logger.Error("Не удалось сериализовать status_details для owner_mismatch", "server_id", server.ID, "error", err)
+			return
+		}
+		updates := map[string]interface{}{
+			"health_status":  "attention_required",
+			"status_details": datatypes.JSON(detailsJSON),
+		}
+		res.Actions = append(res.Actions, Action{
+			Type:       ActionUpdate,
+			EntityType: "Server",
+			EntityUUID: server.ID,
+			Updates:    updates,
+		})
 	}
 
 	updates := make(map[string]interface{})
@@ -184,6 +246,66 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	if len(updates) > 0 {
 		res.Actions = append(res.Actions, Action{Type: ActionUpdate, EntityType: "Server", EntityUUID: server.ID, Updates: updates})
 	}
+}
+
+// getEnrichmentDataForEntity собирает полную информацию о сущности для записи в StatusDetails.
+func (p *processingEngineImpl) getEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error) {
+	var ownerID string
+	var lmd *time.Time
+
+	switch entityType {
+	case "Server":
+		entity, err := p.serverRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти сервер с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	case "Workstation":
+		entity, err := p.workstationRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти РС с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	case "FiscalRegister":
+		entity, err := p.frRepo.GetByID(ctx, entityID)
+		if err != nil || entity == nil {
+			return nil, fmt.Errorf("не удалось найти ФР с ID %s: %w", entityID, err)
+		}
+		ownerID = *entity.OwnerID
+		lmd = entity.LastModifiedDate
+	default:
+		return nil, fmt.Errorf("неподдерживаемый тип сущности: %s", entityType)
+	}
+
+	link, _ := p.linkRepo.GetByInternalID(ctx, nil, "naumen", entityID)
+	owner, _ := p.companyRepo.GetByID(ctx, ownerID)
+
+	var externalID string
+	if link != nil {
+		externalID = link.ServiceDeskUUID
+	}
+
+	var ownerTitle string
+	var ownerActiveContract bool
+	if owner != nil {
+		ownerTitle = *owner.Title
+		if owner.ActiveContract != nil {
+			ownerActiveContract = *owner.ActiveContract
+		}
+	}
+
+	return map[string]interface{}{
+		"internal_id":        entityID,
+		"external_id":        externalID,
+		"last_modified_date": lmd,
+		"owner_info": map[string]interface{}{
+			"id":              ownerID,
+			"title":           ownerTitle,
+			"active_contract": ownerActiveContract,
+		},
+	}, nil
 }
 
 // areCompaniesRelated проверяет, связаны ли две компании.
@@ -219,7 +341,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
 
 	if ws != nil {
-		if ws.Status != nil && *ws.Status == "locked" {
+		if ws.HealthStatus == "locked" {
 			return
 		}
 		updates := make(map[string]interface{})
@@ -245,7 +367,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 // processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, ownerID string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
-		if fr.Status != nil && *fr.Status == "locked" {
+		if fr.HealthStatus == "locked" {
 			return
 		}
 		updates := make(map[string]interface{})

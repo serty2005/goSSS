@@ -236,12 +236,19 @@ type SearchGroupDTO struct {
 
 // OwnerFullDTO содержит расширенную информацию о компании-владельце.
 type OwnerFullDTO struct {
-	UUID            string  `json:"uuid"`
-	ServiceDeskUUID *string `json:"externalUUID,omitempty"`
-	Name            string  `json:"name"`
-	Address         *string `json:"address,omitempty"`
-	ActiveContract  *bool   `json:"active_contract,omitempty"`
-	AdditionalInfo  *string `json:"additional_info,omitempty"`
+	UUID            string      `json:"uuid"`
+	ServiceDeskUUID *string     `json:"external_uuid,omitempty"`
+	Name            string      `json:"name"`
+	Address         *string     `json:"address,omitempty"`
+	ActiveContract  *bool       `json:"active_contract,omitempty"`
+	AdditionalInfo  *string     `json:"additional_info,omitempty"`
+	ParentInfo      *ParentInfo `json:"parent_info,omitempty"`
+}
+
+// ParentInfo содержит краткую информацию о родительской компании.
+type ParentInfo struct {
+	UUID string `json:"uuid"`
+	Name string `json:"name"`
 }
 
 // FoundEntityDTO представляет одну найденную сущность внутри группы.
@@ -254,48 +261,55 @@ type FoundEntityDTO struct {
 
 // ServerRichDTO содержит полный набор полей Сервера для UI.
 type ServerRichDTO struct {
-	UUID            string  `json:"uuid"`                   // Внутренний ID
-	ServiceDeskUUID *string `json:"externalUUID,omitempty"` // Внешний ID (для ссылок)
-	DeviceName      *string `json:"device_name,omitempty"`
-	IP              *string `json:"ip,omitempty"`
-	Status          string  `json:"status,omitempty"`
-	Anydesk         *string `json:"anydesk,omitempty"`
-	Teamviewer      *string `json:"teamviewer,omitempty"`
-	RDP             *string `json:"rdp,omitempty"`
-	Litemanager     *string `json:"litemanager,omitempty"`
-	UniqueID        *string `json:"unique_id,omitempty"`
-	PartnersLink    *string `json:"partners_link,omitempty"`
+	UUID              string      `json:"uuid"`
+	ServiceDeskUUID   *string     `json:"external_uuid,omitempty"`
+	DeviceName        *string     `json:"device_name,omitempty"`
+	IP                *string     `json:"ip,omitempty"`
+	OperationalStatus string      `json:"operational_status,omitempty"`
+	HealthStatus      string      `json:"health_status,omitempty"`
+	StatusDetails     interface{} `json:"status_details,omitempty"`
+	Anydesk           *string     `json:"anydesk,omitempty"`
+	Teamviewer        *string     `json:"teamviewer,omitempty"`
+	RDP               *string     `json:"rdp,omitempty"`
+	Litemanager       *string     `json:"litemanager,omitempty"`
+	UniqueID          *string     `json:"unique_id,omitempty"`
+	CRMid             *string     `json:"crm_id,omitempty"`
+	PartnersLink      *string     `json:"partners_link,omitempty"`
+	ServerName        *string     `json:"server_name,omitempty"`
+	ServerVersion     *string     `json:"server_version,omitempty"`
+	ServerEdition     *string     `json:"server_edition,omitempty"`
+	LastPolledAt      *time.Time  `json:"last_polled_at,omitempty"`
 }
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
-// WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
 type WorkstationRichDTO struct {
-	UUID            string  `json:"uuid"`
-	ServiceDeskUUID *string `json:"externalUUID,omitempty"`
-	DeviceName      *string `json:"device_name,omitempty"`
-	Status          *string `json:"status,omitempty"`
-	Anydesk         *string `json:"anydesk,omitempty"`
-	Teamviewer      *string `json:"teamviewer,omitempty"`
-	Litemanager     *string `json:"litemanager,omitempty"`
+	UUID            string      `json:"uuid"`
+	ServiceDeskUUID *string     `json:"external_uuid,omitempty"`
+	DeviceName      *string     `json:"device_name,omitempty"`
+	HealthStatus    string      `json:"health_status,omitempty"`
+	StatusDetails   interface{} `json:"status_details,omitempty"`
+	Anydesk         *string     `json:"anydesk,omitempty"`
+	Teamviewer      *string     `json:"teamviewer,omitempty"`
+	Litemanager     *string     `json:"litemanager,omitempty"`
 }
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
-	UUID               string     `json:"uuid"`
-	ServiceDeskUUID    *string    `json:"externalUUID,omitempty"`
-	Status             *string    `json:"status,omitempty"`
-	RNKKT              *string    `json:"rn_kkt,omitempty"`
-	ModelKKT           *string    `json:"model_kkt,omitempty"`
-	FNRegistrationDate *time.Time `json:"fn_registration_date,omitempty"`
-	FNExpireDate       *time.Time `json:"fn_expire_date,omitempty"`
-	DriverVersion      *string    `json:"driver_version,omitempty"`
-	FRFirmware         *string    `json:"fr_firmware,omitempty"`
-	FRDownloader       *string    `json:"fr_downloader,omitempty"`
-	OrganizationName   *string    `json:"organization_name,omitempty"`
-	INN                *string    `json:"inn,omitempty"`
-	SerialNumber       *string    `json:"serial_number,omitempty"`
-	IsMarkingActive    bool       `json:"is_marking_active"`
-	IsExciseActive     bool       `json:"is_excise_active"`
+	UUID               string      `json:"uuid"`
+	ServiceDeskUUID    *string     `json:"external_uuid,omitempty"`
+	HealthStatus       string      `json:"health_status,omitempty"`
+	StatusDetails      interface{} `json:"status_details,omitempty"`
+	RNKKT              *string     `json:"rn_kkt,omitempty"`
+	ModelKKT           *string     `json:"model_kkt,omitempty"`
+	SerialNumber       *string     `json:"serial_number,omitempty"`
+	FNNumber           *string     `json:"fn_number,omitempty"`
+	FNRegistrationDate *time.Time  `json:"fn_registration_date,omitempty"`
+	FNExpireDate       *time.Time  `json:"fn_expire_date,omitempty"`
+	DriverVersion      *string     `json:"driver_version,omitempty"`
+	FRFirmware         *string     `json:"fr_firmware,omitempty"`
+	FRDownloader       *string     `json:"fr_downloader,omitempty"`
+	OrganizationName   *string     `json:"organization_name,omitempty"`
+	INN                *string     `json:"inn,omitempty"`
 }
 
 // TaskDTO - DTO для отображения задачи в UI.

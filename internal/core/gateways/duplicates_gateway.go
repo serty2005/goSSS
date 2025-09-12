@@ -92,7 +92,7 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 	err := g.db.WithContext(ctx).Model(model).
 		Select(fmt.Sprintf("%s as value", field)).
 		Where(fmt.Sprintf("%s IS NOT NULL AND %s != ''", field, field)).
-		Where("status != ?", "locked").
+		Where("health_status != ?", "locked").
 		Group(field).
 		Having("count(*) > 1").
 		Find(&duplicateValues).Error

@@ -433,12 +433,15 @@ func agentDataToFiscalRegisterRichDTO(data api.AgentDataDTO) api.FiscalRegisterR
 	}
 }
 
-// modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI.
 // modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
 func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr models.FiscalRegister) api.FiscalRegisterRichDTO {
+	var statusDetails interface{}
+	_ = json.Unmarshal(fr.StatusDetails, &statusDetails)
+
 	dto := api.FiscalRegisterRichDTO{
-		UUID:               fr.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
-		Status:             fr.Status,
+		UUID:               fr.ID,
+		HealthStatus:       fr.HealthStatus,
+		StatusDetails:      statusDetails,
 		RNKKT:              fr.RNKKT,
 		ModelKKT:           fr.ModelKKT,
 		FNRegistrationDate: fr.KKTRegDate,
@@ -449,8 +452,6 @@ func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr model
 		OrganizationName:   fr.LegalName,
 		INN:                fr.INN,
 		SerialNumber:       fr.FRSerialNumber,
-		IsMarkingActive:    true,
-		IsExciseActive:     false,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
 	if err == nil && link != nil {
@@ -461,16 +462,21 @@ func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr model
 
 // modelToServerRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
 func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Server) api.ServerRichDTO {
+	var statusDetails interface{}
+	_ = json.Unmarshal(server.StatusDetails, &statusDetails)
+
 	dto := api.ServerRichDTO{
-		UUID:        server.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
-		DeviceName:  server.DeviceName,
-		IP:          server.IP,
-		Status:      server.Status,
-		Anydesk:     server.Anydesk,
-		Teamviewer:  server.Teamviewer,
-		RDP:         server.RDP,
-		Litemanager: server.Litemanager,
-		UniqueID:    server.UniqueID,
+		UUID:              server.ID,
+		DeviceName:        server.DeviceName,
+		IP:                server.IP,
+		OperationalStatus: server.Status,
+		HealthStatus:      server.HealthStatus,
+		StatusDetails:     statusDetails,
+		Anydesk:           server.Anydesk,
+		Teamviewer:        server.Teamviewer,
+		RDP:               server.RDP,
+		Litemanager:       server.Litemanager,
+		UniqueID:          server.UniqueID,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", server.ID)
 	if err == nil && link != nil {
@@ -481,13 +487,17 @@ func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Se
 
 // modelToWorkstationRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
 func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws models.Workstation) api.WorkstationRichDTO {
+	var statusDetails interface{}
+	_ = json.Unmarshal(ws.StatusDetails, &statusDetails)
+
 	dto := api.WorkstationRichDTO{
-		UUID:        ws.ID, // ИСПОЛЬЗУЕМ ВНУТРЕННИЙ ID
-		DeviceName:  ws.DeviceName,
-		Status:      ws.Status,
-		Anydesk:     ws.Anydesk,
-		Teamviewer:  ws.Teamviewer,
-		Litemanager: ws.Litemanager,
+		UUID:          ws.ID,
+		DeviceName:    ws.DeviceName,
+		HealthStatus:  ws.HealthStatus,
+		StatusDetails: statusDetails,
+		Anydesk:       ws.Anydesk,
+		Teamviewer:    ws.Teamviewer,
+		Litemanager:   ws.Litemanager,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 	if err == nil && link != nil {

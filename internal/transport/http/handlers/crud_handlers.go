@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
-	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"net/http"
@@ -376,13 +375,13 @@ func (h *CrudHandler) CreateWorkstation(w http.ResponseWriter, r *http.Request) 
 	}
 
 	workstation := &models.Workstation{
-		Teamviewer:  dto.Teamviewer,
-		Anydesk:     dto.Anydesk,
-		Litemanager: dto.Litemanager,
-		DeviceName:  dto.DeviceName,
-		Description: dto.Description,
-		OwnerID:     dto.OwnerID,
-		Status:      utils.StringPtr("offline"),
+		Teamviewer:   dto.Teamviewer,
+		Anydesk:      dto.Anydesk,
+		Litemanager:  dto.Litemanager,
+		DeviceName:   dto.DeviceName,
+		Description:  dto.Description,
+		OwnerID:      dto.OwnerID,
+		HealthStatus: "ok",
 	}
 	workstation.MetaClass = "objectBase$Workstation"
 
@@ -529,7 +528,7 @@ func (h *CrudHandler) CreateFiscalRegister(w http.ResponseWriter, r *http.Reques
 		FRFirmware:     dto.FRFirmware,
 		DriverVersion:  dto.DriverVersion,
 		OwnerID:        dto.OwnerID,
-		Status:         utils.StringPtr("offline"),
+		HealthStatus:   "ok",
 	}
 	fr.MetaClass = "objectBase$FR"
 
