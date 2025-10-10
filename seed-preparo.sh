@@ -5,7 +5,7 @@ HOST="postgres"
 PORT="5432"
 USER="etalon"
 PASSWORD="1"
-DB_NAME="etalon_db"
+DB_NAME="etalon_db_stab"
 ADMIN_DB="postgres"
 
 export PGPASSWORD=$PASSWORD

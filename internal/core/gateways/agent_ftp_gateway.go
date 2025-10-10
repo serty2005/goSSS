@@ -41,6 +41,22 @@ func NewAgentFTPGateway(cfg *config.Config, logger logger.LoggerInterface, db *g
 	return &agentFTPGatewayImpl{cfg, logger, db, ftpClient, bus}
 }
 
+func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
+	g.logger.Info("Запуск шлюза агентов (FTP)", "interval", g.cfg.AgentFTPInterval)
+	ticker := time.NewTicker(g.cfg.AgentFTPInterval)
+	defer ticker.Stop()
+	g.runReconciliationCycle(ctx)
+	for {
+		select {
+		case <-ticker.C:
+			g.runReconciliationCycle(ctx)
+		case <-ctx.Done():
+			g.logger.Info("Остановка шлюза агентов (FTP).")
+			return
+		}
+	}
+}
+
 // isFileNameNumeric проверяет, состоит ли имя файла только из цифр (без расширения).
 func isFileNameNumeric(fileName string) bool {
 	// Убираем расширение .json
@@ -136,20 +152,49 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 	return nil
 }
 
-func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
-	g.logger.Info("Запуск шлюза агентов (FTP)", "interval", g.cfg.AgentFTPInterval)
-	ticker := time.NewTicker(g.cfg.AgentFTPInterval)
-	defer ticker.Stop()
-	g.runReconciliationCycle(ctx)
-	for {
-		select {
-		case <-ticker.C:
-			g.runReconciliationCycle(ctx)
-		case <-ctx.Done():
-			g.logger.Info("Остановка шлюза агентов (FTP).")
-			return
+// syncLocalCacheWithFTP скачивает новые или обновленные файлы с FTP-сервера в локальный кэш.
+func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
+	s.logger.Info("Синхронизация локального кэша с FTP...")
+	ftpFiles, err := s.ftpClient.ListFiles(s.cfg.FTPPath)
+	if err != nil {
+		return fmt.Errorf("не удалось получить список файлов с FTP: %w", err)
+	}
+
+	localFileInfos := make(map[string]os.FileInfo)
+	cachedFiles, err := os.ReadDir(s.cfg.FTPCachePath)
+	if err != nil {
+		return fmt.Errorf("не удалось прочитать кэш-директорию: %w", err)
+	}
+
+	for _, f := range cachedFiles {
+		if info, err := f.Info(); err == nil {
+			localFileInfos[f.Name()] = info
 		}
 	}
+	for _, ftpFile := range ftpFiles {
+		if ftpFile.Type != ftp.EntryTypeFile || !strings.HasSuffix(strings.ToLower(ftpFile.Name), ".json") || ftpFile.Size == 0 {
+			continue
+		}
+		localInfo, found := localFileInfos[ftpFile.Name]
+		if !found || ftpFile.Time.After(localInfo.ModTime()) {
+			s.logger.Info("Обнаружен новый/обновленный файл, скачивание...", "file", ftpFile.Name)
+			ftpFilePath := path.Join(s.cfg.FTPPath, ftpFile.Name)
+			fileData, err := s.ftpClient.DownloadFile(ftpFilePath)
+			if err != nil {
+				s.logger.Error("Не удалось скачать файл", "file", ftpFile.Name, "error", err)
+				continue
+			}
+
+			localFilePath := filepath.Join(s.cfg.FTPCachePath, ftpFile.Name)
+			if err := os.WriteFile(localFilePath, fileData, 0644); err != nil {
+				s.logger.Error("Не удалось сохранить файл в кэш", "file", localFilePath, "error", err)
+				continue
+			}
+			os.Chtimes(localFilePath, ftpFile.Time, ftpFile.Time)
+		}
+	}
+	s.logger.Info("Синхронизация локального кэша завершена.")
+	return nil
 }
 
 func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
@@ -345,49 +390,4 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 		"event_published", false,
 		"processing_time", processingTime)
 	return false
-}
-
-// syncLocalCacheWithFTP скачивает новые или обновленные файлы с FTP-сервера в локальный кэш.
-func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
-	s.logger.Info("Синхронизация локального кэша с FTP...")
-	ftpFiles, err := s.ftpClient.ListFiles(s.cfg.FTPPath)
-	if err != nil {
-		return fmt.Errorf("не удалось получить список файлов с FTP: %w", err)
-	}
-
-	localFileInfos := make(map[string]os.FileInfo)
-	cachedFiles, err := os.ReadDir(s.cfg.FTPCachePath)
-	if err != nil {
-		return fmt.Errorf("не удалось прочитать кэш-директорию: %w", err)
-	}
-
-	for _, f := range cachedFiles {
-		if info, err := f.Info(); err == nil {
-			localFileInfos[f.Name()] = info
-		}
-	}
-	for _, ftpFile := range ftpFiles {
-		if ftpFile.Type != ftp.EntryTypeFile || !strings.HasSuffix(strings.ToLower(ftpFile.Name), ".json") || ftpFile.Size == 0 {
-			continue
-		}
-		localInfo, found := localFileInfos[ftpFile.Name]
-		if !found || ftpFile.Time.After(localInfo.ModTime()) {
-			s.logger.Info("Обнаружен новый/обновленный файл, скачивание...", "file", ftpFile.Name)
-			ftpFilePath := path.Join(s.cfg.FTPPath, ftpFile.Name)
-			fileData, err := s.ftpClient.DownloadFile(ftpFilePath)
-			if err != nil {
-				s.logger.Error("Не удалось скачать файл", "file", ftpFile.Name, "error", err)
-				continue
-			}
-
-			localFilePath := filepath.Join(s.cfg.FTPCachePath, ftpFile.Name)
-			if err := os.WriteFile(localFilePath, fileData, 0644); err != nil {
-				s.logger.Error("Не удалось сохранить файл в кэш", "file", localFilePath, "error", err)
-				continue
-			}
-			os.Chtimes(localFilePath, ftpFile.Time, ftpFile.Time)
-		}
-	}
-	s.logger.Info("Синхронизация локального кэша завершена.")
-	return nil
 }
