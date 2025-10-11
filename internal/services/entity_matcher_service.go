@@ -59,12 +59,25 @@ func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, da
 	}
 
 	// Приоритет 2: Поиск по Рабочей станции
+	// Сначала ищем по Teamviewer и Litemanager
 	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID); ws != nil {
-		log.Info("Найдено совпадение по Рабочей станции", "internal_id", ws.ID)
+		log.Info("Найдено совпадение по Рабочей станции (TV/LM)", "internal_id", ws.ID)
 		return &MatchedEntity{
 			Entity:     ws,
 			EntityType: "Workstation",
 			OwnerUUID:  utils.SafeStringDereference(ws.OwnerID),
+		}
+	}
+
+	// Fallback: поиск по Anydesk (если не нашли по TV/LM)
+	if data.AnydeskID != "" && data.AnydeskID != "None" {
+		if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, "", data.AnydeskID, ""); ws != nil {
+			log.Info("Найдено совпадение по Рабочей станции (Anydesk)", "internal_id", ws.ID)
+			return &MatchedEntity{
+				Entity:     ws,
+				EntityType: "Workstation",
+				OwnerUUID:  utils.SafeStringDereference(ws.OwnerID),
+			}
 		}
 	}
 

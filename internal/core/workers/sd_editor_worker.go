@@ -88,8 +88,34 @@ func (s *sdEditorWorkerImpl) handleUpdateRequest(ctx context.Context, event even
 	// 1. Находим внешний ID по внутреннему ID.
 	link, err := s.linkRepo.GetByInternalID(ctx, nil, "naumen", payload.EntityUUID)
 	if err != nil || link == nil {
+		// ДИАГНОСТИКА: Добавляем детальную информацию для отладки
+		log.Error("Не найдена связь с ServiceDesk - начинаем диагностику",
+			"error", err,
+			"entityUUID", payload.EntityUUID,
+			"entityType", payload.EntityType)
+
+		// Проверяем, существует ли вообще сущность с таким ID в локальной БД
+		entityExists := s.checkEntityExists(ctx, payload.EntityType, payload.EntityUUID, log)
+
+		// Проверяем все связи для этой системы
+		allLinks := s.getAllLinksForSystem(ctx, "naumen", log)
+
+		// Ищем похожие связи (может быть опечатка в ID?)
+		similarLinks := s.findSimilarLinks(ctx, payload.EntityUUID, "naumen", log)
+
+		// Логируем результаты диагностики
+		log.Error("Результаты диагностики отсутствующей связи",
+			"entityExists", entityExists,
+			"totalLinksInSystem", len(allLinks),
+			"similarLinksFound", len(similarLinks),
+			"similarLinks", similarLinks)
+
 		msg := fmt.Sprintf("Не найдена связь с ServiceDesk для сущности с внутренним ID %s", payload.EntityUUID)
-		log.Error(msg, "error", err)
+		log.Error(msg, "diagnostic_info", map[string]interface{}{
+			"entity_exists": entityExists,
+			"total_links": len(allLinks),
+			"similar_links": similarLinks,
+		})
 		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", msg)
 		return
 	}
@@ -327,6 +353,74 @@ func (s *sdEditorWorkerImpl) updateTaskStatus(ctx context.Context, taskID uint, 
 }
 
 var srokFnRegex = regexp.MustCompile(`(13|15|36)`)
+
+// checkEntityExists проверяет, существует ли сущность с данным ID в локальной БД
+func (s *sdEditorWorkerImpl) checkEntityExists(ctx context.Context, entityType, entityUUID string, log logger.LoggerInterface) bool {
+	switch entityType {
+	case string(domain.FiscalRegister):
+		fr, err := s.frRepo.GetByID(ctx, entityUUID)
+		if err != nil {
+			log.Error("Ошибка при проверке существования ФР", "entityUUID", entityUUID, "error", err)
+			return false
+		}
+		return fr != nil
+	case string(domain.Server):
+		server, err := s.serverRepo.GetByID(ctx, entityUUID)
+		if err != nil {
+			log.Error("Ошибка при проверке существования сервера", "entityUUID", entityUUID, "error", err)
+			return false
+		}
+		return server != nil
+	case string(domain.Workstation):
+		ws, err := s.workstationRepo.GetByID(ctx, entityUUID)
+		if err != nil {
+			log.Error("Ошибка при проверке существования РС", "entityUUID", entityUUID, "error", err)
+			return false
+		}
+		return ws != nil
+	case string(domain.Company):
+		company, err := s.companyRepo.GetByID(ctx, entityUUID)
+		if err != nil {
+			log.Error("Ошибка при проверке существования компании", "entityUUID", entityUUID, "error", err)
+			return false
+		}
+		return company != nil
+	default:
+		log.Error("Неизвестный тип сущности для проверки существования", "entityType", entityType)
+		return false
+	}
+}
+
+// getAllLinksForSystem получает все связи для указанной системы
+func (s *sdEditorWorkerImpl) getAllLinksForSystem(ctx context.Context, systemName string, log logger.LoggerInterface) []models.ExternalSystemLink {
+	var links []models.ExternalSystemLink
+	err := s.db.WithContext(ctx).Where("system_name = ?", systemName).Find(&links).Error
+	if err != nil {
+		log.Error("Ошибка при получении всех связей для системы", "systemName", systemName, "error", err)
+		return nil
+	}
+	return links
+}
+
+// findSimilarLinks ищет похожие связи (может быть опечатка в ID)
+func (s *sdEditorWorkerImpl) findSimilarLinks(ctx context.Context, targetUUID, systemName string, log logger.LoggerInterface) []models.ExternalSystemLink {
+	var allLinks []models.ExternalSystemLink
+	err := s.db.WithContext(ctx).Where("system_name = ?", systemName).Find(&allLinks).Error
+	if err != nil {
+		log.Error("Ошибка при получении связей для поиска похожих", "error", err)
+		return nil
+	}
+
+	var similar []models.ExternalSystemLink
+	// Простая проверка на частичное совпадение (может быть улучшена)
+	for _, link := range allLinks {
+		if strings.Contains(link.InternalID, targetUUID) || strings.Contains(targetUUID, link.InternalID) {
+			similar = append(similar, link)
+		}
+	}
+
+	return similar
+}
 
 func addStringFieldToPayload(log logger.LoggerInterface, payload map[string]interface{}, key, value string) {
 	if value != "" {

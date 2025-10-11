@@ -8,6 +8,8 @@ import (
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
+	"etalon-server/internal/transport/http/validators"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"strings"
@@ -288,6 +290,12 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 				return err
 			}
 			entities = wss
+		case "FiscalRegister":
+			var frs []models.FiscalRegister
+			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&frs).Error; err != nil {
+				return err
+			}
+			entities = frs
 		default:
 			return fmt.Errorf("неподдерживаемый тип для обработки дубликатов: %s", payload.EntityType)
 		}
@@ -304,6 +312,12 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 		case []models.Workstation:
 			for _, ws := range v {
 				if data, err := o.getEnrichmentDataForEntity(txCtx, "Workstation", ws.ID); err == nil {
+					enrichedDuplicates = append(enrichedDuplicates, data)
+				}
+			}
+		case []models.FiscalRegister:
+			for _, fr := range v {
+				if data, err := o.getEnrichmentDataForEntity(txCtx, "FiscalRegister", fr.ID); err == nil {
 					enrichedDuplicates = append(enrichedDuplicates, data)
 				}
 			}
@@ -508,19 +522,80 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 		return
 	}
 
+	// Логирование состояния сущностей до обновлений
+	foundServer, _ := o.serverRepo.FindByCRMidOrIP(ctx, payload.Data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(payload.Data.URLRms)))
+	// Используем правильный порядок поиска: TV/LM сначала, Anydesk как fallback
+	foundWS, _ := o.workstationRepo.FindByRemoteIDs(ctx, payload.Data.TeamviewerID, "", payload.Data.LitemanagerID)
+	if foundWS == nil && payload.Data.AnydeskID != "" && payload.Data.AnydeskID != "None" {
+		foundWS, _ = o.workstationRepo.FindByRemoteIDs(ctx, "", payload.Data.AnydeskID, "")
+	}
+	foundFR, _ := o.frRepo.FindBySerialNumber(ctx, payload.Data.SerialNumber)
+
+	if foundServer != nil && foundServer.ID != "" {
+		owner, _ := o.companyRepo.GetByID(ctx, *foundServer.OwnerID)
+		var ownerLegalName string
+		if owner != nil {
+			ownerLegalName = utils.SafeStringDereference(owner.Title)
+		}
+		var lastModifiedDate interface{}
+		if foundServer.LastModifiedDate != nil {
+			lastModifiedDate = foundServer.LastModifiedDate
+		} else {
+			lastModifiedDate = "nil"
+		}
+		log.Info("Состояние сервера до обновления", "source", payload.Source, "server_id", foundServer.ID, "crm_id", utils.SafeStringDereference(foundServer.CRMid), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+	}
+
+	if foundWS != nil && foundWS.ID != "" {
+		owner, _ := o.companyRepo.GetByID(ctx, *foundWS.OwnerID)
+		var ownerLegalName string
+		if owner != nil {
+			ownerLegalName = utils.SafeStringDereference(owner.Title)
+		}
+		var lastModifiedDate interface{}
+		if foundWS.LastModifiedDate != nil {
+			lastModifiedDate = foundWS.LastModifiedDate
+		} else {
+			lastModifiedDate = "nil"
+		}
+		log.Info("Состояние рабочей станции до обновления", "source", payload.Source, "ws_id", foundWS.ID, "teamviewer", utils.SafeStringDereference(foundWS.Teamviewer), "litemanager", utils.SafeStringDereference(foundWS.Litemanager), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+	}
+
+	if foundFR != nil && foundFR.ID != "" {
+		owner, _ := o.companyRepo.GetByID(ctx, *foundFR.OwnerID)
+		var ownerLegalName string
+		if owner != nil {
+			ownerLegalName = utils.SafeStringDereference(owner.Title)
+		}
+		var lastModifiedDate interface{}
+		if foundFR.LastModifiedDate != nil {
+			lastModifiedDate = foundFR.LastModifiedDate
+		} else {
+			lastModifiedDate = "nil"
+		}
+		log.Info("Состояние фискального регистратора до обновления", "source", payload.Source, "fr_id", foundFR.ID, "inn", utils.SafeStringDereference(foundFR.INN), "legal_name", utils.SafeStringDereference(foundFR.LegalName), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+	}
+
 	err := o.db.Transaction(func(tx *gorm.DB) error {
-		for _, action := range result.Actions {
-			log.Debug("Выполнение действия из плана", "action", string(action.Type), "entity", action.EntityType)
+		log.Debug("Начало выполнения действий", "actions_count", len(result.Actions))
+		for i, action := range result.Actions {
+			log.Debug("Выполнение действия", "index", i, "action_type", string(action.Type), "entity_type", action.EntityType, "entity_uuid", action.EntityUUID)
 			switch action.Type {
 			case ActionCreateTask:
+				log.Debug("Создание задачи", "task_type", action.Task.TaskType)
 				if err := tx.Create(action.Task).Error; err != nil {
+					log.Error("Ошибка создания задачи", "error", err)
 					return err
 				}
+				log.Debug("Задача создана успешно", "task_id", action.Task.ID)
 			case ActionUpdate:
 				action.Updates["last_updated_by"] = "agent"
+				log.Debug("Обновление сущности", "updates", action.Updates)
 				if err := o.performUpdate(ctx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
+					log.Error("Ошибка обновления сущности", "error", err)
 					return err
 				}
+				log.Debug("Сущность обновлена успешно")
 			case ActionAddAdditionalOwner:
 				server := &models.Server{Base: models.Base{ID: action.EntityUUID}}
 				company := &models.Company{Base: models.Base{ID: action.AdditionalOwnerUUID}}
@@ -532,6 +607,7 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 				log.Info("Добавлен дополнительный владелец для сервера", "serverID", server.ID, "companyID", company.ID)
 			}
 		}
+		log.Debug("Все действия выполнены успешно")
 		return nil
 	})
 
@@ -539,5 +615,55 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 		log.Error("Ошибка при выполнении плана действий от движка", "error", err)
 	} else {
 		log.Info("План действий от движка успешно выполнен.", "actions_count", len(result.Actions))
+
+		// Логирование состояния сущностей после обновлений для файла агента
+		foundServer, _ := o.serverRepo.FindByCRMidOrIP(ctx, payload.Data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(payload.Data.URLRms)))
+		foundWS, _ := o.workstationRepo.FindByRemoteIDs(ctx, payload.Data.TeamviewerID, "", payload.Data.LitemanagerID)
+		foundFR, _ := o.frRepo.FindBySerialNumber(ctx, payload.Data.SerialNumber)
+
+		if foundServer != nil && foundServer.ID != "" {
+			owner, _ := o.companyRepo.GetByID(ctx, *foundServer.OwnerID)
+			var ownerLegalName string
+			if owner != nil {
+				ownerLegalName = utils.SafeStringDereference(owner.Title)
+			}
+			var lastModifiedDate interface{}
+			if foundServer.LastModifiedDate != nil {
+				lastModifiedDate = foundServer.LastModifiedDate
+			} else {
+				lastModifiedDate = "nil"
+			}
+			log.Info("Состояние сервера после обновления", "source", payload.Source, "server_id", foundServer.ID, "crm_id", utils.SafeStringDereference(foundServer.CRMid), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+		}
+
+		if foundWS != nil && foundWS.ID != "" {
+			owner, _ := o.companyRepo.GetByID(ctx, *foundWS.OwnerID)
+			var ownerLegalName string
+			if owner != nil {
+				ownerLegalName = utils.SafeStringDereference(owner.Title)
+			}
+			var lastModifiedDate interface{}
+			if foundWS.LastModifiedDate != nil {
+				lastModifiedDate = foundWS.LastModifiedDate
+			} else {
+				lastModifiedDate = "nil"
+			}
+			log.Info("Состояние рабочей станции после обновления", "source", payload.Source, "ws_id", foundWS.ID, "teamviewer", utils.SafeStringDereference(foundWS.Teamviewer), "litemanager", utils.SafeStringDereference(foundWS.Litemanager), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+		}
+
+		if foundFR != nil && foundFR.ID != "" {
+			owner, _ := o.companyRepo.GetByID(ctx, *foundFR.OwnerID)
+			var ownerLegalName string
+			if owner != nil {
+				ownerLegalName = utils.SafeStringDereference(owner.Title)
+			}
+			var lastModifiedDate interface{}
+			if foundFR.LastModifiedDate != nil {
+				lastModifiedDate = foundFR.LastModifiedDate
+			} else {
+				lastModifiedDate = "nil"
+			}
+			log.Info("Состояние фискального регистратора после обновления", "source", payload.Source, "fr_id", foundFR.ID, "inn", utils.SafeStringDereference(foundFR.INN), "legal_name", utils.SafeStringDereference(foundFR.LegalName), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+		}
 	}
 }

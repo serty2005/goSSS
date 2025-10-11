@@ -319,7 +319,7 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 			"file_content_preview", string(fileData[:min(200, len(fileData))]))
 		return false
 	}
-	log.Info("JSON успешно распарсен", "hostname", data.Hostname, "serial", data.SerialNumber)
+	log.Info("JSON успешно распарсен", "RMS_url", data.URLRms, "FR_serial", data.SerialNumber)
 
 	// Валидация данных агента
 	if err := validateAgentData(&data, log); err != nil {
