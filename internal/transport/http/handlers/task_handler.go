@@ -122,10 +122,11 @@ func (h *TaskHandler) buildTaskDTO(ctx context.Context, task models.Reconciliati
 	switch domain.TaskType(task.TaskType) {
 	case domain.TaskAddEquipment:
 		detailsObject, err = h.enrichAddEquipmentDetails(task)
-	case domain.TaskNeedUpdate, domain.TaskDataConflict, domain.TaskResolveDuplicate:
-		detailsObject = task.Details // Для этих типов пока оставляем как есть
+	// Для этих типов задач все детали уже в JSON, обогащение не нужно
+	case domain.TaskNeedUpdate, domain.TaskDataConflict, domain.TaskResolveDuplicate, domain.TaskNewClient, domain.TaskAgentOwnerRequired:
+		detailsObject = task.Details
 	default:
-		// Для задач, привязанных к существующим сущностям, обогащаем данными сущности
+		// Для остальных задач, привязанных к существующим сущностям, обогащаем данными сущности
 		detailsObject, err = h.enrichWithExistingEntity(ctx, task.EntityType, task.EntityUUID)
 	}
 
