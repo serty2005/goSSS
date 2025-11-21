@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"os"
@@ -86,6 +87,30 @@ func min(a, b int) int {
 	return b
 }
 
+// isLocalAddress проверяет, является ли адрес локальным.
+func isLocalAddress(address string) bool {
+	// Проверяем localhost
+	if strings.ToLower(address) == "localhost" || address == "127.0.0.1" || strings.HasPrefix(address, "127.") {
+		return true
+	}
+
+	// Проверяем локальные сети
+	localNetworks := []string{
+		"10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
+		"172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+		"172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+		"169.254.", // Link-local
+	}
+
+	for _, network := range localNetworks {
+		if strings.HasPrefix(address, network) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // validateAgentData проверяет корректность данных агента и наличие полезной информации.
 func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error {
 	// Проверка обязательных полей
@@ -95,6 +120,17 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 
 	if data.URLRms == "" {
 		return fmt.Errorf("отсутствует обязательное поле url_rms")
+	}
+
+	// Валидация и нормализация URL сервера
+	normalizedURL := validators.ValidateIPAddress(data.URLRms)
+	if normalizedURL == nil {
+		return fmt.Errorf("некорректный формат URL сервера: %s", data.URLRms)
+	}
+
+	// Проверка на локальные адреса
+	if isLocalAddress(*normalizedURL) {
+		return fmt.Errorf("обнаружен локальный адрес сервера, который не может быть использован для идентификации: %s", *normalizedURL)
 	}
 
 	// Проверка наличия полезных данных для идентификации
@@ -131,11 +167,6 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 		return fmt.Errorf("файл не содержит полезных данных для идентификации (нет серийного номера, CRM ID или ID удаленного доступа)")
 	}
 
-	// Проверка корректности URL
-	if !strings.HasPrefix(data.URLRms, "http://") && !strings.HasPrefix(data.URLRms, "https://") {
-		log.Warn("URL сервера не содержит протокол", "url", data.URLRms)
-	}
-
 	// Проверка формата времени
 	if data.CurrentTime != "" {
 		if _, err := time.Parse("2006-01-02 15:04:05", data.CurrentTime); err != nil {
@@ -144,6 +175,8 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 	}
 
 	log.Info("Валидация данных агента завершена успешно",
+		"hostname", data.Hostname,
+		"normalized_url", *normalizedURL,
 		"has_serial", data.SerialNumber != "",
 		"has_crm_id", data.CRMID != "",
 		"remote_ids_count", validRemoteIDs,
@@ -330,9 +363,14 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 
 	currentFRSerial := data.SerialNumber
 	currentRMSUrl := data.URLRms
+
+	// Проверка дублирования событий - если данные идентичны предыдущим, не публикуем событие
 	hierarchyHasChanged := isNewRecordInDB ||
 		(utils.SafeStringDereference(previousState.LastSeenFRSerial) != currentFRSerial) ||
 		(utils.SafeStringDereference(previousState.LastSeenRMSUrl) != currentRMSUrl)
+
+	// Дополнительная проверка на дублирование: если данные не изменились, но прошло много времени,
+	// можно отправить heartbeat событие (опционально)
 
 	if hierarchyHasChanged {
 		log.Info("Обнаружено изменение в иерархии объектов",

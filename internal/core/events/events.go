@@ -107,6 +107,7 @@ type DiscrepancyDetail struct {
 
 // FiscalRegisterDiscrepancyPayload - полезная нагрузка для события FiscalRegisterDiscrepancyFound.
 type FiscalRegisterDiscrepancyPayload struct {
+	FRInternalUUID    string                       `json:"fr_internal_uuid"`
 	FRServiceDeskUUID string                       `json:"fr_service_desk_uuid"`
 	Discrepancies     map[string]DiscrepancyDetail `json:"discrepancies"` // Карта: имя поля -> детали расхождения
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Скрипт для упаковки всех .go файлов проекта в один .py файл
-с отображением дерева проекта и экранированным содержимым файлов.
+Скрипт для упаковки всех файлов проекта (.go, .json, .mod, .md)
+в один Python-файл для удобной передачи ИИ.
+Формирует дерево проекта и экранирует содержимое всех файлов.
 """
 
 import os
@@ -17,17 +18,17 @@ def escape_content(content: str) -> str:
     return json.dumps(content, ensure_ascii=False)
 
 
-def collect_go_files(root_dir: str):
+def collect_files(root_dir: str, extensions):
     """
-    Рекурсивно собирает пути ко всем .go файлам в проекте.
+    Рекурсивно собирает пути ко всем файлам с указанными расширениями.
     """
-    go_files = []
+    collected = []
     for dirpath, _, filenames in os.walk(root_dir):
         for file in filenames:
-            if file.endswith(".go"):
+            if any(file.endswith(ext) for ext in extensions):
                 full_path = os.path.join(dirpath, file)
-                go_files.append(os.path.normpath(full_path))
-    return sorted(go_files)
+                collected.append(os.path.normpath(full_path))
+    return sorted(collected)
 
 
 def build_tree(root_dir: str) -> str:
@@ -51,15 +52,15 @@ def build_tree(root_dir: str) -> str:
     return "\n".join(tree_lines)
 
 
-def write_to_py(go_files, tree_str, output_file):
+def write_to_py(files, tree_str, output_file):
     """
-    Записывает дерево проекта и содержимое .go файлов в один .py файл.
+    Записывает дерево проекта и содержимое файлов в один .py файл.
     """
     with open(output_file, "w", encoding="utf-8") as f:
         # Заголовок
         f.write("# -*- coding: utf-8 -*-\n")
         f.write("# Этот файл сгенерирован автоматически.\n")
-        f.write("# Содержит дерево проекта и все .go файлы в экранированном виде.\n\n")
+        f.write("# Содержит дерево проекта и файлы (.go, .json, .mod, .md) в экранированном виде.\n\n")
 
         # Дерево проекта
         f.write("project_tree = '''\n")
@@ -68,10 +69,14 @@ def write_to_py(go_files, tree_str, output_file):
 
         # Словарь файлов
         f.write("project_files = {\n")
-        for path in go_files:
+        for path in files:
             rel_path = os.path.relpath(path)
-            with open(path, "r", encoding="utf-8", errors="ignore") as src:
-                content = src.read()
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as src:
+                    content = src.read()
+            except Exception as e:
+                content = f"<<Ошибка чтения файла: {e}>>"
+
             escaped_content = escape_content(content)
             f.write(f'    "{rel_path}": {escaped_content},\n')
         f.write("}\n\n")
@@ -87,15 +92,19 @@ def write_to_py(go_files, tree_str, output_file):
 
 def main():
     root_dir = "."
-    output_file = "go_project_dump.py"
+    output_file = "project_dump.py"
 
     if len(sys.argv) > 1:
         output_file = sys.argv[1]
 
-    go_files = collect_go_files(root_dir)
+    # какие расширения собираем
+    exts = [".go", ".json", ".mod", ".md"]
+
+    files = collect_files(root_dir, exts)
     tree_str = build_tree(root_dir)
-    write_to_py(go_files, tree_str, output_file)
-    print(f"Собрано {len(go_files)} файлов. Результат в {output_file}")
+    write_to_py(files, tree_str, output_file)
+
+    print(f"Собрано {len(files)} файлов. Результат в {output_file}")
 
 
 if __name__ == "__main__":

@@ -146,6 +146,14 @@ type FiscalRegister struct {
 	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
 	OwnerID                *string        `gorm:"type:text;index"`
 	Licenses               datatypes.JSON `gorm:"type:jsonb"`
+	// Address содержит адрес установки фискального регистратора
+	Address                *string        `gorm:"type:text" json:"address"`
+	// AttributeExcise указывает, работает ли ККТ с акцизными товарами
+	AttributeExcise        *bool          `json:"attribute_excise"`
+	// AttributeMarked указывает, работает ли ККТ с маркированными товарами
+	AttributeMarked        *bool          `json:"attribute_marked"`
+	// OFDName содержит название оператора фискальных данных
+	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
 }
 
 // EquipmentStatusLog хранит историю изменений статусов оборудования.

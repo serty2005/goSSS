@@ -8,8 +8,6 @@ import (
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
-	"etalon-server/internal/pkg/utils"
-	"etalon-server/internal/transport/http/validators"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"strings"
@@ -19,13 +17,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// contextKey - это кастомный тип для ключей контекста, чтобы избежать коллизий.
 type contextKey string
 
-// transactionKey - ключ для передачи транзакции gorm через контекст.
 const transactionKey contextKey = "tx"
 
 // Orchestrator - центральный сервис для обработки бизнес-логики на основе событий.
+// Он является "Исполнителем": получает события, делегирует сложную логику
+// движку (ProcessingEngine) и выполняет полученный план действий в транзакциях.
 type Orchestrator struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
@@ -75,10 +73,8 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 	}
 	log := o.logger.With("entityType", payload.EntityType, "serviceDeskUUID", payload.ServiceDeskUUID)
 
-	var updates map[string]interface{}
 	var isNewEntity bool
 	var internalID string
-	var currentEntity, newEntityModel interface{}
 
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := context.WithValue(ctx, transactionKey, tx)
@@ -88,8 +84,9 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		if err != nil {
 			return fmt.Errorf("ошибка поиска связи по внешнему ID: %w", err)
 		}
-
 		isNewEntity = link == nil
+
+		var newEntityModel, currentEntity interface{}
 
 		switch payload.EntityType {
 		case "Company":
@@ -115,17 +112,37 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		default:
 			return fmt.Errorf("неизвестный тип сущности для обработки: %s", payload.EntityType)
 		}
+
 		if err != nil {
 			log.Warn("Пропуск обработки сущности из-за ошибки маппинга", "error", err)
 			return nil
 		}
 
-		if isNewEntity {
-			internalID, err = o.createEntity(txCtx, newEntityModel)
-			if err != nil {
-				return err
-			}
+		// Делегируем логику принятия решений движку
+		result, err := o.engine.ProcessServiceDeskUpdate(txCtx, isNewEntity, payload.EntityType, currentEntity, newEntityModel)
+		if err != nil {
+			return fmt.Errorf("ошибка в движке обработки: %w", err)
+		}
 
+		// Исполняем план, полученный от движка
+		for _, action := range result.Actions {
+			switch action.Type {
+			case ActionCreate:
+				createdID, err := o.createEntity(txCtx, action.EntityToCreate)
+				if err != nil {
+					return err
+				}
+				internalID = createdID // Сохраняем ID для создания связи
+			case ActionUpdate:
+				if err := o.performUpdate(txCtx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
+					return err
+				}
+				internalID = action.EntityUUID
+			}
+		}
+
+		// Если была создана новая сущность, создаем для нее связь
+		if isNewEntity && internalID != "" {
 			newLink := &models.ExternalSystemLink{
 				InternalID: internalID, SystemName: "naumen", ServiceDeskUUID: payload.ServiceDeskUUID,
 				EntityType: payload.EntityType, LastSyncedAt: time.Now(),
@@ -133,29 +150,6 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 			return o.linkRepo.Create(txCtx, tx, newLink)
 		}
 
-		internalID = link.InternalID
-		switch payload.EntityType {
-		case "Company":
-			updates, _ = getCompanyDiff(currentEntity.(*models.Company), newEntityModel.(*models.Company))
-		case "Server":
-			updates, _ = getServerDiff(currentEntity.(*models.Server), newEntityModel.(*models.Server))
-		case "Workstation":
-			updates, _ = getWorkstationDiff(currentEntity.(*models.Workstation), newEntityModel.(*models.Workstation))
-		case "FiscalRegister":
-			updates, _ = getFiscalRegisterDiff(currentEntity.(*models.FiscalRegister), newEntityModel.(*models.FiscalRegister))
-		}
-
-		if newLMD := getLMDFromModel(newEntityModel); newLMD != nil {
-			if updates == nil {
-				updates = make(map[string]interface{})
-			}
-			updates["last_modified_date"] = newLMD
-		}
-
-		if len(updates) > 0 {
-			updates["last_updated_by"] = "naumen_gateway"
-			return o.performUpdate(txCtx, tx, payload.EntityType, internalID, updates)
-		}
 		return nil
 	})
 
@@ -164,18 +158,13 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 		return
 	}
 
-	// diffLog functionality removed - can be reimplemented if needed
-
 	if isNewEntity {
 		log.Info("Новая сущность успешно создана.", "internalID", internalID)
-	} else if len(updates) == 0 {
-		log.Debug("Изменений не найдено, обновление не требуется.")
 	} else {
-		log.Info("Сущность успешно обновлена.", "updates", updates, "internalID", internalID)
+		log.Debug("Обработка существующей сущности завершена.")
 	}
 }
 
-// handleServiceDeskEntityDelete обрабатывает удаление сущности.
 func (o *Orchestrator) handleServiceDeskEntityDelete(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServiceDeskEntityDeletePayload)
 	if !ok {
@@ -207,7 +196,6 @@ func (o *Orchestrator) handleServiceDeskEntityDelete(ctx context.Context, event 
 	}
 }
 
-// handleContractsStatusRecalculated обрабатывает событие о пересчете статусов контрактов.
 func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ContractsStatusPayload)
 	if !ok {
@@ -260,98 +248,27 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 	}
 }
 
-// handleDuplicatesFound обновляет статус для сущностей-дубликатов.
 func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.DuplicatesFoundPayload)
 	if !ok {
 		return
 	}
-	log := o.logger.With(
-		"entityType", payload.EntityType,
-		"field", payload.Field,
-		"value", payload.Value,
-	)
+	log := o.logger.With("entityType", payload.EntityType, "field", payload.Field, "value", payload.Value)
+
+	result := o.engine.ProcessDuplicates(ctx, payload)
+
+	if len(result.Actions) == 0 {
+		log.Debug("Движок не вернул действий для обработки дубликатов.")
+		return
+	}
 
 	err := o.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := context.WithValue(ctx, transactionKey, tx)
-
-		// 1. Получаем все модели дубликатов одним запросом
-		var entities interface{}
-		switch payload.EntityType {
-		case "Server":
-			var srvs []models.Server
-			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&srvs).Error; err != nil {
-				return err
-			}
-			entities = srvs
-		case "Workstation":
-			var wss []models.Workstation
-			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&wss).Error; err != nil {
-				return err
-			}
-			entities = wss
-		case "FiscalRegister":
-			var frs []models.FiscalRegister
-			if err := tx.Where("id IN ?", payload.InternalIDs).Find(&frs).Error; err != nil {
-				return err
-			}
-			entities = frs
-		default:
-			return fmt.Errorf("неподдерживаемый тип для обработки дубликатов: %s", payload.EntityType)
-		}
-
-		// 2. Обогащаем данные для каждой сущности
-		enrichedDuplicates := make([]map[string]interface{}, 0)
-		switch v := entities.(type) {
-		case []models.Server:
-			for _, srv := range v {
-				if data, err := o.getEnrichmentDataForEntity(txCtx, "Server", srv.ID); err == nil {
-					enrichedDuplicates = append(enrichedDuplicates, data)
+		for _, action := range result.Actions {
+			if action.Type == ActionUpdate {
+				if err := o.performUpdate(ctx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
+					log.Error("Не удалось обновить статус для сущности-дубликата", "internalID", action.EntityUUID, "error", err)
+					return err
 				}
-			}
-		case []models.Workstation:
-			for _, ws := range v {
-				if data, err := o.getEnrichmentDataForEntity(txCtx, "Workstation", ws.ID); err == nil {
-					enrichedDuplicates = append(enrichedDuplicates, data)
-				}
-			}
-		case []models.FiscalRegister:
-			for _, fr := range v {
-				if data, err := o.getEnrichmentDataForEntity(txCtx, "FiscalRegister", fr.ID); err == nil {
-					enrichedDuplicates = append(enrichedDuplicates, data)
-				}
-			}
-		}
-
-		if len(enrichedDuplicates) == 0 {
-			log.Warn("Не удалось обогатить данные ни для одного из дубликатов, обновление статуса отменено")
-			return nil
-		}
-
-		// 3. Формируем StatusDetails и обновляем каждую сущность
-		statusDetails := map[string]interface{}{
-			"type":       "duplicate_found",
-			"field":      payload.Field,
-			"value":      payload.Value,
-			"timestamp":  time.Now().UTC().Format(time.RFC3339),
-			"source":     "duplicates_gateway",
-			"duplicates": enrichedDuplicates,
-		}
-
-		detailsJSON, err := json.Marshal(statusDetails)
-		if err != nil {
-			return fmt.Errorf("ошибка сериализации status_details для дубликатов: %w", err)
-		}
-
-		updates := map[string]interface{}{
-			"health_status":  "attention_required",
-			"status_details": datatypes.JSON(detailsJSON),
-		}
-
-		for _, internalID := range payload.InternalIDs {
-			if err := o.performUpdate(ctx, tx, payload.EntityType, internalID, updates); err != nil {
-				log.Error("Не удалось обновить статус для сущности-дубликата", "internalID", internalID, "error", err)
-				return err // Откатываем транзакцию
 			}
 		}
 		return nil
@@ -360,71 +277,60 @@ func (o *Orchestrator) handleDuplicatesFound(ctx context.Context, event eventbus
 	if err != nil {
 		log.Error("Ошибка транзакции при обновлении статусов для дубликатов", "error", err)
 	} else {
-		log.Info("Статусы для группы дубликатов успешно обновлены.", "count", len(payload.InternalIDs))
+		log.Info("Статусы для группы дубликатов успешно обновлены.", "count", len(result.Actions))
 	}
 }
 
-// getEnrichmentDataForEntity собирает полную информацию о сущности для записи в StatusDetails.
-func (o *Orchestrator) getEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error) {
-	var ownerID string
-	var lmd *time.Time
-
-	switch entityType {
-	case "Server":
-		entity, err := o.serverRepo.GetByID(ctx, entityID)
-		if err != nil || entity == nil {
-			return nil, fmt.Errorf("не удалось найти сервер с ID %s: %w", entityID, err)
-		}
-		ownerID = *entity.OwnerID
-		lmd = entity.LastModifiedDate
-	case "Workstation":
-		entity, err := o.workstationRepo.GetByID(ctx, entityID)
-		if err != nil || entity == nil {
-			return nil, fmt.Errorf("не удалось найти РС с ID %s: %w", entityID, err)
-		}
-		ownerID = *entity.OwnerID
-		lmd = entity.LastModifiedDate
-	case "FiscalRegister":
-		entity, err := o.frRepo.GetByID(ctx, entityID)
-		if err != nil || entity == nil {
-			return nil, fmt.Errorf("не удалось найти ФР с ID %s: %w", entityID, err)
-		}
-		ownerID = *entity.OwnerID
-		lmd = entity.LastModifiedDate
-	default:
-		return nil, fmt.Errorf("неподдерживаемый тип сущности: %s", entityType)
+func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventbus.Event) {
+	payload, ok := event.Payload.(events.AgentDataPayload)
+	if !ok {
+		o.logger.Error("Некорректная полезная нагрузка для события AgentDataReceived")
+		return
 	}
 
-	link, _ := o.linkRepo.GetByInternalID(ctx, nil, "naumen", entityID)
-	owner, _ := o.companyRepo.GetByID(ctx, ownerID)
+	log := o.logger.With("source", payload.Source)
+	log.Debug("Оркестратор НАЧАЛ обработку события AgentDataReceived")
 
-	var externalID string
-	if link != nil {
-		externalID = link.ServiceDeskUUID
+	result := o.engine.ProcessAgentData(ctx, payload.Source, &payload.Data)
+
+	if len(result.Actions) == 0 {
+		log.Debug("Движок не вернул никаких действий для выполнения.")
+		return
 	}
 
-	var ownerTitle string
-	var ownerActiveContract bool
-	if owner != nil {
-		ownerTitle = *owner.Title
-		if owner.ActiveContract != nil {
-			ownerActiveContract = *owner.ActiveContract
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		for _, action := range result.Actions {
+			switch action.Type {
+			case ActionCreateTask:
+				if err := tx.Create(action.Task).Error; err != nil {
+					log.Error("Ошибка создания задачи", "error", err)
+					return err
+				}
+			case ActionUpdate:
+				action.Updates["last_updated_by"] = "agent"
+				if err := o.performUpdate(ctx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
+					log.Error("Ошибка обновления сущности", "error", err)
+					return err
+				}
+			case ActionAddAdditionalOwner:
+				server := &models.Server{Base: models.Base{ID: action.EntityUUID}}
+				company := &models.Company{Base: models.Base{ID: action.AdditionalOwnerUUID}}
+				if err := tx.Model(server).Association("AdditionalOwners").Append(company); err != nil {
+					log.Error("Не удалось добавить дополнительного владельца", "serverID", server.ID, "companyID", company.ID, "error", err)
+					return err
+				}
+			}
 		}
-	}
+		return nil
+	})
 
-	return map[string]interface{}{
-		"internal_id":        entityID,
-		"external_id":        externalID,
-		"last_modified_date": lmd,
-		"owner_info": map[string]interface{}{
-			"id":              ownerID,
-			"title":           ownerTitle,
-			"active_contract": ownerActiveContract,
-		},
-	}, nil
+	if err != nil {
+		log.Error("Ошибка при выполнении плана действий от движка", "error", err)
+	} else {
+		log.Info("План действий от движка успешно выполнен.", "actions_count", len(result.Actions))
+	}
 }
 
-// handleServerPollingSucceeded обрабатывает успешный результат опроса сервера.
 func (o *Orchestrator) handleServerPollingSucceeded(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServerPollingSucceededPayload)
 	if !ok {
@@ -446,7 +352,6 @@ func (o *Orchestrator) handleServerPollingSucceeded(ctx context.Context, event e
 	}
 }
 
-// handleServerPollingFailed обрабатывает неудачный результат опроса сервера.
 func (o *Orchestrator) handleServerPollingFailed(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServerPollingFailedPayload)
 	if !ok {
@@ -471,7 +376,7 @@ func (o *Orchestrator) handleFiscalRegisterDiscrepancy(ctx context.Context, even
 	if !ok {
 		return
 	}
-	log := o.logger.With("fr_external_uuid", payload.FRServiceDeskUUID)
+	log := o.logger.With("fr_internal_uuid", payload.FRInternalUUID)
 
 	existingTask, err := o.taskRepo.FindActiveTask(ctx, "need_update", payload.FRServiceDeskUUID)
 	if err != nil {
@@ -484,15 +389,20 @@ func (o *Orchestrator) handleFiscalRegisterDiscrepancy(ctx context.Context, even
 	}
 
 	var commentBuilder strings.Builder
-	commentBuilder.WriteString(fmt.Sprintf("Обнаружено расхождение данных для ФР (%s) между эталонной БД и ServiceDesk. Требуется обновить данные в ServiceDesk.\n\nРасхождения:\n", payload.FRServiceDeskUUID))
+	commentBuilder.WriteString(fmt.Sprintf("Обнаружено расхождение данных для ФР (внутр. ID: %s, внешн. ID: %s) между эталонной БД и ServiceDesk. Требуется обновить данные в ServiceDesk.\n\nРасхождения:\n", payload.FRInternalUUID, payload.FRServiceDeskUUID))
 	for field, details := range payload.Discrepancies {
 		commentBuilder.WriteString(fmt.Sprintf("- Поле '%s':\n  - Эталон: %v\n  - ServiceDesk: %v\n", field, details.EtalonValue, details.ServiceDeskValue))
 	}
 
-	detailsJSON, _ := json.Marshal(payload.Discrepancies)
+	detailsJSON, _ := json.Marshal(payload) // Сохраняем всю полезную нагрузку для контекста
+
 	task := models.ReconciliationTask{
-		TaskType: "need_update", EntityType: "FiscalRegister", EntityUUID: payload.FRServiceDeskUUID,
-		Details: datatypes.JSON(detailsJSON), Status: "new", Comment: commentBuilder.String(),
+		TaskType:   "need_update",
+		EntityType: "FiscalRegister",
+		EntityUUID: payload.FRInternalUUID,
+		Details:    datatypes.JSON(detailsJSON),
+		Status:     "new",
+		Comment:    commentBuilder.String(),
 	}
 	if err := o.db.WithContext(ctx).Create(&task).Error; err != nil {
 		log.Error("Не удалось создать задачу 'need_update'", "error", err)
@@ -501,169 +411,103 @@ func (o *Orchestrator) handleFiscalRegisterDiscrepancy(ctx context.Context, even
 	}
 }
 
-// handleAgentDataReceived вызывает движок обработки и исполняет его план.
-func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventbus.Event) {
-	// Распаковываем полезную нагрузку.
-	payload, ok := event.Payload.(events.AgentDataPayload)
-	if !ok {
-		o.logger.Error("Некорректная полезная нагрузка для события AgentDataReceived")
-		return
+// --- Вспомогательные функции-исполнители (ранее в orchestrator_helpers.go) ---
+
+func (o *Orchestrator) createEntity(ctx context.Context, entity interface{}) (string, error) {
+	tx := ctx.Value(transactionKey).(*gorm.DB)
+	var id string
+	var err error
+	switch v := entity.(type) {
+	case *models.Company:
+		err = o.companyRepo.Create(ctx, tx, v)
+		id = v.ID
+	case *models.Server:
+		err = o.serverRepo.Create(ctx, tx, v)
+		id = v.ID
+	case *models.Workstation:
+		err = o.workstationRepo.Create(ctx, tx, v)
+		id = v.ID
+	case *models.FiscalRegister:
+		err = o.frRepo.Create(ctx, tx, v)
+		id = v.ID
+	default:
+		return "", fmt.Errorf("неподдерживаемый тип для создания: %T", entity)
 	}
+	return id, err
+}
 
-	// Используем Source для логирования.
-	log := o.logger.With("source", payload.Source)
-	log.Debug("Оркестратор НАЧАЛ обработку события AgentDataReceived")
-
-	// Передаем source и data в движок.
-	result := o.engine.ProcessAgentData(ctx, payload.Source, &payload.Data)
-
-	if len(result.Actions) == 0 {
-		log.Debug("Движок не вернул никаких действий для выполнения.")
-		return
+func (o *Orchestrator) performUpdate(ctx context.Context, tx *gorm.DB, entityType, internalID string, updates map[string]interface{}) error {
+	var err error
+	switch entityType {
+	case "Company":
+		_, err = o.companyRepo.Update(ctx, tx, internalID, updates)
+	case "Server":
+		_, err = o.serverRepo.Update(ctx, tx, internalID, updates)
+	case "Workstation":
+		_, err = o.workstationRepo.Update(ctx, tx, internalID, updates)
+	case "FiscalRegister":
+		_, err = o.frRepo.Update(ctx, tx, internalID, updates)
+	default:
+		return fmt.Errorf("неподдерживаемый тип для обновления: %s", entityType)
 	}
+	return err
+}
 
-	// Логирование состояния сущностей до обновлений
-	foundServer, _ := o.serverRepo.FindByCRMidOrIP(ctx, payload.Data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(payload.Data.URLRms)))
-	// Используем правильный порядок поиска: TV/LM сначала, Anydesk как fallback
-	foundWS, _ := o.workstationRepo.FindByRemoteIDs(ctx, payload.Data.TeamviewerID, "", payload.Data.LitemanagerID)
-	if foundWS == nil && payload.Data.AnydeskID != "" && payload.Data.AnydeskID != "None" {
-		foundWS, _ = o.workstationRepo.FindByRemoteIDs(ctx, "", payload.Data.AnydeskID, "")
+func (o *Orchestrator) performDelete(ctx context.Context, tx *gorm.DB, entityType, internalID string) error {
+	var err error
+	switch entityType {
+	case "Company":
+		_, err = o.companyRepo.Delete(ctx, tx, internalID)
+	case "Server":
+		_, err = o.serverRepo.Delete(ctx, tx, internalID)
+	case "Workstation":
+		_, err = o.workstationRepo.Delete(ctx, tx, internalID)
+	case "FiscalRegister":
+		_, err = o.frRepo.Delete(ctx, tx, internalID)
+	default:
+		return fmt.Errorf("неподдерживаемый тип для удаления: %s", entityType)
 	}
-	foundFR, _ := o.frRepo.FindBySerialNumber(ctx, payload.Data.SerialNumber)
+	return err
+}
 
-	if foundServer != nil && foundServer.ID != "" {
-		owner, _ := o.companyRepo.GetByID(ctx, *foundServer.OwnerID)
-		var ownerLegalName string
-		if owner != nil {
-			ownerLegalName = utils.SafeStringDereference(owner.Title)
+func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveIDs []string, log logger.LoggerInterface) error {
+	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
+		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status != ?", inactiveIDs, "locked").
+			Updates(map[string]interface{}{"status_before_lock": gorm.Expr("status"), "status": "locked"})
+		if res.Error != nil {
+			return res.Error
 		}
-		var lastModifiedDate interface{}
-		if foundServer.LastModifiedDate != nil {
-			lastModifiedDate = foundServer.LastModifiedDate
-		} else {
-			lastModifiedDate = "nil"
-		}
-		log.Info("Состояние сервера до обновления", "source", payload.Source, "server_id", foundServer.ID, "crm_id", utils.SafeStringDereference(foundServer.CRMid), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
-	}
-
-	if foundWS != nil && foundWS.ID != "" {
-		owner, _ := o.companyRepo.GetByID(ctx, *foundWS.OwnerID)
-		var ownerLegalName string
-		if owner != nil {
-			ownerLegalName = utils.SafeStringDereference(owner.Title)
-		}
-		var lastModifiedDate interface{}
-		if foundWS.LastModifiedDate != nil {
-			lastModifiedDate = foundWS.LastModifiedDate
-		} else {
-			lastModifiedDate = "nil"
-		}
-		log.Info("Состояние рабочей станции до обновления", "source", payload.Source, "ws_id", foundWS.ID, "teamviewer", utils.SafeStringDereference(foundWS.Teamviewer), "litemanager", utils.SafeStringDereference(foundWS.Litemanager), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
-	}
-
-	if foundFR != nil && foundFR.ID != "" {
-		owner, _ := o.companyRepo.GetByID(ctx, *foundFR.OwnerID)
-		var ownerLegalName string
-		if owner != nil {
-			ownerLegalName = utils.SafeStringDereference(owner.Title)
-		}
-		var lastModifiedDate interface{}
-		if foundFR.LastModifiedDate != nil {
-			lastModifiedDate = foundFR.LastModifiedDate
-		} else {
-			lastModifiedDate = "nil"
-		}
-		log.Info("Состояние фискального регистратора до обновления", "source", payload.Source, "fr_id", foundFR.ID, "inn", utils.SafeStringDereference(foundFR.INN), "legal_name", utils.SafeStringDereference(foundFR.LegalName), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
-	}
-
-	err := o.db.Transaction(func(tx *gorm.DB) error {
-		log.Debug("Начало выполнения действий", "actions_count", len(result.Actions))
-		for i, action := range result.Actions {
-			log.Debug("Выполнение действия", "index", i, "action_type", string(action.Type), "entity_type", action.EntityType, "entity_uuid", action.EntityUUID)
-			switch action.Type {
-			case ActionCreateTask:
-				log.Debug("Создание задачи", "task_type", action.Task.TaskType)
-				if err := tx.Create(action.Task).Error; err != nil {
-					log.Error("Ошибка создания задачи", "error", err)
-					return err
-				}
-				log.Debug("Задача создана успешно", "task_id", action.Task.ID)
-			case ActionUpdate:
-				action.Updates["last_updated_by"] = "agent"
-				log.Debug("Обновление сущности", "updates", action.Updates)
-				if err := o.performUpdate(ctx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
-					log.Error("Ошибка обновления сущности", "error", err)
-					return err
-				}
-				log.Debug("Сущность обновлена успешно")
-			case ActionAddAdditionalOwner:
-				server := &models.Server{Base: models.Base{ID: action.EntityUUID}}
-				company := &models.Company{Base: models.Base{ID: action.AdditionalOwnerUUID}}
-				// Используем GORM Association для добавления связи many2many
-				if err := tx.Model(server).Association("AdditionalOwners").Append(company); err != nil {
-					log.Error("Не удалось добавить дополнительного владельца", "serverID", server.ID, "companyID", company.ID, "error", err)
-					return err
-				}
-				log.Info("Добавлен дополнительный владелец для сервера", "serverID", server.ID, "companyID", company.ID)
-			}
-		}
-		log.Debug("Все действия выполнены успешно")
-		return nil
-	})
-
-	if err != nil {
-		log.Error("Ошибка при выполнении плана действий от движка", "error", err)
-	} else {
-		log.Info("План действий от движка успешно выполнен.", "actions_count", len(result.Actions))
-
-		// Логирование состояния сущностей после обновлений для файла агента
-		foundServer, _ := o.serverRepo.FindByCRMidOrIP(ctx, payload.Data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(payload.Data.URLRms)))
-		foundWS, _ := o.workstationRepo.FindByRemoteIDs(ctx, payload.Data.TeamviewerID, "", payload.Data.LitemanagerID)
-		foundFR, _ := o.frRepo.FindBySerialNumber(ctx, payload.Data.SerialNumber)
-
-		if foundServer != nil && foundServer.ID != "" {
-			owner, _ := o.companyRepo.GetByID(ctx, *foundServer.OwnerID)
-			var ownerLegalName string
-			if owner != nil {
-				ownerLegalName = utils.SafeStringDereference(owner.Title)
-			}
-			var lastModifiedDate interface{}
-			if foundServer.LastModifiedDate != nil {
-				lastModifiedDate = foundServer.LastModifiedDate
-			} else {
-				lastModifiedDate = "nil"
-			}
-			log.Info("Состояние сервера после обновления", "source", payload.Source, "server_id", foundServer.ID, "crm_id", utils.SafeStringDereference(foundServer.CRMid), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
-		}
-
-		if foundWS != nil && foundWS.ID != "" {
-			owner, _ := o.companyRepo.GetByID(ctx, *foundWS.OwnerID)
-			var ownerLegalName string
-			if owner != nil {
-				ownerLegalName = utils.SafeStringDereference(owner.Title)
-			}
-			var lastModifiedDate interface{}
-			if foundWS.LastModifiedDate != nil {
-				lastModifiedDate = foundWS.LastModifiedDate
-			} else {
-				lastModifiedDate = "nil"
-			}
-			log.Info("Состояние рабочей станции после обновления", "source", payload.Source, "ws_id", foundWS.ID, "teamviewer", utils.SafeStringDereference(foundWS.Teamviewer), "litemanager", utils.SafeStringDereference(foundWS.Litemanager), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
-		}
-
-		if foundFR != nil && foundFR.ID != "" {
-			owner, _ := o.companyRepo.GetByID(ctx, *foundFR.OwnerID)
-			var ownerLegalName string
-			if owner != nil {
-				ownerLegalName = utils.SafeStringDereference(owner.Title)
-			}
-			var lastModifiedDate interface{}
-			if foundFR.LastModifiedDate != nil {
-				lastModifiedDate = foundFR.LastModifiedDate
-			} else {
-				lastModifiedDate = "nil"
-			}
-			log.Info("Состояние фискального регистратора после обновления", "source", payload.Source, "fr_id", foundFR.ID, "inn", utils.SafeStringDereference(foundFR.INN), "legal_name", utils.SafeStringDereference(foundFR.LegalName), "last_modified_date", lastModifiedDate, "owner_legal_name", ownerLegalName)
+		if res.RowsAffected > 0 {
+			log.Info("Заморожено единиц оборудования", "count", res.RowsAffected)
 		}
 	}
+	return nil
+}
+
+func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeIDs []string, log logger.LoggerInterface) error {
+	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
+		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status = ? AND status_before_lock IS NOT NULL", activeIDs, "locked").
+			Updates(map[string]interface{}{"status": gorm.Expr("status_before_lock"), "status_before_lock": nil})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected > 0 {
+			log.Info("Разморожено единиц оборудования", "count", res.RowsAffected)
+		}
+	}
+	return nil
+}
+
+func getLMDFromModel(entity interface{}) *time.Time {
+	switch v := entity.(type) {
+	case *models.Company:
+		return v.LastModifiedDate
+	case *models.Server:
+		return v.LastModifiedDate
+	case *models.Workstation:
+		return v.LastModifiedDate
+	case *models.FiscalRegister:
+		return v.LastModifiedDate
+	}
+	return nil
 }

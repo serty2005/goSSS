@@ -4,6 +4,7 @@ package db
 import (
 	"encoding/json"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 
@@ -31,6 +32,7 @@ func Migrate(db *gorm.DB) error {
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
 		&models.User{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
+		&tickets.Ticket{},
 	)
 }
 

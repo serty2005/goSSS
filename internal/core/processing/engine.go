@@ -1,7 +1,9 @@
+// Файл: internal/core/processing/engine.go
 package processing
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
@@ -10,7 +12,10 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
+	"reflect"
 	"time"
+
+	"gorm.io/datatypes"
 )
 
 // ActionType определяет тип действия, которое должен выполнить Оркестратор.
@@ -20,6 +25,7 @@ const (
 	ActionCreateTask         ActionType = "create_task"
 	ActionUpdate             ActionType = "update"
 	ActionAddAdditionalOwner ActionType = "add_additional_owner"
+	ActionCreate             ActionType = "create" // Новое действие для создания сущностей
 )
 
 // Action представляет одно действие в плане.
@@ -30,6 +36,7 @@ type Action struct {
 	Updates             map[string]interface{}
 	Task                *models.ReconciliationTask
 	AdditionalOwnerUUID string // Внутренний ID доп. владельца
+	EntityToCreate      interface{}
 }
 
 // ProcessingResult - это "план действий", который Процессор возвращает Оркестратору.
@@ -40,6 +47,9 @@ type ProcessingResult struct {
 // ProcessingEngine содержит всю сложную бизнес-логику сверки.
 type ProcessingEngine interface {
 	ProcessAgentData(ctx context.Context, source string, data *api.AgentDataDTO) *ProcessingResult
+	ProcessDuplicates(ctx context.Context, payload events.DuplicatesFoundPayload) *ProcessingResult
+	ProcessServiceDeskUpdate(ctx context.Context, isNew bool, entityType string, currentEntity, newEntityModel interface{}) (*ProcessingResult, error)
+	CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error)
 }
 
 type processingEngineImpl struct {
@@ -71,6 +81,113 @@ func NewProcessingEngine(
 	}
 }
 
+// ProcessServiceDeskUpdate обрабатывает событие обновления из SD и возвращает план.
+func (p *processingEngineImpl) ProcessServiceDeskUpdate(ctx context.Context, isNew bool, entityType string, currentEntity, newEntityModel interface{}) (*ProcessingResult, error) {
+	result := &ProcessingResult{Actions: []Action{}}
+
+	if isNew {
+		// Если сущность новая, план прост: создать ее.
+		action := Action{
+			Type:           ActionCreate,
+			EntityType:     entityType,
+			EntityToCreate: newEntityModel,
+		}
+		result.Actions = append(result.Actions, action)
+		return result, nil
+	}
+
+	// Если сущность существует, сравниваем ее с новой версией.
+	updates, err := p.reconciliationEngine.CompareModelsForUpdate(entityType, currentEntity, newEntityModel)
+	if err != nil {
+		return nil, err
+	}
+
+	// Добавляем дату модификации в список обновлений.
+	if newLMD := getLMDFromModel(newEntityModel); newLMD != nil {
+		if updates == nil {
+			updates = make(map[string]interface{})
+		}
+		updates["last_modified_date"] = newLMD
+	}
+
+	if len(updates) > 0 {
+		updates["last_updated_by"] = "naumen_gateway"
+		var internalID string
+		// Получаем ID из существующей сущности
+		if val := reflect.ValueOf(currentEntity).Elem().FieldByName("ID"); val.IsValid() {
+			internalID = val.String()
+		}
+
+		action := Action{
+			Type:       ActionUpdate,
+			EntityType: entityType,
+			EntityUUID: internalID,
+			Updates:    updates,
+		}
+		result.Actions = append(result.Actions, action)
+	}
+
+	return result, nil
+}
+
+// CompareModelsForUpdate просто делегирует вызов нижележащему ReconciliationEngine.
+func (p *processingEngineImpl) CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error) {
+	return p.reconciliationEngine.CompareModelsForUpdate(entityType, current, new)
+}
+
+// ProcessDuplicates обрабатывает событие нахождения дубликатов и возвращает план.
+func (p *processingEngineImpl) ProcessDuplicates(ctx context.Context, payload events.DuplicatesFoundPayload) *ProcessingResult {
+	result := &ProcessingResult{Actions: []Action{}}
+	log := p.logger.With("entityType", payload.EntityType, "field", payload.Field, "value", payload.Value)
+
+	enrichedDuplicates := make([]map[string]interface{}, 0, len(payload.InternalIDs))
+	for _, internalID := range payload.InternalIDs {
+		data, err := p.reconciliationEngine.GetEnrichmentDataForEntity(ctx, payload.EntityType, internalID)
+		if err != nil {
+			log.Warn("Не удалось обогатить данные для одного из дубликатов", "internalID", internalID, "error", err)
+			continue
+		}
+		enrichedDuplicates = append(enrichedDuplicates, data)
+	}
+
+	if len(enrichedDuplicates) < 2 {
+		log.Info("После обогащения осталось меньше двух сущностей, задача на дубликаты не создается")
+		return result
+	}
+
+	statusDetails := map[string]interface{}{
+		"type":       "duplicate_found",
+		"field":      payload.Field,
+		"value":      payload.Value,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"source":     "duplicates_gateway",
+		"duplicates": enrichedDuplicates,
+	}
+
+	detailsJSON, err := json.Marshal(statusDetails)
+	if err != nil {
+		log.Error("Ошибка сериализации status_details для дубликатов", "error", err)
+		return result
+	}
+
+	updates := map[string]interface{}{
+		"health_status":  "attention_required",
+		"status_details": datatypes.JSON(detailsJSON),
+	}
+
+	for _, internalID := range payload.InternalIDs {
+		action := Action{
+			Type:       ActionUpdate,
+			EntityType: payload.EntityType,
+			EntityUUID: internalID,
+			Updates:    updates,
+		}
+		result.Actions = append(result.Actions, action)
+	}
+
+	return result
+}
+
 // ProcessAgentData - главный метод, реализующий согласованную логику.
 func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source string, data *api.AgentDataDTO) *ProcessingResult {
 	result := &ProcessingResult{Actions: []Action{}}
@@ -86,23 +203,25 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 		return result
 	}
 
-	mainMatch := p.matcherSvc.FindEntityByAgentData(ctx, data)
-	if mainMatch == nil {
+	// Используем водопадную логику поиска для надежного сопоставления
+	match := p.matcherSvc.FindEntityByAgentData(ctx, data)
+
+	// Если нет совпадений, создаем задачу на нового клиента
+	if match == nil {
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "new_client", "", data)
 		result.Actions = append(result.Actions, *action)
 		return result
 	}
 
-	payload := &events.AgentDataPayload{Source: source, Data: *data}
-	etalonOwnerID, err := p.reconciliationEngine.DetermineOwner(ctx, payload)
-	if err != nil {
-		p.logger.Error("Ошибка определения владельца", "error", err)
-		action := p.reconciliationEngine.CreateConflictTask(ctx, "data_conflict", "", data)
-		result.Actions = append(result.Actions, *action)
-		return result
-	}
+	log.Info("Найдено совпадение для обработки",
+		"entity_type", match.EntityType,
+		"owner_id", match.OwnerUUID)
+
+	// Получаем ID владельца из найденного совпадения
+	etalonOwnerID := match.OwnerUUID
 	if etalonOwnerID == "" {
-		action := p.reconciliationEngine.CreateConflictTask(ctx, "new_client", "", data)
+		log.Error("Владелец не найден в совпадении")
+		action := p.reconciliationEngine.CreateConflictTask(ctx, "data_conflict", "", data)
 		result.Actions = append(result.Actions, *action)
 		return result
 	}
@@ -110,7 +229,6 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	log.Info("Эталонный владелец оборудования определен", "ownerID", etalonOwnerID)
 
 	foundServer, _ := p.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(data.URLRms)))
-	// Используем правильный порядок поиска: TV/LM сначала, Anydesk как fallback
 	foundWS, _ := p.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID)
 	if foundWS == nil && data.AnydeskID != "" && data.AnydeskID != "None" {
 		foundWS, _ = p.workstationRepo.FindByRemoteIDs(ctx, "", data.AnydeskID, "")
@@ -135,8 +253,6 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	return result
 }
 
-// processServerActions формирует план действий для Сервера.
-// Сервер используется только для определения владельца, данные сервера не обновляются.
 func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, equipmentOwnerID string, server *models.Server, data *api.AgentDataDTO) {
 	serverID := "nil"
 	if server != nil {
@@ -149,7 +265,6 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 		return
 	}
 
-	// Проверяем статус сервера - если заблокирован, пропускаем обработку
 	if server.HealthStatus == "locked" {
 		p.logger.Debug("Обработка сервера пропущена: статус 'locked'", "id", server.ID)
 		return
@@ -160,18 +275,14 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	areRelated := p.reconciliationEngine.AreCompaniesRelated(equipmentOwnerID, serverPrimaryOwnerID)
 	p.logger.Debug("Результат проверки родства компаний", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID, "are_related", areRelated)
 
-	if areRelated {
-		p.logger.Debug("Компании связаны, задача owner_mismatch не создаётся", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID)
-	} else {
+	if !areRelated {
 		p.logger.Debug("Компании не связаны, создание задачи owner_mismatch", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID)
-		// Создать задачу на конфликт владельца
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "owner_mismatch", equipmentOwnerID, data, server)
 		p.logger.Debug("Задача owner_mismatch создана", "task_type", action.Task.TaskType, "entity_type", action.Task.EntityType)
 		res.Actions = append(res.Actions, *action)
 	}
 }
 
-// processWorkstationActions формирует план действий для Рабочей станции.
 func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, res *ProcessingResult, ownerID string, ws *models.Workstation, data *api.AgentDataDTO) {
 	agentTV := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
@@ -181,14 +292,12 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		if ws.HealthStatus == "locked" {
 			return
 		}
-		// Использовать CompareEntityData для обновления
 		agentData := map[string]interface{}{
 			"teamviewer":  agentTV,
 			"litemanager": agentLM,
 			"anydesk":     agentAD,
 		}
-		hasChanges, updateAction := p.reconciliationEngine.CompareEntityData(ctx, "Workstation", agentData, ws)
-		if hasChanges {
+		if hasChanges, updateAction := p.reconciliationEngine.CompareEntityData(ctx, "Workstation", agentData, ws); hasChanges {
 			res.Actions = append(res.Actions, *updateAction)
 		}
 	} else if agentTV != "" || agentLM != "" || agentAD != "" {
@@ -197,23 +306,30 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 	}
 }
 
-// processFiscalRegisterActions формирует план действий для ФР.
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, ownerID string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
 		if fr.HealthStatus == "locked" {
 			return
 		}
-		// Использовать CompareEntityData для обновления
 		agentData := map[string]interface{}{
+			// Существующие поля
 			"dateTime_end":     data.DateTimeEnd,
 			"licenses":         data.Licenses,
 			"RNM":              data.RNM,
 			"organizationName": data.OrganizationName,
 			"INN":              data.INN,
 			"modelName":        data.ModelName,
+			// Новые поля из данных агента
+			"fr_downloader":    data.BootVersion,
+			"kkt_reg_date":     data.DateTimeReg,
+			"driver_version":   data.InstalledDriver,
+			"fn_number":        data.FNSerial,
+			"address":          data.Address,
+			"attribute_excise": data.AttributeExcise,
+			"attribute_marked": data.AttributeMarked,
+			"ofd_name":         data.OFDName,
 		}
-		hasChanges, updateAction := p.reconciliationEngine.CompareEntityData(ctx, "FiscalRegister", agentData, fr)
-		if hasChanges {
+		if hasChanges, updateAction := p.reconciliationEngine.CompareEntityData(ctx, "FiscalRegister", agentData, fr); hasChanges {
 			res.Actions = append(res.Actions, *updateAction)
 		}
 	} else if data.SerialNumber != "" {

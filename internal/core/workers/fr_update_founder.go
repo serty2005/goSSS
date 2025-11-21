@@ -131,6 +131,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 
 		if len(discrepancies) > 0 {
 			payload := events.FiscalRegisterDiscrepancyPayload{
+				FRInternalUUID:    link.InternalID,
 				FRServiceDeskUUID: link.ServiceDeskUUID,
 				Discrepancies:     discrepancies,
 			}

@@ -72,7 +72,11 @@ CREATE TABLE fiscal_registers (
   kkt_reg_date TIMESTAMPTZ,
   fn_expire_date TIMESTAMPTZ,
   last_modified_date TIMESTAMPTZ,
-  owner_id TEXT REFERENCES companies(uuid) ON DELETE SET NULL
+  owner_id TEXT REFERENCES companies(uuid) ON DELETE SET NULL,
+  address TEXT,
+  attribute_excise BOOLEAN,
+  attribute_marked BOOLEAN,
+  ofd_name TEXT
 );
 
 CREATE INDEX idx_fr_uuid ON fiscal_registers(uuid);

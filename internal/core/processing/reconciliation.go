@@ -13,9 +13,11 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
 	"fmt"
+	"reflect"
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // ReconciliationEngine отвечает за логику сверки данных агента с существующими сущностями,
@@ -24,20 +26,20 @@ type ReconciliationEngine interface {
 	// DetermineOwner определяет владельца на основе данных агента (сервер, РС, ФР).
 	DetermineOwner(ctx context.Context, data *events.AgentDataPayload) (string, error)
 
-	// CheckOwnerConflict проверяет конфликт владельцев сервера и оборудования.
-	CheckOwnerConflict(serverOwner, equipmentOwner string) (bool, error)
-
 	// AreCompaniesRelated проверяет, связаны ли компании (родительские связи).
 	AreCompaniesRelated(owner1, owner2 string) bool
-
-	// ResolveDuplicates автоматически разрешает дубликаты на основе иерархии.
-	ResolveDuplicates(ctx context.Context, data *events.AgentDataPayload) error
 
 	// CreateConflictTask создает задачу на конфликт (owner_mismatch, need_update и т.д.).
 	CreateConflictTask(ctx context.Context, conflictType string, etalonOwnerID string, data *api.AgentDataDTO, entities ...interface{}) *Action
 
 	// CompareEntityData сравнивает данные агента с сущностью и определяет необходимость обновления.
 	CompareEntityData(ctx context.Context, entityType string, agentData map[string]interface{}, entity interface{}) (bool, *Action)
+
+	// GetEnrichmentDataForEntity собирает полную информацию о сущности для записи в детали.
+	GetEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error)
+
+	// CompareModelsForUpdate сравнивает две модели одного типа и возвращает map для обновления.
+	CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error)
 }
 
 // reconciliationEngineImpl реализация ReconciliationEngine.
@@ -75,18 +77,14 @@ func NewReconciliationEngine(
 	}
 }
 
-// DetermineOwner определяет владельца по новой логике: сервер (если не локальный) -> РС по ID -> ФР.
-// URL сервера используется только для определения владельца, НЕ для обновления данных сервера.
 func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *events.AgentDataPayload) (string, error) {
 	r.logger.Info("Определение владельца для данных из агента", "source", data.Source, "url_rms", data.Data.URLRms, "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "anydesk", data.Data.AnydeskID, "serial", data.Data.SerialNumber)
 
-	// Проверить локальность URL: если validators.ValidateIPAddress возвращает nil, то локальный
 	normalizedIP := validators.ValidateIPAddress(data.Data.URLRms)
 	isLocal := normalizedIP == nil
 	r.logger.Debug("Проверка локальности URL", "url", data.Data.URLRms, "normalized_ip", utils.SafeStringDereference(normalizedIP), "is_local", isLocal)
 
 	if !isLocal {
-		// Найти сервер по URL/IP для определения владельца
 		server, err := r.serverRepo.FindByCRMidOrIP(ctx, data.Data.CRMID, utils.SafeStringDereference(normalizedIP))
 		r.logger.Debug("Поиск сервера по URL/IP для определения владельца", "crm_id", data.Data.CRMID, "ip", utils.SafeStringDereference(normalizedIP), "found", server != nil, "error", err)
 		if err == nil && server != nil {
@@ -101,8 +99,6 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 		r.logger.Debug("URL локальный, пропуск поиска сервера для определения владельца")
 	}
 
-	// Найти РС по remote IDs: приоритет teamviewer + litemanager, затем anydesk как fallback
-	// Сначала ищем по Teamviewer и Litemanager
 	ws, err := r.workstationRepo.FindByRemoteIDs(ctx, data.Data.TeamviewerID, "", data.Data.LitemanagerID)
 	r.logger.Debug("Поиск РС по TV/LM", "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "found", ws != nil, "error", err)
 	if err == nil && ws != nil {
@@ -114,7 +110,6 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 		}
 	}
 
-	// Fallback: поиск по Anydesk
 	if data.Data.AnydeskID != "" && data.Data.AnydeskID != "None" {
 		ws, err = r.workstationRepo.FindByRemoteIDs(ctx, "", data.Data.AnydeskID, "")
 		r.logger.Debug("Поиск РС по Anydesk", "anydesk", data.Data.AnydeskID, "found", ws != nil, "error", err)
@@ -128,7 +123,6 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 		}
 	}
 
-	// Найти ФР по serial number
 	fr, err := r.frRepo.FindBySerialNumber(ctx, data.Data.SerialNumber)
 	r.logger.Debug("Поиск ФР по serial", "serial", data.Data.SerialNumber, "found", fr != nil, "error", err)
 	if err == nil && fr != nil {
@@ -144,18 +138,6 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 	return "", nil
 }
 
-// CheckOwnerConflict проверяет конфликт между владельцами сервера и оборудования.
-func (r *reconciliationEngineImpl) CheckOwnerConflict(serverOwner, equipmentOwner string) (bool, error) {
-	if serverOwner != equipmentOwner {
-		// Проверить родственные связи
-		if !r.AreCompaniesRelated(serverOwner, equipmentOwner) {
-			return true, nil // Конфликт
-		}
-	}
-	return false, nil
-}
-
-// AreCompaniesRelated проверяет родительские связи между компаниями.
 func (r *reconciliationEngineImpl) AreCompaniesRelated(owner1, owner2 string) bool {
 	r.logger.Debug("Проверка родства компаний", "owner1", owner1, "owner2", owner2)
 	if owner1 == owner2 {
@@ -174,21 +156,21 @@ func (r *reconciliationEngineImpl) AreCompaniesRelated(owner1, owner2 string) bo
 		return false
 	}
 	r.logger.Debug("Родители owner2", "owner2", owner2, "parents2", parents2)
-	// Проверить, является ли owner1 родителем owner2
+
 	for _, p := range parents2 {
 		if p == owner1 {
 			r.logger.Debug("owner1 является родителем owner2", "parent", owner1, "child", owner2)
 			return true
 		}
 	}
-	// Проверить, является ли owner2 родителем owner1
+
 	for _, p := range parents1 {
 		if p == owner2 {
 			r.logger.Debug("owner2 является родителем owner1", "parent", owner2, "child", owner1)
 			return true
 		}
 	}
-	// Проверить общие родители
+
 	parents1Set := make(map[string]struct{})
 	for _, p := range parents1 {
 		parents1Set[p] = struct{}{}
@@ -203,46 +185,6 @@ func (r *reconciliationEngineImpl) AreCompaniesRelated(owner1, owner2 string) bo
 	return false
 }
 
-// ResolveDuplicates разрешает дубликаты на основе актуальной иерархии.
-func (r *reconciliationEngineImpl) ResolveDuplicates(ctx context.Context, data *events.AgentDataPayload) error {
-	// Найти сервер по данным агента
-	normalizedIP := validators.ValidateIPAddress(data.Data.URLRms)
-	server, err := r.serverRepo.FindByCRMidOrIP(ctx, data.Data.CRMID, utils.SafeStringDereference(normalizedIP))
-	if err != nil || server == nil || server.OwnerID == nil {
-		return nil // Нет сервера, нечего разрешать
-	}
-	serverOwner := *server.OwnerID
-
-	// Найти РС по remote IDs
-	ws, err := r.workstationRepo.FindByRemoteIDs(ctx, data.Data.TeamviewerID, "", data.Data.LitemanagerID)
-	if err != nil || ws == nil {
-		return nil // Нет РС
-	}
-
-	// Если владелец РС совпадает с сервером, OK
-	if ws.OwnerID != nil && *ws.OwnerID == serverOwner {
-		return nil
-	}
-
-	// Иначе, это потенциальный дубликат или конфликт, но поскольку duplicates_gateway обрабатывает отдельно,
-	// здесь просто логируем или создаем задачу если нужно
-	// Для автоматического разрешения: если владелец РС не совпадает, но связан, то обновить owner РС на serverOwner
-	if r.AreCompaniesRelated(*ws.OwnerID, serverOwner) {
-		// Обновить owner РС
-		updates := map[string]interface{}{
-			"owner_id":           serverOwner,
-			"last_modified_date": time.Now(),
-		}
-		_, err := r.workstationRepo.Update(ctx, nil, ws.ID, updates)
-		if err != nil {
-			r.logger.Error("Не удалось обновить owner РС при разрешении дубликатов", "ws_id", ws.ID, "error", err)
-		}
-	}
-
-	return nil
-}
-
-// CreateConflictTask создает задачу на конфликт.
 func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, conflictType string, etalonOwnerID string, data *api.AgentDataDTO, entities ...interface{}) *Action {
 	r.logger.Debug("CreateConflictTask вызвана", "conflictType", conflictType, "etalonOwnerID", etalonOwnerID, "entities_count", len(entities))
 	detailsMap := make(map[string]interface{})
@@ -250,7 +192,6 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 	detailsMap["timestamp"] = time.Now().UTC().Format(time.RFC3339)
 	detailsMap["agent_data"] = data
 
-	// Добавляем информацию об эталонном владельце с внешним UUID
 	if etalonOwnerID != "" {
 		etalonOwner, err := r.companyRepo.GetByID(ctx, etalonOwnerID)
 		if err == nil && etalonOwner != nil {
@@ -269,7 +210,6 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 		}
 	}
 
-	// Обогатить данные для сущностей
 	for i, entity := range entities {
 		var entityID string
 		var entityType string
@@ -286,7 +226,7 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 		default:
 			continue
 		}
-		enriched, err := r.getEnrichmentDataForEntity(ctx, entityType, entityID)
+		enriched, err := r.GetEnrichmentDataForEntity(ctx, entityType, entityID)
 		if err == nil {
 			detailsMap[fmt.Sprintf("entity_%d", i)] = enriched
 		}
@@ -300,7 +240,6 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 		Comment:  fmt.Sprintf("Конфликт типа: %s", conflictType),
 	}
 
-	// Установить EntityType и EntityUUID на основе первой сущности, если есть
 	if len(entities) > 0 {
 		switch e := entities[0].(type) {
 		case *models.Server:
@@ -313,13 +252,22 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 			task.EntityType = "FiscalRegister"
 			task.EntityUUID = e.ID
 		}
+	} else if conflictType == "add_equipment" {
+		// Логика определения типа сущности для новой задачи
+		if data.SerialNumber != "" {
+			task.EntityType = "FiscalRegister"
+			task.EntityUUID = data.SerialNumber // Используем серийный номер как временный идентификатор
+		} else if data.TeamviewerID != "" || data.LitemanagerID != "" || data.AnydeskID != "" {
+			task.EntityType = "Workstation"
+			// Для РС нет одного уникального идентификатора, поэтому оставляем UUID пустым
+		}
 	}
+
 	r.logger.Debug("CreateConflictTask завершена", "task_type", task.TaskType, "entity_type", task.EntityType, "entity_uuid", task.EntityUUID)
 	return &Action{Type: ActionCreateTask, Task: task}
 }
 
-// getEnrichmentDataForEntity собирает полную информацию о сущности для записи в StatusDetails.
-func (r *reconciliationEngineImpl) getEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error) {
+func (r *reconciliationEngineImpl) GetEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error) {
 	var ownerID string
 	var lmd *time.Time
 
@@ -378,7 +326,6 @@ func (r *reconciliationEngineImpl) getEnrichmentDataForEntity(ctx context.Contex
 	}, nil
 }
 
-// CompareEntityData сравнивает данные агента с сущностью.
 func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entityType string, agentData map[string]interface{}, entity interface{}) (bool, *Action) {
 	r.logger.Debug("Сравнение данных агента с сущностью", "entity_type", entityType, "agent_data_keys", getMapKeys(agentData))
 	updates := make(map[string]interface{})
@@ -392,7 +339,6 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			return false, nil
 		}
 		r.logger.Debug("Сравнение для сервера", "server_id", server.ID, "current_crm_id", utils.SafeStringDereference(server.CRMid))
-		// Обновлять crm_id если пустой
 		if agentData["crm_id"] != nil && (server.CRMid == nil || *server.CRMid == "") {
 			updates["crm_id"] = agentData["crm_id"].(string)
 			hasChanges = true
@@ -406,25 +352,13 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 		}
 		r.logger.Debug("Сравнение для ФР", "fr_id", fr.ID, "serial", utils.SafeStringDereference(fr.FRSerialNumber))
 
-		// Сравниваем ВСЕ поля ФР и обновляем сразу при любом различии
 		changesDetected := false
 
-		// dateTime_end (FNExpireDate)
 		if agentData["dateTime_end"] != nil && agentData["dateTime_end"].(string) != "" {
 			agentDateStr := agentData["dateTime_end"].(string)
-			// Используем более гибкий парсинг даты
 			var parsed time.Time
 			var err error
-
-			// Пробуем разные форматы даты
-			formats := []string{
-				"2006-01-02",
-				"2006-01-02 15:04:05",
-				"2006-01-02T15:04:05",
-				"02.01.2006",
-				"02/01/2006",
-			}
-
+			formats := []string{"2006-01-02", "2006-01-02 15:04:05", "2006-01-02T15:04:05", "02.01.2006", "02/01/2006"}
 			for _, format := range formats {
 				parsed, err = time.Parse(format, agentDateStr)
 				if err == nil {
@@ -434,62 +368,161 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 
 			if err != nil {
 				r.logger.Warn("Не удалось распарсить dateTime_end ни в одном формате", "value", agentDateStr, "error", err)
-			} else {
-				if fr.FNExpireDate == nil {
-					updates["fn_expire_date"] = parsed
-					changesDetected = true
-					r.logger.Info("Обновление fn_expire_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
-				} else {
-					if parsed != *fr.FNExpireDate {
-						updates["fn_expire_date"] = parsed
-						changesDetected = true
-						r.logger.Info("Обновление fn_expire_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
-					}
-				}
+			} else if fr.FNExpireDate == nil || parsed != *fr.FNExpireDate {
+				updates["fn_expire_date"] = parsed
+				changesDetected = true
+				r.logger.Debug("Обновление fn_expire_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
 			}
 		}
 
-		// licenses
 		if agentData["licenses"] != nil {
 			jsonBytes, err := json.Marshal(agentData["licenses"])
 			if err != nil {
 				r.logger.Error("Ошибка сериализации licenses", "error", err)
-			} else {
-				currentJSON := string(fr.Licenses)
-				if currentJSON != string(jsonBytes) {
-					updates["licenses"] = datatypes.JSON(jsonBytes)
-					changesDetected = true
-					r.logger.Info("Обновление licenses для ФР", "fr_id", fr.ID)
-				}
+			} else if string(fr.Licenses) != string(jsonBytes) {
+				updates["licenses"] = datatypes.JSON(jsonBytes)
+				changesDetected = true
+				r.logger.Debug("Обновление licenses для ФР", "fr_id", fr.ID)
 			}
 		}
 
-		// RNM (RNKKT)
 		if agentData["RNM"] != nil && agentData["RNM"].(string) != "" && (fr.RNKKT == nil || *fr.RNKKT != agentData["RNM"].(string)) {
 			updates["rn_kkt"] = agentData["RNM"].(string)
 			changesDetected = true
-			r.logger.Info("Обновление rn_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["RNM"])
+			r.logger.Debug("Обновление rn_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["RNM"])
 		}
 
-		// organizationName (LegalName)
 		if agentData["organizationName"] != nil && agentData["organizationName"].(string) != "" && (fr.LegalName == nil || *fr.LegalName != agentData["organizationName"].(string)) {
 			updates["legal_name"] = agentData["organizationName"].(string)
 			changesDetected = true
-			r.logger.Info("Обновление legal_name (organizationName) для ФР", "fr_id", fr.ID, "new_value", agentData["organizationName"])
+			r.logger.Debug("Обновление legal_name (organizationName) для ФР", "fr_id", fr.ID, "new_value", agentData["organizationName"])
 		}
 
-		// INN
 		if agentData["INN"] != nil && agentData["INN"].(string) != "" && (fr.INN == nil || *fr.INN != agentData["INN"].(string)) {
 			updates["inn"] = agentData["INN"].(string)
 			changesDetected = true
-			r.logger.Info("Обновление inn для ФР", "fr_id", fr.ID, "new_value", agentData["INN"])
+			r.logger.Debug("Обновление inn для ФР", "fr_id", fr.ID, "new_value", agentData["INN"])
 		}
 
-		// modelName (ModelKKT)
 		if agentData["modelName"] != nil && agentData["modelName"].(string) != "" && (fr.ModelKKT == nil || *fr.ModelKKT != agentData["modelName"].(string)) {
 			updates["model_kkt"] = agentData["modelName"].(string)
 			changesDetected = true
-			r.logger.Info("Обновление model_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["modelName"])
+			r.logger.Debug("Обновление model_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["modelName"])
+		}
+
+		// Новые поля из данных агента
+
+		// fr_downloader из bootVersion
+		if agentData["fr_downloader"] != nil && agentData["fr_downloader"].(string) != "" && (fr.FRDownloader == nil || *fr.FRDownloader != agentData["fr_downloader"].(string)) {
+			updates["fr_downloader"] = agentData["fr_downloader"].(string)
+			changesDetected = true
+			r.logger.Debug("Обновление fr_downloader для ФР", "fr_id", fr.ID, "new_value", agentData["fr_downloader"])
+		}
+
+		// kkt_reg_date из datetime_reg
+		if agentData["kkt_reg_date"] != nil && agentData["kkt_reg_date"].(string) != "" {
+			agentDateStr := agentData["kkt_reg_date"].(string)
+			var parsed time.Time
+			var err error
+			formats := []string{"2006-01-02", "2006-01-02 15:04:05", "2006-01-02T15:04:05", "02.01.2006", "02/01/2006"}
+			for _, format := range formats {
+				parsed, err = time.Parse(format, agentDateStr)
+				if err == nil {
+					break
+				}
+			}
+
+			if err != nil {
+				r.logger.Warn("Не удалось распарсить kkt_reg_date ни в одном формате", "value", agentDateStr, "error", err)
+			} else if fr.KKTRegDate == nil || parsed != *fr.KKTRegDate {
+				updates["kkt_reg_date"] = parsed
+				changesDetected = true
+				r.logger.Debug("Обновление kkt_reg_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
+			}
+		}
+
+		// driver_version из installed_driver
+		if agentData["driver_version"] != nil && agentData["driver_version"].(string) != "" && (fr.DriverVersion == nil || *fr.DriverVersion != agentData["driver_version"].(string)) {
+			updates["driver_version"] = agentData["driver_version"].(string)
+			changesDetected = true
+			r.logger.Debug("Обновление driver_version для ФР", "fr_id", fr.ID, "new_value", agentData["driver_version"])
+		}
+
+		// fn_number из fn_serial
+		if agentData["fn_number"] != nil && agentData["fn_number"].(string) != "" && (fr.FNNumber == nil || *fr.FNNumber != agentData["fn_number"].(string)) {
+			updates["fn_number"] = agentData["fn_number"].(string)
+			changesDetected = true
+			r.logger.Debug("Обновление fn_number для ФР", "fr_id", fr.ID, "new_value", agentData["fn_number"])
+		}
+
+		// address - адрес фискального регистратора
+		if agentData["address"] != nil && agentData["address"].(string) != "" && (fr.Address == nil || *fr.Address != agentData["address"].(string)) {
+			updates["address"] = agentData["address"].(string)
+			changesDetected = true
+			r.logger.Debug("Обновление address для ФР", "fr_id", fr.ID, "new_value", agentData["address"])
+		}
+
+		// attribute_excise - признак работы с акцизными товарами
+		if agentData["attribute_excise"] != nil {
+			var newValue *bool
+			if val, ok := agentData["attribute_excise"].(*string); ok && val != nil {
+				// Пришло как строка, парсим в boolean
+				switch *val {
+				case "True", "true", "1":
+					excise := true
+					newValue = &excise
+				case "False", "false", "0":
+					excise := false
+					newValue = &excise
+				}
+			} else if val, ok := agentData["attribute_excise"].(*bool); ok && val != nil {
+				// Пришло как *bool (legacy)
+				newValue = val
+			} else if val, ok := agentData["attribute_excise"].(bool); ok {
+				// Пришло как bool (legacy)
+				newValue = &val
+			}
+
+			if newValue != nil && (fr.AttributeExcise == nil || *fr.AttributeExcise != *newValue) {
+				updates["attribute_excise"] = newValue
+				changesDetected = true
+				r.logger.Debug("Обновление attribute_excise для ФР", "fr_id", fr.ID, "new_value", newValue)
+			}
+		}
+
+		// attribute_marked - признак работы с маркированными товарами
+		if agentData["attribute_marked"] != nil {
+			var newValue *bool
+			if val, ok := agentData["attribute_marked"].(*string); ok && val != nil {
+				// Пришло как строка, парсим в boolean
+				switch *val {
+				case "True", "true", "1":
+					marked := true
+					newValue = &marked
+				case "False", "false", "0":
+					marked := false
+					newValue = &marked
+				}
+			} else if val, ok := agentData["attribute_marked"].(*bool); ok && val != nil {
+				// Пришло как *bool (legacy)
+				newValue = val
+			} else if val, ok := agentData["attribute_marked"].(bool); ok {
+				// Пришло как bool (legacy)
+				newValue = &val
+			}
+
+			if newValue != nil && (fr.AttributeMarked == nil || *fr.AttributeMarked != *newValue) {
+				updates["attribute_marked"] = newValue
+				changesDetected = true
+				r.logger.Debug("Обновление attribute_marked для ФР", "fr_id", fr.ID, "new_value", newValue)
+			}
+		}
+
+		// ofd_name - название оператора фискальных данных
+		if agentData["ofd_name"] != nil && agentData["ofd_name"].(string) != "" && (fr.OFDName == nil || *fr.OFDName != agentData["ofd_name"].(string)) {
+			updates["ofd_name"] = agentData["ofd_name"].(string)
+			changesDetected = true
+			r.logger.Debug("Обновление ofd_name для ФР", "fr_id", fr.ID, "new_value", agentData["ofd_name"])
 		}
 
 		if changesDetected {
@@ -502,7 +535,6 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			return false, nil
 		}
 		r.logger.Debug("Сравнение для РС", "ws_id", ws.ID, "current_teamviewer", utils.SafeStringDereference(ws.Teamviewer), "current_litemanager", utils.SafeStringDereference(ws.Litemanager))
-		// Для РС обновлять только Teamviewer и Litemanager (Anydesk используется только для поиска)
 		if agentData["teamviewer"] != nil && agentData["teamviewer"].(string) != "" && (ws.Teamviewer == nil || *ws.Teamviewer != agentData["teamviewer"].(string)) {
 			updates["teamviewer"] = agentData["teamviewer"].(string)
 			hasChanges = true
@@ -513,7 +545,6 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			hasChanges = true
 			r.logger.Info("Обновление litemanager для РС", "ws_id", ws.ID, "new_value", agentData["litemanager"])
 		}
-		// Anydesk НЕ обновляем - используется только для поиска
 	}
 
 	if hasChanges {
@@ -546,7 +577,93 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 	return false, nil
 }
 
-// getMapKeys возвращает ключи мапы для логирования
+func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error) {
+	switch entityType {
+	case "Company":
+		c, okC := current.(*models.Company)
+		n, okN := new.(*models.Company)
+		if !okC || !okN {
+			return nil, fmt.Errorf("неверные типы для сравнения Company")
+		}
+		return getCompanyDiff(c, n), nil
+	case "Server":
+		c, okC := current.(*models.Server)
+		n, okN := new.(*models.Server)
+		if !okC || !okN {
+			return nil, fmt.Errorf("неверные типы для сравнения Server")
+		}
+		return getServerDiff(c, n), nil
+	case "Workstation":
+		c, okC := current.(*models.Workstation)
+		n, okN := new.(*models.Workstation)
+		if !okC || !okN {
+			return nil, fmt.Errorf("неверные типы для сравнения Workstation")
+		}
+		return getWorkstationDiff(c, n), nil
+	case "FiscalRegister":
+		c, okC := current.(*models.FiscalRegister)
+		n, okN := new.(*models.FiscalRegister)
+		if !okC || !okN {
+			return nil, fmt.Errorf("неверные типы для сравнения FiscalRegister")
+		}
+		return getFiscalRegisterDiff(c, n), nil
+	}
+	return nil, fmt.Errorf("неподдерживаемый тип для сравнения: %s", entityType)
+}
+
+func compareAndLog[T comparable](updates map[string]interface{}, key string, current, new *T) {
+	isCurrentNil := current == nil || reflect.ValueOf(current).IsNil()
+	isNewNil := new == nil || reflect.ValueOf(new).IsNil()
+	if isCurrentNil && isNewNil {
+		return
+	}
+	if isCurrentNil != isNewNil || *current != *new {
+		updates[key] = new
+	}
+}
+
+func getCompanyDiff(current *models.Company, new *models.Company) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "title", current.Title, new.Title)
+	compareAndLog(updates, "address", current.Address, new.Address)
+	compareAndLog(updates, "additional_name", current.AdditionalName, new.AdditionalName)
+	compareAndLog(updates, "parent_id", current.ParentID, new.ParentID)
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getServerDiff(current *models.Server, new *models.Server) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	compareAndLog(updates, "unique_id", current.UniqueID, new.UniqueID)
+	compareAndLog(updates, "rdp", current.RDP, new.RDP)
+	compareAndLog(updates, "server_version", current.ServerVersion, new.ServerVersion)
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getWorkstationDiff(current *models.Workstation, new *models.Workstation) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
 func getMapKeys(m map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

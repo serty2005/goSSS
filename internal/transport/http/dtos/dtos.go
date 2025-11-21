@@ -106,19 +106,76 @@ type AgentDataDTO struct {
 	BootVersion      string        `json:"bootVersion,omitempty"` // Версия прошивки (для FRFirmware)
 	Licenses         LicensesField `json:"licenses,omitempty"`    // Используем кастомный тип
 
+	// Новые поля для фискальных регистраторов
+	Address         string  `json:"address,omitempty"`          // Адрес фискального регистратора
+	AttributeExcise *string `json:"attribute_excise,omitempty"` // Признак работы с акцизными товарами (строковый)
+	AttributeMarked *string `json:"attribute_marked,omitempty"` // Признак работы с маркированными товарами (строковый)
+	OFDName         string  `json:"ofd_name,omitempty"`         // Название оператора фискальных данных
+
+	// Временные поля для парсинга строковых значений
+	AttributeExciseStr string `json:"attribute_excise_str,omitempty"`
+	AttributeMarkedStr string `json:"attribute_marked_str,omitempty"`
+
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
 func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
-	type Alias AgentDataDTO
-	alias := &struct{ *Alias }{Alias: (*Alias)(a)}
-	if err := json.Unmarshal(data, alias); err != nil {
+	// Сначала парсим JSON в map для доступа к сырым значениям
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	// Обрабатываем поля attribute_excise и attribute_marked отдельно
+	// Они могут приходить как строки или как boolean значения
+
+	// Обрабатываем attribute_excise
+	if val, exists := raw["attribute_excise"]; exists && val != nil {
+		if strVal, ok := val.(string); ok {
+			// Пришло как строка, сохраняем как строку
+			a.AttributeExcise = &strVal
+		} else if boolVal, ok := val.(bool); ok {
+			// Пришло как boolean, преобразуем в строку
+			strVal := "false"
+			if boolVal {
+				strVal = "true"
+			}
+			a.AttributeExcise = &strVal
+		}
+	}
+
+	// Обрабатываем attribute_marked
+	if val, exists := raw["attribute_marked"]; exists && val != nil {
+		if strVal, ok := val.(string); ok {
+			// Пришло как строка, сохраняем как строку
+			a.AttributeMarked = &strVal
+		} else if boolVal, ok := val.(bool); ok {
+			// Пришло как boolean, преобразуем в строку
+			strVal := "false"
+			if boolVal {
+				strVal = "true"
+			}
+			a.AttributeMarked = &strVal
+		}
+	}
+
+	// Удаляем обработанные поля из raw мапы
+	delete(raw, "attribute_excise")
+	delete(raw, "attribute_marked")
+
+	// Создаем временную структуру без проблемных полей для парсинга остальных данных
+	type Alias AgentDataDTO
+	alias := &struct{ *Alias }{Alias: (*Alias)(a)}
+
+	// Подготавливаем данные без проблемных полей
+	tempData, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+
+	// Парсим остальные поля
+	if err := json.Unmarshal(tempData, alias); err != nil {
 		return err
 	}
 
@@ -144,6 +201,10 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "installed_driver")
 	delete(raw, "bootVersion")
 	delete(raw, "licenses")
+	delete(raw, "address")
+	delete(raw, "ofd_name")
+	delete(raw, "attribute_excise_str")
+	delete(raw, "attribute_marked_str")
 
 	a.AdditionalProperties = raw
 	return nil

@@ -14,6 +14,8 @@ type MatchedEntity struct {
 	Entity     interface{} // Найденная сущность (*models.Server, *models.Workstation, etc.)
 	EntityType string      // 'Server', 'Workstation', 'FiscalRegister'
 	OwnerUUID  string      // Внутренний ID владельца
+	MatchScore float64     // Оценка качества совпадения (0.0-1.0)
+	MatchType  string      // Тип совпадения: 'exact', 'partial'
 }
 
 // EntityMatcherService определяет интерфейс для сервиса идентификации сущностей по данным от агента.
