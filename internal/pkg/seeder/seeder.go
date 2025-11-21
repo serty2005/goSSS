@@ -2,10 +2,11 @@ package seeder
 
 import (
 	"context"
-	"etalon-server/internal/infra/external"
-	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/external"
+	"etalon-server/internal/infra/logger"
 	"fmt"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ const batchSize = 100
 type Seeder struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -26,7 +27,7 @@ type Seeder struct {
 }
 
 func NewSeeder(
-	logger logger.LoggerInterface, db *gorm.DB, companyRepo repositories.CompanyRepo,
+	logger logger.LoggerInterface, db *gorm.DB, companyRepo company.Repository,
 	serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo, contractRepo repositories.ContractRepo,
 ) *Seeder {
@@ -44,7 +45,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
 	err := s.db.AutoMigrate(
-		&models.Company{}, &models.Server{}, &models.Workstation{},
+		&company.Company{}, &models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
 		&models.User{}, &models.ExternalSystemLink{},
@@ -105,10 +106,10 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 				childIntID := extToIntID[extID]
 				parentIntID := extToIntID[parentExtID]
 				if childIntID != "" && parentIntID != "" {
-					tx.Model(&models.Company{}).Where("id = ?", childIntID).Update("parent_id", parentIntID)
+					tx.Model(&company.Company{}).Where("id = ?", childIntID).Update("parent_id", parentIntID)
 				}
 			}
-			tx.Model(&models.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", "ou$company")
+			tx.Model(&company.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", "ou$company")
 		}
 
 		s.logger.Info("Создание Оборудования...")
@@ -222,18 +223,18 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 		for extID, intID := range extToIntID {
 			if _, isActive := activeCompanyExtIDs[extID]; isActive {
 				var count int64
-				tx.Model(&models.Company{}).Where("id = ?", intID).Count(&count)
+				tx.Model(&company.Company{}).Where("id = ?", intID).Count(&count)
 				if count > 0 {
 					activeCompanyIntIDs = append(activeCompanyIntIDs, intID)
 				}
 			}
 		}
 
-		if err := tx.Model(&models.Company{}).Session(&gorm.Session{AllowGlobalUpdate: true}).Update("active_contract", false).Error; err != nil {
+		if err := tx.Model(&company.Company{}).Session(&gorm.Session{AllowGlobalUpdate: true}).Update("active_contract", false).Error; err != nil {
 			return err
 		}
 		if len(activeCompanyIntIDs) > 0 {
-			if err := tx.Model(&models.Company{}).Where("id IN ?", activeCompanyIntIDs).Update("active_contract", true).Error; err != nil {
+			if err := tx.Model(&company.Company{}).Where("id IN ?", activeCompanyIntIDs).Update("active_contract", true).Error; err != nil {
 				return err
 			}
 		}

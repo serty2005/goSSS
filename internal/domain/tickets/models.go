@@ -1,7 +1,7 @@
 package tickets
 
 import (
-	"etalon-server/internal/domain/models" // Импортируем базовую модель
+	"etalon-server/internal/domain/common"
 	"time"
 )
 
@@ -23,7 +23,7 @@ const (
 
 // Ticket представляет собой метаданные заявки, хранящиеся в локальной БД.
 type Ticket struct {
-	models.Base // Внедряем ID, CreatedAt, UpdatedAt, DeletedAt, MetaClass
+	common.Base // Внедряем ID, CreatedAt, UpdatedAt, DeletedAt, MetaClass
 
 	// Данные из ServiceDesk
 	ServiceDeskUUID  string    `json:"service_desk_uuid" gorm:"uniqueIndex;not null;type:text"`

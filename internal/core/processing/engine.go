@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/logger"
@@ -57,7 +58,7 @@ type processingEngineImpl struct {
 	serverRepo           repositories.ServerRepo
 	workstationRepo      repositories.WorkstationRepo
 	frRepo               repositories.FiscalRegisterRepo
-	companyRepo          repositories.CompanyRepo
+	companyRepo          company.Repository
 	taskRepo             repositories.TaskRepo
 	matcherSvc           services.EntityMatcherService
 	linkRepo             repositories.LinkRepo
@@ -70,7 +71,7 @@ func NewProcessingEngine(
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
-	companyRepo repositories.CompanyRepo,
+	companyRepo company.Repository,
 	taskRepo repositories.TaskRepo,
 	matcherSvc services.EntityMatcherService,
 	linkRepo repositories.LinkRepo,

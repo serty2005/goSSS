@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/logger"
@@ -44,7 +45,7 @@ type ReconciliationEngine interface {
 
 // reconciliationEngineImpl реализация ReconciliationEngine.
 type reconciliationEngineImpl struct {
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -56,7 +57,7 @@ type reconciliationEngineImpl struct {
 
 // NewReconciliationEngine создает новый экземпляр ReconciliationEngine.
 func NewReconciliationEngine(
-	companyRepo repositories.CompanyRepo,
+	companyRepo company.Repository,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
@@ -580,8 +581,8 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error) {
 	switch entityType {
 	case "Company":
-		c, okC := current.(*models.Company)
-		n, okN := new.(*models.Company)
+		c, okC := current.(*company.Company)
+		n, okN := new.(*company.Company)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения Company")
 		}
@@ -622,7 +623,7 @@ func compareAndLog[T comparable](updates map[string]interface{}, key string, cur
 	}
 }
 
-func getCompanyDiff(current *models.Company, new *models.Company) map[string]interface{} {
+func getCompanyDiff(current *company.Company, new *company.Company) map[string]interface{} {
 	updates := make(map[string]interface{})
 	compareAndLog(updates, "title", current.Title, new.Title)
 	compareAndLog(updates, "address", current.Address, new.Address)

@@ -6,15 +6,19 @@ import (
 	"etalon-server/internal/core/gateways"
 	"etalon-server/internal/core/processing"
 	"etalon-server/internal/core/workers"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/infra/plugins/naumen"
+	infraRepos "etalon-server/internal/infra/repositories"
 	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/services"
+	companySvc "etalon-server/internal/services/company"
 	"etalon-server/internal/transport/http/handlers"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/pkg/eventbus"
@@ -22,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +53,7 @@ type Application struct {
 	FRUpdateFounder       workers.FRUpdateFounder
 	SDEditor              workers.SDEditorWorker
 	StatusActualityWorker workers.StatusActualityWorker
+	TicketGateway         gateways.TicketGateway
 
 	// Handlers
 	CrudHandler          *handlers.CrudHandler
@@ -60,6 +66,7 @@ type Application struct {
 	ContractHandler      *handlers.ContractHandler
 	UserHandler          *handlers.UserHandler
 	DebugHandler         *handlers.DebugHandler
+	TicketHandler        *handlers.TicketHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -170,7 +177,7 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 }
 
 type Repositories struct {
-	CompanyRepo     repositories.CompanyRepo
+	CompanyRepo     company.Repository
 	ServerRepo      repositories.ServerRepo
 	WorkstationRepo repositories.WorkstationRepo
 	FRRepo          repositories.FiscalRegisterRepo
@@ -179,11 +186,13 @@ type Repositories struct {
 	TaskRepo        repositories.TaskRepo
 	UserRepo        repositories.UserRepo
 	LinkRepo        repositories.LinkRepo
+	TicketRepo      tickets.TicketRepository
 }
 
 func setupRepositories(db *gorm.DB) Repositories {
 	return Repositories{
-		CompanyRepo:     repositories.NewCompanyRepo(db),
+		TicketRepo:      infraRepos.NewTicketRepo(db),
+		CompanyRepo:     infraRepos.NewCompanyRepo(db),
 		ServerRepo:      repositories.NewServerRepo(db),
 		WorkstationRepo: repositories.NewWorkstationRepo(db),
 		FRRepo:          repositories.NewFiscalRegisterRepo(db),
@@ -215,15 +224,21 @@ type Services struct {
 	TaskResolutionService services.TaskResolutionService
 	ServerActionsService  services.ServerActionsService
 	EntityMatcherService  services.EntityMatcherService
+	TicketService         services.TicketService
+	CompanyService        company.Service
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
+	transactor := db.NewGormTransactor(app.DB)
+
 	return Services{
 		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
 		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo),
 	}
 }
 
@@ -240,10 +255,11 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, clients.SDClient)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), clients.SDClient, repos.TicketRepo, app.DB, repos.LinkRepo)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
-	app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, srvs.CompanyService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
 	app.TaskHandler = handlers.NewTaskHandler(app.DB, srvs.TaskResolutionService, app.SDEditor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
@@ -253,6 +269,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ContractHandler = handlers.NewContractHandler(app.DB, repos.ContractRepo)
 	app.UserHandler = handlers.NewUserHandler(app.DB, srvs.AuthService, repos.UserRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
+	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
 }
 
 // --- Функции-хелперы для Run() ---
@@ -294,6 +311,11 @@ func (a *Application) setupRouter() *chi.Mux {
 		a.ServerActionsHandler.RegisterRoutes(r)
 		a.ContractHandler.RegisterRoutes(r)
 
+		r.Route("/tickets", func(r chi.Router) {
+			r.Use(middleware.AdminRequiredMiddleware)
+			a.TicketHandler.RegisterRoutes(r)
+		})
+
 		r.Route("/users", func(r chi.Router) {
 			r.Use(middleware.AdminRequiredMiddleware)
 			a.UserHandler.RegisterRoutes(r)
@@ -311,6 +333,17 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to Etalon Server"))
 	})
+	// --- СТАТИКА ДЛЯ ВЛОЖЕНИЙ ---
+	// Раздаем файлы из папки storage/tickets по URL /static/tickets/
+
+	// Создаем путь к папке с тикетами
+	// workDir, _ := os.Getwd()
+	// Важно: TicketStoragePath из конфига может быть относительным (./storage...),
+	// http.Dir требует чистого пути.
+
+	// Используем стандартный обработчик chi для статики
+	fileServer(r, "/static/tickets", http.Dir(a.Config.TicketStoragePath))
+
 	return r
 }
 
@@ -351,6 +384,8 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	if a.Config.EnableSDeskGateway {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.SDeskGateway.Start(ctx) }()
+		wg.Add(1)
+		go func() { defer wg.Done(); a.TicketGateway.Start(ctx) }()
 	} else {
 		a.Logger.Info("Синхронизация сущностей с ServiceDesk отключена в конфигурации.")
 	}
@@ -361,4 +396,25 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	} else {
 		a.Logger.Info("Проверка актуальности статусов отключена в конфигурации.")
 	}
+
+}
+
+// Вспомогательная функция для статики в Chi
+func fileServer(r chi.Router, path string, root http.FileSystem) {
+	if strings.ContainsAny(path, "{}*") {
+		panic("FileServer does not permit any URL parameters")
+	}
+
+	if path != "/" && path[len(path)-1] != '/' {
+		r.Get(path, http.RedirectHandler(path+"/", http.StatusPermanentRedirect).ServeHTTP)
+		path += "/"
+	}
+	path += "*"
+
+	r.Get(path, func(w http.ResponseWriter, r *http.Request) {
+		rctx := chi.RouteContext(r.Context())
+		pathPrefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+		fs := http.StripPrefix(pathPrefix, http.FileServer(root))
+		fs.ServeHTTP(w, r)
+	})
 }

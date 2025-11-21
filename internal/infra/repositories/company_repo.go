@@ -1,0 +1,110 @@
+package repositories
+
+import (
+	"context"
+	"etalon-server/internal/domain/company"
+	infraDB "etalon-server/internal/infra/db"
+
+	"gorm.io/gorm"
+)
+
+type companyRepo struct {
+	db *gorm.DB
+}
+
+func NewCompanyRepo(db *gorm.DB) company.Repository {
+	return &companyRepo{db: db}
+}
+
+func (r *companyRepo) getDB(ctx context.Context) *gorm.DB {
+	return infraDB.ExtractDB(ctx, r.db)
+}
+
+func (r *companyRepo) Create(ctx context.Context, entity *company.Company) error {
+	return r.getDB(ctx).WithContext(ctx).Create(entity).Error
+}
+
+func (r *companyRepo) Update(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
+	res := r.getDB(ctx).WithContext(ctx).Model(&company.Company{}).Where("id = ?", internalID).Updates(updateData)
+	return res.RowsAffected > 0, res.Error
+}
+
+func (r *companyRepo) Delete(ctx context.Context, internalID string) (bool, error) {
+	res := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).Delete(&company.Company{})
+	return res.RowsAffected > 0, res.Error
+}
+
+func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.Company, error) {
+	var entity company.Company
+	err := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).First(&entity).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &entity, err
+}
+
+func (r *companyRepo) GetByIDs(ctx context.Context, internalIDs []string) ([]company.Company, error) {
+	if len(internalIDs) == 0 {
+		return nil, nil
+	}
+	var entities []company.Company
+	err := r.getDB(ctx).WithContext(ctx).Where("id IN ?", internalIDs).Find(&entities).Error
+	return entities, err
+}
+
+func (r *companyRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*company.Company, error) {
+	var entity company.Company
+	err := r.getDB(ctx).WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&entity).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &entity, err
+}
+
+func (r *companyRepo) GetAllParentIDs(ctx context.Context, childID string) ([]string, error) {
+	var parentIDs []string
+	currentID := childID
+	db := r.getDB(ctx)
+
+	for i := 0; i < 10; i++ {
+		var entity company.Company
+		err := db.WithContext(ctx).Select("parent_id").Where("id = ?", currentID).First(&entity).Error
+		if err == gorm.ErrRecordNotFound {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if entity.ParentID != nil && *entity.ParentID != "" {
+			parentIDs = append(parentIDs, *entity.ParentID)
+			currentID = *entity.ParentID
+		} else {
+			break
+		}
+	}
+	return parentIDs, nil
+}
+
+func (r *companyRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*company.Company, error) {
+	var entities []*company.Company
+	err := r.getDB(ctx).WithContext(ctx).Unscoped().Select("id", "last_modified_date", "deleted_at").Find(&entities).Error
+	if err != nil {
+		return nil, err
+	}
+	res := make(map[string]*company.Company, len(entities))
+	for _, c := range entities {
+		res[c.ID] = c
+	}
+	return res, nil
+}
+
+func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, error) {
+	var entities []company.Company
+	query := r.getDB(ctx).WithContext(ctx).
+		Where("title ILIKE ? OR address ILIKE ? OR additional_name ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%")
+	if !showInactive {
+		query = query.Where("active_contract = ?", true)
+	}
+	err := query.Limit(limit).Offset(offset).Find(&entities).Error
+	return entities, err
+}

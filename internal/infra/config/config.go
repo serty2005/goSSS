@@ -45,6 +45,8 @@ type Config struct {
 	// Шлюз синхронизации с ServiceDesk (сущности)
 	EnableSDeskGateway bool
 	SDeskSyncInterval  time.Duration
+	// Путь для хранения вложений тикетов
+	TicketStoragePath string
 
 	// Шлюз синхронизации контрактов
 	EnableContractGateway bool
@@ -123,6 +125,7 @@ func New() *Config {
 		// ServiceDesk Gateway
 		EnableSDeskGateway: getEnvAsBool("ENABLE_SDESK_GATEWAY", true),
 		SDeskSyncInterval:  time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
+		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
 		// Contract Gateway
 		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),

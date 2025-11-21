@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	api "etalon-server/internal/transport/http/dtos"
@@ -16,15 +17,16 @@ import (
 // CrudHandler обрабатывает CRUD-запросы.
 type CrudHandler struct {
 	db              *gorm.DB
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
+	companyService  company.Service
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
 }
 
 // NewCrudHandler создает новый экземпляр обработчика.
-func NewCrudHandler(db *gorm.DB, companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) *CrudHandler {
-	return &CrudHandler{db, companyRepo, serverRepo, workstationRepo, frRepo}
+func NewCrudHandler(db *gorm.DB, companyRepo company.Repository, companyService company.Service, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) *CrudHandler {
+	return &CrudHandler{db, companyRepo, companyService, serverRepo, workstationRepo, frRepo}
 }
 
 // RegisterRoutes регистрирует CRUD роуты.
@@ -85,7 +87,7 @@ func (h *CrudHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	company := &models.Company{
+	company := &company.Company{
 		Title:          dto.Title,
 		Address:        dto.Address,
 		AdditionalName: dto.AdditionalName,
@@ -94,7 +96,7 @@ func (h *CrudHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 	company.MetaClass = "ou$company"
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
-		return h.companyRepo.Create(r.Context(), tx, company)
+		return h.companyRepo.Create(r.Context(), company)
 	})
 	if err != nil {
 		log.Error("Failed to create company", "error", err)
@@ -122,7 +124,7 @@ func (h *CrudHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 	var updated bool
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var txErr error
-		updated, txErr = h.companyRepo.Update(r.Context(), tx, id, updateData)
+		updated, txErr = h.companyRepo.Update(r.Context(), id, updateData)
 		return txErr
 	})
 	if err != nil {
@@ -143,7 +145,7 @@ func (h *CrudHandler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
 	var deleted bool
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var txErr error
-		deleted, txErr = h.companyRepo.Delete(r.Context(), tx, id)
+		deleted, txErr = h.companyRepo.Delete(r.Context(), id)
 		return txErr
 	})
 

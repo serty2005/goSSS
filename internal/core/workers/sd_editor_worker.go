@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/external"
@@ -34,7 +35,7 @@ type sdEditorWorkerImpl struct {
 	sdClient        external.ExternalSystemClient
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -48,7 +49,7 @@ func NewSDEditorWorker(
 	sdClient external.ExternalSystemClient,
 	taskRepo repositories.TaskRepo,
 	linkRepo repositories.LinkRepo,
-	companyRepo repositories.CompanyRepo,
+	companyRepo company.Repository,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,

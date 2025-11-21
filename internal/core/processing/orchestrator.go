@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/common"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/external"
@@ -29,7 +31,7 @@ type Orchestrator struct {
 	db              *gorm.DB
 	bus             eventbus.EventBus
 	sdClient        external.ExternalSystemClient
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -41,7 +43,7 @@ type Orchestrator struct {
 // NewOrchestrator создает новый экземпляр Оркестратора.
 func NewOrchestrator(
 	logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, sdClient external.ExternalSystemClient,
-	companyRepo repositories.CompanyRepo, serverRepo repositories.ServerRepo,
+	companyRepo company.Repository, serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo,
 	taskRepo repositories.TaskRepo, linkRepo repositories.LinkRepo, engine ProcessingEngine,
 ) *Orchestrator {
@@ -218,12 +220,12 @@ func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, ev
 		source := "contract_gateway"
 
 		if len(activeIDs) > 0 {
-			if res := tx.Model(&models.Company{}).Where("id IN ?", activeIDs).Updates(map[string]interface{}{"active_contract": true, "last_updated_by": source}); res.Error != nil {
+			if res := tx.Model(&company.Company{}).Where("id IN ?", activeIDs).Updates(map[string]interface{}{"active_contract": true, "last_updated_by": source}); res.Error != nil {
 				return res.Error
 			}
 		}
 		if len(inactiveIDs) > 0 {
-			if res := tx.Model(&models.Company{}).Where("id IN ?", inactiveIDs).Updates(map[string]interface{}{"active_contract": false, "last_updated_by": source}); res.Error != nil {
+			if res := tx.Model(&company.Company{}).Where("id IN ?", inactiveIDs).Updates(map[string]interface{}{"active_contract": false, "last_updated_by": source}); res.Error != nil {
 				return res.Error
 			}
 		}
@@ -313,8 +315,8 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 					return err
 				}
 			case ActionAddAdditionalOwner:
-				server := &models.Server{Base: models.Base{ID: action.EntityUUID}}
-				company := &models.Company{Base: models.Base{ID: action.AdditionalOwnerUUID}}
+				server := &models.Server{Base: common.Base{ID: action.EntityUUID}}
+				company := &company.Company{Base: common.Base{ID: action.AdditionalOwnerUUID}}
 				if err := tx.Model(server).Association("AdditionalOwners").Append(company); err != nil {
 					log.Error("Не удалось добавить дополнительного владельца", "serverID", server.ID, "companyID", company.ID, "error", err)
 					return err
@@ -418,8 +420,8 @@ func (o *Orchestrator) createEntity(ctx context.Context, entity interface{}) (st
 	var id string
 	var err error
 	switch v := entity.(type) {
-	case *models.Company:
-		err = o.companyRepo.Create(ctx, tx, v)
+	case *company.Company:
+		err = o.companyRepo.Create(ctx, v)
 		id = v.ID
 	case *models.Server:
 		err = o.serverRepo.Create(ctx, tx, v)
@@ -440,7 +442,7 @@ func (o *Orchestrator) performUpdate(ctx context.Context, tx *gorm.DB, entityTyp
 	var err error
 	switch entityType {
 	case "Company":
-		_, err = o.companyRepo.Update(ctx, tx, internalID, updates)
+		_, err = o.companyRepo.Update(ctx, internalID, updates)
 	case "Server":
 		_, err = o.serverRepo.Update(ctx, tx, internalID, updates)
 	case "Workstation":
@@ -457,7 +459,7 @@ func (o *Orchestrator) performDelete(ctx context.Context, tx *gorm.DB, entityTyp
 	var err error
 	switch entityType {
 	case "Company":
-		_, err = o.companyRepo.Delete(ctx, tx, internalID)
+		_, err = o.companyRepo.Delete(ctx, internalID)
 	case "Server":
 		_, err = o.serverRepo.Delete(ctx, tx, internalID)
 	case "Workstation":
@@ -500,7 +502,7 @@ func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeI
 
 func getLMDFromModel(entity interface{}) *time.Time {
 	switch v := entity.(type) {
-	case *models.Company:
+	case *company.Company:
 		return v.LastModifiedDate
 	case *models.Server:
 		return v.LastModifiedDate

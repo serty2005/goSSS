@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/config"
@@ -23,7 +24,7 @@ type statusActualityWorkerImpl struct {
 	cfg             *config.Config
 	logger          logger.LoggerInterface
 	db              *gorm.DB
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -34,7 +35,7 @@ func NewStatusActualityWorker(
 	cfg *config.Config,
 	logger logger.LoggerInterface,
 	db *gorm.DB,
-	companyRepo repositories.CompanyRepo,
+	companyRepo company.Repository,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,

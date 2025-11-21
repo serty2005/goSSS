@@ -2,9 +2,11 @@ package external
 
 import (
 	"context"
-	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/infra/logger"
 
 	"gorm.io/gorm"
 )
@@ -28,7 +30,7 @@ type MapperContext struct {
 // Вся логика, специфичная для конкретной внешней системы, должна быть инкапсулирована здесь.
 type Mapper interface {
 	// DataToCompany преобразует сырые данные в модель Company.
-	DataToCompany(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.Company, error)
+	DataToCompany(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*company.Company, error)
 
 	// DataToServer преобразует сырые данные в модель Server.
 	DataToServer(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.Server, error)
@@ -44,6 +46,14 @@ type Mapper interface {
 
 	// GetCompanyUUIDsFromContract извлекает UUID компаний из данных контракта.
 	GetCompanyUUIDsFromContract(data map[string]interface{}) []string
+
+	// --- Методы для Tickets ---
+
+	// DataToTicket преобразует сырые данные в модель Ticket.
+	DataToTicket(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*tickets.Ticket, error)
+
+	// DataToComment преобразует сырые данные в структуру Comment.
+	DataToComment(data map[string]interface{}) (*tickets.Comment, error)
 }
 
 // ExternalSystemClient определяет абстрактный интерфейс для взаимодействия с внешней системой (например, ServiceDesk).
@@ -75,4 +85,13 @@ type ExternalSystemClient interface {
 
 	// FindReferenceID ищет ID в справочнике внешней системы.
 	FindReferenceID(ctx context.Context, referenceType, title string, useSubstringSearch bool) (string, error)
+
+	// --- Методы для Tickets ---
+
+	// FetchTickets получает список заявок с обязательной фильтрацией по статусам.
+	// statuses: список кодов статусов, например []string{"registered", "inprogress"}
+	FetchTickets(ctx context.Context, statuses []string) ([]map[string]interface{}, error)
+
+	// FetchComments получает список комментариев для конкретной сущности (заявки).
+	FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error)
 }

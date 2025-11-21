@@ -3,6 +3,7 @@ package db
 
 import (
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
@@ -28,11 +29,11 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 // Migrate выполняет автомиграцию схемы базы данных.
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
-		&models.Company{}, &models.Server{}, &models.Workstation{},
+		&company.Company{}, &tickets.Ticket{},
+		&models.Server{}, &models.Workstation{},
 		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
 		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
 		&models.User{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
-		&tickets.Ticket{},
 	)
 }
 

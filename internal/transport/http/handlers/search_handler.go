@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/pkg/utils"
@@ -20,7 +21,7 @@ import (
 
 // SearchHandler обрабатывает поисковые запросы.
 type SearchHandler struct {
-	companyRepo     repositories.CompanyRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -29,7 +30,7 @@ type SearchHandler struct {
 
 // NewSearchHandler создает новый экземпляр обработчика.
 func NewSearchHandler(
-	companyRepo repositories.CompanyRepo,
+	companyRepo company.Repository,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
@@ -68,7 +69,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	log.Debug("Начало выполнения поискового запроса")
 
 	var wg sync.WaitGroup
-	var initialCompanies []models.Company
+	var initialCompanies []company.Company
 	var initialServers []models.Server
 	var initialWorkstations []models.Workstation
 	var initialFRs []models.FiscalRegister
@@ -121,7 +122,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		allOwnerIDs = append(allOwnerIDs, id)
 	}
 
-	var allOwnerCompanies []models.Company
+	var allOwnerCompanies []company.Company
 	var allOwnerServers []models.Server
 	var allOwnerWorkstations []models.Workstation
 	var allOwnerFRs []models.FiscalRegister
@@ -143,7 +144,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Кэшируем информацию о родителях, чтобы не делать лишних запросов к БД
-	parentCompanyCache := make(map[string]*models.Company)
+	parentCompanyCache := make(map[string]*company.Company)
 
 	for _, owner := range allOwnerCompanies {
 		ownerID := owner.ID

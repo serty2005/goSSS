@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/iiko"
@@ -39,14 +40,14 @@ type serverActionsServiceImpl struct {
 	logger        logger.LoggerInterface
 	bus           eventbus.EventBus
 	serverRepo    repositories.ServerRepo
-	companyRepo   repositories.CompanyRepo
+	companyRepo   company.Repository
 	db            *gorm.DB
 	iikoClient    iiko.IikoClient
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
-func NewServerActionsService(cfg *config.Config, logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, iikoClient iiko.IikoClient) ServerActionsService {
+func NewServerActionsService(cfg *config.Config, logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo repositories.ServerRepo, companyRepo company.Repository, db *gorm.DB, iikoClient iiko.IikoClient) ServerActionsService {
 	return &serverActionsServiceImpl{
 		cfg:           cfg,
 		logger:        logger,

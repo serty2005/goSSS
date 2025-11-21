@@ -4,10 +4,11 @@ package models
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"etalon-server/internal/domain/common"
+	"etalon-server/internal/domain/company"
+
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 )
 
 // ExternalSystemLink хранит связь между нашей внутренней сущностью и ее ID во внешней системе.
@@ -27,63 +28,28 @@ const (
 	StatusRegistrationFailed = "registration_failed"
 )
 
-// Base содержит общие поля для всех моделей.
-type Base struct {
-	ID            string `gorm:"primaryKey;type:text"`
-	MetaClass     string `gorm:"type:text"`
-	LastUpdatedBy string `gorm:"type:varchar(50);default:'unknown'"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
-}
-
-// BeforeCreate будет вызван GORM перед созданием записи.
-func (base *Base) BeforeCreate(tx *gorm.DB) (err error) {
-	if base.ID == "" {
-		base.ID = uuid.New().String()
-	}
-	return
-}
-
-// Company представляет сущность компании.
-type Company struct {
-	Base
-	Address          *string    `gorm:"type:text"`
-	Title            *string    `gorm:"type:text"`
-	ActiveContract   *bool      `gorm:"type:boolean"`
-	LastModifiedDate *time.Time `json:"last_modified_date"`
-	AdditionalName   *string    `gorm:"type:text"`
-	ParentID         *string    `gorm:"type:text"`
-	Parent           *Company   `gorm:"foreignKey:ParentID"`
-
-	Contracts       []Contract       `gorm:"many2many:company_contracts;"`
-	Servers         []Server         `gorm:"foreignKey:OwnerID"`
-	Workstations    []Workstation    `gorm:"foreignKey:OwnerID"`
-	FiscalRegisters []FiscalRegister `gorm:"foreignKey:OwnerID"`
-}
-
 // Contract представляет сущность контракта.
 type Contract struct {
-	Base
+	common.Base
 	State            *string `gorm:"type:varchar(50);index"`
 	StateStartTime   *time.Time
-	Services         datatypes.JSON `gorm:"type:jsonb"`
-	Recipients       datatypes.JSON `gorm:"type:jsonb"`
-	LastModifiedDate *time.Time     `json:"last_modified_date"`
-	ServiceLevel     int            `gorm:"default:-1;index"`
-	Companies        []Company      `gorm:"many2many:company_contracts;"`
+	Services         datatypes.JSON    `gorm:"type:jsonb"`
+	Recipients       datatypes.JSON    `gorm:"type:jsonb"`
+	LastModifiedDate *time.Time        `json:"last_modified_date"`
+	ServiceLevel     int               `gorm:"default:-1;index"`
+	Companies        []company.Company `gorm:"many2many:company_contracts;"`
 }
 
 type CompanyContract struct {
-	CompanyID  string   `gorm:"primaryKey"`
-	Company    Company  `gorm:"foreignKey:CompanyID"`
-	ContractID string   `gorm:"primaryKey"`
-	Contract   Contract `gorm:"foreignKey:ContractID"`
+	CompanyID  string          `gorm:"primaryKey"`
+	Company    company.Company `gorm:"foreignKey:CompanyID"`
+	ContractID string          `gorm:"primaryKey"`
+	Contract   Contract        `gorm:"foreignKey:ContractID"`
 }
 
 // Server представляет сущность сервера.
 type Server struct {
-	Base
+	common.Base
 	UniqueID         *string    `gorm:"type:text"`
 	CRMid            *string    `gorm:"column:crm_id;type:text;index"`
 	Teamviewer       *string    `gorm:"type:text"`
@@ -98,7 +64,7 @@ type Server struct {
 	Description      *string    `gorm:"type:text"`
 	OwnerID          *string    `gorm:"type:text;index"`
 
-	AdditionalOwners []Company `gorm:"many2many:server_additional_owners;foreignKey:ID;joinForeignKey:ServerID;references:ID;joinReferences:CompanyID"`
+	AdditionalOwners []company.Company `gorm:"many2many:server_additional_owners;foreignKey:ID;joinForeignKey:ServerID;references:ID;joinReferences:CompanyID"`
 
 	ServerName             *string        `gorm:"type:text"`
 	ServerEdition          *string        `gorm:"type:varchar(50)"`
@@ -112,7 +78,7 @@ type Server struct {
 
 // Workstation представляет сущность рабочей станции.
 type Workstation struct {
-	Base
+	common.Base
 	Teamviewer             *string        `gorm:"type:text"`
 	Anydesk                *string        `gorm:"type:text"`
 	Litemanager            *string        `gorm:"type:text"`
@@ -127,7 +93,7 @@ type Workstation struct {
 
 // FiscalRegister представляет сущность фискального регистратора.
 type FiscalRegister struct {
-	Base
+	common.Base
 	ModelKKT               *string        `gorm:"type:text"`
 	FFD                    *string        `gorm:"type:text"`
 	RNKKT                  *string        `gorm:"column:rn_kkt;type:text;index"`
@@ -146,13 +112,9 @@ type FiscalRegister struct {
 	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
 	OwnerID                *string        `gorm:"type:text;index"`
 	Licenses               datatypes.JSON `gorm:"type:jsonb"`
-	// Address содержит адрес установки фискального регистратора
 	Address                *string        `gorm:"type:text" json:"address"`
-	// AttributeExcise указывает, работает ли ККТ с акцизными товарами
 	AttributeExcise        *bool          `json:"attribute_excise"`
-	// AttributeMarked указывает, работает ли ККТ с маркированными товарами
 	AttributeMarked        *bool          `json:"attribute_marked"`
-	// OFDName содержит название оператора фискальных данных
 	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
 }
 

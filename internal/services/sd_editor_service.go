@@ -4,13 +4,14 @@ package services
 import (
 	"context"
 	"encoding/json"
-	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/infra/external"
-	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/infra/external"
+	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
+	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"regexp"
@@ -32,8 +33,8 @@ type sdEditorServiceImpl struct {
 	bus             eventbus.EventBus
 	sdClient        external.ExternalSystemClient
 	taskRepo        repositories.TaskRepo
-	linkRepo        repositories.LinkRepo // Новая зависимость
-	companyRepo     repositories.CompanyRepo
+	linkRepo        repositories.LinkRepo
+	companyRepo     company.Repository
 	serverRepo      repositories.ServerRepo
 	workstationRepo repositories.WorkstationRepo
 	frRepo          repositories.FiscalRegisterRepo
@@ -46,8 +47,8 @@ func NewSDEditorService(
 	bus eventbus.EventBus,
 	sdClient external.ExternalSystemClient,
 	taskRepo repositories.TaskRepo,
-	linkRepo repositories.LinkRepo, // Новая зависимость
-	companyRepo repositories.CompanyRepo,
+	linkRepo repositories.LinkRepo,
+	companyRepo company.Repository,
 	serverRepo repositories.ServerRepo,
 	workstationRepo repositories.WorkstationRepo,
 	frRepo repositories.FiscalRegisterRepo,
@@ -58,7 +59,7 @@ func NewSDEditorService(
 		bus:             bus,
 		sdClient:        sdClient,
 		taskRepo:        taskRepo,
-		linkRepo:        linkRepo, // Инициализация
+		linkRepo:        linkRepo,
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,

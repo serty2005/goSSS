@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -31,7 +33,9 @@ var attrsMap = map[string]string{
 	"objectBase$Server":      "UniqueID,Teamviewer,RDP,AnyDesk,UUID,IP,CabinetLink,DeviceName,lastModifiedDate,iikoVersion,description,nameforclient,owner,litemanagerID",
 	"objectBase$Workstation": "Commentariy,Teamviewer,AnyDesk,DeviceName,litemanagerID,lastModifiedDate,UUID,owner",
 	"objectBase$FR":          "UUID,ModelKKT,lastModifiedDate,owner,FFD,FRDownloader,RNKKT,KKTRegDate,FNExpireDate,LegalName,FRSerialNumber,FNNumber,FRFirmware",
-	"agreement$agreement":    "state,stateStartTime,services,recipientsOU,lastModifiedDate", // Добавлено для контрактов
+	"agreement$agreement":    "state,stateStartTime,services,recipientsOU,lastModifiedDate",
+	"serviceCall":            "number,lastComment,agreement,requestDate,descriptionRTF,clientOU,lastModifiedDate,UUID,state",
+	"comment":                "UUID,text,author,creationDate,private,files",
 }
 
 // карты минимальных атрибутов, специфичные для Naumen ServiceDesk.
@@ -40,7 +44,19 @@ var minimalAttrsMap = map[string]string{
 	"objectBase$Server":      "UUID,lastModifiedDate,owner",
 	"objectBase$Workstation": "UUID,lastModifiedDate,owner",
 	"objectBase$FR":          "UUID,lastModifiedDate,owner",
+	"serviceCall":            "UUID,lastModifiedDate,state,lastComment",
 }
+
+// --- СПЕЦИФИЧНЫЕ ДЛЯ NAUMEN КОНСТАНТЫ ---
+const (
+	metaClassCompany     = "ou$company"
+	metaClassServer      = "objectBase$Server"
+	metaClassWorkstation = "objectBase$Workstation"
+	metaClassFR          = "objectBase$FR"
+	metaClassAgreement   = "agreement$agreement"
+	metaClassServiceCall = "serviceCall"
+	metaClassComment     = "comment"
+)
 
 type naumenClientImpl struct {
 	client         *http.Client
@@ -158,6 +174,43 @@ func (s *naumenClientImpl) FetchEntityDetails(ctx context.Context, externalID st
 	return response, err
 }
 
+// FetchTickets получает список заявок с фильтрацией по статусам.
+func (s *naumenClientImpl) FetchTickets(ctx context.Context, statuses []string) ([]map[string]interface{}, error) {
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("список статусов не может быть пустым для запроса заявок")
+	}
+
+	// Формируем строку фильтра для URL: {'state':['val1','val2']}
+	// Нам нужно обернуть каждый статус в одинарные кавычки
+	quotedStatuses := make([]string, len(statuses))
+	for i, status := range statuses {
+		quotedStatuses[i] = fmt.Sprintf("'%s'", status)
+	}
+	filterString := fmt.Sprintf("{'state':[%s]}", strings.Join(quotedStatuses, ","))
+
+	// Используем метакласс из констант (serviceCall$serviceCall)
+	// Если Naumen ругается на $serviceCall в URL с фильтром, можно заменить на просто "serviceCall" локально
+	metaClass := metaClassServiceCall
+
+	// Формируем итоговый URL
+	// Пример: .../rest/find/serviceCall$serviceCall/{'state':['registered']}
+	url := fmt.Sprintf("%s/find/%s/%s", s.baseURL, metaClass, filterString)
+
+	attrs := attrsMap[metaClass]
+	params := map[string]string{
+		"attrs": attrs,
+	}
+
+	var responseList []map[string]interface{}
+	// Используем POST, так как это стандарт для сложных выборок, хотя GET тоже может работать
+	err := s.doWithRetry(ctx, http.MethodPost, url, nil, &responseList, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch tickets: %w", err)
+	}
+
+	return responseList, nil
+}
+
 // UpdateEntity обновляет сущность.
 func (s *naumenClientImpl) UpdateEntity(ctx context.Context, externalID string, entityType string, data map[string]interface{}) error {
 	if len(data) == 0 {
@@ -184,10 +237,6 @@ func (s *naumenClientImpl) CreateEntity(ctx context.Context, entityType string, 
 	if !ok {
 		return nil, fmt.Errorf("неизвестный тип сущности для Naumen: %s", entityType)
 	}
-	if s.dryRun {
-		s.logger.Warn("[DRY RUN] Отправка запроса на СОЗДАНИЕ в Naumen SD пропущена.", "metaClass", metaClass)
-		return map[string]interface{}{"UUID": "dry-run-fake-uuid"}, nil
-	}
 	url := fmt.Sprintf("%s/create-m2m/%s", s.baseURL, metaClass)
 	bodyBytes, err := json.Marshal(data)
 	if err != nil {
@@ -195,6 +244,10 @@ func (s *naumenClientImpl) CreateEntity(ctx context.Context, entityType string, 
 	}
 	var response map[string]interface{}
 	params := map[string]string{"attrs": "UUID"}
+	if s.dryRun {
+		s.logger.Warn("[DRY RUN] Отправка запроса на СОЗДАНИЕ в Naumen SD пропущена.", "data", data)
+		return map[string]interface{}{"UUID": "dry-run-fake-uuid"}, nil
+	}
 	err = s.doWithRetry(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes), &response, params)
 	return response, err
 }
@@ -254,6 +307,35 @@ func (s *naumenClientImpl) FindReferenceID(ctx context.Context, referenceType, t
 	s.referenceCache[cacheKey] = foundUUID
 	s.cacheMutex.Unlock()
 	return foundUUID, nil
+}
+
+// FetchComments получает список комментариев для заявки.
+func (s *naumenClientImpl) FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
+	metaClass := metaClassComment
+	// attrs := attrsMap[metaClass]
+	url := fmt.Sprintf("%s/find/%s", s.baseURL, metaClass)
+
+	// Формируем тело запроса: фильтр по источнику (заявке)
+	filter := map[string]string{
+		"source": sourceUUID,
+	}
+	bodyBytes, err := json.Marshal(filter)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сериализации фильтра: %w", err)
+	}
+
+	// // Атрибуты передаем через query params, а фильтр - через body
+	// params := map[string]string{
+	// 	"attrs": attrs,
+	// }
+
+	var responseList []map[string]interface{}
+	// Передаем bytes.NewBuffer(bodyBytes) вместо nil
+	err = s.doWithRetry(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes), &responseList)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения комментариев к заявке %s: %w", sourceUUID, err)
+	}
+	return responseList, nil
 }
 
 // doWithRetry выполняет HTTP-запрос с политикой повторов и улучшенным логированием.
@@ -363,18 +445,9 @@ func newNaumenMapper(db *gorm.DB, linkRepo repositories.LinkRepo, logger logger.
 	}
 }
 
-// --- СПЕЦИФИЧНЫЕ ДЛЯ NAUMEN КОНСТАНТЫ ---
-const (
-	metaClassCompany     = "ou$company"
-	metaClassServer      = "objectBase$Server"
-	metaClassWorkstation = "objectBase$Workstation"
-	metaClassFR          = "objectBase$FR"
-	metaClassAgreement   = "agreement$agreement"
-)
-
 // DataToCompany преобразует мапу от Naumen в модель Company.
-func (m *naumenMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Company, error) {
-	company := &models.Company{}
+func (m *naumenMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*company.Company, error) {
+	company := &company.Company{}
 	company.MetaClass = metaClassCompany
 
 	if title, ok := data["title"].(string); ok {
@@ -632,6 +705,98 @@ func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperCo
 	}
 
 	return contract, nil
+}
+
+// DataToTicket преобразует данные из Naumen в модель Ticket.
+func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*tickets.Ticket, error) {
+	ticket := &tickets.Ticket{}
+	ticket.MetaClass = metaClassServiceCall
+
+	// Обязательные поля
+	if uuid, ok := data["UUID"].(string); ok {
+		ticket.ServiceDeskUUID = uuid
+	} else {
+		return nil, fmt.Errorf("missing UUID in ticket data")
+	}
+
+	// Номер заявки (number может приходить как float64 из json.Unmarshal)
+	if num, ok := data["number"].(float64); ok {
+		ticket.Number = int(num)
+	} else if num, ok := data["number"].(int); ok {
+		ticket.Number = num
+	}
+
+	if state, ok := data["state"].(string); ok {
+		ticket.Status = state
+	}
+
+	// Даты
+	if reqDate, ok := data["requestDate"].(string); ok {
+		if t := utils.ParseServiceDeskTime(reqDate); t != nil {
+			ticket.RequestDate = *t
+		}
+	}
+	if lmd, ok := data["lastModifiedDate"].(string); ok {
+		if t := utils.ParseServiceDeskTime(lmd); t != nil {
+			ticket.LastModifiedDate = *t
+		}
+	}
+
+	// Связь с компанией (clientOU)
+	if clientOU, ok := data["clientOU"].(map[string]interface{}); ok {
+		if ouUUID, ok := clientOU["UUID"].(string); ok {
+			// Ищем внутренний ID компании через LinkRepo
+			internalID, err := mc.LinkRepo.FindInternalIDByExternalID(ctx, mc.DB, "naumen", ouUUID)
+			if err == nil && internalID != "" {
+				ticket.CompanyID = internalID
+			} else {
+				// Если компания не найдена, заявка остается "сиротой" или требует ручной привязки.
+				// Логируем это как Warning, но не прерываем маппинг.
+				mc.Logger.Warn("Ticket linked to unknown company", "ticket_uuid", ticket.ServiceDeskUUID, "company_uuid", ouUUID)
+			}
+		}
+	}
+
+	// Связь с контрактом (agreement)
+	if agr, ok := data["agreement"].(map[string]interface{}); ok {
+		if agrUUID, ok := agr["UUID"].(string); ok {
+			internalID, err := mc.LinkRepo.FindInternalIDByExternalID(ctx, mc.DB, "naumen", agrUUID)
+			if err == nil && internalID != "" {
+				ticket.ContractID = &internalID
+			}
+		}
+	}
+
+	return ticket, nil
+}
+
+// DataToComment преобразует данные из Naumen в структуру Comment.
+func (m *naumenMapper) DataToComment(data map[string]interface{}) (*tickets.Comment, error) {
+	comment := &tickets.Comment{}
+
+	if uuid, ok := data["UUID"].(string); ok {
+		comment.UUID = uuid
+	}
+	if text, ok := data["text"].(string); ok {
+		comment.Text = text
+	}
+	if author, ok := data["author"].(map[string]interface{}); ok {
+		if title, ok := author["title"].(string); ok {
+			comment.AuthorName = title
+		}
+	}
+	if created, ok := data["creationDate"].(string); ok {
+		if t := utils.ParseServiceDeskTime(created); t != nil {
+			comment.CreationDate = *t
+		}
+	}
+
+	// Маппинг флага приватности
+	if private, ok := data["private"].(bool); ok {
+		comment.IsInternal = private
+	}
+
+	return comment, nil
 }
 
 // determineServiceLevel - специфичная для Naumen логика определения уровня сервиса.

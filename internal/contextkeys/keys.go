@@ -7,4 +7,6 @@ type ContextKey string
 const (
 	UserRolesContextKey ContextKey = "userRoles"
 	UserIDContextKey    ContextKey = "userID"
+	LoggerContextKey    ContextKey = "logger"
+	TransactionKey      ContextKey = "tx"
 )

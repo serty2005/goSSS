@@ -1,15 +1,15 @@
-// Файл: internal/pkg/seeder/mock_client.go (ВОССТАНОВЛЕННЫЙ И ИСПРАВЛЕННЫЙ)
 package seeder
 
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/tickets" // <-- Добавлен импорт домена тикетов
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/transport/http/validators"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -52,13 +52,18 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, entityType 
 	case "Contract":
 		fileName = "agreements.json"
 	default:
-		return nil, fmt.Errorf("неизвестный entityType для мок-клиента: %s", entityType)
+		// Для неизвестных типов (или если мы решим добавить Tickets сюда) возвращаем пустой список
+		return []map[string]interface{}{}, nil
 	}
+
 	fullPath := filepath.Join(m.dataPath, fileName)
 	file, err := os.ReadFile(fullPath)
 	if err != nil {
-		return nil, err
+		// Если файла нет, не падаем, а возвращаем пустоту (для удобства тестов)
+		m.logger.Warn("Mock file not found", "file", fileName)
+		return []map[string]interface{}{}, nil
 	}
+
 	var responseList []map[string]interface{}
 	if err := json.Unmarshal(file, &responseList); err != nil {
 		return nil, err
@@ -66,7 +71,18 @@ func (m *MockServiceDeskClient) FetchEntityList(ctx context.Context, entityType 
 	return responseList, nil
 }
 
-// --- Заглушки для методов интерфейса, не используемых в сидере ---\
+// FetchTickets возвращает пустой список, так как мы не сидируем заявки.
+func (m *MockServiceDeskClient) FetchTickets(ctx context.Context, statuses []string) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{}, nil
+}
+
+// FetchComments возвращает пустой список.
+func (m *MockServiceDeskClient) FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{}, nil
+}
+
+// --- Заглушки для остальных методов интерфейса ---
+
 func (m *MockServiceDeskClient) FetchEntitySummaries(ctx context.Context, entityType string) ([]map[string]interface{}, error) {
 	return m.FetchEntityList(ctx, entityType)
 }
@@ -80,13 +96,13 @@ func (m *MockServiceDeskClient) UpdateEntity(ctx context.Context, externalID str
 	return nil
 }
 func (m *MockServiceDeskClient) CreateEntity(ctx context.Context, entityType string, data map[string]interface{}) (map[string]interface{}, error) {
-	return nil, nil
+	return map[string]interface{}{"UUID": "mock-uuid"}, nil
 }
 func (m *MockServiceDeskClient) FindReferenceID(ctx context.Context, referenceType, title string, useSubstringSearch bool) (string, error) {
-	return "", nil
+	return "mock-ref-id", nil
 }
 
-// --- Мок-реализация маппера специально для сидера ---\
+// --- Мок-реализация маппера специально для сидера ---
 type mockMapper struct {
 	logger logger.LoggerInterface
 }
@@ -106,8 +122,18 @@ func getOwnerUUID(data map[string]interface{}) string {
 	return ""
 }
 
-func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Company, error) {
-	company := &models.Company{}
+// DataToTicket - заглушка для интерфейса Mapper.
+func (m *mockMapper) DataToTicket(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*tickets.Ticket, error) {
+	return nil, nil
+}
+
+// DataToComment - заглушка для интерфейса Mapper.
+func (m *mockMapper) DataToComment(data map[string]interface{}) (*tickets.Comment, error) {
+	return nil, nil
+}
+
+func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*company.Company, error) {
+	company := &company.Company{}
 	company.MetaClass = "ou$company"
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title

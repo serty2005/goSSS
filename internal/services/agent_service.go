@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/logger"
@@ -32,13 +33,13 @@ type AgentService interface {
 type agentServiceImpl struct {
 	logger      logger.LoggerInterface
 	agentRepo   repositories.AgentRepo
-	companyRepo repositories.CompanyRepo
+	companyRepo company.Repository
 	db          *gorm.DB
 	bus         eventbus.EventBus
 }
 
 // NewAgentService создает новый экземпляр сервиса агентов.
-func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo repositories.CompanyRepo, db *gorm.DB, bus eventbus.EventBus) AgentService {
+func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus) AgentService {
 	return &agentServiceImpl{
 		logger:      logger,
 		agentRepo:   agentRepo,
