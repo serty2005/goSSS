@@ -35,4 +35,7 @@ type TicketRepository interface {
 
 	// AssociateAsset привязывает заявку к оборудованию (обновляет AssetID/AssetType).
 	AssociateAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
+
+	// GetActive возвращает список всех заявок, которые локально не находятся в конечных статусах (closed, resolved).
+	GetActive(ctx context.Context) ([]Ticket, error)
 }

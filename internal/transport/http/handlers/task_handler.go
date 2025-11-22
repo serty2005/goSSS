@@ -6,8 +6,11 @@ import (
 	"errors"
 	"etalon-server/internal/core/workers"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
@@ -27,9 +30,9 @@ type TaskHandler struct {
 	db              *gorm.DB
 	resolutionSvc   services.TaskResolutionService
 	sdEditor        workers.SDEditorWorker
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 	linkRepo        repositories.LinkRepo
 }
 
@@ -38,9 +41,9 @@ func NewTaskHandler(
 	db *gorm.DB,
 	resolutionSvc services.TaskResolutionService,
 	sdEditor workers.SDEditorWorker,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
 ) *TaskHandler {
 	return &TaskHandler{
@@ -355,13 +358,13 @@ func (h *TaskHandler) findDuplicateGroups(field string, entityType string) ([]ap
 		var records []interface{}
 		switch entityType {
 		case "Workstation":
-			var wsRecords []models.Workstation
+			var wsRecords []workstation.Workstation
 			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&wsRecords)
 			for i := range wsRecords {
 				records = append(records, wsRecords[i])
 			}
 		case "Server":
-			var srvRecords []models.Server
+			var srvRecords []server.Server
 			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&srvRecords)
 			for i := range srvRecords {
 				records = append(records, srvRecords[i])
@@ -398,9 +401,9 @@ func (h *TaskHandler) findDuplicateGroups(field string, entityType string) ([]ap
 func (h *TaskHandler) getModel(entityType string) interface{} {
 	switch entityType {
 	case "Workstation":
-		return &models.Workstation{}
+		return &workstation.Workstation{}
 	case "Server":
-		return &models.Server{}
+		return &server.Server{}
 	default:
 		return nil
 	}
@@ -408,11 +411,11 @@ func (h *TaskHandler) getModel(entityType string) interface{} {
 
 func getLMDFromInterface(record interface{}) *time.Time {
 	switch v := record.(type) {
-	case models.Workstation:
+	case workstation.Workstation:
 		return v.LastModifiedDate
-	case models.Server:
+	case server.Server:
 		return v.LastModifiedDate
-	case models.FiscalRegister:
+	case fiscal.FiscalRegister:
 		return v.LastModifiedDate
 	default:
 		return nil
@@ -435,7 +438,7 @@ func agentDataToFiscalRegisterRichDTO(data api.AgentDataDTO) api.FiscalRegisterR
 }
 
 // modelToFiscalRegisterRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
-func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr models.FiscalRegister) api.FiscalRegisterRichDTO {
+func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr fiscal.FiscalRegister) api.FiscalRegisterRichDTO {
 	var statusDetails interface{}
 	_ = json.Unmarshal(fr.StatusDetails, &statusDetails)
 
@@ -462,7 +465,7 @@ func (h *TaskHandler) modelToFiscalRegisterRichDTO(ctx context.Context, fr model
 }
 
 // modelToServerRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
-func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Server) api.ServerRichDTO {
+func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server server.Server) api.ServerRichDTO {
 	var statusDetails interface{}
 	_ = json.Unmarshal(server.StatusDetails, &statusDetails)
 
@@ -487,7 +490,7 @@ func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server models.Se
 }
 
 // modelToWorkstationRichDTO преобразует модель БД в DTO для UI, обогащая внешним ID.
-func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws models.Workstation) api.WorkstationRichDTO {
+func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws workstation.Workstation) api.WorkstationRichDTO {
 	var statusDetails interface{}
 	_ = json.Unmarshal(ws.StatusDetails, &statusDetails)
 

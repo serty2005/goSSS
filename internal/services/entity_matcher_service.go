@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
@@ -25,17 +27,17 @@ type EntityMatcherService interface {
 
 type entityMatcherServiceImpl struct {
 	logger          logger.LoggerInterface
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 // NewEntityMatcherService создает новый экземпляр сервиса.
 func NewEntityMatcherService(
 	logger logger.LoggerInterface,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 ) EntityMatcherService {
 	return &entityMatcherServiceImpl{logger, serverRepo, workstationRepo, frRepo}
 }

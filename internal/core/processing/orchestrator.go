@@ -6,8 +6,11 @@ import (
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/pkg/eventbus"
@@ -32,9 +35,9 @@ type Orchestrator struct {
 	bus             eventbus.EventBus
 	sdClient        external.ExternalSystemClient
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
 	engine          ProcessingEngine
@@ -43,8 +46,8 @@ type Orchestrator struct {
 // NewOrchestrator создает новый экземпляр Оркестратора.
 func NewOrchestrator(
 	logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, sdClient external.ExternalSystemClient,
-	companyRepo company.Repository, serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo,
+	companyRepo company.Repository, serverRepo server.Repository,
+	workstationRepo workstation.Repository, frRepo fiscal.Repository,
 	taskRepo repositories.TaskRepo, linkRepo repositories.LinkRepo, engine ProcessingEngine,
 ) *Orchestrator {
 	return &Orchestrator{
@@ -315,7 +318,7 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 					return err
 				}
 			case ActionAddAdditionalOwner:
-				server := &models.Server{Base: common.Base{ID: action.EntityUUID}}
+				server := &server.Server{Base: common.Base{ID: action.EntityUUID}}
 				company := &company.Company{Base: common.Base{ID: action.AdditionalOwnerUUID}}
 				if err := tx.Model(server).Association("AdditionalOwners").Append(company); err != nil {
 					log.Error("Не удалось добавить дополнительного владельца", "serverID", server.ID, "companyID", company.ID, "error", err)
@@ -423,13 +426,13 @@ func (o *Orchestrator) createEntity(ctx context.Context, entity interface{}) (st
 	case *company.Company:
 		err = o.companyRepo.Create(ctx, v)
 		id = v.ID
-	case *models.Server:
+	case *server.Server:
 		err = o.serverRepo.Create(ctx, tx, v)
 		id = v.ID
-	case *models.Workstation:
+	case *workstation.Workstation:
 		err = o.workstationRepo.Create(ctx, tx, v)
 		id = v.ID
-	case *models.FiscalRegister:
+	case *fiscal.FiscalRegister:
 		err = o.frRepo.Create(ctx, tx, v)
 		id = v.ID
 	default:
@@ -473,7 +476,7 @@ func (o *Orchestrator) performDelete(ctx context.Context, tx *gorm.DB, entityTyp
 }
 
 func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveIDs []string, log logger.LoggerInterface) error {
-	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
+	for _, model := range []interface{}{&server.Server{}, &workstation.Workstation{}, &fiscal.FiscalRegister{}} {
 		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status != ?", inactiveIDs, "locked").
 			Updates(map[string]interface{}{"status_before_lock": gorm.Expr("status"), "status": "locked"})
 		if res.Error != nil {
@@ -487,7 +490,7 @@ func (o *Orchestrator) lockEquipment(ctx context.Context, tx *gorm.DB, inactiveI
 }
 
 func (o *Orchestrator) unlockEquipment(ctx context.Context, tx *gorm.DB, activeIDs []string, log logger.LoggerInterface) error {
-	for _, model := range []interface{}{&models.Server{}, &models.Workstation{}, &models.FiscalRegister{}} {
+	for _, model := range []interface{}{&server.Server{}, &workstation.Workstation{}, &fiscal.FiscalRegister{}} {
 		res := tx.WithContext(ctx).Model(model).Where("owner_id IN ? AND status = ? AND status_before_lock IS NOT NULL", activeIDs, "locked").
 			Updates(map[string]interface{}{"status": gorm.Expr("status_before_lock"), "status_before_lock": nil})
 		if res.Error != nil {
@@ -504,11 +507,11 @@ func getLMDFromModel(entity interface{}) *time.Time {
 	switch v := entity.(type) {
 	case *company.Company:
 		return v.LastModifiedDate
-	case *models.Server:
+	case *server.Server:
 		return v.LastModifiedDate
-	case *models.Workstation:
+	case *workstation.Workstation:
 		return v.LastModifiedDate
-	case *models.FiscalRegister:
+	case *fiscal.FiscalRegister:
 		return v.LastModifiedDate
 	}
 	return nil

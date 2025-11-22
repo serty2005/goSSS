@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/domain/company"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets" // <-- Добавлен импорт домена тикетов
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
@@ -156,8 +159,8 @@ func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperConte
 	return company, nil
 }
 
-func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Server, error) {
-	server := &models.Server{}
+func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*server.Server, error) {
+	server := &server.Server{}
 	server.MetaClass = "objectBase$Server"
 	ownerExtID := getOwnerUUID(data)
 	server.OwnerID = &ownerExtID
@@ -198,8 +201,8 @@ func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContex
 	return server, nil
 }
 
-func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Workstation, error) {
-	ws := &models.Workstation{}
+func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*workstation.Workstation, error) {
+	ws := &workstation.Workstation{}
 	ws.MetaClass = "objectBase$Workstation"
 	ownerExtID := getOwnerUUID(data)
 	ws.OwnerID = &ownerExtID
@@ -224,8 +227,8 @@ func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperC
 	return ws, nil
 }
 
-func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.FiscalRegister, error) {
-	fr := &models.FiscalRegister{}
+func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*fiscal.FiscalRegister, error) {
+	fr := &fiscal.FiscalRegister{}
 	fr.MetaClass = "objectBase$FR"
 	ownerExtID := getOwnerUUID(data)
 	fr.OwnerID = &ownerExtID
@@ -284,8 +287,8 @@ func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.Mapp
 	return fr, nil
 }
 
-func (m *mockMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Contract, error) {
-	contract := &models.Contract{}
+func (m *mockMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*contract.Contract, error) {
+	contract := &contract.Contract{}
 	contract.MetaClass = "agreement$agreement"
 	if state, ok := data["state"].(string); ok {
 		contract.State = &state

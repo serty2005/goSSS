@@ -4,8 +4,8 @@ package models
 import (
 	"time"
 
-	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
@@ -28,94 +28,11 @@ const (
 	StatusRegistrationFailed = "registration_failed"
 )
 
-// Contract представляет сущность контракта.
-type Contract struct {
-	common.Base
-	State            *string `gorm:"type:varchar(50);index"`
-	StateStartTime   *time.Time
-	Services         datatypes.JSON    `gorm:"type:jsonb"`
-	Recipients       datatypes.JSON    `gorm:"type:jsonb"`
-	LastModifiedDate *time.Time        `json:"last_modified_date"`
-	ServiceLevel     int               `gorm:"default:-1;index"`
-	Companies        []company.Company `gorm:"many2many:company_contracts;"`
-}
-
 type CompanyContract struct {
-	CompanyID  string          `gorm:"primaryKey"`
-	Company    company.Company `gorm:"foreignKey:CompanyID"`
-	ContractID string          `gorm:"primaryKey"`
-	Contract   Contract        `gorm:"foreignKey:ContractID"`
-}
-
-// Server представляет сущность сервера.
-type Server struct {
-	common.Base
-	UniqueID         *string    `gorm:"type:text"`
-	CRMid            *string    `gorm:"column:crm_id;type:text;index"`
-	Teamviewer       *string    `gorm:"type:text"`
-	RDP              *string    `gorm:"type:text"`
-	Anydesk          *string    `gorm:"type:text"`
-	IP               *string    `gorm:"type:text"`
-	CabinetLink      *string    `gorm:"type:text"`
-	DeviceName       *string    `gorm:"type:text;index"`
-	LastModifiedDate *time.Time `json:"last_modified_date"`
-	Litemanager      *string    `gorm:"type:text"`
-	ServerVersion    *string    `gorm:"type:text"`
-	Description      *string    `gorm:"type:text"`
-	OwnerID          *string    `gorm:"type:text;index"`
-
-	AdditionalOwners []company.Company `gorm:"many2many:server_additional_owners;foreignKey:ID;joinForeignKey:ServerID;references:ID;joinReferences:CompanyID"`
-
-	ServerName             *string        `gorm:"type:text"`
-	ServerEdition          *string        `gorm:"type:varchar(50)"`
-	LastPolledAt           *time.Time     `gorm:"column:last_polled_at"`
-	Status                 string         `gorm:"type:varchar(50);default:'unknown';index"` // Операционный статус (active, offline)
-	StatusBeforeLock       *string        `gorm:"type:varchar(50)"`
-	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"` // Статус состояния (ok, attention_required)
-	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
-	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
-}
-
-// Workstation представляет сущность рабочей станции.
-type Workstation struct {
-	common.Base
-	Teamviewer             *string        `gorm:"type:text"`
-	Anydesk                *string        `gorm:"type:text"`
-	Litemanager            *string        `gorm:"type:text"`
-	DeviceName             *string        `gorm:"type:text"`
-	LastModifiedDate       *time.Time     `json:"last_modified_date"`
-	Description            *string        `gorm:"type:text"`
-	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"`
-	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
-	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
-	OwnerID                *string        `gorm:"type:text;index"`
-}
-
-// FiscalRegister представляет сущность фискального регистратора.
-type FiscalRegister struct {
-	common.Base
-	ModelKKT               *string        `gorm:"type:text"`
-	FFD                    *string        `gorm:"type:text"`
-	RNKKT                  *string        `gorm:"column:rn_kkt;type:text;index"`
-	LegalName              *string        `gorm:"type:text"`
-	INN                    *string        `gorm:"column:inn;type:text;index"`
-	FRSerialNumber         *string        `gorm:"type:text;index"`
-	FNNumber               *string        `gorm:"type:text"`
-	KKTRegDate             *time.Time     `json:"kkt_reg_date"`
-	FNExpireDate           *time.Time     `json:"fn_expire_date"`
-	LastModifiedDate       *time.Time     `json:"last_modified_date"`
-	FRDownloader           *string        `gorm:"type:varchar(100)"`
-	FRFirmware             *string        `gorm:"type:text"`
-	DriverVersion          *string        `gorm:"type:varchar(50)"`
-	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"`
-	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
-	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
-	OwnerID                *string        `gorm:"type:text;index"`
-	Licenses               datatypes.JSON `gorm:"type:jsonb"`
-	Address                *string        `gorm:"type:text" json:"address"`
-	AttributeExcise        *bool          `json:"attribute_excise"`
-	AttributeMarked        *bool          `json:"attribute_marked"`
-	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
+	CompanyID  string            `gorm:"primaryKey"`
+	Company    company.Company   `gorm:"foreignKey:CompanyID"`
+	ContractID string            `gorm:"primaryKey"`
+	Contract   contract.Contract `gorm:"foreignKey:ContractID"`
 }
 
 // EquipmentStatusLog хранит историю изменений статусов оборудования.

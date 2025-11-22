@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/domain/company"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -500,13 +503,13 @@ func (m *naumenMapper) getOwnerInternalID(ctx context.Context, data map[string]i
 }
 
 // DataToServer преобразует мапу от Naumen в модель Server.
-func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Server, error) {
+func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*server.Server, error) {
 	ownerInternalID, err := m.getOwnerInternalID(ctx, data)
 	if err != nil {
 		externalUUID, _ := data["UUID"].(string)
 		return nil, fmt.Errorf("сервер (ext: %s): %w", externalUUID, err)
 	}
-	server := &models.Server{OwnerID: &ownerInternalID}
+	server := &server.Server{OwnerID: &ownerInternalID}
 	server.MetaClass = metaClassServer
 
 	rawUniqueID, _ := data["UniqueID"].(string)
@@ -567,13 +570,13 @@ func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperCont
 }
 
 // DataToWorkstation преобразует мапу от Naumen в модель Workstation.
-func (m *naumenMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Workstation, error) {
+func (m *naumenMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*workstation.Workstation, error) {
 	ownerInternalID, err := m.getOwnerInternalID(ctx, data)
 	if err != nil {
 		externalUUID, _ := data["UUID"].(string)
 		return nil, fmt.Errorf("рабочая станция (ext: %s): %w", externalUUID, err)
 	}
-	ws := &models.Workstation{OwnerID: &ownerInternalID}
+	ws := &workstation.Workstation{OwnerID: &ownerInternalID}
 	ws.MetaClass = metaClassWorkstation
 	if tv, ok := data["Teamviewer"].(string); ok {
 		ws.Teamviewer = validators.ValidateRemoteAccessID(tv)
@@ -595,13 +598,13 @@ func (m *naumenMapper) DataToWorkstation(ctx context.Context, mc *external.Mappe
 }
 
 // DataToFiscalRegister преобразует мапу от Naumen в модель FiscalRegister.
-func (m *naumenMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.FiscalRegister, error) {
+func (m *naumenMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*fiscal.FiscalRegister, error) {
 	ownerInternalID, err := m.getOwnerInternalID(ctx, data)
 	if err != nil {
 		externalUUID, _ := data["UUID"].(string)
 		return nil, fmt.Errorf("фискальный регистратор (ext: %s): %w", externalUUID, err)
 	}
-	fr := &models.FiscalRegister{OwnerID: &ownerInternalID}
+	fr := &fiscal.FiscalRegister{OwnerID: &ownerInternalID}
 	fr.MetaClass = metaClassFR
 
 	if val, ok := data["ModelKKT"].(map[string]interface{}); ok {
@@ -660,51 +663,60 @@ func (m *naumenMapper) DataToFiscalRegister(ctx context.Context, mc *external.Ma
 var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
 
 // DataToContract преобразует мапу от Naumen в модель Contract.
-func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*models.Contract, error) {
-	contract := &models.Contract{}
-	contract.MetaClass = metaClassAgreement
+func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*contract.Contract, error) {
+	c := &contract.Contract{}
+	c.MetaClass = metaClassAgreement
 
 	if state, ok := data["state"].(string); ok {
-		contract.State = &state
+		c.State = &state
 	}
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
-		contract.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
+		c.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
 	if sst, ok := data["stateStartTime"].(string); ok {
-		contract.StateStartTime = utils.ParseServiceDeskTime(sst)
+		c.StateStartTime = utils.ParseServiceDeskTime(sst)
 	}
 
-	var serviceTitles []string
+	// Обработка Services для определения ServiceLevel
+	var servicesList []map[string]interface{}
 	if services, ok := data["services"].([]interface{}); ok {
-		for _, serviceItem := range services {
-			if serviceMap, smOk := serviceItem.(map[string]interface{}); smOk {
-				if title, tOk := serviceMap["title"].(string); tOk {
-					serviceTitles = append(serviceTitles, title)
-				}
+		for _, item := range services {
+			if svcMap, ok := item.(map[string]interface{}); ok {
+				servicesList = append(servicesList, svcMap)
 			}
 		}
-		if servicesJSON, err := json.Marshal(serviceTitles); err == nil {
-			contract.Services = datatypes.JSON(servicesJSON)
+		// Сохраняем сырой JSON для истории/отладки (опционально, сохраняем только названия)
+		var serviceTitles []string
+		for _, s := range servicesList {
+			if t, ok := s["title"].(string); ok {
+				serviceTitles = append(serviceTitles, t)
+			}
+		}
+		if j, err := json.Marshal(serviceTitles); err == nil {
+			c.Services = datatypes.JSON(j)
 		}
 	}
 
-	contract.ServiceLevel = m.determineServiceLevel(serviceTitles)
+	// Определение уровня сервиса на основе маппинга
+	c.ServiceLevel = m.determineServiceLevel(servicesList)
 
+	// Обработка Recipients (получателей услуг)
+	// Мы сохраняем их в JSON для справки, но основная логика связей будет в Сервисе
 	if recipients, ok := data["recipientsOU"].([]interface{}); ok {
 		var recipientUUIDs []string
-		for _, recipientItem := range recipients {
-			if recipientMap, rmOk := recipientItem.(map[string]interface{}); rmOk {
-				if recipientUUID, uOk := recipientMap["UUID"].(string); uOk {
-					recipientUUIDs = append(recipientUUIDs, recipientUUID)
+		for _, item := range recipients {
+			if m, ok := item.(map[string]interface{}); ok {
+				if u, ok := m["UUID"].(string); ok && u != "" {
+					recipientUUIDs = append(recipientUUIDs, u)
 				}
 			}
 		}
-		if recipientsJSON, err := json.Marshal(recipientUUIDs); err == nil {
-			contract.Recipients = datatypes.JSON(recipientsJSON)
+		if j, err := json.Marshal(recipientUUIDs); err == nil {
+			c.Recipients = datatypes.JSON(j)
 		}
 	}
 
-	return contract, nil
+	return c, nil
 }
 
 // DataToTicket преобразует данные из Naumen в модель Ticket.
@@ -799,31 +811,38 @@ func (m *naumenMapper) DataToComment(data map[string]interface{}) (*tickets.Comm
 	return comment, nil
 }
 
-// determineServiceLevel - специфичная для Naumen логика определения уровня сервиса.
-func (m *naumenMapper) determineServiceLevel(serviceTitles []string) int {
-	serviceSet := make(map[string]struct{})
-	for _, title := range serviceTitles {
-		serviceSet[title] = struct{}{}
+// determineServiceLevel определяет уровень сервиса на основе UUID или Title услуг.
+func (m *naumenMapper) determineServiceLevel(services []map[string]interface{}) int {
+	// Приоритеты: ищем самый высокий приоритет (меньшее число, кроме -1) или специфичный?
+	// Обычно контракт имеет один уровень SLA, или берем "лучший".
+	// В данном ТЗ:
+	// 0 - Прием на АО
+	// 1 - TS Cloud
+	// 2 - TS Standard
+	// 3 - TS Standard (без выездов)
+	// 5 - Разовое
+
+	// Будем искать совпадения. Если есть несколько, логика приоритета не задана явно,
+	// предположим, что берем первый найденный известный уровень.
+
+	for _, svc := range services {
+		uuid, _ := svc["UUID"].(string)
+		// title, _ := svc["title"].(string) // Можно использовать как fallback
+
+		switch uuid {
+		case "slmService$2631701": // Прием на АО
+			return 0
+		case "slmService$2459001": // TS Standard
+			return 1
+		case "slmService$2678801": // TS Standard (без выездов)
+			return 2
+		case "slmService$2628302": // TS Cloud
+			return 3
+		case "slmService$12881901": // Разовое обновление / обращение
+			return 5
+		}
 	}
-	// Специфичные для Naumen названия услуг
-	if _, ok := serviceSet["TS Standard (без выездов)"]; ok {
-		return 3
-	}
-	if _, ok := serviceSet["TS Standard"]; ok {
-		return 2
-	}
-	if _, ok := serviceSet["TS Cloud"]; ok {
-		return 1
-	}
-	if _, ok := serviceSet["Прием на АО"]; ok {
-		return 0
-	}
-	if _, ok := serviceSet["Разовое обращение"]; ok {
-		return 5
-	}
-	if _, ok := serviceSet["Базовая услуга"]; ok {
-		return 5
-	}
+
 	return -1
 }
 

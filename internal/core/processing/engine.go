@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/services"
@@ -55,30 +58,30 @@ type ProcessingEngine interface {
 
 type processingEngineImpl struct {
 	logger               logger.LoggerInterface
-	serverRepo           repositories.ServerRepo
-	workstationRepo      repositories.WorkstationRepo
-	frRepo               repositories.FiscalRegisterRepo
-	companyRepo          company.Repository
 	taskRepo             repositories.TaskRepo
-	matcherSvc           services.EntityMatcherService
+	companyRepo          company.Repository
+	serverRepo           server.Repository
+	workstationRepo      workstation.Repository
+	frRepo               fiscal.Repository
 	linkRepo             repositories.LinkRepo
 	reconciliationEngine ReconciliationEngine
+	matcherSvc           services.EntityMatcherService
 }
 
 // NewProcessingEngine создает новый экземпляр движка.
 func NewProcessingEngine(
 	logger logger.LoggerInterface,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
-	companyRepo company.Repository,
 	taskRepo repositories.TaskRepo,
-	matcherSvc services.EntityMatcherService,
+	companyRepo company.Repository,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
 	reconciliationEngine ReconciliationEngine,
+	matcherSvc services.EntityMatcherService,
 ) ProcessingEngine {
 	return &processingEngineImpl{
-		logger, serverRepo, workstationRepo, frRepo, companyRepo, taskRepo, matcherSvc, linkRepo, reconciliationEngine,
+		logger, taskRepo, companyRepo, serverRepo, workstationRepo, frRepo, linkRepo, reconciliationEngine, matcherSvc,
 	}
 }
 
@@ -254,7 +257,7 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	return result
 }
 
-func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, equipmentOwnerID string, server *models.Server, data *api.AgentDataDTO) {
+func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, equipmentOwnerID string, server *server.Server, data *api.AgentDataDTO) {
 	serverID := "nil"
 	if server != nil {
 		serverID = server.ID
@@ -284,7 +287,7 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	}
 }
 
-func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, res *ProcessingResult, ownerID string, ws *models.Workstation, data *api.AgentDataDTO) {
+func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, res *ProcessingResult, ownerID string, ws *workstation.Workstation, data *api.AgentDataDTO) {
 	agentTV := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
 	agentAD := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.AnydeskID))
@@ -307,7 +310,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 	}
 }
 
-func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, ownerID string, fr *models.FiscalRegister, data *api.AgentDataDTO) {
+func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, ownerID string, fr *fiscal.FiscalRegister, data *api.AgentDataDTO) {
 	if fr != nil {
 		if fr.HealthStatus == "locked" {
 			return

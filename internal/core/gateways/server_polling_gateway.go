@@ -3,8 +3,7 @@ package gateways
 import (
 	"context"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/domain/models"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/infra/logger"
@@ -24,12 +23,12 @@ type ServerPollingGateway interface {
 type serverPollingGatewayImpl struct {
 	cfg        *config.Config
 	logger     logger.LoggerInterface
-	serverRepo repositories.ServerRepo
+	serverRepo server.Repository
 	rmsClient  iiko.IikoClient
 	bus        eventbus.EventBus
 }
 
-func NewServerPollingGateway(cfg *config.Config, logger logger.LoggerInterface, serverRepo repositories.ServerRepo, rmsClient iiko.IikoClient, bus eventbus.EventBus) ServerPollingGateway {
+func NewServerPollingGateway(cfg *config.Config, logger logger.LoggerInterface, serverRepo server.Repository, rmsClient iiko.IikoClient, bus eventbus.EventBus) ServerPollingGateway {
 	return &serverPollingGatewayImpl{cfg, logger, serverRepo, rmsClient, bus}
 }
 
@@ -95,7 +94,7 @@ func (g *serverPollingGatewayImpl) runCycle(ctx context.Context) {
 }
 
 // processServer обрабатывает один сервер и публикует событие.
-func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server models.Server) {
+func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server server.Server) {
 	serverIP := utils.SafeStringDereference(server.IP)
 	requestID := server.ID
 	if serverIP != "" {

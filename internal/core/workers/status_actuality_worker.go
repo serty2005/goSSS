@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"fmt"
@@ -25,9 +27,9 @@ type statusActualityWorkerImpl struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 // NewStatusActualityWorker создает новый экземпляр воркера.
@@ -36,9 +38,9 @@ func NewStatusActualityWorker(
 	logger logger.LoggerInterface,
 	db *gorm.DB,
 	companyRepo company.Repository,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 ) StatusActualityWorker {
 	return &statusActualityWorkerImpl{
 		cfg:             cfg,
@@ -79,7 +81,7 @@ func (w *statusActualityWorkerImpl) runCheckCycle(ctx context.Context) {
 		txCtx := context.WithValue(ctx, "tx", tx)
 
 		// Проверка серверов
-		var servers []models.Server
+		var servers []server.Server
 		if err := tx.Where("health_status = ?", "attention_required").Find(&servers).Error; err != nil {
 			return err
 		}
@@ -92,7 +94,7 @@ func (w *statusActualityWorkerImpl) runCheckCycle(ctx context.Context) {
 		}
 
 		// Проверка рабочих станций
-		var workstations []models.Workstation
+		var workstations []workstation.Workstation
 		if err := tx.Where("health_status = ?", "attention_required").Find(&workstations).Error; err != nil {
 			return err
 		}
@@ -105,7 +107,7 @@ func (w *statusActualityWorkerImpl) runCheckCycle(ctx context.Context) {
 		}
 
 		// Проверка ФР
-		var frs []models.FiscalRegister
+		var frs []fiscal.FiscalRegister
 		if err := tx.Where("health_status = ?", "attention_required").Find(&frs).Error; err != nil {
 			return err
 		}
@@ -162,10 +164,10 @@ func (w *statusActualityWorkerImpl) checkForDuplicates(ctx context.Context, enti
 	var entityType string
 
 	switch entity.(type) {
-	case *models.Server:
+	case *server.Server:
 		tableName = "servers"
 		entityType = "Server"
-	case *models.Workstation:
+	case *workstation.Workstation:
 		tableName = "workstations"
 		entityType = "Workstation"
 	default:
@@ -190,7 +192,7 @@ func (w *statusActualityWorkerImpl) checkOwnerMismatch(ctx context.Context, enti
 
 	var currentOwnerID string
 	switch e := entity.(type) {
-	case *models.Server:
+	case *server.Server:
 		if e.OwnerID != nil {
 			currentOwnerID = *e.OwnerID
 		}
@@ -219,15 +221,15 @@ func (w *statusActualityWorkerImpl) updateStatusAndLog(tx *gorm.DB, entityType, 
 	// Обновляем саму сущность
 	switch entityType {
 	case "Server":
-		if res := tx.Model(&models.Server{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
+		if res := tx.Model(&server.Server{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
 			return res.Error
 		}
 	case "Workstation":
-		if res := tx.Model(&models.Workstation{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
+		if res := tx.Model(&workstation.Workstation{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
 			return res.Error
 		}
 	case "FiscalRegister":
-		if res := tx.Model(&models.FiscalRegister{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
+		if res := tx.Model(&fiscal.FiscalRegister{}).Where("id = ?", entityID).Updates(updates); res.Error != nil {
 			return res.Error
 		}
 	default:

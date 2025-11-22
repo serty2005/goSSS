@@ -4,8 +4,10 @@ import (
 	"context"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -37,15 +39,15 @@ type serviceDeskGatewayImpl struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB // Добавляем прямое подключение для работы со связями
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 	mu              sync.Mutex
 	isSyncing       bool
 }
 
 // NewServiceDeskGateway создает новый экземпляр шлюза ServiceDesk.
-func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger logger.LoggerInterface, db *gorm.DB, companyRepo company.Repository, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) ServiceDeskGateway {
+func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger logger.LoggerInterface, db *gorm.DB, companyRepo company.Repository, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) ServiceDeskGateway {
 	return &serviceDeskGatewayImpl{
 		cfg:             cfg,
 		sdClient:        sdClient,

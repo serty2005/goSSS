@@ -3,9 +3,12 @@ package external
 import (
 	"context"
 	"etalon-server/internal/domain/company"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 
 	"gorm.io/gorm"
@@ -33,16 +36,16 @@ type Mapper interface {
 	DataToCompany(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*company.Company, error)
 
 	// DataToServer преобразует сырые данные в модель Server.
-	DataToServer(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.Server, error)
+	DataToServer(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*server.Server, error)
 
 	// DataToWorkstation преобразует сырые данные в модель Workstation.
-	DataToWorkstation(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.Workstation, error)
+	DataToWorkstation(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*workstation.Workstation, error)
 
 	// DataToFiscalRegister преобразует сырые данные в модель FiscalRegister.
-	DataToFiscalRegister(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.FiscalRegister, error)
+	DataToFiscalRegister(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*fiscal.FiscalRegister, error)
 
 	// DataToContract преобразует сырые данные в модель Contract.
-	DataToContract(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*models.Contract, error)
+	DataToContract(ctx context.Context, mc *MapperContext, data map[string]interface{}) (*contract.Contract, error)
 
 	// GetCompanyUUIDsFromContract извлекает UUID компаний из данных контракта.
 	GetCompanyUUIDsFromContract(data map[string]interface{}) []string

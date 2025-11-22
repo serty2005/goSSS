@@ -7,8 +7,12 @@ import (
 	"etalon-server/internal/core/processing"
 	"etalon-server/internal/core/workers"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/external"
@@ -19,6 +23,7 @@ import (
 	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/services"
 	companySvc "etalon-server/internal/services/company"
+	contractSvc "etalon-server/internal/services/contract"
 	"etalon-server/internal/transport/http/handlers"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/pkg/eventbus"
@@ -54,6 +59,7 @@ type Application struct {
 	SDEditor              workers.SDEditorWorker
 	StatusActualityWorker workers.StatusActualityWorker
 	TicketGateway         gateways.TicketGateway
+	ContractGateway       gateways.ContractGateway
 
 	// Handlers
 	CrudHandler          *handlers.CrudHandler
@@ -178,26 +184,26 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 
 type Repositories struct {
 	CompanyRepo     company.Repository
-	ServerRepo      repositories.ServerRepo
-	WorkstationRepo repositories.WorkstationRepo
-	FRRepo          repositories.FiscalRegisterRepo
+	ContractRepo    contract.Repository
+	TicketRepo      tickets.TicketRepository
+	ServerRepo      server.Repository
+	WorkstationRepo workstation.Repository
+	FRRepo          fiscal.Repository
 	AgentRepo       repositories.AgentRepo
-	ContractRepo    repositories.ContractRepo
 	TaskRepo        repositories.TaskRepo
 	UserRepo        repositories.UserRepo
 	LinkRepo        repositories.LinkRepo
-	TicketRepo      tickets.TicketRepository
 }
 
 func setupRepositories(db *gorm.DB) Repositories {
 	return Repositories{
 		TicketRepo:      infraRepos.NewTicketRepo(db),
 		CompanyRepo:     infraRepos.NewCompanyRepo(db),
-		ServerRepo:      repositories.NewServerRepo(db),
-		WorkstationRepo: repositories.NewWorkstationRepo(db),
-		FRRepo:          repositories.NewFiscalRegisterRepo(db),
+		ContractRepo:    infraRepos.NewContractRepo(db),
+		ServerRepo:      infraRepos.NewServerRepo(db),
+		WorkstationRepo: infraRepos.NewWorkstationRepo(db),
+		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
 		AgentRepo:       repositories.NewAgentRepo(db),
-		ContractRepo:    repositories.NewContractRepo(db),
 		TaskRepo:        repositories.NewTaskRepo(db),
 		UserRepo:        repositories.NewUserRepo(db),
 		LinkRepo:        repositories.NewLinkRepo(db),
@@ -226,6 +232,7 @@ type Services struct {
 	EntityMatcherService  services.EntityMatcherService
 	TicketService         services.TicketService
 	CompanyService        company.Service
+	ContractService       contract.Service
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -239,12 +246,13 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo),
+		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, clients.SDClient, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 	}
 }
 
 func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
 	reconciliationEngine := processing.NewReconciliationEngine(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, srvs.EntityMatcherService, app.Logger.With("component", "reconciliation_engine"))
-	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.TaskRepo, srvs.EntityMatcherService, repos.LinkRepo, reconciliationEngine)
+	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.TaskRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, reconciliationEngine, srvs.EntityMatcherService)
 	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
 	orchestrator.Start(context.Background()) // Оркестратор только подписывается, активной работы не ведет
 
@@ -256,6 +264,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), clients.SDClient, repos.TicketRepo, app.DB, repos.LinkRepo)
+	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), clients.SDClient, srvs.ContractService)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
@@ -266,7 +275,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService)
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
-	app.ContractHandler = handlers.NewContractHandler(app.DB, repos.ContractRepo)
+	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
 	app.UserHandler = handlers.NewUserHandler(app.DB, srvs.AuthService, repos.UserRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
@@ -389,7 +398,10 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	} else {
 		a.Logger.Info("Синхронизация сущностей с ServiceDesk отключена в конфигурации.")
 	}
-
+	if a.Config.EnableContractGateway && a.ContractGateway != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.ContractGateway.Start(ctx) }()
+	}
 	if a.Config.EnableStatusWorker {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.StatusActualityWorker.Start(ctx) }()

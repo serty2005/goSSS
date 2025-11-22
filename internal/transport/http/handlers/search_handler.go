@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/domain/company"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
@@ -22,18 +24,18 @@ import (
 // SearchHandler обрабатывает поисковые запросы.
 type SearchHandler struct {
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 	linkRepo        repositories.LinkRepo
 }
 
 // NewSearchHandler создает новый экземпляр обработчика.
 func NewSearchHandler(
 	companyRepo company.Repository,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
 ) *SearchHandler {
 	return &SearchHandler{companyRepo, serverRepo, workstationRepo, frRepo, linkRepo}
@@ -70,9 +72,9 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	var wg sync.WaitGroup
 	var initialCompanies []company.Company
-	var initialServers []models.Server
-	var initialWorkstations []models.Workstation
-	var initialFRs []models.FiscalRegister
+	var initialServers []server.Server
+	var initialWorkstations []workstation.Workstation
+	var initialFRs []fiscal.FiscalRegister
 	wg.Add(4)
 	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, true, limit, 0) }()
 	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0) }()
@@ -123,9 +125,9 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var allOwnerCompanies []company.Company
-	var allOwnerServers []models.Server
-	var allOwnerWorkstations []models.Workstation
-	var allOwnerFRs []models.FiscalRegister
+	var allOwnerServers []server.Server
+	var allOwnerWorkstations []workstation.Workstation
+	var allOwnerFRs []fiscal.FiscalRegister
 	wg.Add(4)
 	go func() { defer wg.Done(); allOwnerCompanies, _ = h.companyRepo.GetByIDs(ctx, allOwnerIDs) }()
 	go func() { defer wg.Done(); allOwnerServers, _ = h.serverRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
@@ -215,7 +217,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 // --- Вспомогательные функции-группировщики ---
 
-func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []models.Server) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []server.Server) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, s := range servers {
 		if s.OwnerID != nil {
@@ -271,7 +273,7 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []model
 	return result
 }
 
-func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstations []models.Workstation) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstations []workstation.Workstation) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, ws := range workstations {
 		if ws.OwnerID != nil {
@@ -304,7 +306,7 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 	return result
 }
 
-func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []models.FiscalRegister) map[string][]api.FoundEntityDTO {
+func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []fiscal.FiscalRegister) map[string][]api.FoundEntityDTO {
 	result := make(map[string][]api.FoundEntityDTO)
 	for _, fr := range frs {
 		if fr.OwnerID != nil {

@@ -3,8 +3,9 @@ package handlers
 import (
 	"encoding/json"
 	"etalon-server/internal/domain/company"
-	"etalon-server/internal/domain/models"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"net/http"
@@ -19,13 +20,13 @@ type CrudHandler struct {
 	db              *gorm.DB
 	companyRepo     company.Repository
 	companyService  company.Service
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 // NewCrudHandler создает новый экземпляр обработчика.
-func NewCrudHandler(db *gorm.DB, companyRepo company.Repository, companyService company.Service, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) *CrudHandler {
+func NewCrudHandler(db *gorm.DB, companyRepo company.Repository, companyService company.Service, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) *CrudHandler {
 	return &CrudHandler{db, companyRepo, companyService, serverRepo, workstationRepo, frRepo}
 }
 
@@ -180,10 +181,10 @@ func (h *CrudHandler) GetServersList(w http.ResponseWriter, r *http.Request) {
 
 	// Получаем общее количество
 	var total int64
-	h.db.Model(&models.Server{}).Count(&total)
+	h.db.Model(&server.Server{}).Count(&total)
 
 	// Получаем данные с пагинацией
-	var servers []models.Server
+	var servers []server.Server
 	err = h.db.Limit(limit).Offset(offset).Order("created_at desc").Find(&servers).Error
 	if err != nil {
 		log.Error("Failed to get servers", "error", err)
@@ -227,7 +228,7 @@ func (h *CrudHandler) CreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server := &models.Server{
+	server := &server.Server{
 		UniqueID:      dto.UniqueID,
 		CRMid:         dto.CRMid,
 		Teamviewer:    dto.Teamviewer,
@@ -327,10 +328,10 @@ func (h *CrudHandler) GetWorkstationsList(w http.ResponseWriter, r *http.Request
 
 	// Получаем общее количество
 	var total int64
-	h.db.Model(&models.Workstation{}).Count(&total)
+	h.db.Model(&workstation.Workstation{}).Count(&total)
 
 	// Получаем данные с пагинацией
-	var workstations []models.Workstation
+	var workstations []workstation.Workstation
 	err = h.db.Limit(limit).Offset(offset).Order("created_at desc").Find(&workstations).Error
 	if err != nil {
 		log.Error("Failed to get workstations", "error", err)
@@ -376,7 +377,7 @@ func (h *CrudHandler) CreateWorkstation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	workstation := &models.Workstation{
+	workstation := &workstation.Workstation{
 		Teamviewer:   dto.Teamviewer,
 		Anydesk:      dto.Anydesk,
 		Litemanager:  dto.Litemanager,
@@ -471,10 +472,10 @@ func (h *CrudHandler) GetFiscalRegistersList(w http.ResponseWriter, r *http.Requ
 
 	// Получаем общее количество
 	var total int64
-	h.db.Model(&models.FiscalRegister{}).Count(&total)
+	h.db.Model(&fiscal.FiscalRegister{}).Count(&total)
 
 	// Получаем данные с пагинацией
-	var fiscalRegisters []models.FiscalRegister
+	var fiscalRegisters []fiscal.FiscalRegister
 	err = h.db.Limit(limit).Offset(offset).Order("created_at desc").Find(&fiscalRegisters).Error
 	if err != nil {
 		log.Error("Failed to get fiscal registers", "error", err)
@@ -520,7 +521,7 @@ func (h *CrudHandler) CreateFiscalRegister(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	fr := &models.FiscalRegister{
+	fr := &fiscal.FiscalRegister{
 		ModelKKT:       dto.ModelKKT,
 		RNKKT:          dto.RNKKT,
 		INN:            dto.INN,

@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/services"
@@ -46,9 +49,9 @@ type ReconciliationEngine interface {
 // reconciliationEngineImpl реализация ReconciliationEngine.
 type reconciliationEngineImpl struct {
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
 	matcherSvc      services.EntityMatcherService
@@ -58,9 +61,9 @@ type reconciliationEngineImpl struct {
 // NewReconciliationEngine создает новый экземпляр ReconciliationEngine.
 func NewReconciliationEngine(
 	companyRepo company.Repository,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 	taskRepo repositories.TaskRepo,
 	linkRepo repositories.LinkRepo,
 	matcherSvc services.EntityMatcherService,
@@ -215,13 +218,13 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 		var entityID string
 		var entityType string
 		switch e := entity.(type) {
-		case *models.Server:
+		case *server.Server:
 			entityID = e.ID
 			entityType = "Server"
-		case *models.Workstation:
+		case *workstation.Workstation:
 			entityID = e.ID
 			entityType = "Workstation"
-		case *models.FiscalRegister:
+		case *fiscal.FiscalRegister:
 			entityID = e.ID
 			entityType = "FiscalRegister"
 		default:
@@ -243,13 +246,13 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 
 	if len(entities) > 0 {
 		switch e := entities[0].(type) {
-		case *models.Server:
+		case *server.Server:
 			task.EntityType = "Server"
 			task.EntityUUID = e.ID
-		case *models.Workstation:
+		case *workstation.Workstation:
 			task.EntityType = "Workstation"
 			task.EntityUUID = e.ID
-		case *models.FiscalRegister:
+		case *fiscal.FiscalRegister:
 			task.EntityType = "FiscalRegister"
 			task.EntityUUID = e.ID
 		}
@@ -334,7 +337,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 
 	switch entityType {
 	case "Server":
-		server, ok := entity.(*models.Server)
+		server, ok := entity.(*server.Server)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для Server")
 			return false, nil
@@ -346,7 +349,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			r.logger.Info("Обновление crm_id для сервера", "server_id", server.ID, "new_crm_id", agentData["crm_id"])
 		}
 	case "FiscalRegister":
-		fr, ok := entity.(*models.FiscalRegister)
+		fr, ok := entity.(*fiscal.FiscalRegister)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для FiscalRegister")
 			return false, nil
@@ -530,7 +533,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			hasChanges = true
 		}
 	case "Workstation":
-		ws, ok := entity.(*models.Workstation)
+		ws, ok := entity.(*workstation.Workstation)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для Workstation")
 			return false, nil
@@ -554,15 +557,15 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 		var entityUUID string
 		switch entityType {
 		case "Server":
-			if server, ok := entity.(*models.Server); ok {
+			if server, ok := entity.(*server.Server); ok {
 				entityUUID = server.ID
 			}
 		case "Workstation":
-			if ws, ok := entity.(*models.Workstation); ok {
+			if ws, ok := entity.(*workstation.Workstation); ok {
 				entityUUID = ws.ID
 			}
 		case "FiscalRegister":
-			if fr, ok := entity.(*models.FiscalRegister); ok {
+			if fr, ok := entity.(*fiscal.FiscalRegister); ok {
 				entityUUID = fr.ID
 			}
 		}
@@ -588,22 +591,22 @@ func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, cur
 		}
 		return getCompanyDiff(c, n), nil
 	case "Server":
-		c, okC := current.(*models.Server)
-		n, okN := new.(*models.Server)
+		c, okC := current.(*server.Server)
+		n, okN := new.(*server.Server)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения Server")
 		}
 		return getServerDiff(c, n), nil
 	case "Workstation":
-		c, okC := current.(*models.Workstation)
-		n, okN := new.(*models.Workstation)
+		c, okC := current.(*workstation.Workstation)
+		n, okN := new.(*workstation.Workstation)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения Workstation")
 		}
 		return getWorkstationDiff(c, n), nil
 	case "FiscalRegister":
-		c, okC := current.(*models.FiscalRegister)
-		n, okN := new.(*models.FiscalRegister)
+		c, okC := current.(*fiscal.FiscalRegister)
+		n, okN := new.(*fiscal.FiscalRegister)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения FiscalRegister")
 		}
@@ -635,7 +638,7 @@ func getCompanyDiff(current *company.Company, new *company.Company) map[string]i
 	return updates
 }
 
-func getServerDiff(current *models.Server, new *models.Server) map[string]interface{} {
+func getServerDiff(current *server.Server, new *server.Server) map[string]interface{} {
 	updates := make(map[string]interface{})
 	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
 	compareAndLog(updates, "unique_id", current.UniqueID, new.UniqueID)
@@ -647,7 +650,7 @@ func getServerDiff(current *models.Server, new *models.Server) map[string]interf
 	return updates
 }
 
-func getWorkstationDiff(current *models.Workstation, new *models.Workstation) map[string]interface{} {
+func getWorkstationDiff(current *workstation.Workstation, new *workstation.Workstation) map[string]interface{} {
 	updates := make(map[string]interface{})
 	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
 	if current.DeletedAt.Valid {
@@ -656,7 +659,7 @@ func getWorkstationDiff(current *models.Workstation, new *models.Workstation) ma
 	return updates
 }
 
-func getFiscalRegisterDiff(current *models.FiscalRegister, new *models.FiscalRegister) map[string]interface{} {
+func getFiscalRegisterDiff(current *fiscal.FiscalRegister, new *fiscal.FiscalRegister) map[string]interface{} {
 	updates := make(map[string]interface{})
 	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
 	if current.DeletedAt.Valid {

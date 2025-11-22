@@ -6,8 +6,11 @@ import (
 	"errors"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
@@ -40,13 +43,13 @@ type taskResolutionServiceImpl struct {
 	db              *gorm.DB
 	bus             eventbus.EventBus
 	taskRepo        repositories.TaskRepo
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 // NewTaskResolutionService создает новый экземпляр сервиса.
-func NewTaskResolutionService(logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo, frRepo repositories.FiscalRegisterRepo) TaskResolutionService {
+func NewTaskResolutionService(logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) TaskResolutionService {
 	return &taskResolutionServiceImpl{
 		logger:          logger,
 		db:              db,
@@ -243,7 +246,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 	var err error
 	switch task.EntityType {
 	case "Workstation":
-		ws := &models.Workstation{
+		ws := &workstation.Workstation{
 			OwnerID:      &details.EtalonOwnerUUID,
 			DeviceName:   &details.AgentData.Hostname,
 			Teamviewer:   &details.AgentData.TeamviewerID,
@@ -253,7 +256,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 		}
 		err = s.workstationRepo.Create(ctx, tx, ws)
 	case "FiscalRegister":
-		fr := &models.FiscalRegister{
+		fr := &fiscal.FiscalRegister{
 			OwnerID:        &details.EtalonOwnerUUID,
 			FRSerialNumber: &details.AgentData.SerialNumber,
 			ModelKKT:       &details.AgentData.ModelName,

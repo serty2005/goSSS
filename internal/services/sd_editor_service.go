@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
@@ -35,9 +38,9 @@ type sdEditorServiceImpl struct {
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 // NewSDEditorService создает новый экземпляр воркера SDEditorService.
@@ -49,9 +52,9 @@ func NewSDEditorService(
 	taskRepo repositories.TaskRepo,
 	linkRepo repositories.LinkRepo,
 	companyRepo company.Repository,
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 ) SDEditorService {
 	return &sdEditorServiceImpl{
 		logger:          logger,

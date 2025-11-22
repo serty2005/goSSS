@@ -4,7 +4,7 @@ package workers
 import (
 	"context"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
@@ -26,7 +26,7 @@ type frUpdateFounderImpl struct {
 	cfg      *config.Config
 	logger   loggerPkg.LoggerInterface
 	bus      eventbus.EventBus
-	frRepo   repositories.FiscalRegisterRepo
+	frRepo   fiscal.Repository
 	linkRepo repositories.LinkRepo // Новая зависимость
 	sdClient external.ExternalSystemClient
 }
@@ -36,7 +36,7 @@ func NewFRUpdateFounder(
 	cfg *config.Config,
 	logger loggerPkg.LoggerInterface,
 	bus eventbus.EventBus,
-	frRepo repositories.FiscalRegisterRepo,
+	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo, // Новая зависимость
 	sdClient external.ExternalSystemClient,
 ) FRUpdateFounder {
@@ -84,7 +84,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 	}
 
 	// 2. Преобразуем данные из SD в мапу [externalUUID] -> *models.FiscalRegister
-	remoteFRsMap := make(map[string]*models.FiscalRegister, len(remoteFRsData))
+	remoteFRsMap := make(map[string]*fiscal.FiscalRegister, len(remoteFRsData))
 	// MapperContext здесь не нужен, так как DataToFiscalRegister не ищет связей
 	mapperCtx := &external.MapperContext{Logger: cycleLogger}
 	for _, data := range remoteFRsData {
@@ -147,7 +147,7 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 }
 
 // compareFiscalRegisters сравнивает два фискальных регистратора и возвращает карту расхождений.
-func (w *frUpdateFounderImpl) compareFiscalRegisters(local, remote *models.FiscalRegister) map[string]events.DiscrepancyDetail {
+func (w *frUpdateFounderImpl) compareFiscalRegisters(local, remote *fiscal.FiscalRegister) map[string]events.DiscrepancyDetail {
 	discrepancies := make(map[string]events.DiscrepancyDetail)
 
 	if local.FNExpireDate != nil && (remote.FNExpireDate == nil || !local.FNExpireDate.Truncate(24*time.Hour).Equal(remote.FNExpireDate.Truncate(24*time.Hour))) {

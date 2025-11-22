@@ -4,8 +4,12 @@ package db
 import (
 	"encoding/json"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 
@@ -30,9 +34,9 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&company.Company{}, &tickets.Ticket{},
-		&models.Server{}, &models.Workstation{},
-		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
+		&server.Server{}, &workstation.Workstation{},
+		&fiscal.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
+		&models.Agent{}, &contract.Contract{}, &models.CompanyContract{},
 		&models.User{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
 	)
 }

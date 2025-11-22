@@ -3,8 +3,11 @@ package seeder
 import (
 	"context"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"fmt"
@@ -20,16 +23,16 @@ type Seeder struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
 	companyRepo     company.Repository
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
-	contractRepo    repositories.ContractRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
+	contractRepo    contract.Repository
 }
 
 func NewSeeder(
 	logger logger.LoggerInterface, db *gorm.DB, companyRepo company.Repository,
-	serverRepo repositories.ServerRepo, workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo, contractRepo repositories.ContractRepo,
+	serverRepo server.Repository, workstationRepo workstation.Repository,
+	frRepo fiscal.Repository, contractRepo contract.Repository,
 ) *Seeder {
 	return &Seeder{
 		logger, db, companyRepo, serverRepo, workstationRepo, frRepo, contractRepo,
@@ -45,9 +48,9 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
 	err := s.db.AutoMigrate(
-		&company.Company{}, &models.Server{}, &models.Workstation{},
-		&models.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &models.Contract{}, &models.CompanyContract{},
+		&company.Company{}, &server.Server{}, &workstation.Workstation{},
+		&fiscal.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
+		&models.Agent{}, &contract.Contract{}, &models.CompanyContract{},
 		&models.User{}, &models.ExternalSystemLink{},
 	)
 	if err != nil {
@@ -185,26 +188,58 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 		s.logger.Info("Создание Контрактов и связей...")
 		var linksToCreate []models.CompanyContract
-		for _, data := range contractData {
+		contractsCreated := 0
+
+		for i, data := range contractData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
+				s.logger.Warn("Пропуск контракта: отсутствует UUID", "index", i)
 				continue
 			}
-			contract, _ := sdClient.Mapper().DataToContract(ctx, mapperCtx, data)
-			tx.Create(contract)
-			extToIntID[extID] = contract.ID
-			// ИСПРАВЛЕНИЕ: Добавляем создание связи
-			tx.Create(&models.ExternalSystemLink{InternalID: contract.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Contract", LastSyncedAt: time.Now()})
+			contractModel, err := sdClient.Mapper().DataToContract(ctx, mapperCtx, data)
+			if err != nil {
+				s.logger.Error("Ошибка маппинга контракта", "error", err, "index", i)
+				continue
+			}
+
+			if err := tx.Create(contractModel).Error; err != nil {
+				s.logger.Error("CRITICAL: Ошибка создания контракта", "error", err, "uuid", extID)
+				continue
+			}
+
+			contractsCreated++
+			extToIntID[extID] = contractModel.ID
+
+			link := &models.ExternalSystemLink{
+				InternalID:      contractModel.ID,
+				SystemName:      "naumen",
+				ServiceDeskUUID: extID,
+				EntityType:      "Contract",
+				LastSyncedAt:    time.Now(),
+			}
+
+			if err := tx.Create(link).Error; err != nil {
+				s.logger.Error("Ошибка создания ExternalSystemLink для контракта", "uuid", extID, "error", err)
+				return err
+			}
 
 			companyExtIDs := sdClient.Mapper().GetCompanyUUIDsFromContract(data)
+			s.logger.Debug("Создание связей для контракта", "uuid", extID, "count", len(companyExtIDs))
 			for _, compExtID := range companyExtIDs {
 				if compIntID, ok := extToIntID[compExtID]; ok {
-					linksToCreate = append(linksToCreate, models.CompanyContract{CompanyID: compIntID, ContractID: contract.ID})
+					linksToCreate = append(linksToCreate, models.CompanyContract{CompanyID: compIntID, ContractID: contractModel.ID})
+				} else {
+					s.logger.Warn("Пропуск связи: компания не найдена", "contractUUID", extID, "companyUUID", compExtID)
 				}
 			}
 		}
+
+		s.logger.Info("Контракты обработаны", "created_count", contractsCreated, "links_to_create", len(linksToCreate))
+
 		if len(linksToCreate) > 0 {
+			s.logger.Info("Массовая вставка связей CompanyContract...", "count", len(linksToCreate))
 			if err := tx.Table("company_contracts").CreateInBatches(linksToCreate, batchSize).Error; err != nil {
+				s.logger.Error("CRITICAL: Ошибка вставки связей company_contracts", "error", err)
 				return err
 			}
 		}
@@ -265,11 +300,11 @@ func (s *Seeder) clearDatabase() error {
 func (s *Seeder) getModelForType(entityType string) interface{} {
 	switch entityType {
 	case "Server":
-		return &models.Server{}
+		return &server.Server{}
 	case "Workstation":
-		return &models.Workstation{}
+		return &workstation.Workstation{}
 	case "FiscalRegister":
-		return &models.FiscalRegister{}
+		return &fiscal.FiscalRegister{}
 	default:
 		return nil
 	}

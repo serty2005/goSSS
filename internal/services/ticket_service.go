@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -32,9 +34,9 @@ type ticketServiceImpl struct {
 	sdClient   external.ExternalSystemClient
 	cfg        *config.Config
 	// Добавляем репозитории для валидации
-	serverRepo      repositories.ServerRepo
-	workstationRepo repositories.WorkstationRepo
-	frRepo          repositories.FiscalRegisterRepo
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
 }
 
 func NewTicketService(
@@ -43,9 +45,9 @@ func NewTicketService(
 	sdClient external.ExternalSystemClient,
 	cfg *config.Config,
 	// Добавляем аргументы
-	serverRepo repositories.ServerRepo,
-	workstationRepo repositories.WorkstationRepo,
-	frRepo repositories.FiscalRegisterRepo,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
 ) TicketService {
 	return &ticketServiceImpl{
 		logger:          logger,

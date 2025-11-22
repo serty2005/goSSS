@@ -111,6 +111,21 @@ func (r *ticketRepo) AssociateAsset(ctx context.Context, ticketID string, assetI
 		}).Error
 }
 
+func (r *ticketRepo) GetActive(ctx context.Context) ([]tickets.Ticket, error) {
+	var activeTickets []tickets.Ticket
+	// Статусы, которые считаются "конечными"
+	finalStatuses := []string{tickets.StatusClosed, tickets.StatusResolved}
+
+	err := r.db.WithContext(ctx).
+		Where("status NOT IN ?", finalStatuses).
+		Find(&activeTickets).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("db: get active tickets: %w", err)
+	}
+	return activeTickets, nil
+}
+
 // buildQuery строит базовый запрос GORM на основе фильтра.
 func (r *ticketRepo) buildQuery(ctx context.Context, filter tickets.TicketFilter) *gorm.DB {
 	query := r.db.WithContext(ctx).Model(&tickets.Ticket{})

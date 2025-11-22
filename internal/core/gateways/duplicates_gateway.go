@@ -3,7 +3,9 @@ package gateways
 import (
 	"context"
 	"etalon-server/internal/core/events"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/pkg/eventbus"
@@ -65,9 +67,9 @@ func (g *duplicatesGatewayImpl) runSearchCycle(ctx context.Context) {
 		entityType string
 		fields     []string
 	}{
-		{&models.Server{}, "Server", []string{"ip"}},
-		{&models.Workstation{}, "Workstation", []string{"anydesk", "teamviewer", "litemanager"}},
-		{&models.FiscalRegister{}, "FiscalRegister", []string{"fr_serial_number", "rn_kkt"}},
+		{&server.Server{}, "Server", []string{"ip"}},
+		{&workstation.Workstation{}, "Workstation", []string{"anydesk", "teamviewer", "litemanager"}},
+		{&fiscal.FiscalRegister{}, "FiscalRegister", []string{"fr_serial_number", "rn_kkt"}},
 	}
 
 	var wg sync.WaitGroup
