@@ -12,19 +12,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 )
 
 // UserHandler обрабатывает запросы для управления пользователями.
 type UserHandler struct {
-	db       *gorm.DB
 	userSvc  services.AuthService
 	userRepo repositories.UserRepo
 }
 
 // NewUserHandler создает новый экземпляр обработчика пользователей.
-func NewUserHandler(db *gorm.DB, userSvc services.AuthService, userRepo repositories.UserRepo) *UserHandler {
-	return &UserHandler{db, userSvc, userRepo}
+func NewUserHandler(userSvc services.AuthService, userRepo repositories.UserRepo) *UserHandler {
+	return &UserHandler{userSvc, userRepo}
 }
 
 // RegisterRoutes регистрирует роуты для пользователей.

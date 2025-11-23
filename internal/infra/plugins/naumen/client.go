@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -32,34 +33,26 @@ import (
 
 // карты атрибутов, специфичные для Naumen ServiceDesk.
 var attrsMap = map[string]string{
-	"ou$company":             "adress,UUID,title,lastModifiedDate,additionalName,parent,recipientAgreements",
-	"objectBase$Server":      "UniqueID,Teamviewer,RDP,AnyDesk,UUID,IP,CabinetLink,DeviceName,lastModifiedDate,iikoVersion,description,nameforclient,owner,litemanagerID",
-	"objectBase$Workstation": "Commentariy,Teamviewer,AnyDesk,DeviceName,litemanagerID,lastModifiedDate,UUID,owner",
-	"objectBase$FR":          "UUID,ModelKKT,lastModifiedDate,owner,FFD,FRDownloader,RNKKT,KKTRegDate,FNExpireDate,LegalName,FRSerialNumber,FNNumber,FRFirmware",
-	"agreement$agreement":    "state,stateStartTime,services,recipientsOU,lastModifiedDate",
-	"serviceCall":            "number,lastComment,agreement,requestDate,descriptionRTF,clientOU,lastModifiedDate,UUID,state",
-	"comment":                "UUID,text,author,creationDate,private,files",
+	string(domain.MetaClassCompany):     "adress,UUID,title,lastModifiedDate,additionalName,parent,recipientAgreements",
+	string(domain.MetaClassServer):      "UniqueID,Teamviewer,RDP,AnyDesk,UUID,IP,CabinetLink,DeviceName,lastModifiedDate,iikoVersion,description,nameforclient,owner,litemanagerID",
+	string(domain.MetaClassWorkstation): "Commentariy,Teamviewer,AnyDesk,DeviceName,litemanagerID,lastModifiedDate,UUID,owner",
+	string(domain.MetaClassFR):          "UUID,ModelKKT,lastModifiedDate,owner,FFD,FRDownloader,RNKKT,KKTRegDate,FNExpireDate,LegalName,FRSerialNumber,FNNumber,FRFirmware",
+	string(domain.MetaClassAgreement):   "state,stateStartTime,services,recipientsOU,lastModifiedDate",
+	string(domain.MetaClassServiceCall): "number,lastComment,agreement,requestDate,descriptionRTF,clientOU,lastModifiedDate,UUID,state",
+	string(domain.MetaClassComment):     "UUID,text,author,creationDate,private,files",
 }
 
 // карты минимальных атрибутов, специфичные для Naumen ServiceDesk.
 var minimalAttrsMap = map[string]string{
-	"ou$company":             "UUID,lastModifiedDate,parent",
-	"objectBase$Server":      "UUID,lastModifiedDate,owner",
-	"objectBase$Workstation": "UUID,lastModifiedDate,owner",
-	"objectBase$FR":          "UUID,lastModifiedDate,owner",
-	"serviceCall":            "UUID,lastModifiedDate,state,lastComment",
+	string(domain.MetaClassCompany):     "UUID,lastModifiedDate,parent",
+	string(domain.MetaClassServer):      "UUID,lastModifiedDate,owner",
+	string(domain.MetaClassWorkstation): "UUID,lastModifiedDate,owner",
+	string(domain.MetaClassFR):          "UUID,lastModifiedDate,owner",
+	string(domain.MetaClassServiceCall): "UUID,lastModifiedDate,state,lastComment",
 }
 
 // --- СПЕЦИФИЧНЫЕ ДЛЯ NAUMEN КОНСТАНТЫ ---
-const (
-	metaClassCompany     = "ou$company"
-	metaClassServer      = "objectBase$Server"
-	metaClassWorkstation = "objectBase$Workstation"
-	metaClassFR          = "objectBase$FR"
-	metaClassAgreement   = "agreement$agreement"
-	metaClassServiceCall = "serviceCall"
-	metaClassComment     = "comment"
-)
+// Используются константы из domain
 
 type naumenClientImpl struct {
 	client         *http.Client
@@ -193,7 +186,7 @@ func (s *naumenClientImpl) FetchTickets(ctx context.Context, statuses []string) 
 
 	// Используем метакласс из констант (serviceCall$serviceCall)
 	// Если Naumen ругается на $serviceCall в URL с фильтром, можно заменить на просто "serviceCall" локально
-	metaClass := metaClassServiceCall
+	metaClass := string(domain.MetaClassServiceCall)
 
 	// Формируем итоговый URL
 	// Пример: .../rest/find/serviceCall$serviceCall/{'state':['registered']}
@@ -314,7 +307,7 @@ func (s *naumenClientImpl) FindReferenceID(ctx context.Context, referenceType, t
 
 // FetchComments получает список комментариев для заявки.
 func (s *naumenClientImpl) FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
-	metaClass := metaClassComment
+	metaClass := string(domain.MetaClassComment)
 	// attrs := attrsMap[metaClass]
 	url := fmt.Sprintf("%s/find/%s", s.baseURL, metaClass)
 
@@ -451,7 +444,7 @@ func newNaumenMapper(db *gorm.DB, linkRepo repositories.LinkRepo, logger logger.
 // DataToCompany преобразует мапу от Naumen в модель Company.
 func (m *naumenMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*company.Company, error) {
 	company := &company.Company{}
-	company.MetaClass = metaClassCompany
+	company.MetaClass = string(domain.MetaClassCompany)
 
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
@@ -510,7 +503,7 @@ func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperCont
 		return nil, fmt.Errorf("сервер (ext: %s): %w", externalUUID, err)
 	}
 	server := &server.Server{OwnerID: &ownerInternalID}
-	server.MetaClass = metaClassServer
+	server.MetaClass = string(domain.MetaClassServer)
 
 	rawUniqueID, _ := data["UniqueID"].(string)
 	rawTeamviewer, _ := data["Teamviewer"].(string)
@@ -577,7 +570,7 @@ func (m *naumenMapper) DataToWorkstation(ctx context.Context, mc *external.Mappe
 		return nil, fmt.Errorf("рабочая станция (ext: %s): %w", externalUUID, err)
 	}
 	ws := &workstation.Workstation{OwnerID: &ownerInternalID}
-	ws.MetaClass = metaClassWorkstation
+	ws.MetaClass = string(domain.MetaClassWorkstation)
 	if tv, ok := data["Teamviewer"].(string); ok {
 		ws.Teamviewer = validators.ValidateRemoteAccessID(tv)
 	}
@@ -605,7 +598,7 @@ func (m *naumenMapper) DataToFiscalRegister(ctx context.Context, mc *external.Ma
 		return nil, fmt.Errorf("фискальный регистратор (ext: %s): %w", externalUUID, err)
 	}
 	fr := &fiscal.FiscalRegister{OwnerID: &ownerInternalID}
-	fr.MetaClass = metaClassFR
+	fr.MetaClass = string(domain.MetaClassFR)
 
 	if val, ok := data["ModelKKT"].(map[string]interface{}); ok {
 		if title, ok2 := val["title"].(string); ok2 {
@@ -665,7 +658,7 @@ var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
 // DataToContract преобразует мапу от Naumen в модель Contract.
 func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*contract.Contract, error) {
 	c := &contract.Contract{}
-	c.MetaClass = metaClassAgreement
+	c.MetaClass = string(domain.MetaClassAgreement)
 
 	if state, ok := data["state"].(string); ok {
 		c.State = &state
@@ -722,7 +715,7 @@ func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperCo
 // DataToTicket преобразует данные из Naumen в модель Ticket.
 func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*tickets.Ticket, error) {
 	ticket := &tickets.Ticket{}
-	ticket.MetaClass = metaClassServiceCall
+	ticket.MetaClass = string(domain.MetaClassServiceCall)
 
 	// Обязательные поля
 	if uuid, ok := data["UUID"].(string); ok {

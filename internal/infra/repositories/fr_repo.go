@@ -2,9 +2,12 @@ package repositories
 
 import (
 	"context"
+	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/fiscal" // <-- Новый импорт
 	infraDB "etalon-server/internal/infra/db"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -29,30 +32,50 @@ func (r *frRepo) Create(ctx context.Context, tx *gorm.DB, fr *fiscal.FiscalRegis
 
 func (r *frRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&fiscal.FiscalRegister{}).Where("id = ?", internalID).Updates(updateData)
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *frRepo) Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Where("id = ?", internalID).Delete(&fiscal.FiscalRegister{})
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *frRepo) GetByID(ctx context.Context, internalID string) (*fiscal.FiscalRegister, error) {
 	var fr fiscal.FiscalRegister
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Where("id = ?", internalID).First(&fr).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &fr, err
+	return &fr, nil
 }
 
 func (r *frRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*fiscal.FiscalRegister, error) {
 	var fr fiscal.FiscalRegister
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&fr).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &fr, err
+	return &fr, nil
 }
 
 func (r *frRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*fiscal.FiscalRegister, error) {
@@ -83,10 +106,13 @@ func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*fiscal.Fis
 	}
 	var fr fiscal.FiscalRegister
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Where("fr_serial_number = ?", sn).Order("updated_at DESC").First(&fr).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &fr, err
+	return &fr, nil
 }
 
 func (r *frRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]fiscal.FiscalRegister, error) {

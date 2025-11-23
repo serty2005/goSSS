@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
 	"fmt"
 
@@ -46,7 +47,7 @@ func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, e
 	err := r.db.WithContext(ctx).First(&ticket, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("db: get ticket by id: %w", err)
 	}
@@ -59,7 +60,7 @@ func (r *ticketRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*
 	err := r.db.WithContext(ctx).First(&ticket, "service_desk_uuid = ?", sdUUID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("db: get ticket by sd uuid: %w", err)
 	}

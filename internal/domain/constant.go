@@ -19,6 +19,22 @@ const (
 	SystemNaumen SystemName = "naumen"
 )
 
+// MetaClass представляет метакласс Naumen ServiceDesk.
+type MetaClass string
+
+const (
+	MetaClassCompany     MetaClass = "ou$company"
+	MetaClassServer      MetaClass = "objectBase$Server"
+	MetaClassWorkstation MetaClass = "objectBase$Workstation"
+	MetaClassFR          MetaClass = "objectBase$FR"
+	MetaClassAgreement   MetaClass = "agreement$agreement"
+	MetaClassServiceCall MetaClass = "serviceCall$serviceCall"
+	MetaClassComment     MetaClass = "comment"
+	MetaClassModeliFR    MetaClass = "ModeliFR"
+	MetaClassFFD         MetaClass = "FFD"
+	MetaClassSrokiFN     MetaClass = "SrokiFN"
+)
+
 // TaskType представляет тип задачи.
 type TaskType string
 

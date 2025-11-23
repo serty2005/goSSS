@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/task"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
@@ -24,6 +25,10 @@ import (
 	"etalon-server/internal/services"
 	companySvc "etalon-server/internal/services/company"
 	contractSvc "etalon-server/internal/services/contract"
+	fiscalSvc "etalon-server/internal/services/fiscal"
+	serverSvc "etalon-server/internal/services/server"
+	taskSvc "etalon-server/internal/services/task"
+	workstationSvc "etalon-server/internal/services/workstation"
 	"etalon-server/internal/transport/http/handlers"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/pkg/eventbus"
@@ -62,7 +67,7 @@ type Application struct {
 	ContractGateway       gateways.ContractGateway
 
 	// Handlers
-	CrudHandler          *handlers.CrudHandler
+	CompanyHandler       *handlers.CompanyHandler
 	SearchHandler        *handlers.SearchHandler
 	SyncHandler          *handlers.SyncHandler
 	TaskHandler          *handlers.TaskHandler
@@ -73,6 +78,9 @@ type Application struct {
 	UserHandler          *handlers.UserHandler
 	DebugHandler         *handlers.DebugHandler
 	TicketHandler        *handlers.TicketHandler
+	ServerHandler        *handlers.ServerHandler
+	WorkstationHandler   *handlers.WSHandler
+	FiscalHandler        *handlers.FiscalHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -228,11 +236,15 @@ type Services struct {
 	AuthService           services.AuthService
 	AgentService          services.AgentService
 	TaskResolutionService services.TaskResolutionService
+	TaskService           task.Service
 	ServerActionsService  services.ServerActionsService
 	EntityMatcherService  services.EntityMatcherService
 	TicketService         services.TicketService
 	CompanyService        company.Service
 	ContractService       contract.Service
+	ServerService         server.Service
+	WorkstationService    workstation.Service
+	FiscalService         fiscal.Service
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -242,11 +254,15 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
 		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), transactor, app.DB),
 		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo),
 		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, clients.SDClient, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		ServerService:         serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
+		WorkstationService:    workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
+		FiscalService:         fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
 	}
 }
 
@@ -268,15 +284,19 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
-	app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, srvs.CompanyService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	// app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, srvs.CompanyService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.ServerHandler = handlers.NewServerHandler(srvs.ServerService)
+	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService)
+	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService)
+	app.CompanyHandler = handlers.NewCompanyHandler(srvs.CompanyService)
 	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
-	app.TaskHandler = handlers.NewTaskHandler(app.DB, srvs.TaskResolutionService, app.SDEditor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
+	app.TaskHandler = handlers.NewTaskHandler(srvs.TaskResolutionService, app.SDEditor, srvs.TaskService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService)
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
-	app.UserHandler = handlers.NewUserHandler(app.DB, srvs.AuthService, repos.UserRepo)
+	app.UserHandler = handlers.NewUserHandler(srvs.AuthService, repos.UserRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
 }
@@ -314,14 +334,17 @@ func (a *Application) setupRouter() *chi.Mux {
 	// Защищенная группа роутов для UI
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.JwtAuthMiddleware(a.Config))
-		a.CrudHandler.RegisterRoutes(r)
+		a.CompanyHandler.RegisterRoutes(r)
+		a.ServerHandler.RegisterRoutes(r)
+		a.WorkstationHandler.RegisterRoutes(r)
+		a.FiscalHandler.RegisterRoutes(r)
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
 		a.ServerActionsHandler.RegisterRoutes(r)
 		a.ContractHandler.RegisterRoutes(r)
 
 		r.Route("/tickets", func(r chi.Router) {
-			r.Use(middleware.AdminRequiredMiddleware)
+			// r.Use(middleware.AdminRequiredMiddleware)
 			a.TicketHandler.RegisterRoutes(r)
 		})
 

@@ -4,12 +4,12 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 )
 
 // ServerActionsHandler обрабатывает специфичные действия над серверами.
@@ -27,7 +27,7 @@ func NewServerActionsHandler(actionsSvc services.ServerActionsService) *ServerAc
 // RegisterRoutes регистрирует роуты для действий с серверами.
 // ИЗМЕНЕНИЕ: В URL теперь ожидается внутренний ID, а не UUID.
 func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/servers/{id}/install_license", h.installLicense)
+	r.Post("/servers/{id}/license", h.installLicense)
 	r.Post("/servers/{id}/poll", h.pollServerStatus)
 	r.Post("/servers/{serverID}/additional_owners", h.addAdditionalOwner)
 	r.Delete("/servers/{serverID}/additional_owners/{companyID}", h.removeAdditionalOwner)
@@ -58,7 +58,7 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 
 	err := h.actionsSvc.InstallLicense(r.Context(), serverID, dto.UniqueID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		} else {
 			log.Error("Ошибка при вызове заглушки установки лицензии", "serverID", serverID, "error", err)
@@ -83,7 +83,7 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 		switch {
 		case errors.Is(err, services.ErrRateLimitExceeded):
 			RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
-		case errors.Is(err, gorm.ErrRecordNotFound):
+		case errors.Is(err, domain.ErrNotFound):
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		default:
 			log.Error("Ошибка при запуске принудительного опроса", "serverID", serverID, "error", err)
@@ -112,9 +112,11 @@ func (h *ServerActionsHandler) addAdditionalOwner(w http.ResponseWriter, r *http
 		return
 	}
 
+	log.Debug("Запрос на добавление допвладельца для сервера", "serverID", serverID, "CompanyID", dto.CompanyID)
+
 	err := h.actionsSvc.AddAdditionalOwner(r.Context(), serverID, dto.CompanyID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
 			log.Error("Ошибка при добавлении дополнительного владельца", "error", err)
@@ -135,10 +137,11 @@ func (h *ServerActionsHandler) removeAdditionalOwner(w http.ResponseWriter, r *h
 		RespondWithError(w, http.StatusBadRequest, "ID сервера и компании обязательны")
 		return
 	}
+	log.Debug("Запрос на удаление допвладельца у сервера", "serverID", serverID, "companyID", companyID)
 
 	err := h.actionsSvc.RemoveAdditionalOwner(r.Context(), serverID, companyID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
 			log.Error("Ошибка при удалении дополнительного владельца", "error", err)

@@ -2,9 +2,12 @@ package repositories
 
 import (
 	"context"
+	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	infraDB "etalon-server/internal/infra/db"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -26,21 +29,38 @@ func (r *companyRepo) Create(ctx context.Context, entity *company.Company) error
 
 func (r *companyRepo) Update(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Model(&company.Company{}).Where("id = ?", internalID).Updates(updateData)
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *companyRepo) Delete(ctx context.Context, internalID string) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).Delete(&company.Company{})
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.Company, error) {
 	var entity company.Company
 	err := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).First(&entity).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &entity, err
+	return &entity, nil
 }
 
 func (r *companyRepo) GetByIDs(ctx context.Context, internalIDs []string) ([]company.Company, error) {
@@ -55,10 +75,13 @@ func (r *companyRepo) GetByIDs(ctx context.Context, internalIDs []string) ([]com
 func (r *companyRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*company.Company, error) {
 	var entity company.Company
 	err := r.getDB(ctx).WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&entity).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &entity, err
+	return &entity, nil
 }
 
 func (r *companyRepo) GetAllParentIDs(ctx context.Context, childID string) ([]string, error) {

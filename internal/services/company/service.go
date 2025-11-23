@@ -2,14 +2,12 @@ package company
 
 import (
 	"context"
-	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/interfaces"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 )
-
-var ErrCompanyNotFound = errors.New("company not found")
 
 type serviceImpl struct {
 	logger      logger.LoggerInterface
@@ -66,7 +64,7 @@ func (s *serviceImpl) UpdateCompany(ctx context.Context, id string, data map[str
 			return err
 		}
 		if !updated {
-			return ErrCompanyNotFound
+			return domain.ErrNotFound
 		}
 		return nil
 	})
@@ -79,8 +77,19 @@ func (s *serviceImpl) DeleteCompany(ctx context.Context, id string) error {
 			return err
 		}
 		if !deleted {
-			return ErrCompanyNotFound
+			return domain.ErrNotFound
 		}
 		return nil
 	})
+}
+
+func (s *serviceImpl) GetCompany(ctx context.Context, id string) (*company.Company, error) {
+	return s.companyRepo.GetByID(ctx, id)
+}
+
+func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int) ([]company.Company, error) {
+	// Здесь можно добавить бизнес-логику, например, фильтрацию по правам пользователя
+	// Пока просто проксируем в репозиторий
+	// showInactive = true (показываем всех)
+	return s.companyRepo.Search(ctx, term, true, limit, offset)
 }

@@ -3,11 +3,13 @@ package repositories
 import (
 	"context"
 	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	infraDB "etalon-server/internal/infra/db"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -31,21 +33,38 @@ func (r *contractRepo) Create(ctx context.Context, c *contract.Contract) error {
 
 func (r *contractRepo) Update(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Model(&contract.Contract{}).Where("id = ?", internalID).Updates(updateData)
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *contractRepo) Delete(ctx context.Context, internalID string) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).Delete(&contract.Contract{})
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *contractRepo) GetByID(ctx context.Context, internalID string) (*contract.Contract, error) {
 	var c contract.Contract
 	err := r.getDB(ctx).WithContext(ctx).Preload("Companies").Where("id = ?", internalID).First(&c).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &c, err
+	return &c, nil
 }
 
 // GetByServiceDeskUUID находит контракт по внешнему UUID (через таблицу связей).
@@ -57,10 +76,13 @@ func (r *contractRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) 
 		Where("l.system_name = ? AND l.service_desk_uuid = ? AND l.entity_type = ?", "naumen", sdUUID, "Contract").
 		First(&c).Error
 
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &c, err
+	return &c, nil
 }
 
 // ReplaceCompanyLinks обновляет связи Many-to-Many для контракта.

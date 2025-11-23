@@ -2,10 +2,13 @@ package repositories
 
 import (
 	"context"
+	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/workstation"
 	infraDB "etalon-server/internal/infra/db"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -30,30 +33,50 @@ func (r *workstationRepo) Create(ctx context.Context, tx *gorm.DB, ws *workstati
 
 func (r *workstationRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&workstation.Workstation{}).Where("id = ?", internalID).Updates(updateData)
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *workstationRepo) Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Where("id = ?", internalID).Delete(&workstation.Workstation{})
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *workstationRepo) GetByID(ctx context.Context, internalID string) (*workstation.Workstation, error) {
 	var ws workstation.Workstation
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Where("id = ?", internalID).First(&ws).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &ws, err
+	return &ws, nil
 }
 
 func (r *workstationRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*workstation.Workstation, error) {
 	var ws workstation.Workstation
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&ws).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &ws, err
+	return &ws, nil
 }
 
 func (r *workstationRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*workstation.Workstation, error) {
@@ -105,10 +128,13 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 	query = query.Where(strings.Join(conditions, " OR "), values...)
 
 	err := query.Order("updated_at DESC").First(&ws).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &ws, err
+	return &ws, nil
 }
 
 func (r *workstationRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]workstation.Workstation, error) {

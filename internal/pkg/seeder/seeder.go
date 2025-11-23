@@ -2,6 +2,7 @@ package seeder
 
 import (
 	"context"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -105,14 +106,14 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 			extID, _ := data["UUID"].(string)
 			companyModel, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
 			parentExtID := companyModel.MetaClass
-			if parentExtID != "ou$company" {
+			if parentExtID != string(domain.MetaClassCompany) {
 				childIntID := extToIntID[extID]
 				parentIntID := extToIntID[parentExtID]
 				if childIntID != "" && parentIntID != "" {
 					tx.Model(&company.Company{}).Where("id = ?", childIntID).Update("parent_id", parentIntID)
 				}
 			}
-			tx.Model(&company.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", "ou$company")
+			tx.Model(&company.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", string(domain.MetaClassCompany))
 		}
 
 		s.logger.Info("Создание Оборудования...")

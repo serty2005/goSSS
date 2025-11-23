@@ -3,10 +3,12 @@ package repositories
 import (
 	"context"
 	"errors"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/server"
 	infraDB "etalon-server/internal/infra/db"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -34,30 +36,50 @@ func (r *serverRepo) Create(ctx context.Context, tx *gorm.DB, s *server.Server) 
 
 func (r *serverRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&server.Server{}).Where("id = ?", internalID).Updates(updateData)
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *serverRepo) Delete(ctx context.Context, tx *gorm.DB, internalID string) (bool, error) {
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Where("id = ?", internalID).Delete(&server.Server{})
-	return res.RowsAffected > 0, res.Error
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *serverRepo) GetByID(ctx context.Context, internalID string) (*server.Server, error) {
 	var s server.Server
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Preload("AdditionalOwners").Where("id = ?", internalID).First(&s).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &s, err
+	return &s, nil
 }
 
 func (r *serverRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*server.Server, error) {
 	var s server.Server
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).Unscoped().Preload("AdditionalOwners").Where("id = ?", internalID).First(&s).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
-	return &s, err
+	return &s, nil
 }
 
 func (r *serverRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*server.Server, error) {
@@ -115,10 +137,13 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 	// Поиск по IP
 	if ip != "" {
 		err := db.Where("ip = ? AND status != ?", ip, "locked").First(&s).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, domain.ErrNotFound
+			}
+			return nil, err
 		}
-		return &s, err
+		return &s, nil
 	}
 
 	return nil, nil

@@ -10,6 +10,7 @@ import (
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/task"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/pkg/utils"
 	"etalon-server/internal/services"
@@ -17,19 +18,16 @@ import (
 	"etalon-server/internal/transport/http/middleware"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 )
 
 // TaskHandler обрабатывает запросы, связанные с задачами сверки и поиском дубликатов.
 type TaskHandler struct {
-	db              *gorm.DB
 	resolutionSvc   services.TaskResolutionService
 	sdEditor        workers.SDEditorWorker
+	taskSvc         task.Service
 	serverRepo      server.Repository
 	workstationRepo workstation.Repository
 	frRepo          fiscal.Repository
@@ -38,18 +36,18 @@ type TaskHandler struct {
 
 // NewTaskHandler создает новый экземпляр обработчика.
 func NewTaskHandler(
-	db *gorm.DB,
 	resolutionSvc services.TaskResolutionService,
 	sdEditor workers.SDEditorWorker,
+	taskSvc task.Service,
 	serverRepo server.Repository,
 	workstationRepo workstation.Repository,
 	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
 ) *TaskHandler {
 	return &TaskHandler{
-		db:              db,
 		resolutionSvc:   resolutionSvc,
 		sdEditor:        sdEditor,
+		taskSvc:         taskSvc,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
 		frRepo:          frRepo,
@@ -81,12 +79,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	var tasks []models.ReconciliationTask
-	query := h.db.Model(&models.ReconciliationTask{})
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
-	err = query.Limit(limit).Offset(offset).Order("created_at desc").Find(&tasks).Error
+	tasks, err := h.taskSvc.GetTasks(r.Context(), status, limit, offset)
 	if err != nil {
 		log.Error("Не удалось получить задачи из БД", "error", err)
 		middleware.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка задач")
@@ -308,118 +301,25 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 // GetDuplicates находит и возвращает группы дубликатов в формате JSON.
 func (h *TaskHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
-	var allGroups []api.DuplicateGroupDTO
-
-	wsFields := []string{"anydesk", "teamviewer", "litemanager"}
-	for _, field := range wsFields {
-		groups, err := h.findDuplicateGroups(field, "Workstation")
-		if err != nil {
-			log.Error("Ошибка поиска дубликатов Workstation", "field", field, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
-			return
-		}
-		allGroups = append(allGroups, groups...)
-	}
-
-	serverGroups, err := h.findDuplicateGroups("ip", "Server")
+	groups, err := h.taskSvc.GetDuplicates(r.Context())
 	if err != nil {
-		log.Error("Ошибка поиска дубликатов Server", "field", "ip", "error", err)
+		log.Error("Ошибка поиска дубликатов", "error", err)
 		RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
 		return
 	}
-	allGroups = append(allGroups, serverGroups...)
+
+	var allGroups []api.DuplicateGroupDTO
+	for _, g := range groups {
+		allGroups = append(allGroups, api.DuplicateGroupDTO{
+			Field:      g.Field,
+			Value:      g.Value,
+			MainRecord: g.MainRecord,
+			Duplicates: g.Duplicates,
+			EntityType: g.EntityType,
+		})
+	}
 
 	RespondWithJSON(w, http.StatusOK, allGroups)
-}
-
-func (h *TaskHandler) findDuplicateGroups(field string, entityType string) ([]api.DuplicateGroupDTO, error) {
-	var results []struct {
-		Value string
-		Count int
-	}
-	model := h.getModel(entityType)
-	if model == nil {
-		return nil, fmt.Errorf("неизвестный тип сущности: %s", entityType)
-	}
-
-	err := h.db.Model(model).
-		Select(fmt.Sprintf("%s as value, count(*) as count", field)).
-		Where(fmt.Sprintf("%s IS NOT NULL AND %s != ''", field, field)).
-		Group(field).
-		Having("count(*) > 1").
-		Find(&results).Error
-
-	if err != nil {
-		return nil, err
-	}
-
-	var groups []api.DuplicateGroupDTO
-	for _, res := range results {
-		var records []interface{}
-		switch entityType {
-		case "Workstation":
-			var wsRecords []workstation.Workstation
-			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&wsRecords)
-			for i := range wsRecords {
-				records = append(records, wsRecords[i])
-			}
-		case "Server":
-			var srvRecords []server.Server
-			h.db.Where(fmt.Sprintf("%s = ?", field), res.Value).Find(&srvRecords)
-			for i := range srvRecords {
-				records = append(records, srvRecords[i])
-			}
-		}
-
-		if len(records) < 2 {
-			continue
-		}
-
-		sort.Slice(records, func(i, j int) bool {
-			dateI := getLMDFromInterface(records[i])
-			dateJ := getLMDFromInterface(records[j])
-			if dateI == nil {
-				return false
-			}
-			if dateJ == nil {
-				return true
-			}
-			return dateI.After(*dateJ)
-		})
-
-		groups = append(groups, api.DuplicateGroupDTO{
-			Field:      field,
-			Value:      res.Value,
-			MainRecord: records[0],
-			Duplicates: records[1:],
-			EntityType: entityType,
-		})
-	}
-	return groups, nil
-}
-
-func (h *TaskHandler) getModel(entityType string) interface{} {
-	switch entityType {
-	case "Workstation":
-		return &workstation.Workstation{}
-	case "Server":
-		return &server.Server{}
-	default:
-		return nil
-	}
-}
-
-func getLMDFromInterface(record interface{}) *time.Time {
-	switch v := record.(type) {
-	case workstation.Workstation:
-		return v.LastModifiedDate
-	case server.Server:
-		return v.LastModifiedDate
-	case fiscal.FiscalRegister:
-		return v.LastModifiedDate
-	default:
-		return nil
-	}
 }
 
 // --- Вспомогательные функции-мапперы ---

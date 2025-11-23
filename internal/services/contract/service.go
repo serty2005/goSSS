@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"encoding/json"
+	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -247,7 +248,7 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 			return err
 		}
 		if !updated {
-			return fmt.Errorf("contract not found") // Можно использовать типизированную ошибку
+			return domain.ErrNotFound
 		}
 
 		// В идеале здесь тоже нужно проверять, изменился ли статус на 'active'/'closed'
@@ -265,7 +266,7 @@ func (s *serviceImpl) DeleteContract(ctx context.Context, id string) error {
 			return err
 		}
 		if !deleted {
-			return fmt.Errorf("contract not found")
+			return domain.ErrNotFound
 		}
 		return nil
 	})

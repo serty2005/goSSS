@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
@@ -18,8 +19,8 @@ import (
 )
 
 var (
-	ErrAgentNotFound      = errors.New("агент не найден")
-	ErrAgentAlreadyExists = errors.New("агент с таким UUID уже существует")
+	ErrAgentNotFound      = domain.ErrNotFound
+	ErrAgentAlreadyExists = domain.ErrAlreadyExists
 	ErrOwnerNotDetermined = errors.New("не удалось определить владельца для агента")
 )
 

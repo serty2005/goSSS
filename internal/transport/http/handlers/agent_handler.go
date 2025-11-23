@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
@@ -48,14 +49,13 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.agentService.RegisterAgent(r.Context(), &dto)
 	if err != nil {
-		switch {
-		case errors.Is(err, services.ErrAgentAlreadyExists):
+		if errors.Is(err, domain.ErrAlreadyExists) {
 			log.Info("Попытка повторной регистрации существующего агента", "uuid", dto.AgentUUID)
 			RespondWithError(w, http.StatusConflict, "Агент с таким UUID уже зарегистрирован")
-		default:
-			log.Error("Ошибка регистрации агента", "uuid", dto.AgentUUID, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при регистрации агента")
+			return
 		}
+		log.Error("register failed", "error", err)
+		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
@@ -83,15 +83,13 @@ func (h *AgentHandler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 	config, err := h.agentService.GetAgentConfig(r.Context(), uuid)
 	if err != nil {
-		switch {
-		case errors.Is(err, services.ErrAgentNotFound):
-			// Это штатная ситуация для агента, который еще не прошел регистрацию до конца.
-			log.Info("Агент не найден при запросе конфигурации", "uuid", uuid)
-			RespondWithError(w, http.StatusNotFound, "Агент не найден или его регистрация еще не завершена")
-		default:
-			log.Error("Ошибка получения конфигурации агента", "uuid", uuid, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		if errors.Is(err, domain.ErrNotFound) {
+			log.Error("не найдена запись", "error", err)
+			RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
 		}
+		log.Error("get config failed", "error", err)
+		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
@@ -124,14 +122,13 @@ func (h *AgentHandler) postAgentData(w http.ResponseWriter, r *http.Request) {
 
 	err := h.agentService.ProcessData(r.Context(), uuid, &dto)
 	if err != nil {
-		switch {
-		case errors.Is(err, services.ErrAgentNotFound):
-			log.Info("Агент не найден при обработке данных", "uuid", uuid)
-			RespondWithError(w, http.StatusNotFound, "Агент не найден")
-		default:
-			log.Error("Ошибка обработки данных от агента", "uuid", uuid, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка при обработке данных")
+		if errors.Is(err, domain.ErrNotFound) {
+			log.Error("не найдена запись", "error", err)
+			RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
 		}
+		log.Error("process data failed", "error", err)
+		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
