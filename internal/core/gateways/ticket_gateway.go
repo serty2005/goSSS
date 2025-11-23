@@ -168,6 +168,10 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 
 			// Точечно запрашиваем статус из Naumen, чтобы узнать точный конечный статус
 			link, _ := g.linkRepo.GetByInternalID(ctx, nil, "naumen", localT.ID)
+			if link == nil {
+				g.logger.Warn("Связь не найдена для заявки, пропускаем обработку", "internal_id", localT.ID)
+				continue
+			}
 			details, err := g.sdClient.FetchEntityDetails(ctx, link.ServiceDeskUUID, "Ticket")
 			if err != nil {
 				g.logger.Error("Не удалось проверить статус исчезнувшей заявки", "uuid", localT.ServiceDeskUUID, "error", err)
