@@ -49,18 +49,30 @@ func GetLogger(ctx context.Context) logger.LoggerInterface {
 func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var tokenString string
+
+			// 1. Сначала пробуем извлечь токен из заголовка Authorization
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				RespondWithError(w, http.StatusUnauthorized, "Отсутствует заголовок Authorization")
+			if authHeader != "" {
+				// Проверяем формат "Bearer <token>"
+				parts := strings.Split(authHeader, " ")
+				if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+					tokenString = parts[1]
+				}
+			}
+
+			// 2. Если в заголовке токена нет, ищем в Query параметрах (для SSE)
+			if tokenString == "" {
+				tokenString = r.URL.Query().Get("token")
+			}
+
+			// 3. Если токен все еще не найден — ошибка
+			if tokenString == "" {
+				RespondWithError(w, http.StatusUnauthorized, "Отсутствует токен авторизации")
 				return
 			}
 
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-			if tokenString == authHeader {
-				RespondWithError(w, http.StatusUnauthorized, "Неверный формат токена")
-				return
-			}
-
+			// 4. Парсинг и валидация токена
 			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("неожиданный метод подписи: %v", token.Header["alg"])
@@ -73,6 +85,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
+			// 5. Извлечение claims и сохранение в контекст
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
 				ctx := r.Context()
 				if sub, ok := claims["sub"].(string); ok {

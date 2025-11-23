@@ -10,6 +10,7 @@ const (
 	FiscalRegister EntityType = "FiscalRegister"
 	Contract       EntityType = "Contract"
 	Agent          EntityType = "Agent"
+	Ticket         EntityType = "Ticket"
 )
 
 // SystemName представляет имя внешней системы.
@@ -28,7 +29,7 @@ const (
 	MetaClassWorkstation MetaClass = "objectBase$Workstation"
 	MetaClassFR          MetaClass = "objectBase$FR"
 	MetaClassAgreement   MetaClass = "agreement$agreement"
-	MetaClassServiceCall MetaClass = "serviceCall$serviceCall"
+	MetaClassServiceCall MetaClass = "serviceCall"
 	MetaClassComment     MetaClass = "comment"
 	MetaClassModeliFR    MetaClass = "ModeliFR"
 	MetaClassFFD         MetaClass = "FFD"

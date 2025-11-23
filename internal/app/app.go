@@ -77,6 +77,7 @@ type Application struct {
 	ContractHandler      *handlers.ContractHandler
 	UserHandler          *handlers.UserHandler
 	DebugHandler         *handlers.DebugHandler
+	SSEHandler           *handlers.SSEHandler
 	TicketHandler        *handlers.TicketHandler
 	ServerHandler        *handlers.ServerHandler
 	WorkstationHandler   *handlers.WSHandler
@@ -279,7 +280,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, clients.SDClient)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
-	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), clients.SDClient, repos.TicketRepo, app.DB, repos.LinkRepo)
+	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), clients.SDClient, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
 	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), clients.SDClient, srvs.ContractService)
 }
 
@@ -298,6 +299,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
 	app.UserHandler = handlers.NewUserHandler(srvs.AuthService, repos.UserRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
+	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
 }
 
@@ -342,6 +344,7 @@ func (a *Application) setupRouter() *chi.Mux {
 		a.TaskHandler.RegisterRoutes(r)
 		a.ServerActionsHandler.RegisterRoutes(r)
 		a.ContractHandler.RegisterRoutes(r)
+		a.SSEHandler.RegisterRoutes(r) // Server-Sent Events
 
 		r.Route("/tickets", func(r chi.Router) {
 			// r.Use(middleware.AdminRequiredMiddleware)

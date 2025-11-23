@@ -26,9 +26,11 @@ type Ticket struct {
 	common.Base // Внедряем ID, CreatedAt, UpdatedAt, DeletedAt, MetaClass
 
 	// Данные из ServiceDesk
-	ServiceDeskUUID  string    `json:"service_desk_uuid" gorm:"uniqueIndex;not null;type:text"`
+	ServiceDeskUUID  string    `json:"service_desk_uuid" gorm:"-"` // gorm:"-" означает, что поле не хранится в таблице tickets, а подтягивается через JOIN
 	Number           int       `json:"number" gorm:"index"`
 	Status           string    `json:"status" gorm:"type:varchar(50);index"`
+	Subject          string    `json:"subject" gorm:"type:text"`      // Тема заявки (из title)
+	LastComment      string    `json:"last_comment" gorm:"type:text"` // Текст последнего комментария (preview)
 	RequestDate      time.Time `json:"request_date"`
 	LastModifiedDate time.Time `json:"last_modified_date"`
 

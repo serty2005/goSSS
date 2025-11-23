@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
+	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"net/http"
 	"strconv"
@@ -42,10 +43,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Парсинг фильтров
 	filter := tickets.TicketFilter{
-		Limit:     limit,
-		Offset:    offset,
-		CompanyID: r.URL.Query().Get("company_id"),
-		SortBy:    r.URL.Query().Get("sort_by"),
+		Limit:       limit,
+		Offset:      offset,
+		CompanyID:   r.URL.Query().Get("company_id"),
+		SortBy:      r.URL.Query().Get("sort_by"),
+		SearchQuery: r.URL.Query().Get("search"),
 	}
 
 	// Фильтр по оборудованию
@@ -68,11 +70,26 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Маппинг в TicketListDTO
+	dtos := make([]api.TicketListDTO, len(items))
+	for i, item := range items {
+		dtos[i] = api.TicketListDTO{
+			ID:               item.ID,
+			Number:           item.Number,
+			ServiceDeskUUID:  item.ServiceDeskUUID, // Теперь это поле заполнено благодаря JOIN
+			Status:           item.Status,
+			Subject:          item.Subject,
+			LastComment:      item.LastComment,
+			LastActivityDate: item.LastModifiedDate,
+			CompanyID:        item.CompanyID,
+		}
+	}
+
 	RespondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"data":   items,
+		"data":   dtos,
 		"total":  total,
-		"limit":  limit,
-		"offset": offset,
+		"limit":  filter.Limit,
+		"offset": filter.Offset,
 	})
 }
 

@@ -184,12 +184,12 @@ func (s *naumenClientImpl) FetchTickets(ctx context.Context, statuses []string) 
 	}
 	filterString := fmt.Sprintf("{'state':[%s]}", strings.Join(quotedStatuses, ","))
 
-	// Используем метакласс из констант (serviceCall$serviceCall)
+	// Используем метакласс из констант (serviceCall)
 	// Если Naumen ругается на $serviceCall в URL с фильтром, можно заменить на просто "serviceCall" локально
 	metaClass := string(domain.MetaClassServiceCall)
 
 	// Формируем итоговый URL
-	// Пример: .../rest/find/serviceCall$serviceCall/{'state':['registered']}
+	// Пример: .../rest/find/serviceCall/{'state':['registered']}
 	url := fmt.Sprintf("%s/find/%s/%s", s.baseURL, metaClass, filterString)
 
 	attrs := attrsMap[metaClass]
@@ -735,6 +735,20 @@ func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperCont
 		ticket.Status = state
 	}
 
+	if description, ok := data["description"].(string); ok {
+		ticket.Subject = description
+	}
+
+	// Naumen может возвращать объект или строку.
+	if lastComment, ok := data["lastComment"].(map[string]interface{}); ok {
+		// Пытаемся достать текст, если он там есть (обычно там title или plainText)
+		if text, ok := lastComment["title"].(string); ok {
+			ticket.LastComment = text
+		}
+	} else if lastCommentStr, ok := data["lastComment"].(string); ok {
+		ticket.LastComment = lastCommentStr
+	}
+
 	// Даты
 	if reqDate, ok := data["requestDate"].(string); ok {
 		if t := utils.ParseServiceDeskTime(reqDate); t != nil {
@@ -858,21 +872,23 @@ func (m *naumenMapper) GetCompanyUUIDsFromContract(data map[string]interface{}) 
 func (s *naumenClientImpl) mapEntityTypeToMetaClass(entityType string) (string, bool) {
 	switch entityType {
 	case "Company":
-		return "ou$company", true
+		return string(domain.MetaClassCompany), true
 	case "Server":
-		return "objectBase$Server", true
+		return string(domain.MetaClassServer), true
 	case "Workstation":
-		return "objectBase$Workstation", true
+		return string(domain.MetaClassWorkstation), true
 	case "FiscalRegister":
-		return "objectBase$FR", true
+		return string(domain.MetaClassFR), true
 	case "Contract":
-		return "agreement$agreement", true
+		return string(domain.MetaClassAgreement), true
+	case "Ticket":
+		return string(domain.MetaClassServiceCall), true
 	case "ModeliFR":
-		return "ModeliFR", true
+		return string(domain.MetaClassModeliFR), true
 	case "FFD":
-		return "FFD", true
+		return string(domain.MetaClassFFD), true
 	case "SrokiFN":
-		return "SrokiFN", true
+		return string(domain.MetaClassSrokiFN), true
 	default:
 		return "", false
 	}

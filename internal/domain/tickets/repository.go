@@ -6,13 +6,14 @@ import (
 
 // TicketFilter содержит параметры для поиска заявок.
 type TicketFilter struct {
-	CompanyID string   // Фильтр по компании
-	AssetID   *string  // Фильтр по конкретному оборудованию
-	AssetType *string  // Фильтр по типу оборудования
-	Statuses  []string // Список статусов для выборки
-	Limit     int
-	Offset    int
-	SortBy    string // Поле для сортировки (например, "request_date desc")
+	CompanyID   string   // Фильтр по компании
+	AssetID     *string  // Фильтр по конкретному оборудованию
+	AssetType   *string  // Фильтр по типу оборудования
+	Statuses    []string // Список статусов для выборки
+	SearchQuery string   // Полнотекстовый поиск (по номеру или статусу)
+	Limit       int
+	Offset      int
+	SortBy      string // Поле для сортировки
 }
 
 // TicketRepository определяет методы для работы с хранилищем заявок.

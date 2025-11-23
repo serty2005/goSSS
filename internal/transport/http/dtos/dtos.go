@@ -119,6 +119,18 @@ type AgentDataDTO struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
+// TicketListDTO - DTO для списка заявок (для таблицы на UI).
+type TicketListDTO struct {
+	ID               string    `json:"id"`                // Внутренний ID
+	Number           int       `json:"number"`            // Номер заявки
+	ServiceDeskUUID  string    `json:"service_desk_uuid"` // Внешний UUID
+	Status           string    `json:"status"`            // Статус
+	Subject          string    `json:"subject"`           // Описание/Тема
+	LastComment      string    `json:"last_comment"`      // Последний комментарий
+	LastActivityDate time.Time `json:"last_activity"`     // Дата последнего изменения
+	CompanyID        string    `json:"company_id"`
+}
+
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
 func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	// Сначала парсим JSON в map для доступа к сырым значениям

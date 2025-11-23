@@ -35,6 +35,9 @@ const (
 	ServiceDeskUpdateRequested = "servicedesk.entity.update.requested"
 	// FiscalRegisterDiscrepancyFound событие возникает, когда воркер обнаружил расхождение данных ФР.
 	FiscalRegisterDiscrepancyFound = "discrepancy.fiscal_register.found"
+
+	// TicketUpdated событие возникает, когда воркер обнаружил обновление тикета.
+	TicketUpdated = "ticket.updated"
 )
 
 // ServiceDeskEntityPayload - полезная нагрузка для события ServiceDeskEntityUpdated.

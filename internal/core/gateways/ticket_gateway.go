@@ -2,11 +2,14 @@ package gateways
 
 import (
 	"context"
+	"etalon-server/internal/core/events"
+	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/pkg/eventbus"
 	"time"
 
 	"gorm.io/gorm"
@@ -24,6 +27,7 @@ type ticketGatewayImpl struct {
 	ticketRepo tickets.TicketRepository
 	// Зависимости для MapperContext (пока оставляем DB здесь только для маппера,
 	// но бизнес-логику через него не делаем)
+	bus      eventbus.EventBus
 	db       *gorm.DB
 	linkRepo repositories.LinkRepo
 }
@@ -34,6 +38,7 @@ func NewTicketGateway(
 	logger logger.LoggerInterface,
 	sdClient external.ExternalSystemClient,
 	ticketRepo tickets.TicketRepository,
+	bus eventbus.EventBus,
 	db *gorm.DB,
 	linkRepo repositories.LinkRepo,
 ) TicketGateway {
@@ -42,6 +47,7 @@ func NewTicketGateway(
 		logger:     logger,
 		sdClient:   sdClient,
 		ticketRepo: ticketRepo,
+		bus:        bus,
 		db:         db,
 		linkRepo:   linkRepo,
 	}
@@ -109,10 +115,35 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 		// Сохраняем UUID в сет для проверки зомби
 		activeRemoteUUIDs[ticket.ServiceDeskUUID] = struct{}{}
 
+		// 1. Ищем связь в локальной БД
+		link, _ := g.linkRepo.GetByExternalID(ctx, nil, "naumen", ticket.ServiceDeskUUID)
+		if link != nil {
+			// 2a. Если связь есть - обновляем существующий тикет
+			ticket.ID = link.InternalID
+		}
+		// 2b. Если связи нет - ticket.ID останется пустым, Upsert создаст новый.
+
 		if err := g.ticketRepo.Upsert(ctx, ticket); err != nil {
 			g.logger.Error("Ошибка сохранения заявки в БД", "uuid", ticket.ServiceDeskUUID, "error", err)
 			continue
 		}
+
+		// 3. Если создали новый (link был nil), нужно создать связь
+		if link == nil && ticket.ID != "" {
+			newLink := &models.ExternalSystemLink{
+				InternalID:      ticket.ID,
+				SystemName:      "naumen",
+				ServiceDeskUUID: ticket.ServiceDeskUUID,
+				EntityType:      "Ticket", // Или serviceCall, главное консистентно
+				LastSyncedAt:    time.Now(),
+			}
+			g.linkRepo.Create(ctx, nil, newLink)
+		} else if link != nil {
+			// Обновим время синхронизации
+			link.LastSyncedAt = time.Now()
+			g.db.Save(link)
+		}
+
 		countUpserted++
 	}
 
@@ -136,7 +167,8 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 			g.logger.Info("Обнаружена заявка, исчезнувшая из активных. Проверка статуса...", "uuid", localT.ServiceDeskUUID)
 
 			// Точечно запрашиваем статус из Naumen, чтобы узнать точный конечный статус
-			details, err := g.sdClient.FetchEntityDetails(ctx, localT.ServiceDeskUUID, "Ticket")
+			link, _ := g.linkRepo.GetByInternalID(ctx, nil, "naumen", localT.ID)
+			details, err := g.sdClient.FetchEntityDetails(ctx, link.ServiceDeskUUID, "Ticket")
 			if err != nil {
 				g.logger.Error("Не удалось проверить статус исчезнувшей заявки", "uuid", localT.ServiceDeskUUID, "error", err)
 				continue
@@ -152,6 +184,16 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 					g.logger.Error("Не удалось обновить статус зомби-заявки", "uuid", localT.ServiceDeskUUID, "error", err)
 				} else {
 					zombiesCount++
+
+					g.bus.Publish(eventbus.Event{
+						Type: events.TicketUpdated,
+						Payload: map[string]interface{}{
+							"internal_id": localT.ID,
+							"sd_uuid":     link.ServiceDeskUUID,
+							"new_status":  newState,
+							"updated_by":  "ticket_gateway",
+						},
+					})
 				}
 			}
 		}

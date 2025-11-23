@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
 	"net/http"
@@ -34,10 +35,9 @@ func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
 }
 
 type installLicenseRequestDTO struct {
-	UniqueID string `json:"uniqueId"`
+	UniqueID string `json:"unique_id"`
 }
 
-// installLicense обрабатывает запрос на запуск установки лицензии.
 func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	serverID := chi.URLParam(r, "id")
@@ -52,21 +52,31 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if dto.UniqueID == "" {
-		RespondWithError(w, http.StatusBadRequest, "Поле 'uniqueId' обязательно для заполнения")
+		RespondWithError(w, http.StatusBadRequest, "Поле 'unique_id' обязательно для заполнения")
 		return
 	}
 
 	err := h.actionsSvc.InstallLicense(r.Context(), serverID, dto.UniqueID)
 	if err != nil {
+		// Обработка специфичных ошибок
+		var httpErr *iiko.HttpError
+		if errors.As(err, &httpErr) {
+			if httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden {
+				log.Warn("Ошибка авторизации при установке лицензии", "serverID", serverID, "error", err)
+				RespondWithError(w, http.StatusUnauthorized, "Неверный логин или пароль для доступа к iikoRMS серверу")
+				return
+			}
+		}
+
 		if errors.Is(err, domain.ErrNotFound) {
 			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		} else {
-			log.Error("Ошибка при вызове заглушки установки лицензии", "serverID", serverID, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+			log.Error("Ошибка при установке лицензии", "serverID", serverID, "error", err)
+			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при установке лицензии")
 		}
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии отправлена успешно"})
+	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии выполнена успешно"})
 }
 
 // pollServerStatus обрабатывает запрос на принудительный асинхронный опрос статуса сервера.
