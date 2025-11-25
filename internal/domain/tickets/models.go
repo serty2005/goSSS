@@ -12,6 +12,7 @@ const (
 	StatusWaitClientAnswer = "waitClientAnswer"
 	StatusResolved         = "resolved"
 	StatusClosed           = "closed"
+	StatusResummed         = "resumed"
 )
 
 // Типы активов для полиморфной связи.
@@ -26,7 +27,7 @@ type Ticket struct {
 	common.Base // Внедряем ID, CreatedAt, UpdatedAt, DeletedAt, MetaClass
 
 	// Данные из ServiceDesk
-	ServiceDeskUUID  string    `json:"service_desk_uuid" gorm:"-"` // gorm:"-" означает, что поле не хранится в таблице tickets, а подтягивается через JOIN
+	ServiceDeskUUID  string    `json:"service_desk_uuid" gorm:"-:migration;<-:false"` // Внешний UUID
 	Number           int       `json:"number" gorm:"index"`
 	Status           string    `json:"status" gorm:"type:varchar(50);index"`
 	Subject          string    `json:"subject" gorm:"type:text"`      // Тема заявки (из title)

@@ -18,10 +18,19 @@ import (
 	"etalon-server/internal/transport/http/validators"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+)
+
+// Константы для типов сущностей для улучшения читаемости и поддерживаемости
+const (
+	EntityTypeServer         = "Server"
+	EntityTypeWorkstation    = "Workstation"
+	EntityTypeFiscalRegister = "FiscalRegister"
+	EntityTypeAgent          = "Agent"
 )
 
 // ReconciliationEngine отвечает за логику сверки данных агента с существующими сущностями,
@@ -189,14 +198,91 @@ func (r *reconciliationEngineImpl) AreCompaniesRelated(owner1, owner2 string) bo
 	return false
 }
 
+// CreateConflictTask создает задачу на конфликт (owner_mismatch, need_update и т.д.).
+// Возвращает nil, если активная задача уже существует.
 func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, conflictType string, etalonOwnerID string, data *api.AgentDataDTO, entities ...interface{}) *Action {
-	r.logger.Debug("CreateConflictTask вызвана", "conflictType", conflictType, "etalonOwnerID", etalonOwnerID, "entities_count", len(entities))
+	r.logger.Debug("CreateConflictTask вызвана", "conflictType", conflictType, "etalonOwnerID", etalonOwnerID)
+
+	// 1. Определяем EntityUUID для поиска дубликатов
+	var entityUUID string
+	var entityType string
+
+	if len(entities) > 0 {
+		switch e := entities[0].(type) {
+		case *server.Server:
+			entityType = EntityTypeServer
+			entityUUID = e.ID
+		case *workstation.Workstation:
+			entityType = EntityTypeWorkstation
+			entityUUID = e.ID
+		case *fiscal.FiscalRegister:
+			entityType = EntityTypeFiscalRegister
+			entityUUID = e.ID
+		}
+	} else if conflictType == "add_equipment" {
+		// Для нового оборудования используем уникальные идентификаторы как временный UUID
+		if data != nil && data.SerialNumber != "" {
+			entityType = EntityTypeFiscalRegister
+			entityUUID = data.SerialNumber
+		} else if data != nil && (data.TeamviewerID != "" || data.LitemanagerID != "" || data.AnydeskID != "") {
+			entityType = EntityTypeWorkstation
+			// Склеиваем найденные ID удалённого доступа в порядке Teamviewer -> Litemanager -> Anydesk, пропуская пустые
+			var ids []string
+			if data.TeamviewerID != "" {
+				ids = append(ids, data.TeamviewerID)
+			}
+			if data.LitemanagerID != "" {
+				ids = append(ids, data.LitemanagerID)
+			}
+			if data.AnydeskID != "" {
+				ids = append(ids, data.AnydeskID)
+			}
+			entityUUID = strings.Join(ids, "_")
+		}
+	} else if conflictType == "new_client" {
+		entityType = EntityTypeAgent
+		// Для new_client entityUUID формируем из склеенных ID данных нового клиента в порядке ServerURL -> SerialNumber -> TeamviewerID -> LitemanagerID -> AnydeskID, пропуская пустые
+		if data != nil {
+			var ids []string
+			if data.URLRms != "" {
+				ids = append(ids, data.URLRms)
+			}
+			if data.SerialNumber != "" {
+				ids = append(ids, data.SerialNumber)
+			}
+			if data.TeamviewerID != "" {
+				ids = append(ids, data.TeamviewerID)
+			}
+			if data.LitemanagerID != "" {
+				ids = append(ids, data.LitemanagerID)
+			}
+			if data.AnydeskID != "" {
+				ids = append(ids, data.AnydeskID)
+			}
+			entityUUID = strings.Join(ids, "_")
+		}
+		// Если ids пустой, entityUUID останется пустым, что приемлемо для new_client
+	}
+
+	// 2. ПРОВЕРКА: Есть ли уже активная задача?
+	// Проверяем только если смогли определить идентификатор
+	if entityUUID != "" {
+		existingTask, err := r.taskRepo.FindActiveTask(ctx, conflictType, entityUUID)
+		if err == nil && existingTask != nil {
+			r.logger.Debug("Активная задача такого типа уже существует, пропускаем создание",
+				"type", conflictType, "uuid", entityUUID)
+			return nil // <--- Возвращаем nil, действие не требуется
+		}
+	}
+
+	// 3. Формируем задачу, если дубликата нет
 	detailsMap := make(map[string]interface{})
 	detailsMap["conflict_type"] = conflictType
 	detailsMap["timestamp"] = time.Now().UTC().Format(time.RFC3339)
 	detailsMap["agent_data"] = data
 
 	if etalonOwnerID != "" {
+		// ... (код заполнения owner_info без изменений) ...
 		etalonOwner, err := r.companyRepo.GetByID(ctx, etalonOwnerID)
 		if err == nil && etalonOwner != nil {
 			link, _ := r.linkRepo.GetByInternalID(ctx, nil, "naumen", etalonOwnerID)
@@ -209,28 +295,31 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 				ownerInfo["external_id"] = link.ServiceDeskUUID
 			}
 			detailsMap["etalon_owner"] = ownerInfo
+			// Для обратной совместимости с фронтом добавляем плоское поле
+			if link != nil {
+				detailsMap["etalon_owner_id"] = link.ServiceDeskUUID // Внешний ID
+			} else {
+				detailsMap["etalon_owner_id"] = etalonOwnerID
+			}
 		} else {
 			detailsMap["etalon_owner_id"] = etalonOwnerID
 		}
 	}
 
+	// ... (код заполнения entity_X без изменений) ...
 	for i, entity := range entities {
-		var entityID string
-		var entityType string
+		var eID, eType string
 		switch e := entity.(type) {
 		case *server.Server:
-			entityID = e.ID
-			entityType = "Server"
+			eID, eType = e.ID, EntityTypeServer
 		case *workstation.Workstation:
-			entityID = e.ID
-			entityType = "Workstation"
+			eID, eType = e.ID, EntityTypeWorkstation
 		case *fiscal.FiscalRegister:
-			entityID = e.ID
-			entityType = "FiscalRegister"
+			eID, eType = e.ID, EntityTypeFiscalRegister
 		default:
 			continue
 		}
-		enriched, err := r.GetEnrichmentDataForEntity(ctx, entityType, entityID)
+		enriched, err := r.GetEnrichmentDataForEntity(ctx, eType, eID)
 		if err == nil {
 			detailsMap[fmt.Sprintf("entity_%d", i)] = enriched
 		}
@@ -238,36 +327,15 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 
 	details, _ := json.Marshal(detailsMap)
 	task := &models.ReconciliationTask{
-		TaskType: conflictType,
-		Status:   "new",
-		Details:  datatypes.JSON(details),
-		Comment:  fmt.Sprintf("Конфликт типа: %s", conflictType),
+		TaskType:   conflictType,
+		Status:     "new",
+		Details:    datatypes.JSON(details),
+		Comment:    fmt.Sprintf("Конфликт типа: %s", conflictType),
+		EntityType: entityType,
+		EntityUUID: entityUUID,
 	}
 
-	if len(entities) > 0 {
-		switch e := entities[0].(type) {
-		case *server.Server:
-			task.EntityType = "Server"
-			task.EntityUUID = e.ID
-		case *workstation.Workstation:
-			task.EntityType = "Workstation"
-			task.EntityUUID = e.ID
-		case *fiscal.FiscalRegister:
-			task.EntityType = "FiscalRegister"
-			task.EntityUUID = e.ID
-		}
-	} else if conflictType == "add_equipment" {
-		// Логика определения типа сущности для новой задачи
-		if data.SerialNumber != "" {
-			task.EntityType = "FiscalRegister"
-			task.EntityUUID = data.SerialNumber // Используем серийный номер как временный идентификатор
-		} else if data.TeamviewerID != "" || data.LitemanagerID != "" || data.AnydeskID != "" {
-			task.EntityType = "Workstation"
-			// Для РС нет одного уникального идентификатора, поэтому оставляем UUID пустым
-		}
-	}
-
-	r.logger.Debug("CreateConflictTask завершена", "task_type", task.TaskType, "entity_type", task.EntityType, "entity_uuid", task.EntityUUID)
+	r.logger.Debug("CreateConflictTask сформировала новую задачу", "task_type", task.TaskType)
 	return &Action{Type: ActionCreateTask, Task: task}
 }
 
@@ -276,21 +344,21 @@ func (r *reconciliationEngineImpl) GetEnrichmentDataForEntity(ctx context.Contex
 	var lmd *time.Time
 
 	switch entityType {
-	case "Server":
+	case EntityTypeServer:
 		entity, err := r.serverRepo.GetByID(ctx, entityID)
 		if err != nil || entity == nil {
 			return nil, fmt.Errorf("не удалось найти сервер с ID %s: %w", entityID, err)
 		}
 		ownerID = utils.SafeStringDereference(entity.OwnerID)
 		lmd = entity.LastModifiedDate
-	case "Workstation":
+	case EntityTypeWorkstation:
 		entity, err := r.workstationRepo.GetByID(ctx, entityID)
 		if err != nil || entity == nil {
 			return nil, fmt.Errorf("не удалось найти РС с ID %s: %w", entityID, err)
 		}
 		ownerID = utils.SafeStringDereference(entity.OwnerID)
 		lmd = entity.LastModifiedDate
-	case "FiscalRegister":
+	case EntityTypeFiscalRegister:
 		entity, err := r.frRepo.GetByID(ctx, entityID)
 		if err != nil || entity == nil {
 			return nil, fmt.Errorf("не удалось найти ФР с ID %s: %w", entityID, err)
@@ -336,7 +404,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 	hasChanges := false
 
 	switch entityType {
-	case "Server":
+	case EntityTypeServer:
 		server, ok := entity.(*server.Server)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для Server")
@@ -348,7 +416,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			hasChanges = true
 			r.logger.Info("Обновление crm_id для сервера", "server_id", server.ID, "new_crm_id", agentData["crm_id"])
 		}
-	case "FiscalRegister":
+	case EntityTypeFiscalRegister:
 		fr, ok := entity.(*fiscal.FiscalRegister)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для FiscalRegister")
@@ -532,7 +600,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 		if changesDetected {
 			hasChanges = true
 		}
-	case "Workstation":
+	case EntityTypeWorkstation:
 		ws, ok := entity.(*workstation.Workstation)
 		if !ok {
 			r.logger.Error("Некорректный тип сущности для Workstation")
@@ -556,15 +624,15 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 		r.logger.Info("Найдены изменения для сущности", "entity_type", entityType, "updates", updates)
 		var entityUUID string
 		switch entityType {
-		case "Server":
+		case EntityTypeServer:
 			if server, ok := entity.(*server.Server); ok {
 				entityUUID = server.ID
 			}
-		case "Workstation":
+		case EntityTypeWorkstation:
 			if ws, ok := entity.(*workstation.Workstation); ok {
 				entityUUID = ws.ID
 			}
-		case "FiscalRegister":
+		case EntityTypeFiscalRegister:
 			if fr, ok := entity.(*fiscal.FiscalRegister); ok {
 				entityUUID = fr.ID
 			}
@@ -590,21 +658,21 @@ func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, cur
 			return nil, fmt.Errorf("неверные типы для сравнения Company")
 		}
 		return getCompanyDiff(c, n), nil
-	case "Server":
+	case EntityTypeServer:
 		c, okC := current.(*server.Server)
 		n, okN := new.(*server.Server)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения Server")
 		}
 		return getServerDiff(c, n), nil
-	case "Workstation":
+	case EntityTypeWorkstation:
 		c, okC := current.(*workstation.Workstation)
 		n, okN := new.(*workstation.Workstation)
 		if !okC || !okN {
 			return nil, fmt.Errorf("неверные типы для сравнения Workstation")
 		}
 		return getWorkstationDiff(c, n), nil
-	case "FiscalRegister":
+	case EntityTypeFiscalRegister:
 		c, okC := current.(*fiscal.FiscalRegister)
 		n, okN := new.(*fiscal.FiscalRegister)
 		if !okC || !okN {

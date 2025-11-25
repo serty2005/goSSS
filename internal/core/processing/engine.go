@@ -213,7 +213,9 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	// Если нет совпадений, создаем задачу на нового клиента
 	if match == nil {
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "new_client", "", data)
-		result.Actions = append(result.Actions, *action)
+		if action != nil {
+			result.Actions = append(result.Actions, *action)
+		}
 		return result
 	}
 
@@ -226,7 +228,9 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	if etalonOwnerID == "" {
 		log.Error("Владелец не найден в совпадении")
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "data_conflict", "", data)
-		result.Actions = append(result.Actions, *action)
+		if action != nil {
+			result.Actions = append(result.Actions, *action)
+		}
 		return result
 	}
 
@@ -282,8 +286,12 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	if !areRelated {
 		p.logger.Debug("Компании не связаны, создание задачи owner_mismatch", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID)
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "owner_mismatch", equipmentOwnerID, data, server)
-		p.logger.Debug("Задача owner_mismatch создана", "task_type", action.Task.TaskType, "entity_type", action.Task.EntityType)
-		res.Actions = append(res.Actions, *action)
+		if action != nil {
+			p.logger.Debug("Задача owner_mismatch создана", "task_type", action.Task.TaskType)
+			res.Actions = append(res.Actions, *action)
+		} else {
+			p.logger.Debug("Задача owner_mismatch уже существует, пропускаем")
+		}
 	}
 }
 
@@ -306,7 +314,12 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		}
 	} else if agentTV != "" || agentLM != "" || agentAD != "" {
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
-		res.Actions = append(res.Actions, *action)
+		if action != nil {
+			res.Actions = append(res.Actions, *action)
+			p.logger.Debug("Задача add_equipment создана", "task_type", action.Task.TaskType)
+		} else {
+			p.logger.Debug("Задача add_equipment уже существует, пропускаем")
+		}
 	}
 }
 
@@ -318,12 +331,12 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 		agentData := map[string]interface{}{
 			// Существующие поля
 			"dateTime_end":     data.DateTimeEnd,
-			"licenses":         data.Licenses,
 			"RNM":              data.RNM,
 			"organizationName": data.OrganizationName,
 			"INN":              data.INN,
 			"modelName":        data.ModelName,
 			// Новые поля из данных агента
+			"licenses":         data.Licenses,
 			"fr_downloader":    data.BootVersion,
 			"kkt_reg_date":     data.DateTimeReg,
 			"driver_version":   data.InstalledDriver,
@@ -338,6 +351,8 @@ func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context,
 		}
 	} else if data.SerialNumber != "" {
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
-		res.Actions = append(res.Actions, *action)
+		if action != nil {
+			res.Actions = append(res.Actions, *action)
+		}
 	}
 }

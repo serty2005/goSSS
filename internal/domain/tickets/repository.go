@@ -25,6 +25,9 @@ type TicketRepository interface {
 	// GetByID возвращает заявку по внутреннему ID.
 	GetByID(ctx context.Context, id string) (*Ticket, error)
 
+	// GetByNumber возвращает заявку по номеру.
+	GetByNumber(ctx context.Context, number int) (*Ticket, error)
+
 	// GetByServiceDeskUUID возвращает заявку по внешнему UUID (ServiceDesk).
 	GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*Ticket, error)
 

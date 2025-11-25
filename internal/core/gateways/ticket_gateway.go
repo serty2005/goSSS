@@ -84,9 +84,9 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 		tickets.StatusRegistered,
 		tickets.StatusInProgress,
 		tickets.StatusWaitClientAnswer,
+		tickets.StatusResummed,
 	}
 
-	// 1. Получаем активные заявки из внешней системы
 	rawTickets, err := g.sdClient.FetchTickets(ctx, targetStatuses)
 	if err != nil {
 		g.logger.Error("Ошибка получения списка заявок из SD", "error", err)
@@ -101,9 +101,9 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 		Logger:   g.logger,
 	}
 
-	// Сет для хранения UUID активных заявок, которые пришли от Naumen
 	activeRemoteUUIDs := make(map[string]struct{})
 	countUpserted := 0
+	countRestored := 0
 
 	for _, rawData := range rawTickets {
 		ticket, err := g.sdClient.Mapper().DataToTicket(ctx, mapperCtx, rawData)
@@ -112,34 +112,53 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 			continue
 		}
 
-		// Сохраняем UUID в сет для проверки зомби
 		activeRemoteUUIDs[ticket.ServiceDeskUUID] = struct{}{}
 
-		// 1. Ищем связь в локальной БД
+		// 1. Ищем существующую связь
 		link, _ := g.linkRepo.GetByExternalID(ctx, nil, "naumen", ticket.ServiceDeskUUID)
-		if link != nil {
-			// 2a. Если связь есть - обновляем существующий тикет
-			ticket.ID = link.InternalID
-		}
-		// 2b. Если связи нет - ticket.ID останется пустым, Upsert создаст новый.
 
+		if link != nil {
+			// Связь есть, обновляем тикет
+			ticket.ID = link.InternalID
+		} else {
+			// 2. Связи нет. Ищем по бизнес-ключу (Номеру), чтобы избежать дублей
+			existingTicket, err := g.ticketRepo.GetByNumber(ctx, ticket.Number)
+			if err == nil && existingTicket != nil {
+				// Нашли "сироту"! Восстанавливаем связь
+				g.logger.Info("Найден существующий тикет без связи. Восстановление...", "number", ticket.Number)
+				ticket.ID = existingTicket.ID
+
+				newLink := &models.ExternalSystemLink{
+					InternalID:      ticket.ID,
+					SystemName:      "naumen",
+					ServiceDeskUUID: ticket.ServiceDeskUUID,
+					EntityType:      "Ticket",
+					LastSyncedAt:    time.Now(),
+				}
+				if err := g.linkRepo.Create(ctx, nil, newLink); err == nil {
+					link = newLink
+					countRestored++
+				}
+			}
+		}
+
+		// 3. Сохраняем (Create или Update)
 		if err := g.ticketRepo.Upsert(ctx, ticket); err != nil {
 			g.logger.Error("Ошибка сохранения заявки в БД", "uuid", ticket.ServiceDeskUUID, "error", err)
 			continue
 		}
 
-		// 3. Если создали новый (link был nil), нужно создать связь
+		// 4. Если тикет был создан с нуля (ticket.ID заполнился после Upsert), создаем связь
 		if link == nil && ticket.ID != "" {
 			newLink := &models.ExternalSystemLink{
 				InternalID:      ticket.ID,
 				SystemName:      "naumen",
 				ServiceDeskUUID: ticket.ServiceDeskUUID,
-				EntityType:      "Ticket", // Или serviceCall, главное консистентно
+				EntityType:      "Ticket",
 				LastSyncedAt:    time.Now(),
 			}
 			g.linkRepo.Create(ctx, nil, newLink)
 		} else if link != nil {
-			// Обновим время синхронизации
 			link.LastSyncedAt = time.Now()
 			g.db.Save(link)
 		}
@@ -147,11 +166,7 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 		countUpserted++
 	}
 
-	// --- ЛОГИКА ZOMBIE KILLER ---
-	// Ищем в локальной БД заявки, которые у нас числятся активными,
-	// но которых нет в списке, пришедшем от Naumen.
-
-	// ИСПОЛЬЗУЕМ РЕПОЗИТОРИЙ ВМЕСТО ПРЯМОГО SQL
+	// --- Zombie Killer ---
 	localActiveTickets, err := g.ticketRepo.GetActive(ctx)
 	if err != nil {
 		g.logger.Error("Не удалось получить список локальных активных заявок", "error", err)
@@ -160,42 +175,31 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 
 	zombiesCount := 0
 	for _, localT := range localActiveTickets {
+		// Теперь ServiceDeskUUID будет заполнен благодаря gorm:"<-:false" и JOIN в GetActive
+		if localT.ServiceDeskUUID == "" {
+			continue
+		}
+
 		if _, exists := activeRemoteUUIDs[localT.ServiceDeskUUID]; !exists {
-			// Заявка была активна у нас, но не пришла в списке активных из Naumen.
-			// Значит, она либо закрыта, либо удалена, либо перешла в другой статус.
+			g.logger.Info("Заявка исчезла из активных в SD. Проверка статуса...", "uuid", localT.ServiceDeskUUID)
 
-			g.logger.Info("Обнаружена заявка, исчезнувшая из активных. Проверка статуса...", "uuid", localT.ServiceDeskUUID)
-
-			// Точечно запрашиваем статус из Naumen, чтобы узнать точный конечный статус
-			link, _ := g.linkRepo.GetByInternalID(ctx, nil, "naumen", localT.ID)
-			if link == nil {
-				g.logger.Warn("Связь не найдена для заявки, пропускаем обработку", "internal_id", localT.ID)
-				continue
-			}
-			details, err := g.sdClient.FetchEntityDetails(ctx, link.ServiceDeskUUID, "Ticket")
+			details, err := g.sdClient.FetchEntityDetails(ctx, localT.ServiceDeskUUID, "Ticket")
 			if err != nil {
-				g.logger.Error("Не удалось проверить статус исчезнувшей заявки", "uuid", localT.ServiceDeskUUID, "error", err)
+				g.logger.Error("Не удалось проверить статус зомби-заявки", "uuid", localT.ServiceDeskUUID, "error", err)
 				continue
 			}
 
-			// Обновляем статус в БД
-			if newState, ok := details["state"].(string); ok {
-				g.logger.Info("Обновление статуса исчезнувшей заявки", "uuid", localT.ServiceDeskUUID, "old_status", localT.Status, "new_status", newState)
-
+			if newState, ok := details["state"].(string); ok && newState != localT.Status {
+				g.logger.Info("Обновление статуса зомби-заявки", "uuid", localT.ServiceDeskUUID, "new_status", newState)
 				localT.Status = newState
-				// Используем Upsert для сохранения нового статуса
-				if err := g.ticketRepo.Upsert(ctx, &localT); err != nil {
-					g.logger.Error("Не удалось обновить статус зомби-заявки", "uuid", localT.ServiceDeskUUID, "error", err)
-				} else {
+				if err := g.ticketRepo.Upsert(ctx, &localT); err == nil {
 					zombiesCount++
-
 					g.bus.Publish(eventbus.Event{
 						Type: events.TicketUpdated,
 						Payload: map[string]interface{}{
 							"internal_id": localT.ID,
-							"sd_uuid":     link.ServiceDeskUUID,
+							"sd_uuid":     localT.ServiceDeskUUID,
 							"new_status":  newState,
-							"updated_by":  "ticket_gateway",
 						},
 					})
 				}
@@ -203,5 +207,8 @@ func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 		}
 	}
 
-	g.logger.Info("Синхронизация заявок завершена", "upserted", countUpserted, "zombies_fixed", zombiesCount)
+	g.logger.Info("Синхронизация заявок завершена",
+		"upserted", countUpserted,
+		"restored_links", countRestored,
+		"zombies_fixed", zombiesCount)
 }

@@ -383,7 +383,7 @@ func (o *Orchestrator) handleFiscalRegisterDiscrepancy(ctx context.Context, even
 	}
 	log := o.logger.With("fr_internal_uuid", payload.FRInternalUUID)
 
-	existingTask, err := o.taskRepo.FindActiveTask(ctx, "need_update", payload.FRServiceDeskUUID)
+	existingTask, err := o.taskRepo.FindActiveTask(ctx, "need_update", payload.FRInternalUUID)
 	if err != nil {
 		log.Error("Ошибка при поиске существующей задачи 'need_update'", "error", err)
 		return

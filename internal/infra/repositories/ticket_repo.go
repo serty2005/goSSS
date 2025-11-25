@@ -58,6 +58,23 @@ func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, e
 	return &ticket, nil
 }
 
+// GetByNumber возвращает заявку по номеру.
+func (r *ticketRepo) GetByNumber(ctx context.Context, number int) (*tickets.Ticket, error) {
+	var ticket tickets.Ticket
+	// Ищем только в таблице tickets, так как связи может и не быть
+	err := r.db.WithContext(ctx).
+		Where("number = ?", number).
+		First(&ticket).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("db: get ticket by number: %w", err)
+	}
+	return &ticket, nil
+}
+
 // GetByServiceDeskUUID возвращает заявку по внешнему UUID.
 func (r *ticketRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket

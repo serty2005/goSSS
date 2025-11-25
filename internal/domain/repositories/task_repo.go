@@ -27,15 +27,17 @@ func NewTaskRepo(db *gorm.DB) TaskRepo {
 }
 
 // FindActiveTask ищет активную задачу по типу и UUID связанной сущности.
+// Активной считается задача, которая не находится в конечных статусах (resolved, rejected).
 func (r *taskRepo) FindActiveTask(ctx context.Context, taskType, entityUUID string) (*models.ReconciliationTask, error) {
 	if taskType == "" || entityUUID == "" {
-		// Не ищем задачи без ключевых идентификаторов
 		return nil, nil
 	}
 
 	var task models.ReconciliationTask
+	// ИЗМЕНЕНИЕ: Используем NOT IN для исключения закрытых задач
 	err := r.db.WithContext(ctx).
-		Where("task_type = ? AND entity_uuid = ? AND status = 'new'", taskType, entityUUID).
+		Where("task_type = ? AND entity_uuid = ? AND status NOT IN ?",
+			taskType, entityUUID, []string{"resolved", "rejected", "closed"}).
 		First(&task).Error
 
 	if err == gorm.ErrRecordNotFound {
