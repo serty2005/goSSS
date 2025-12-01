@@ -147,10 +147,23 @@ func (b *InMemoryEventBus) Start(ctx context.Context, logger logger.LoggerInterf
 		case event := <-b.events:
 			b.processEvent(ctx, event)
 		case <-ctx.Done():
-			logger.Info("Шина событий останавливается.")
+			logger.Info("Шина событий останавливается. Закрытие каналов подписчиков...")
+			b.closeAllChannels() // Закрываем каналы при остановке контекста
 			return
 		}
 	}
+}
+
+// closeAllChannels закрывает все каналы стриминговых подписчиков.
+func (b *InMemoryEventBus) closeAllChannels() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for ch := range b.chanSubs {
+		close(ch) // Это заставит SSEHandler выйти из цикла (ok станет false)
+	}
+	// Очищаем карту, чтобы сборщик мусора сделал своё дело
+	b.chanSubs = make(map[chan Event]*chanSubscriber)
 }
 
 func (b *InMemoryEventBus) processEvent(ctx context.Context, event Event) {

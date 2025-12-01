@@ -192,11 +192,12 @@ func (p *processingEngineImpl) ProcessDuplicates(ctx context.Context, payload ev
 	return result
 }
 
-// ProcessAgentData - главный метод, реализующий согласованную логику.
+// ProcessAgentData - главный метод, реализующий согласованную логику сверки.
 func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source string, data *api.AgentDataDTO) *ProcessingResult {
 	result := &ProcessingResult{Actions: []Action{}}
 	log := p.logger.With("source", source)
 
+	// 1. Валидация времени агента
 	currentTime := utils.ParseAgentTime(data.CurrentTime)
 	if currentTime == nil {
 		log.Warn("Не удалось распознать 'current_time' из данных агента. Обработка прервана.")
@@ -207,11 +208,82 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 		return result
 	}
 
-	// Используем водопадную логику поиска для надежного сопоставления
-	match := p.matcherSvc.FindEntityByAgentData(ctx, data)
+	// 2. Получение отчета о поиске сущностей (Водопадный алгоритм)
+	report, err := p.matcherSvc.GetMatchReport(ctx, data)
+	if err != nil {
+		log.Error("Ошибка при выполнении поиска сущностей (Matcher)", "error", err)
+		return result
+	}
 
-	// Если нет совпадений, создаем задачу на нового клиента
-	if match == nil {
+	// 3. Обработка Дубликатов
+	if len(report.Duplicates) > 0 {
+		log.Warn("Обнаружены дубликаты сущностей. Создание задачи resolve_duplicate.", "count", len(report.Duplicates))
+
+		// Извлекаем UUID дубликатов для создания задачи
+		var duplicateUUIDs []string
+		for _, dup := range report.Duplicates {
+			if ws, ok := dup.(workstation.Workstation); ok {
+				duplicateUUIDs = append(duplicateUUIDs, ws.ID)
+			}
+			// TODO:
+			// Добавить другие типы, если matcher начнет возвращать дубли по ним
+		}
+
+		// Проверяем, есть ли уже задача на эти дубликаты
+		existingTask, _ := p.taskRepo.FindActiveDuplicateTaskByMemberUUIDs(ctx, duplicateUUIDs)
+		if existingTask == nil {
+			// Создаем задачу вручную, так как CreateConflictTask заточен под одну сущность
+			detailsMap := map[string]interface{}{
+				"duplicates": report.Duplicates,
+				"agent_data": data,
+				"reason":     "multiple_entities_match_agent_id",
+			}
+			detailsJSON, _ := json.Marshal(detailsMap)
+
+			task := &models.ReconciliationTask{
+				TaskType:   "resolve_duplicate",
+				Status:     "new",
+				Details:    datatypes.JSON(detailsJSON),
+				Comment:    "Обнаружено несколько сущностей с одинаковыми ID удаленного доступа.",
+				EntityType: "Workstation", // Пока только для WS актуально
+				// EntityUUID можно оставить пустым или записать ID первой сущности
+			}
+			result.Actions = append(result.Actions, Action{Type: ActionCreateTask, Task: task})
+		} else {
+			log.Debug("Активная задача на дубликаты уже существует.", "task_id", existingTask.ID)
+		}
+
+		return result // Прерываем обработку, нельзя обновлять при дублях
+	}
+
+	// 4. Обработка Конфликта Владельцев (Owner Mismatch)
+	if report.Conflict {
+		srvOwner := utils.SafeStringDereference(report.FoundServer.OwnerID)
+		wsOwner := utils.SafeStringDereference(report.FoundWorkstation.OwnerID)
+
+		log.Info("Проверка родства компаний при конфликте владельцев", "server_owner", srvOwner, "ws_owner", wsOwner)
+
+		areRelated := p.reconciliationEngine.AreCompaniesRelated(srvOwner, wsOwner)
+		if !areRelated {
+			// Создаем задачу owner_mismatch
+			log.Warn("Владельцы не связаны. Создание задачи owner_mismatch.")
+
+			// В качестве эталонного владельца берем владельца Сервера (Приоритет 1)
+			action := p.reconciliationEngine.CreateConflictTask(ctx, "owner_mismatch", srvOwner, data, report.FoundServer, report.FoundWorkstation)
+			if action != nil {
+				result.Actions = append(result.Actions, *action)
+			}
+			return result // Прерываем обработку, требуется вмешательство человека
+		} else {
+			log.Info("Компании связаны (холдинг/филиал). Конфликт игнорируется.")
+		}
+	}
+
+	// 5. Обработка "Нового" или "Существующего" (Trusted Updates)
+
+	// Если ничего не найдено -> New Client / Add Equipment
+	if report.FoundServer == nil && report.FoundWorkstation == nil && report.FoundFR == nil {
+		log.Info("Сущности не найдены. Создание задачи new_client.")
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "new_client", "", data)
 		if action != nil {
 			result.Actions = append(result.Actions, *action)
@@ -219,44 +291,108 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 		return result
 	}
 
-	log.Info("Найдено совпадение для обработки",
-		"entity_type", match.EntityType,
-		"owner_id", match.OwnerUUID)
-
-	// Получаем ID владельца из найденного совпадения
-	etalonOwnerID := match.OwnerUUID
-	if etalonOwnerID == "" {
-		log.Error("Владелец не найден в совпадении")
+	// Если что-то найдено, применяем логику обновлений
+	ownerID := report.PrimaryOwnerID
+	if ownerID == "" {
+		log.Warn("Сущности найдены, но владелец не определен. Создание задачи data_conflict.")
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "data_conflict", "", data)
 		if action != nil {
 			result.Actions = append(result.Actions, *action)
 		}
+		// Продолжаем попытку обновления найденных сущностей, даже если владелец не ясен?
+		// Нет, лучше остановиться, это риск.
 		return result
 	}
 
-	log.Info("Эталонный владелец оборудования определен", "ownerID", etalonOwnerID)
-
-	foundServer, _ := p.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(validators.ValidateIPAddress(data.URLRms)))
-	foundWS, _ := p.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID)
-	if foundWS == nil && data.AnydeskID != "" && data.AnydeskID != "None" {
-		foundWS, _ = p.workstationRepo.FindByRemoteIDs(ctx, "", data.AnydeskID, "")
-	}
-	foundFR, _ := p.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
-
-	ownerCompany, err := p.companyRepo.GetByID(ctx, etalonOwnerID)
-	if err != nil || ownerCompany == nil {
-		log.Error("Не удалось получить данные о компании-владельце, обработка прервана", "ownerID", etalonOwnerID, "error", err)
-		return result
+	// Проверка контракта владельца
+	ownerCompany, err := p.companyRepo.GetByID(ctx, ownerID)
+	if err == nil && ownerCompany != nil {
+		if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
+			log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца", "ownerID", ownerID)
+			return result
+		}
 	}
 
-	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
-		log.Debug("Обработка данных от агента пропущена: неактивный контракт у владельца", "ownerID", etalonOwnerID)
-		return result
+	// A. Обработка Сервера (Привязка владельца, если отсутствует)
+	if report.FoundServer != nil && report.FoundServer.HealthStatus != "locked" {
+		// Если у сервера нет владельца, привязываем найденного
+		if report.FoundServer.OwnerID == nil || *report.FoundServer.OwnerID == "" {
+			updates := map[string]interface{}{
+				"owner_id":        ownerID,
+				"last_updated_by": "agent_matcher",
+			}
+			result.Actions = append(result.Actions, Action{
+				Type:       ActionUpdate,
+				EntityType: EntityTypeServer,
+				EntityUUID: report.FoundServer.ID,
+				Updates:    updates,
+			})
+		}
+		// Остальные поля сервера обновляются через CompareEntityData (но там read-only правила)
+		_, action := p.reconciliationEngine.CompareEntityData(ctx, EntityTypeServer, map[string]interface{}{"crm_id": data.CRMID}, report.FoundServer)
+		if action != nil {
+			result.Actions = append(result.Actions, *action)
+		}
 	}
 
-	p.processServerActions(ctx, result, etalonOwnerID, foundServer, data)
-	p.processWorkstationActions(ctx, result, etalonOwnerID, foundWS, data)
-	p.processFiscalRegisterActions(ctx, result, etalonOwnerID, foundFR, data)
+	// B. Обработка Рабочей станции
+	agentWSData := map[string]interface{}{
+		"teamviewer":  utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID)),
+		"litemanager": utils.SafeStringDereference(validators.ExtractLiteManagerID(data.AdditionalProperties, data.LitemanagerID)),
+		"hostname":    data.Hostname,
+	}
+
+	if report.FoundWorkstation != nil {
+		if report.FoundWorkstation.HealthStatus != "locked" {
+			_, action := p.reconciliationEngine.CompareEntityData(ctx, EntityTypeWorkstation, agentWSData, report.FoundWorkstation)
+			if action != nil {
+				result.Actions = append(result.Actions, *action)
+			}
+		}
+	} else {
+		// РС не найдена, но есть данные для неё -> add_equipment
+		// Проверяем, есть ли валидные данные для создания
+		if agentWSData["teamviewer"] != "" || agentWSData["litemanager"] != "" {
+			log.Info("Рабочая станция не найдена, создание задачи add_equipment")
+			action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
+			if action != nil {
+				result.Actions = append(result.Actions, *action)
+			}
+		}
+	}
+
+	// C. Обработка Фискального регистратора
+	agentFRData := map[string]interface{}{
+		"RNM":              data.RNM,
+		"organizationName": data.OrganizationName,
+		"INN":              data.INN,
+		"modelName":        data.ModelName,
+		"licenses":         data.Licenses,
+		"fr_downloader":    data.BootVersion,
+		"kkt_reg_date":     data.DateTimeReg,
+		"dateTime_end":     data.DateTimeEnd,
+		"driver_version":   data.InstalledDriver,
+		"fn_number":        data.FNSerial,
+		"address":          data.Address,
+		"attribute_excise": data.AttributeExcise,
+		"attribute_marked": data.AttributeMarked,
+		"ofd_name":         data.OFDName,
+	}
+
+	if report.FoundFR != nil {
+		if report.FoundFR.HealthStatus != "locked" {
+			_, action := p.reconciliationEngine.CompareEntityData(ctx, EntityTypeFiscalRegister, agentFRData, report.FoundFR)
+			if action != nil {
+				result.Actions = append(result.Actions, *action)
+			}
+		}
+	} else if data.SerialNumber != "" {
+		log.Info("ФР не найден, создание задачи add_equipment")
+		action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
+		if action != nil {
+			result.Actions = append(result.Actions, *action)
+		}
+	}
 
 	return result
 }

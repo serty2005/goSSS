@@ -1,4 +1,4 @@
-// internal/workers/fr_update_founder.go
+// internal/core/workers/fr_update_founder.go
 package workers
 
 import (
@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/external"
 	loggerPkg "etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
 	"etalon-server/pkg/eventbus"
 	"time"
 
@@ -27,7 +28,7 @@ type frUpdateFounderImpl struct {
 	logger   loggerPkg.LoggerInterface
 	bus      eventbus.EventBus
 	frRepo   fiscal.Repository
-	linkRepo repositories.LinkRepo // Новая зависимость
+	linkRepo repositories.LinkRepo
 	sdClient external.ExternalSystemClient
 }
 
@@ -37,7 +38,7 @@ func NewFRUpdateFounder(
 	logger loggerPkg.LoggerInterface,
 	bus eventbus.EventBus,
 	frRepo fiscal.Repository,
-	linkRepo repositories.LinkRepo, // Новая зависимость
+	linkRepo repositories.LinkRepo,
 	sdClient external.ExternalSystemClient,
 ) FRUpdateFounder {
 	return &frUpdateFounderImpl{
@@ -52,10 +53,25 @@ func NewFRUpdateFounder(
 
 // Start запускает воркер в фоновом режиме.
 func (w *frUpdateFounderImpl) Start(ctx context.Context) {
-	w.logger.Info("Запуск воркера поиска обновлений для ФР (FRUpdateFounder)", "interval", w.cfg.FRDiscrepancyCheckInterval)
+	// ВАЖНО: Добавляем начальную задержку, чтобы AgentFTPGateway и SDeskGateway
+	// успели обновить локальную базу данных при старте сервера.
+	// Иначе мы будем сравнивать пустую или устаревшую базу и не найдем расхождений.
+	initialDelay := 30 * time.Second
+	w.logger.Info("Запуск воркера FRUpdateFounder (ожидание перед первым циклом)",
+		"initial_delay", initialDelay,
+		"interval", w.cfg.FRDiscrepancyCheckInterval)
+
+	select {
+	case <-time.After(initialDelay):
+		// Продолжаем запуск
+	case <-ctx.Done():
+		return
+	}
+
 	ticker := time.NewTicker(w.cfg.FRDiscrepancyCheckInterval)
 	defer ticker.Stop()
 
+	// Запускаем первый цикл сразу после задержки
 	w.runCheckCycle(ctx)
 
 	for {
@@ -85,7 +101,6 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 
 	// 2. Преобразуем данные из SD в мапу [externalUUID] -> *models.FiscalRegister
 	remoteFRsMap := make(map[string]*fiscal.FiscalRegister, len(remoteFRsData))
-	// MapperContext здесь не нужен, так как DataToFiscalRegister не ищет связей
 	mapperCtx := &external.MapperContext{Logger: cycleLogger}
 	for _, data := range remoteFRsData {
 		fr, err := w.sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
@@ -117,19 +132,22 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 			continue
 		}
 		if link == nil {
-			cycleLogger.Debug("Пропуск ФР, для которого нет связи с внешней системой", "internal_id", localFR.ID)
+			// Если связи нет, это может быть новый ФР, который еще не создан в SD.
+			// Этим занимается ProcessingEngine (add_equipment), здесь пропускаем.
 			continue
 		}
 
 		remoteFR, ok := remoteFRsMap[link.ServiceDeskUUID]
 		if !ok {
-			cycleLogger.Debug("Пропуск локального ФР, так как он отсутствует во внешней системе", "internal_id", localFR.ID)
+			cycleLogger.Debug("Локальный ФР имеет связь, но отсутствует в выгрузке ServiceDesk (возможно, удален или архивирован)", "internal_id", localFR.ID, "sd_uuid", link.ServiceDeskUUID)
 			continue
 		}
 
 		discrepancies := w.compareFiscalRegisters(&localFR, remoteFR)
 
 		if len(discrepancies) > 0 {
+			cycleLogger.Info("Обнаружено расхождение данных ФР", "internal_id", localFR.ID, "diffs", len(discrepancies))
+
 			payload := events.FiscalRegisterDiscrepancyPayload{
 				FRInternalUUID:    link.InternalID,
 				FRServiceDeskUUID: link.ServiceDeskUUID,
@@ -147,9 +165,11 @@ func (w *frUpdateFounderImpl) runCheckCycle(ctx context.Context) {
 }
 
 // compareFiscalRegisters сравнивает два фискальных регистратора и возвращает карту расхождений.
+// Local - это эталон (из БД), Remote - это данные из SD.
 func (w *frUpdateFounderImpl) compareFiscalRegisters(local, remote *fiscal.FiscalRegister) map[string]events.DiscrepancyDetail {
 	discrepancies := make(map[string]events.DiscrepancyDetail)
 
+	// 1. Дата окончания ФН (самое важное)
 	if local.FNExpireDate != nil && (remote.FNExpireDate == nil || !local.FNExpireDate.Truncate(24*time.Hour).Equal(remote.FNExpireDate.Truncate(24*time.Hour))) {
 		var remoteDateStr string
 		if remote.FNExpireDate != nil {
@@ -161,6 +181,38 @@ func (w *frUpdateFounderImpl) compareFiscalRegisters(local, remote *fiscal.Fisca
 		discrepancies["FNExpireDate"] = events.DiscrepancyDetail{
 			EtalonValue:      local.FNExpireDate.Format("2006-01-02"),
 			ServiceDeskValue: remoteDateStr,
+		}
+	}
+
+	// 2. РН ККТ (RNKKT)
+	// Сравниваем очищенные значения, так как форматирование может отличаться
+	localRN := utils.NormalizeRNKKT(utils.SafeStringDereference(local.RNKKT))
+	remoteRN := utils.NormalizeRNKKT(utils.SafeStringDereference(remote.RNKKT))
+
+	if localRN != "" && localRN != remoteRN {
+		discrepancies["RNKKT"] = events.DiscrepancyDetail{
+			EtalonValue:      utils.SafeStringDereference(local.RNKKT),
+			ServiceDeskValue: utils.SafeStringDereference(remote.RNKKT),
+		}
+	}
+
+	// 3. Заводской номер (FRSerialNumber)
+	if local.FRSerialNumber != nil && *local.FRSerialNumber != "" {
+		if remote.FRSerialNumber == nil || *local.FRSerialNumber != *remote.FRSerialNumber {
+			discrepancies["FRSerialNumber"] = events.DiscrepancyDetail{
+				EtalonValue:      *local.FRSerialNumber,
+				ServiceDeskValue: utils.SafeStringDereference(remote.FRSerialNumber),
+			}
+		}
+	}
+
+	// 4. Номер ФН (FNNumber)
+	if local.FNNumber != nil && *local.FNNumber != "" {
+		if remote.FNNumber == nil || *local.FNNumber != *remote.FNNumber {
+			discrepancies["FNNumber"] = events.DiscrepancyDetail{
+				EtalonValue:      *local.FNNumber,
+				ServiceDeskValue: utils.SafeStringDereference(remote.FNNumber),
+			}
 		}
 	}
 

@@ -12,4 +12,7 @@ type Service interface {
 	DeleteCompany(ctx context.Context, id string) error
 	GetCompany(ctx context.Context, id string) (*Company, error)
 	SearchCompanies(ctx context.Context, term string, limit, offset int) ([]Company, error)
+
+	// GetInfrastructure возвращает список всего активного оборудования компании.
+	GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error)
 }

@@ -83,8 +83,9 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 
 	details := &tickets.TicketDetails{
-		Metadata: *ticket,
-		Comments: make([]tickets.Comment, 0),
+		Metadata:    *ticket,
+		CompanyName: ticket.CompanyName,
+		Comments:    make([]tickets.Comment, 0),
 	}
 
 	// 2. Получаем HTML описание из Naumen

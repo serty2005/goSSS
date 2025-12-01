@@ -9,20 +9,27 @@ import (
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
+	"fmt"
+	"net"
 )
 
-// MatchedEntity результат работы EntityMatcherService.
-type MatchedEntity struct {
-	Entity     interface{} // Найденная сущность (*models.Server, *models.Workstation, etc.)
-	EntityType string      // 'Server', 'Workstation', 'FiscalRegister'
-	OwnerUUID  string      // Внутренний ID владельца
-	MatchScore float64     // Оценка качества совпадения (0.0-1.0)
-	MatchType  string      // Тип совпадения: 'exact', 'partial'
+// MatchReport содержит детальный отчет о поиске сущностей по данным агента.
+type MatchReport struct {
+	PrimaryOwnerID   string                   // Владелец, определенный по приоритетам
+	FoundServer      *server.Server           // Найденный сервер (Приоритет 1)
+	FoundWorkstation *workstation.Workstation // Найденная РС (Приоритет 2)
+	FoundFR          *fiscal.FiscalRegister   // Найденный ФР (Приоритет 3)
+
+	// Duplicates содержит список сущностей, если по одному критерию найдено более одной записи.
+	Duplicates []interface{}
+
+	// Conflict указывает на несовпадение владельцев между найденными сущностями.
+	Conflict bool
 }
 
-// EntityMatcherService определяет интерфейс для сервиса идентификации сущностей по данным от агента.
+// EntityMatcherService определяет интерфейс для сервиса идентификации сущностей.
 type EntityMatcherService interface {
-	FindEntityByAgentData(ctx context.Context, data *api.AgentDataDTO) *MatchedEntity
+	GetMatchReport(ctx context.Context, data *api.AgentDataDTO) (*MatchReport, error)
 }
 
 type entityMatcherServiceImpl struct {
@@ -32,7 +39,6 @@ type entityMatcherServiceImpl struct {
 	frRepo          fiscal.Repository
 }
 
-// NewEntityMatcherService создает новый экземпляр сервиса.
 func NewEntityMatcherService(
 	logger logger.LoggerInterface,
 	serverRepo server.Repository,
@@ -42,59 +48,97 @@ func NewEntityMatcherService(
 	return &entityMatcherServiceImpl{logger, serverRepo, workstationRepo, frRepo}
 }
 
-// FindEntityByAgentData выполняет "водопадную" логику поиска.
-func (s *entityMatcherServiceImpl) FindEntityByAgentData(ctx context.Context, data *api.AgentDataDTO) *MatchedEntity {
-	logIdentifier := data.SerialNumber
-	if logIdentifier == "" {
-		logIdentifier = data.TeamviewerID
+func (s *entityMatcherServiceImpl) GetMatchReport(ctx context.Context, data *api.AgentDataDTO) (*MatchReport, error) {
+	report := &MatchReport{
+		Duplicates: make([]interface{}, 0),
 	}
-	log := s.logger.With("log_identifier", logIdentifier)
 
+	// Извлекаем ID заранее для логгера
+	tvID := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
+	lmID := utils.SafeStringDereference(validators.ExtractLiteManagerID(data.AdditionalProperties, data.LitemanagerID))
+
+	// Формируем идентификатор для логов: TV_LM
+	remoteIDs := fmt.Sprintf("TV:%s_LM:%s", tvID, lmID)
+	log := s.logger.With("remote_ids", remoteIDs, "serial", data.SerialNumber)
+
+	// --- Приоритет 1: Сервер (Server) ---
 	normalizedIP := validators.ValidateIPAddress(data.URLRms)
+	isLocal := true
 
-	// Приоритет 1: Поиск по Серверу
-	if server, _ := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, utils.SafeStringDereference(normalizedIP)); server != nil {
-		log.Info("Найдено совпадение по Серверу", "internal_id", server.ID)
-		return &MatchedEntity{
-			Entity:     server,
-			EntityType: "Server",
-			OwnerUUID:  utils.SafeStringDereference(server.OwnerID),
+	if normalizedIP != nil {
+		hostOnly := utils.ExtractHostFromURL(*normalizedIP)
+		// Если это валидный IP, проверяем на приватность.
+		// Если это домен (ParseIP == nil), считаем его публичным (isLocal = false).
+		if net.ParseIP(hostOnly) != nil {
+			var err error
+			isLocal, err = utils.IsPrivateIP(hostOnly)
+			if err != nil {
+				log.Warn("Ошибка проверки IP адреса", "ip", *normalizedIP, "error", err)
+				isLocal = true // Считаем локальным при ошибке для безопасности
+			}
+		} else {
+			// Это доменное имя (например, iiko.it), значит адрес не локальный (127.x, 192.168.x)
+			isLocal = false
 		}
 	}
 
-	// Приоритет 2: Поиск по Рабочей станции
-	// Сначала ищем по Teamviewer и Litemanager
-	if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, data.TeamviewerID, "", data.LitemanagerID); ws != nil {
-		log.Info("Найдено совпадение по Рабочей станции (TV/LM)", "internal_id", ws.ID)
-		return &MatchedEntity{
-			Entity:     ws,
-			EntityType: "Workstation",
-			OwnerUUID:  utils.SafeStringDereference(ws.OwnerID),
+	if !isLocal && normalizedIP != nil {
+		srv, err := s.serverRepo.FindByCRMidOrIP(ctx, data.CRMID, *normalizedIP)
+		if err == nil && srv != nil {
+			report.FoundServer = srv
+			log.Debug("Найден сервер (Приоритет 1)", "server_id", srv.ID, "owner", utils.SafeStringDereference(srv.OwnerID))
+
+			if srv.OwnerID != nil && *srv.OwnerID != "" {
+				report.PrimaryOwnerID = *srv.OwnerID
+			}
 		}
+	} else {
+		log.Debug("Пропуск поиска сервера: локальный или невалидный адрес", "url_rms", data.URLRms)
 	}
 
-	// Fallback: поиск по Anydesk (если не нашли по TV/LM)
-	if data.AnydeskID != "" && data.AnydeskID != "None" {
-		if ws, _ := s.workstationRepo.FindByRemoteIDs(ctx, "", data.AnydeskID, ""); ws != nil {
-			log.Info("Найдено совпадение по Рабочей станции (Anydesk)", "internal_id", ws.ID)
-			return &MatchedEntity{
-				Entity:     ws,
-				EntityType: "Workstation",
-				OwnerUUID:  utils.SafeStringDereference(ws.OwnerID),
+	// --- Приоритет 2: Рабочая станция (Workstation) ---
+	if tvID != "" || lmID != "" {
+		wsList, err := s.workstationRepo.FindAllByRemoteIDs(ctx, tvID, lmID)
+		if err == nil && len(wsList) > 0 {
+			if len(wsList) == 1 {
+				report.FoundWorkstation = &wsList[0]
+				log.Debug("Найдена рабочая станция (Приоритет 2)", "ws_id", wsList[0].ID, "owner", utils.SafeStringDereference(wsList[0].OwnerID))
+
+				if report.PrimaryOwnerID == "" && wsList[0].OwnerID != nil && *wsList[0].OwnerID != "" {
+					report.PrimaryOwnerID = *wsList[0].OwnerID
+				}
+			} else {
+				log.Warn("Обнаружены дубликаты рабочих станций", "count", len(wsList))
+				for _, ws := range wsList {
+					report.Duplicates = append(report.Duplicates, ws)
+				}
 			}
 		}
 	}
 
-	// Приоритет 3: Поиск по Фискальному регистратору
-	if fr, _ := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber); fr != nil {
-		log.Info("Найдено совпадение по Фискальному регистратору", "internal_id", fr.ID)
-		return &MatchedEntity{
-			Entity:     fr,
-			EntityType: "FiscalRegister",
-			OwnerUUID:  utils.SafeStringDereference(fr.OwnerID),
+	// --- Приоритет 3: Фискальный регистратор (FiscalRegister) ---
+	if data.SerialNumber != "" {
+		fr, err := s.frRepo.FindBySerialNumber(ctx, data.SerialNumber)
+		if err == nil && fr != nil {
+			report.FoundFR = fr
+			log.Debug("Найден ФР (Приоритет 3)", "fr_id", fr.ID, "owner", utils.SafeStringDereference(fr.OwnerID))
+
+			if report.PrimaryOwnerID == "" && fr.OwnerID != nil && *fr.OwnerID != "" {
+				report.PrimaryOwnerID = *fr.OwnerID
+			}
 		}
 	}
 
-	log.Warn("Не найдено совпадений ни по одному из приоритетов.")
-	return nil
+	// --- Финальная проверка на конфликт владельцев ---
+	if report.FoundServer != nil && report.FoundWorkstation != nil {
+		srvOwner := utils.SafeStringDereference(report.FoundServer.OwnerID)
+		wsOwner := utils.SafeStringDereference(report.FoundWorkstation.OwnerID)
+
+		if srvOwner != "" && wsOwner != "" && srvOwner != wsOwner {
+			report.Conflict = true
+			log.Warn("Обнаружено несовпадение владельцев Сервера и РС", "srv_owner", srvOwner, "ws_owner", wsOwner)
+		}
+	}
+
+	return report, nil
 }

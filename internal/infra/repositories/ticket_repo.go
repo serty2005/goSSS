@@ -43,9 +43,11 @@ func (r *ticketRepo) Upsert(ctx context.Context, ticket *tickets.Ticket) error {
 // GetByID возвращает заявку по внутреннему ID.
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket
+	// Добавляем выборку companies.title как CompanyName
 	err := r.db.WithContext(ctx).Table("tickets").
-		Select("tickets.*, links.service_desk_uuid").
+		Select("tickets.*, links.service_desk_uuid, companies.title as company_name").
 		Joins("LEFT JOIN external_system_links links ON links.internal_id = tickets.id AND links.system_name = ?", "naumen").
+		Joins("LEFT JOIN companies ON companies.id = tickets.company_id").
 		Where("tickets.id = ?", id).
 		Scan(&ticket).Error
 

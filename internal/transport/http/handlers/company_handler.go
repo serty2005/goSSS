@@ -28,6 +28,7 @@ func (h *CompanyHandler) RegisterRoutes(r chi.Router) {
 		r.Post("/", h.Create)
 		r.Put("/{id}", h.Update)
 		r.Delete("/{id}", h.Delete)
+		r.Get("/{id}/infrastructure", h.GetInfrastructure)
 	})
 }
 
@@ -120,4 +121,29 @@ func (h *CompanyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetInfrastructure возвращает список оборудования для компании.
+func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		RespondWithError(w, http.StatusBadRequest, "Company ID is required")
+		return
+	}
+
+	items, err := h.service.GetInfrastructure(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			middleware.GetLogger(r.Context()).Warn("company not found for infrastructure request", "id", id)
+			RespondWithError(w, http.StatusNotFound, "Company not found")
+			return
+		}
+		middleware.GetLogger(r.Context()).Error("failed to get company infrastructure", "error", err)
+		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	// Если оборудования нет, items будет пустым слайсом (инициализирован в сервисе),
+	// json.Marshal сериализует его как [] (не null).
+	RespondWithJSON(w, http.StatusOK, items)
 }

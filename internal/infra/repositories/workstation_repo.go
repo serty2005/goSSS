@@ -137,6 +137,36 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 	return &ws, nil
 }
 
+// FindAllByRemoteIDs реализует поиск всех совпадений для детекции дубликатов.
+func (r *workstationRepo) FindAllByRemoteIDs(ctx context.Context, tv, lm string) ([]workstation.Workstation, error) {
+	var workstations []workstation.Workstation
+
+	// Ищем только активные записи (не locked)
+	query := r.dbOrTx(ctx, nil).WithContext(ctx).Where("health_status != ?", "locked")
+
+	var conditions []string
+	var values []interface{}
+
+	if tv != "" && tv != "None" {
+		conditions = append(conditions, "teamviewer = ?")
+		values = append(values, tv)
+	}
+	if lm != "" && lm != "None" {
+		conditions = append(conditions, "litemanager = ?")
+		values = append(values, lm)
+	}
+
+	if len(conditions) == 0 {
+		return nil, nil
+	}
+
+	// Используем OR, так как совпадение по любому из ID считается попаданием
+	query = query.Where(strings.Join(conditions, " OR "), values...)
+
+	err := query.Find(&workstations).Error
+	return workstations, err
+}
+
 func (r *workstationRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]workstation.Workstation, error) {
 	if len(ownerIDs) == 0 {
 		return nil, nil

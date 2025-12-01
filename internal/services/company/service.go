@@ -2,28 +2,50 @@ package company
 
 import (
 	"context"
+	"encoding/json"
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/interfaces"
+	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
+	"fmt"
+	"strings"
+	"sync"
 )
 
 type serviceImpl struct {
-	logger      logger.LoggerInterface
-	tm          interfaces.Transactor
-	companyRepo company.Repository
+	logger          logger.LoggerInterface
+	tm              interfaces.Transactor
+	companyRepo     company.Repository
+	serverRepo      server.Repository
+	workstationRepo workstation.Repository
+	frRepo          fiscal.Repository
+	linkRepo        repositories.LinkRepo
 }
 
+// NewService создает сервис с зависимостями от репозиториев оборудования.
 func NewService(
 	logger logger.LoggerInterface,
 	tm interfaces.Transactor,
 	companyRepo company.Repository,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
+	linkRepo repositories.LinkRepo,
 ) company.Service {
 	return &serviceImpl{
-		logger:      logger,
-		tm:          tm,
-		companyRepo: companyRepo,
+		logger:          logger,
+		tm:              tm,
+		companyRepo:     companyRepo,
+		serverRepo:      serverRepo,
+		workstationRepo: workstationRepo,
+		frRepo:          frRepo,
+		linkRepo:        linkRepo,
 	}
 }
 
@@ -35,7 +57,6 @@ func (s *serviceImpl) CreateCompany(ctx context.Context, dto *api.CompanyCreateD
 	}
 	entity.MetaClass = "ou$company"
 
-	// Используем транзакцию
 	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		if err := s.companyRepo.Create(txCtx, entity); err != nil {
 			s.logger.Error("failed to create company", "error", err)
@@ -51,7 +72,6 @@ func (s *serviceImpl) CreateCompany(ctx context.Context, dto *api.CompanyCreateD
 }
 
 func (s *serviceImpl) UpdateCompany(ctx context.Context, id string, data map[string]interface{}) error {
-	// Очистка системных полей
 	delete(data, "id")
 	delete(data, "meta_class")
 	delete(data, "created_at")
@@ -88,8 +108,173 @@ func (s *serviceImpl) GetCompany(ctx context.Context, id string) (*company.Compa
 }
 
 func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int) ([]company.Company, error) {
-	// Здесь можно добавить бизнес-логику, например, фильтрацию по правам пользователя
-	// Пока просто проксируем в репозиторий
-	// showInactive = true (показываем всех)
 	return s.companyRepo.Search(ctx, term, true, limit, offset)
+}
+
+// GetInfrastructure возвращает плоский список оборудования компании.
+func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error) {
+	// 1. Проверяем существование компании
+	comp, err := s.companyRepo.GetByID(ctx, companyID)
+	if err != nil {
+		if err == domain.ErrNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("ошибка при проверке компании: %w", err)
+	}
+	if comp == nil {
+		return nil, domain.ErrNotFound
+	}
+
+	ownerIDs := []string{companyID}
+	results := make([]api.FoundEntityDTO, 0)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// 2. Параллельно запрашиваем оборудование
+	wg.Add(3)
+
+	// --- Серверы ---
+	go func() {
+		defer wg.Done()
+		servers, err := s.serverRepo.FindByOwnerIDs(ctx, ownerIDs)
+		if err != nil {
+			s.logger.Error("GetInfrastructure: ошибка получения серверов", "error", err)
+			return
+		}
+		for _, srv := range servers {
+			// Получаем внешний ID
+			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", srv.ID)
+			var extUUID *string
+			if link != nil {
+				extUUID = &link.ServiceDeskUUID
+			}
+
+			// Парсим детали статуса
+			var statusDetails interface{}
+			_ = json.Unmarshal(srv.StatusDetails, &statusDetails)
+
+			// Формируем ссылку на кабинет (для web_access логики фронта)
+			var partnersLink *string
+			clientIdStr := utils.SafeStringDereference(srv.CabinetLink)
+			if clientIdStr != "" && clientIdStr != "N/A" {
+				var linkUrl string
+				ipStr := utils.SafeStringDereference(srv.IP)
+				if strings.Contains(strings.ToLower(ipStr), "syrve") {
+					linkUrl = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				} else {
+					linkUrl = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientIdStr)
+				}
+				partnersLink = &linkUrl
+			}
+
+			dto := api.FoundEntityDTO{
+				EntityType: "Server",
+				Data: api.ServerRichDTO{
+					UUID:              srv.ID,
+					ServiceDeskUUID:   extUUID,
+					DeviceName:        srv.DeviceName,
+					IP:                srv.IP,
+					OperationalStatus: srv.Status,
+					HealthStatus:      srv.HealthStatus,
+					StatusDetails:     statusDetails,
+					Anydesk:           srv.Anydesk,
+					Teamviewer:        srv.Teamviewer,
+					RDP:               srv.RDP,
+					Litemanager:       srv.Litemanager,
+					UniqueID:          srv.UniqueID,
+					CRMid:             srv.CRMid,
+					PartnersLink:      partnersLink,
+					ServerName:        srv.ServerName,
+					ServerVersion:     srv.ServerVersion,
+					ServerEdition:     srv.ServerEdition,
+					LastPolledAt:      srv.LastPolledAt,
+				},
+			}
+			mu.Lock()
+			results = append(results, dto)
+			mu.Unlock()
+		}
+	}()
+
+	// --- Рабочие станции ---
+	go func() {
+		defer wg.Done()
+		workstations, err := s.workstationRepo.FindByOwnerIDs(ctx, ownerIDs)
+		if err != nil {
+			s.logger.Error("GetInfrastructure: ошибка получения РС", "error", err)
+			return
+		}
+		for _, ws := range workstations {
+			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
+			var extUUID *string
+			if link != nil {
+				extUUID = &link.ServiceDeskUUID
+			}
+			var statusDetails interface{}
+			_ = json.Unmarshal(ws.StatusDetails, &statusDetails)
+
+			dto := api.FoundEntityDTO{
+				EntityType: "Workstation",
+				Data: api.WorkstationRichDTO{
+					UUID:            ws.ID,
+					ServiceDeskUUID: extUUID,
+					DeviceName:      ws.DeviceName,
+					HealthStatus:    ws.HealthStatus,
+					StatusDetails:   statusDetails,
+					Anydesk:         ws.Anydesk,
+					Teamviewer:      ws.Teamviewer,
+					Litemanager:     ws.Litemanager,
+				},
+			}
+			mu.Lock()
+			results = append(results, dto)
+			mu.Unlock()
+		}
+	}()
+
+	// --- Фискальные регистраторы ---
+	go func() {
+		defer wg.Done()
+		frs, err := s.frRepo.FindByOwnerIDs(ctx, ownerIDs)
+		if err != nil {
+			s.logger.Error("GetInfrastructure: ошибка получения ФР", "error", err)
+			return
+		}
+		for _, fr := range frs {
+			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
+			var extUUID *string
+			if link != nil {
+				extUUID = &link.ServiceDeskUUID
+			}
+			var statusDetails interface{}
+			_ = json.Unmarshal(fr.StatusDetails, &statusDetails)
+
+			dto := api.FoundEntityDTO{
+				EntityType: "FiscalRegister",
+				Data: api.FiscalRegisterRichDTO{
+					UUID:               fr.ID,
+					ServiceDeskUUID:    extUUID,
+					HealthStatus:       fr.HealthStatus,
+					StatusDetails:      statusDetails,
+					RNKKT:              fr.RNKKT,
+					ModelKKT:           fr.ModelKKT,
+					SerialNumber:       fr.FRSerialNumber,
+					FNNumber:           fr.FNNumber,
+					FNRegistrationDate: fr.KKTRegDate,
+					FNExpireDate:       fr.FNExpireDate,
+					DriverVersion:      fr.DriverVersion,
+					FRFirmware:         fr.FRFirmware,
+					FRDownloader:       fr.FRDownloader,
+					OrganizationName:   fr.LegalName,
+					INN:                fr.INN,
+				},
+			}
+			mu.Lock()
+			results = append(results, dto)
+			mu.Unlock()
+		}
+	}()
+
+	wg.Wait()
+	return results, nil
 }

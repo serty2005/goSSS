@@ -5,6 +5,7 @@ import (
 	"etalon-server/internal/transport/http/dtos" // <-- ИЗМЕНЕНИЕ ПУТИ
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -100,6 +101,24 @@ func IsPrivateIP(ipStr string) (bool, error) {
 	_, private16, _ := net.ParseCIDR("192.168.0.0/16")
 
 	return private24.Contains(ip) || private20.Contains(ip) || private16.Contains(ip), nil
+}
+
+// ExtractHostFromURL извлекает хост (IP или домен) из строки вида "host:port" или "host".
+func ExtractHostFromURL(address string) string {
+	if strings.Contains(address, "://") {
+		// Если вдруг пришел полный URL
+		u, err := url.Parse(address)
+		if err == nil {
+			return u.Hostname()
+		}
+	}
+
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		// Ошибка обычно означает отсутствие порта, возвращаем строку как есть
+		return address
+	}
+	return host
 }
 
 // CalculateFRFirmware вычисляет строку для поля FRFirmware на основе лицензий.

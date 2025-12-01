@@ -398,246 +398,150 @@ func (r *reconciliationEngineImpl) GetEnrichmentDataForEntity(ctx context.Contex
 	}, nil
 }
 
+// CompareEntityData сравнивает данные агента с сущностью и определяет необходимость обновления,
+// применяя правила "Доверенного обновления" (Trusted Update Rules).
 func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entityType string, agentData map[string]interface{}, entity interface{}) (bool, *Action) {
-	r.logger.Debug("Сравнение данных агента с сущностью", "entity_type", entityType, "agent_data_keys", getMapKeys(agentData))
+	r.logger.Debug("Сравнение данных агента с сущностью (Trusted Rules)", "entity_type", entityType)
 	updates := make(map[string]interface{})
 	hasChanges := false
+	var entityUUID string
 
 	switch entityType {
 	case EntityTypeServer:
 		server, ok := entity.(*server.Server)
 		if !ok {
-			r.logger.Error("Некорректный тип сущности для Server")
 			return false, nil
 		}
-		r.logger.Debug("Сравнение для сервера", "server_id", server.ID, "current_crm_id", utils.SafeStringDereference(server.CRMid))
+		entityUUID = server.ID
+
+		// ПРАВИЛО 1: Сервер (Server) - Read-only данные, кроме Owner и CRM ID.
+		// Мы НЕ обновляем ServerName, Version, IP из агента, так как агент может запускаться в разных средах.
+
+		// Обновляем CRM ID, только если он отсутствует
 		if agentData["crm_id"] != nil && (server.CRMid == nil || *server.CRMid == "") {
-			updates["crm_id"] = agentData["crm_id"].(string)
-			hasChanges = true
-			r.logger.Info("Обновление crm_id для сервера", "server_id", server.ID, "new_crm_id", agentData["crm_id"])
-		}
-	case EntityTypeFiscalRegister:
-		fr, ok := entity.(*fiscal.FiscalRegister)
-		if !ok {
-			r.logger.Error("Некорректный тип сущности для FiscalRegister")
-			return false, nil
-		}
-		r.logger.Debug("Сравнение для ФР", "fr_id", fr.ID, "serial", utils.SafeStringDereference(fr.FRSerialNumber))
-
-		changesDetected := false
-
-		if agentData["dateTime_end"] != nil && agentData["dateTime_end"].(string) != "" {
-			agentDateStr := agentData["dateTime_end"].(string)
-			var parsed time.Time
-			var err error
-			formats := []string{"2006-01-02", "2006-01-02 15:04:05", "2006-01-02T15:04:05", "02.01.2006", "02/01/2006"}
-			for _, format := range formats {
-				parsed, err = time.Parse(format, agentDateStr)
-				if err == nil {
-					break
-				}
-			}
-
-			if err != nil {
-				r.logger.Warn("Не удалось распарсить dateTime_end ни в одном формате", "value", agentDateStr, "error", err)
-			} else if fr.FNExpireDate == nil || parsed != *fr.FNExpireDate {
-				updates["fn_expire_date"] = parsed
-				changesDetected = true
-				r.logger.Debug("Обновление fn_expire_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
+			val := agentData["crm_id"].(string)
+			if val != "" {
+				updates["crm_id"] = val
+				hasChanges = true
 			}
 		}
 
-		if agentData["licenses"] != nil {
-			jsonBytes, err := json.Marshal(agentData["licenses"])
-			if err != nil {
-				r.logger.Error("Ошибка сериализации licenses", "error", err)
-			} else if string(fr.Licenses) != string(jsonBytes) {
-				updates["licenses"] = datatypes.JSON(jsonBytes)
-				changesDetected = true
-				r.logger.Debug("Обновление licenses для ФР", "fr_id", fr.ID)
-			}
-		}
+		// Владелец (Owner) обновляется через механизм owner_mismatch задач, здесь мы его не трогаем напрямую,
+		// если только он не пустой. Но логика ProcessingEngine это обработает отдельно.
 
-		if agentData["RNM"] != nil && agentData["RNM"].(string) != "" && (fr.RNKKT == nil || *fr.RNKKT != agentData["RNM"].(string)) {
-			updates["rn_kkt"] = agentData["RNM"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление rn_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["RNM"])
-		}
-
-		if agentData["organizationName"] != nil && agentData["organizationName"].(string) != "" && (fr.LegalName == nil || *fr.LegalName != agentData["organizationName"].(string)) {
-			updates["legal_name"] = agentData["organizationName"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление legal_name (organizationName) для ФР", "fr_id", fr.ID, "new_value", agentData["organizationName"])
-		}
-
-		if agentData["INN"] != nil && agentData["INN"].(string) != "" && (fr.INN == nil || *fr.INN != agentData["INN"].(string)) {
-			updates["inn"] = agentData["INN"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление inn для ФР", "fr_id", fr.ID, "new_value", agentData["INN"])
-		}
-
-		if agentData["modelName"] != nil && agentData["modelName"].(string) != "" && (fr.ModelKKT == nil || *fr.ModelKKT != agentData["modelName"].(string)) {
-			updates["model_kkt"] = agentData["modelName"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление model_kkt для ФР", "fr_id", fr.ID, "new_value", agentData["modelName"])
-		}
-
-		// Новые поля из данных агента
-
-		// fr_downloader из bootVersion
-		if agentData["fr_downloader"] != nil && agentData["fr_downloader"].(string) != "" && (fr.FRDownloader == nil || *fr.FRDownloader != agentData["fr_downloader"].(string)) {
-			updates["fr_downloader"] = agentData["fr_downloader"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление fr_downloader для ФР", "fr_id", fr.ID, "new_value", agentData["fr_downloader"])
-		}
-
-		// kkt_reg_date из datetime_reg
-		if agentData["kkt_reg_date"] != nil && agentData["kkt_reg_date"].(string) != "" {
-			agentDateStr := agentData["kkt_reg_date"].(string)
-			var parsed time.Time
-			var err error
-			formats := []string{"2006-01-02", "2006-01-02 15:04:05", "2006-01-02T15:04:05", "02.01.2006", "02/01/2006"}
-			for _, format := range formats {
-				parsed, err = time.Parse(format, agentDateStr)
-				if err == nil {
-					break
-				}
-			}
-
-			if err != nil {
-				r.logger.Warn("Не удалось распарсить kkt_reg_date ни в одном формате", "value", agentDateStr, "error", err)
-			} else if fr.KKTRegDate == nil || parsed != *fr.KKTRegDate {
-				updates["kkt_reg_date"] = parsed
-				changesDetected = true
-				r.logger.Debug("Обновление kkt_reg_date для ФР", "fr_id", fr.ID, "new_date", agentDateStr, "parsed", parsed.Format("2006-01-02"))
-			}
-		}
-
-		// driver_version из installed_driver
-		if agentData["driver_version"] != nil && agentData["driver_version"].(string) != "" && (fr.DriverVersion == nil || *fr.DriverVersion != agentData["driver_version"].(string)) {
-			updates["driver_version"] = agentData["driver_version"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление driver_version для ФР", "fr_id", fr.ID, "new_value", agentData["driver_version"])
-		}
-
-		// fn_number из fn_serial
-		if agentData["fn_number"] != nil && agentData["fn_number"].(string) != "" && (fr.FNNumber == nil || *fr.FNNumber != agentData["fn_number"].(string)) {
-			updates["fn_number"] = agentData["fn_number"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление fn_number для ФР", "fr_id", fr.ID, "new_value", agentData["fn_number"])
-		}
-
-		// address - адрес фискального регистратора
-		if agentData["address"] != nil && agentData["address"].(string) != "" && (fr.Address == nil || *fr.Address != agentData["address"].(string)) {
-			updates["address"] = agentData["address"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление address для ФР", "fr_id", fr.ID, "new_value", agentData["address"])
-		}
-
-		// attribute_excise - признак работы с акцизными товарами
-		if agentData["attribute_excise"] != nil {
-			var newValue *bool
-			if val, ok := agentData["attribute_excise"].(*string); ok && val != nil {
-				// Пришло как строка, парсим в boolean
-				switch *val {
-				case "True", "true", "1":
-					excise := true
-					newValue = &excise
-				case "False", "false", "0":
-					excise := false
-					newValue = &excise
-				}
-			} else if val, ok := agentData["attribute_excise"].(*bool); ok && val != nil {
-				// Пришло как *bool (legacy)
-				newValue = val
-			} else if val, ok := agentData["attribute_excise"].(bool); ok {
-				// Пришло как bool (legacy)
-				newValue = &val
-			}
-
-			if newValue != nil && (fr.AttributeExcise == nil || *fr.AttributeExcise != *newValue) {
-				updates["attribute_excise"] = newValue
-				changesDetected = true
-				r.logger.Debug("Обновление attribute_excise для ФР", "fr_id", fr.ID, "new_value", newValue)
-			}
-		}
-
-		// attribute_marked - признак работы с маркированными товарами
-		if agentData["attribute_marked"] != nil {
-			var newValue *bool
-			if val, ok := agentData["attribute_marked"].(*string); ok && val != nil {
-				// Пришло как строка, парсим в boolean
-				switch *val {
-				case "True", "true", "1":
-					marked := true
-					newValue = &marked
-				case "False", "false", "0":
-					marked := false
-					newValue = &marked
-				}
-			} else if val, ok := agentData["attribute_marked"].(*bool); ok && val != nil {
-				// Пришло как *bool (legacy)
-				newValue = val
-			} else if val, ok := agentData["attribute_marked"].(bool); ok {
-				// Пришло как bool (legacy)
-				newValue = &val
-			}
-
-			if newValue != nil && (fr.AttributeMarked == nil || *fr.AttributeMarked != *newValue) {
-				updates["attribute_marked"] = newValue
-				changesDetected = true
-				r.logger.Debug("Обновление attribute_marked для ФР", "fr_id", fr.ID, "new_value", newValue)
-			}
-		}
-
-		// ofd_name - название оператора фискальных данных
-		if agentData["ofd_name"] != nil && agentData["ofd_name"].(string) != "" && (fr.OFDName == nil || *fr.OFDName != agentData["ofd_name"].(string)) {
-			updates["ofd_name"] = agentData["ofd_name"].(string)
-			changesDetected = true
-			r.logger.Debug("Обновление ofd_name для ФР", "fr_id", fr.ID, "new_value", agentData["ofd_name"])
-		}
-
-		if changesDetected {
-			hasChanges = true
-		}
 	case EntityTypeWorkstation:
 		ws, ok := entity.(*workstation.Workstation)
 		if !ok {
-			r.logger.Error("Некорректный тип сущности для Workstation")
 			return false, nil
 		}
-		r.logger.Debug("Сравнение для РС", "ws_id", ws.ID, "current_teamviewer", utils.SafeStringDereference(ws.Teamviewer), "current_litemanager", utils.SafeStringDereference(ws.Litemanager))
-		if agentData["teamviewer"] != nil && agentData["teamviewer"].(string) != "" && (ws.Teamviewer == nil || *ws.Teamviewer != agentData["teamviewer"].(string)) {
-			updates["teamviewer"] = agentData["teamviewer"].(string)
-			hasChanges = true
-			r.logger.Info("Обновление teamviewer для РС", "ws_id", ws.ID, "new_value", agentData["teamviewer"])
+		entityUUID = ws.ID
+
+		// ПРАВИЛО 2: Рабочая станция (WS) - Доверенное обновление специфичных полей.
+
+		// Teamviewer
+		if val, ok := agentData["teamviewer"].(string); ok && val != "" {
+			if ws.Teamviewer == nil || *ws.Teamviewer != val {
+				updates["teamviewer"] = val
+				hasChanges = true
+			}
 		}
-		if agentData["litemanager"] != nil && agentData["litemanager"].(string) != "" && (ws.Litemanager == nil || *ws.Litemanager != agentData["litemanager"].(string)) {
-			updates["litemanager"] = agentData["litemanager"].(string)
+
+		// Litemanager
+		if val, ok := agentData["litemanager"].(string); ok && val != "" {
+			if ws.Litemanager == nil || *ws.Litemanager != val {
+				updates["litemanager"] = val
+				hasChanges = true
+			}
+		}
+
+		// Hostname (DeviceName)
+		if val, ok := agentData["hostname"].(string); ok && val != "" {
+			if ws.DeviceName == nil || *ws.DeviceName != val {
+				updates["device_name"] = val
+				hasChanges = true
+			}
+		}
+
+		// ВАЖНО: Anydesk НЕ обновляем (пока не починим агента), как указано в ТЗ.
+
+	case EntityTypeFiscalRegister:
+		fr, ok := entity.(*fiscal.FiscalRegister)
+		if !ok {
+			return false, nil
+		}
+		entityUUID = fr.ID
+
+		// ПРАВИЛО 3: Фискальный регистратор (FR) - Полное доверие (Full Trust).
+		// Обновляем все поля, пришедшие от агента.
+
+		// Используем хелпер для сравнения и заполнения updates
+		compareAndSet(updates, "rn_kkt", fr.RNKKT, agentData["RNM"])
+		compareAndSet(updates, "inn", fr.INN, agentData["INN"])
+		compareAndSet(updates, "legal_name", fr.LegalName, agentData["organizationName"])
+		compareAndSet(updates, "model_kkt", fr.ModelKKT, agentData["modelName"])
+		compareAndSet(updates, "fr_downloader", fr.FRDownloader, agentData["fr_downloader"])
+		compareAndSet(updates, "driver_version", fr.DriverVersion, agentData["driver_version"])
+		compareAndSet(updates, "fn_number", fr.FNNumber, agentData["fn_number"])
+		compareAndSet(updates, "address", fr.Address, agentData["address"])
+		compareAndSet(updates, "ofd_name", fr.OFDName, agentData["ofd_name"])
+
+		// Сложные типы (Даты, JSON, Bool)
+		if checkDateChanged(fr.FNExpireDate, agentData["dateTime_end"]) {
+			updates["fn_expire_date"] = utils.ParseAgentTime(agentData["dateTime_end"].(string))
 			hasChanges = true
-			r.logger.Info("Обновление litemanager для РС", "ws_id", ws.ID, "new_value", agentData["litemanager"])
+		}
+		if checkDateChanged(fr.KKTRegDate, agentData["kkt_reg_date"]) {
+			updates["kkt_reg_date"] = utils.ParseAgentTime(agentData["kkt_reg_date"].(string))
+			hasChanges = true
+		}
+
+		// Licenses (JSON)
+		if agentData["licenses"] != nil {
+			jsonBytes, _ := json.Marshal(agentData["licenses"])
+			if string(fr.Licenses) != string(jsonBytes) {
+				updates["licenses"] = datatypes.JSON(jsonBytes)
+				hasChanges = true
+			}
+		}
+
+		// Attribute Excise (Bool/String conversion handled inside agentData parsing mostly, but checking here)
+		if agentData["attribute_excise"] != nil {
+			var newVal *bool
+			if strVal, ok := agentData["attribute_excise"].(*string); ok && strVal != nil {
+				b := (*strVal == "true" || *strVal == "1")
+				newVal = &b
+			}
+
+			if newVal != nil && (fr.AttributeExcise == nil || *fr.AttributeExcise != *newVal) {
+				updates["attribute_excise"] = newVal
+				hasChanges = true
+			}
+		}
+
+		// Attribute Marked
+		if agentData["attribute_marked"] != nil {
+			var newVal *bool
+			if strVal, ok := agentData["attribute_marked"].(*string); ok && strVal != nil {
+				b := (*strVal == "true" || *strVal == "1")
+				newVal = &b
+			}
+
+			if newVal != nil && (fr.AttributeMarked == nil || *fr.AttributeMarked != *newVal) {
+				updates["attribute_marked"] = newVal
+				hasChanges = true
+			}
+		}
+
+		// Проверка hasChanges для строковых полей, если они были добавлены через compareAndSet
+		if len(updates) > 0 {
+			hasChanges = true
 		}
 	}
 
 	if hasChanges {
 		updates["last_modified_date"] = time.Now()
-		r.logger.Info("Найдены изменения для сущности", "entity_type", entityType, "updates", updates)
-		var entityUUID string
-		switch entityType {
-		case EntityTypeServer:
-			if server, ok := entity.(*server.Server); ok {
-				entityUUID = server.ID
-			}
-		case EntityTypeWorkstation:
-			if ws, ok := entity.(*workstation.Workstation); ok {
-				entityUUID = ws.ID
-			}
-		case EntityTypeFiscalRegister:
-			if fr, ok := entity.(*fiscal.FiscalRegister); ok {
-				entityUUID = fr.ID
-			}
-		}
-		r.logger.Info("Создание действия обновления", "entity_type", entityType, "entity_uuid", entityUUID)
+		updates["last_updated_by"] = "agent"
+
 		return true, &Action{
 			Type:       ActionUpdate,
 			EntityType: entityType,
@@ -645,7 +549,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			Updates:    updates,
 		}
 	}
-	r.logger.Debug("Изменений не найдено", "entity_type", entityType)
+
 	return false, nil
 }
 
@@ -681,6 +585,37 @@ func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, cur
 		return getFiscalRegisterDiff(c, n), nil
 	}
 	return nil, fmt.Errorf("неподдерживаемый тип для сравнения: %s", entityType)
+}
+
+func compareAndSet(updates map[string]interface{}, key string, currentPtr *string, newVal interface{}) {
+	if newVal == nil {
+		return
+	}
+	strVal, ok := newVal.(string)
+	if !ok || strVal == "" {
+		return
+	}
+	if currentPtr == nil || *currentPtr != strVal {
+		updates[key] = strVal
+	}
+}
+
+func checkDateChanged(current *time.Time, newDateInterface interface{}) bool {
+	if newDateInterface == nil {
+		return false
+	}
+	dateStr, ok := newDateInterface.(string)
+	if !ok || dateStr == "" {
+		return false
+	}
+	parsed := utils.ParseAgentTime(dateStr)
+	if parsed == nil {
+		return false
+	}
+	if current == nil || !current.Equal(*parsed) {
+		return true
+	}
+	return false
 }
 
 func compareAndLog[T comparable](updates map[string]interface{}, key string, current, new *T) {
