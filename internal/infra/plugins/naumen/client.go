@@ -735,8 +735,8 @@ func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperCont
 		ticket.Status = state
 	}
 
-	if description, ok := data["description"].(string); ok {
-		ticket.Subject = description
+	if description, ok := data["descriptionRTF"].(string); ok {
+		ticket.Subject = utils.StripHTML(description)
 	}
 
 	// Naumen может возвращать объект или строку.

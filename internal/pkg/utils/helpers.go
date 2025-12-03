@@ -24,6 +24,8 @@ var nonDigitRegex = regexp.MustCompile(`\D`)
 // Regex для извлечения квартала и года из legacy-строки лицензии.
 var legacyLicenseRegex = regexp.MustCompile(`(\d)\s*квартала\s*(\d{4})`)
 
+var htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
+
 // ParseServiceDeskTime парсит строку времени из ServiceDesk.
 // Возвращает nil, если строка пустая или не может быть распарсена.
 func ParseServiceDeskTime(dateStr string) *time.Time {
@@ -168,4 +170,19 @@ func StringPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// StripHTML удаляет HTML-теги из строки и обрезает лишние пробелы.
+// Используется для генерации текстового превью из RTF-полей.
+func StripHTML(input string) string {
+	// Заменяем <br> и </p> на переносы строк или пробелы, чтобы текст не слипался
+	input = strings.ReplaceAll(input, "<br>", " ")
+	input = strings.ReplaceAll(input, "</p>", " ")
+	input = strings.ReplaceAll(input, "</div>", " ")
+	// Декодируем HTML сущности (&nbsp; и т.д.), если нужно, но пока просто удалим теги
+
+	stripped := htmlTagRegex.ReplaceAllString(input, "")
+	// Убираем двойные пробелы и лишние переносы
+	stripped = strings.Join(strings.Fields(stripped), " ")
+	return strings.TrimSpace(stripped)
 }
