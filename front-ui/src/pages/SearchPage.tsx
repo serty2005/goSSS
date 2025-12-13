@@ -1,11 +1,14 @@
 import React from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Card, List, Typography, Spin, Empty, Badge, Button, Space } from 'antd';
+import { Card, Typography, Spin, Empty, Space, Row, Col, Button } from 'antd';
 import { searchApi } from '@/api/search';
-import { getEntityIcon, getEntityLabel, getStatusColor } from '@/utils/mappers';
+import { getEntityIcon } from '@/utils/mappers';
 import { ArrowRightOutlined } from '@ant-design/icons';
-import { SearchFoundEntity, EntityData } from '@/types/api';
+import { SearchFoundEntity, ServerEntity, WorkstationEntity, FiscalEntity } from '@/types/api';
+import ServerCard from '@/components/entities/ServerCard';
+import WorkstationCard from '@/components/entities/WorkstationCard';
+import FiscalCard from '@/components/entities/FiscalCard';
 
 const { Title, Text } = Typography;
 
@@ -34,6 +37,19 @@ const SearchPage: React.FC = () => {
 
   const results = data?.data?.search_results || [];
 
+  const renderEntityCard = (item: SearchFoundEntity) => {
+    switch (item.entity_type) {
+      case 'Server':
+        return <ServerCard data={item.data as ServerEntity} />;
+      case 'Workstation':
+        return <WorkstationCard data={item.data as WorkstationEntity} />;
+      case 'FiscalRegister':
+        return <FiscalCard data={item.data as FiscalEntity} />;
+      default:
+        return <div>Unknown entity type</div>;
+    }
+  };
+
   return (
     <div>
       <Title level={4}>Результаты поиска: "{term}"</Title>
@@ -46,53 +62,30 @@ const SearchPage: React.FC = () => {
             <Card 
               key={group.owner.uuid} 
               title={
-                <Space>
-                   {getEntityIcon('Company')}
-                   <Text strong>{group.owner.name}</Text>
-                   <Text type="secondary" style={{ fontSize: 12 }}>{group.owner.address}</Text>
-                </Space>
+                <Link to={`/companies/${group.owner.uuid}`} style={{ color: 'inherit' }}>
+                  <Space>
+                     {getEntityIcon('Company')}
+                     <Text strong style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+                        {group.owner.name}
+                     </Text>
+                     <Text type="secondary" style={{ fontSize: 12 }}>{group.owner.address}</Text>
+                  </Space>
+                </Link>
               }
               className="glass-panel"
-              extra={<Button type="link">Перейти к компании <ArrowRightOutlined /></Button>}
+              extra={
+                 <Link to={`/companies/${group.owner.uuid}`}>
+                    <Button type="link">Перейти к компании <ArrowRightOutlined /></Button>
+                 </Link>
+              }
             >
-              <List
-                itemLayout="horizontal"
-                dataSource={group.found_entities}
-                renderItem={(item: SearchFoundEntity) => {
-                  const d = item.data as EntityData;
-                  const title = d.device_name || d.rn_kkt || d.uuid;
-                  const subtitle = d.ip || d.serial_number || '';
-                  const statusRaw = d.operational_status || d.health_status;
-                  
-                  // getStatusColor теперь возвращает корректный Union Type для Badge
-                  const badgeStatus = getStatusColor(statusRaw);
-
-                  return (
-                    <List.Item>
-                      <List.Item.Meta
-                        avatar={
-                          <div style={{ fontSize: 24, color: '#1890ff' }}>
-                            {getEntityIcon(item.entity_type)}
-                          </div>
-                        }
-                        title={
-                          <Space>
-                            <Text strong>{title}</Text>
-                            <Badge status={badgeStatus} text={statusRaw || 'unknown'} />
-                          </Space>
-                        }
-                        description={
-                          <Space split="|">
-                             <Text type="secondary">{getEntityLabel(item.entity_type)}</Text>
-                             <Text>{subtitle}</Text>
-                          </Space>
-                        }
-                      />
-                      <Button size="small">Детали</Button>
-                    </List.Item>
-                  );
-                }}
-              />
+              <Row gutter={[16, 16]}>
+                {group.found_entities.map((item, idx) => (
+                  <Col key={`${item.entity_type}-${idx}`} xs={24} md={12} lg={8} xl={6}>
+                    {renderEntityCard(item)}
+                  </Col>
+                ))}
+              </Row>
             </Card>
           ))}
         </Space>

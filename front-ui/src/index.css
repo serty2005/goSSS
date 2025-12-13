@@ -9,20 +9,23 @@ body {
   transition: background-color 0.3s ease;
 }
 
-/* Глобальный эффект стекла для компонентов AntD */
+/* 
+  Глобальный эффект стекла.
+  Убрали жесткий белый border, который был невиден на белом фоне.
+  Теперь полагаемся на настройки темы AntD для border-color.
+*/
 .glass-panel {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* Принудительно применяем эффект к карточкам и модалкам */
+/* Принудительно применяем эффект к контенту AntD */
 .ant-card, .ant-modal-content, .ant-drawer-content {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
 
-/* Скроллбары для красоты */
+/* Скроллбары */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -31,6 +34,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #8c8c8c;
+  background: #bfbfbf; /* Более нейтральный цвет скролла */
   border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #999;
 }

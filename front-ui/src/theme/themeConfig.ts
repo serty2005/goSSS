@@ -1,18 +1,19 @@
-// Исправленные импорты: разделяем значения и типы
 import { theme } from 'antd';
 import type { ThemeConfig } from 'antd';
 
-// Цветовые палитры для тем
+// Цветовые палитры
 const lightColors = {
-  primary: '#1890ff',
-  bgContainer: 'rgba(230, 247, 255, 0.65)',
-  bgLayout: '#f0f5ff',
+  primary: '#1677ff', // Чуть более глубокий синий (AntD v5 default)
+  bgContainer: 'rgba(255, 255, 255, 0.85)', // Почти белый, слегка прозрачный
+  bgLayout: '#f0f2f5a9', // Нейтральный светло-серый, приятный глазу
+  borderColor: '#d9d9d960', // Стандартный серый бордер
 };
 
 const darkColors = {
   primary: '#177ddc',
-  bgContainer: 'rgba(17, 29, 44, 0.65)',
-  bgLayout: '#0a111b',
+  bgContainer: 'rgba(20, 20, 20, 0.65)', // Темный, прозрачный
+  bgLayout: '#000000', // Глубокий черный для контраста в OLED стиле
+  borderColor: '#303030',
 };
 
 export const getThemeConfig = (mode: 'light' | 'dark'): ThemeConfig => {
@@ -20,29 +21,32 @@ export const getThemeConfig = (mode: 'light' | 'dark'): ThemeConfig => {
   const colors = isDark ? darkColors : lightColors;
 
   return {
-    // Теперь theme.darkAlgorithm и theme.defaultAlgorithm будут доступны
     algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
     token: {
       colorPrimary: colors.primary,
       colorBgContainer: colors.bgContainer,
       colorBgLayout: colors.bgLayout,
+      colorBorder: colors.borderColor, // Явный цвет границ
       borderRadius: 8,
       wireframe: false,
+      // В светлой теме делаем тень мягче, но заметнее для отделения слоев
       boxShadow: isDark 
         ? '0 4px 12px rgba(0, 0, 0, 0.4)' 
-        : '0 4px 12px rgba(24, 144, 255, 0.15)',
+        : '0 2px 8px rgba(0, 0, 0, 0.08)', 
     },
     components: {
       Layout: {
-        colorBgHeader: isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.6)',
-        colorBgTrigger: colors.primary,
+        // Хедер в светлой теме делаем чисто белым (или с легким блюром), чтобы отделить от серого фона
+        colorBgHeader: isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.7)',
       },
       Menu: {
         colorBgContainer: 'transparent',
       },
       Card: {
         colorBgContainer: colors.bgContainer,
-        lineWidth: 1,
+        // Убираем лишние обводки в светлой теме, полагаемся на тень, 
+        // но оставляем тонкий бордер для четкости
+        lineWidth: 1, 
       }
     },
   };

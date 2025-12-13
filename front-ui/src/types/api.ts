@@ -26,19 +26,105 @@ export interface CompanyOwner {
   parent_info?: { uuid: string; name: string };
 }
 
-// Тип для статуса бейджа Ant Design
+export interface CompanyModel {
+  ID: string;
+  Title?: string;
+  Address?: string;
+  AdditionalName?: string;
+  ActiveContract?: boolean;
+  ParentID?: string;
+  LastModifiedDate?: string;
+}
+
 export type AntBadgeStatus = 'success' | 'processing' | 'error' | 'default' | 'warning';
 
-export interface EntityData {
+// --- CMDB Entities (Rich DTOs) ---
+
+export interface ServerEntity {
   uuid: string;
+  external_uuid?: string;
+  unique_id?: string;
+  
   device_name?: string;
-  ip?: string; // Для серверов
-  rn_kkt?: string; // Для ФР
-  serial_number?: string;
+  server_name?: string;
+  ip?: string;
+  
+  rdp?: string;
+  anydesk?: string;
+  teamviewer?: string;
+  litemanager?: string;
+  partners_link?: string;
+  
   operational_status?: 'active' | 'offline' | 'unknown';
-  health_status?: 'ok' | 'attention_required' | 'locked';
-  // Используем unknown вместо any для безопасной работы с динамическими полями
-  [key: string]: unknown; 
+  health_status: 'ok' | 'attention_required' | 'locked';
+  status_details?: unknown;
+  last_polled_at?: string;
+  
+  server_version?: string;
+  server_edition?: string;
+  
+  crm_id?: string;
+  
+  // Добавлено поле address
+  address?: string;
+  description?: string;
+
+  [key: string]: unknown;
+}
+
+export interface WorkstationEntity {
+  uuid: string;
+  external_uuid?: string;
+  device_name?: string;
+  
+  anydesk?: string;
+  teamviewer?: string;
+  litemanager?: string;
+  
+  health_status: 'ok' | 'attention_required' | 'locked';
+  status_details?: unknown;
+
+  // Добавлено поле description
+  description?: string;
+  address?: string;
+
+  [key: string]: unknown;
+}
+
+export interface FiscalEntity {
+  uuid: string;
+  external_uuid?: string;
+  
+  model_kkt?: string;
+  serial_number?: string;
+  rn_kkt?: string;
+  
+  fn_number?: string;
+  fn_registration_date?: string;
+  fn_expire_date?: string;
+  
+  driver_version?: string;
+  fr_firmware?: string;
+  fr_downloader?: string;
+  
+  organization_name?: string;
+  inn?: string;
+  
+  health_status: 'ok' | 'attention_required' | 'locked';
+  status_details?: unknown;
+
+  // Добавлено поле address
+  address?: string;
+  description?: string;
+
+  [key: string]: unknown;
+}
+
+export type EntityData = ServerEntity | WorkstationEntity | FiscalEntity;
+
+export interface InfrastructureItem {
+  entity_type: 'Server' | 'Workstation' | 'FiscalRegister';
+  data: EntityData;
 }
 
 // --- Search DTO ---
@@ -66,7 +152,6 @@ export interface TaskDTO {
   entity_type: string;
   status: TaskStatus;
   created_at: string;
-  // Детали могут быть любой структуры, но мы знаем, что это объект
   details: Record<string, unknown>; 
 }
 

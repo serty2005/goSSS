@@ -9,6 +9,7 @@ import LoginPage from '@/pages/auth/LoginPage';
 import Dashboard from '@/pages/Dashboard';
 import SearchPage from '@/pages/SearchPage';
 import TasksPage from '@/pages/TasksPage';
+import CompanyPage from '@/pages/companies/CompanyPage';
 
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
@@ -30,16 +31,16 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  // ReactNode валиден для возврата
   return <>{children}</>;
 };
 
 const App: React.FC = () => {
   const themeMode = useUiStore((state) => state.themeMode);
   
-  // Применение темы к body для смены общего фона (за пределами React компонентов)
+  // Обновляем логику фона: синхронизируем с themeConfig
   useEffect(() => {
-    const colorBgLayout = themeMode === 'dark' ? '#0a111b' : '#f0f5ff';
+    // #000000 для темной, #f0f2f5 для светлой
+    const colorBgLayout = themeMode === 'dark' ? '#000000' : '#f0f2f5';
     document.body.style.backgroundColor = colorBgLayout;
   }, [themeMode]);
 
@@ -58,15 +59,24 @@ const App: React.FC = () => {
                 <MainLayout />
               </ProtectedRoute>
             }>
-              {/* Вложенные роуты внутри MainLayout */}
               <Route index element={<Dashboard />} />
               <Route path="search" element={<SearchPage />} />
               <Route path="tasks" element={<TasksPage />} />
               <Route path="tickets" element={<div>Тикеты</div>} />
-              <Route path="companies" element={<div>Компании</div>} />
-              <Route path="servers" element={<div>Серверы</div>} />
-              <Route path="workstations" element={<div>РС</div>} />
-              <Route path="fiscals" element={<div>ФР</div>} />
+              
+              <Route path="companies" element={<div>Список компаний</div>} />
+              <Route path="companies/:id" element={<CompanyPage />} />
+              
+              {/* Роуты для оборудования */}
+              <Route path="servers" element={<div>Список серверов</div>} />
+              <Route path="servers/:id" element={<div>Детали сервера (в разработке)</div>} />
+              
+              <Route path="workstations" element={<div>Список РС</div>} />
+              <Route path="workstations/:id" element={<div>Детали РС (в разработке)</div>} />
+              
+              <Route path="fiscals" element={<div>Список ФР</div>} />
+              <Route path="fiscals/:id" element={<div>Детали ФР (в разработке)</div>} />
+              
               <Route path="admin" element={<div>Админка</div>} />
             </Route>
             
