@@ -56,6 +56,22 @@ services:
     networks:
       - etalon-net
 
+  # 4. Фронт
+  frontend:
+    container_name: frontend
+    build:
+      # Путь относительно docker-compose.yml к папке фронта
+      context: ../front-ui 
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      # Маппим 5173 хоста на 80 порт Nginx внутри
+      - "80:80"
+    depends_on:
+      - server
+    networks:
+      - etalon-net
+
 volumes:
   pg_data:
 
