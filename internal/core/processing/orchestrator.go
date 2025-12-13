@@ -93,29 +93,55 @@ func (o *Orchestrator) handleServiceDeskEntityUpdate(ctx context.Context, event 
 
 		var newEntityModel, currentEntity interface{}
 
-		switch payload.EntityType {
-		case "Company":
-			newEntityModel, err = o.sdClient.Mapper().DataToCompany(txCtx, mapperCtx, payload.Data)
-			if err == nil && !isNewEntity {
-				currentEntity, _ = o.companyRepo.GetByIDUnscoped(txCtx, link.InternalID)
+		// ИЗМЕНЕНИЕ: Проверяем, пришли ли данные как Map (Legacy/Webhook) или как Model (Adapter)
+
+		// Попытка приведения payload.Data к map
+		dataMap, isMap := payload.Data.(map[string]interface{})
+
+		// Если это Map, используем Mapper (старый путь)
+		if isMap {
+			switch payload.EntityType {
+			case "Company":
+				newEntityModel, err = o.sdClient.Mapper().DataToCompany(txCtx, mapperCtx, dataMap)
+				if err == nil && !isNewEntity {
+					currentEntity, _ = o.companyRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				}
+			case "Server":
+				newEntityModel, err = o.sdClient.Mapper().DataToServer(txCtx, mapperCtx, dataMap)
+				if err == nil && !isNewEntity {
+					currentEntity, _ = o.serverRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				}
+			case "Workstation":
+				newEntityModel, err = o.sdClient.Mapper().DataToWorkstation(txCtx, mapperCtx, dataMap)
+				if err == nil && !isNewEntity {
+					currentEntity, _ = o.workstationRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				}
+			case "FiscalRegister":
+				newEntityModel, err = o.sdClient.Mapper().DataToFiscalRegister(txCtx, mapperCtx, dataMap)
+				if err == nil && !isNewEntity {
+					currentEntity, _ = o.frRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				}
+			default:
+				return fmt.Errorf("неизвестный тип сущности для обработки (Map): %s", payload.EntityType)
 			}
-		case "Server":
-			newEntityModel, err = o.sdClient.Mapper().DataToServer(txCtx, mapperCtx, payload.Data)
-			if err == nil && !isNewEntity {
-				currentEntity, _ = o.serverRepo.GetByIDUnscoped(txCtx, link.InternalID)
+		} else {
+			// Если это не Map, предполагаем, что это уже готовая модель от Адаптера
+			// Здесь нам не нужно вызывать DataTo..., так как Адаптер уже вернул struct.
+			newEntityModel = payload.Data
+
+			// Нам всё равно нужно загрузить currentEntity для сравнения
+			if !isNewEntity {
+				switch payload.EntityType {
+				case "Company":
+					currentEntity, _ = o.companyRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				case "Server":
+					currentEntity, _ = o.serverRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				case "Workstation":
+					currentEntity, _ = o.workstationRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				case "FiscalRegister":
+					currentEntity, _ = o.frRepo.GetByIDUnscoped(txCtx, link.InternalID)
+				}
 			}
-		case "Workstation":
-			newEntityModel, err = o.sdClient.Mapper().DataToWorkstation(txCtx, mapperCtx, payload.Data)
-			if err == nil && !isNewEntity {
-				currentEntity, _ = o.workstationRepo.GetByIDUnscoped(txCtx, link.InternalID)
-			}
-		case "FiscalRegister":
-			newEntityModel, err = o.sdClient.Mapper().DataToFiscalRegister(txCtx, mapperCtx, payload.Data)
-			if err == nil && !isNewEntity {
-				currentEntity, _ = o.frRepo.GetByIDUnscoped(txCtx, link.InternalID)
-			}
-		default:
-			return fmt.Errorf("неизвестный тип сущности для обработки: %s", payload.EntityType)
 		}
 
 		if err != nil {

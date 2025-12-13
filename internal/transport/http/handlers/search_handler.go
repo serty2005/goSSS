@@ -12,6 +12,7 @@ import (
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -54,7 +55,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	term := r.URL.Query().Get("term")
 	if term == "" {
 		log.Warn("Попытка поиска с пустым запросом", "remote_addr", r.RemoteAddr)
-		RespondWithError(w, http.StatusBadRequest, "Поисковый запрос не может быть пустым")
+		response.RespondWithError(w, http.StatusBadRequest, "Поисковый запрос не может быть пустым")
 		return
 	}
 
@@ -104,7 +105,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	if len(ownerIDs) == 0 {
 		log.Debug("Поисковый запрос выполнен, результатов не найдено", "search_term", term)
-		RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
+		response.RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
 		return
 	}
 
@@ -212,7 +213,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		finalResponse.SearchResults = append(finalResponse.SearchResults, group)
 	}
 	log.Info("Поиск завершен успешно", "groups_count", len(finalResponse.SearchResults), "search_term", term)
-	RespondWithJSON(w, http.StatusOK, finalResponse)
+	response.RespondWithJSON(w, http.StatusOK, finalResponse)
 }
 
 // --- Вспомогательные функции-группировщики ---

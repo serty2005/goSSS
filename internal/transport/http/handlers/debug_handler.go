@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"etalon-server/internal/transport/http/response"
 	"etalon-server/pkg/eventbus"
 	"net/http"
 
@@ -27,5 +28,5 @@ func (h *DebugHandler) RegisterRoutes(r chi.Router) {
 // getBusStatus возвращает текущее состояние шины событий.
 func (h *DebugHandler) getBusStatus(w http.ResponseWriter, r *http.Request) {
 	debugInfo := h.bus.GetDebugInfo()
-	RespondWithJSON(w, http.StatusOK, debugInfo)
+	response.RespondWithJSON(w, http.StatusOK, debugInfo)
 }

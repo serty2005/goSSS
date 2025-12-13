@@ -4,6 +4,7 @@ package handlers
 import (
 	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -36,7 +37,7 @@ func (h *SyncHandler) TriggerSeed(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
 	if key == "" || key != h.seederKey {
 		log.Warn("Попытка запуска наполнения БД с неверным ключом", "remote_addr", r.RemoteAddr)
-		RespondWithError(w, http.StatusUnauthorized, "Неверный или отсутствует ключ доступа")
+		response.RespondWithError(w, http.StatusUnauthorized, "Неверный или отсутствует ключ доступа")
 		return
 	}
 
@@ -55,7 +56,7 @@ func (h *SyncHandler) TriggerSeed(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("Ответ отправлен клиенту, процесс запущен в фоне")
 
-	RespondWithJSON(w, http.StatusAccepted, map[string]string{
+	response.RespondWithJSON(w, http.StatusAccepted, map[string]string{
 		"message": "Наполнение базы данных запущено в фоновом режиме",
 	})
 }

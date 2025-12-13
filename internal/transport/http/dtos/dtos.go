@@ -491,7 +491,7 @@ type PaginationParams struct {
 	Offset int `json:"offset,omitempty"`
 }
 
-// PaginatedResponse - универсальный пагинированный ответ
+// PaginatedResponse - универсальный пагинированный ответ (используется для разделения Data/Meta).
 type PaginatedResponse struct {
 	Data    interface{} `json:"data"`
 	Total   int64       `json:"total"`

@@ -1,41 +1,38 @@
-// Файл: internal/core/workers/sd_editor_worker.go
+// internal/core/workers/sd_editor_worker.go
 package workers
 
 import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/core/integrations"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/workstation"
-	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/pkg/eventbus"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
-	"etalon-server/pkg/eventbus"
-
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
-// SDEditorWorker определяет интерфейс для воркера, который асинхронно изменяет данные в ServiceDesk.
+// SDEditorWorker - воркер для записи изменений во внешние системы (Spokes).
 type SDEditorWorker interface {
 	Start(ctx context.Context)
 }
 
-// sdEditorWorkerImpl реализует интерфейс SDEditorWorker.
 type sdEditorWorkerImpl struct {
 	logger          logger.LoggerInterface
 	db              *gorm.DB
 	bus             eventbus.EventBus
-	sdClient        external.ExternalSystemClient
+	manager         *integrations.Manager
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
 	companyRepo     company.Repository
@@ -44,12 +41,11 @@ type sdEditorWorkerImpl struct {
 	frRepo          fiscal.Repository
 }
 
-// NewSDEditorWorker создает новый экземпляр воркера SDEditorWorker.
 func NewSDEditorWorker(
 	logger logger.LoggerInterface,
 	db *gorm.DB,
 	bus eventbus.EventBus,
-	sdClient external.ExternalSystemClient,
+	manager *integrations.Manager,
 	taskRepo repositories.TaskRepo,
 	linkRepo repositories.LinkRepo,
 	companyRepo company.Repository,
@@ -61,7 +57,7 @@ func NewSDEditorWorker(
 		logger:          logger,
 		db:              db,
 		bus:             bus,
-		sdClient:        sdClient,
+		manager:         manager,
 		taskRepo:        taskRepo,
 		linkRepo:        linkRepo,
 		companyRepo:     companyRepo,
@@ -71,264 +67,186 @@ func NewSDEditorWorker(
 	}
 }
 
-// Start запускает воркер и подписывает его на события.
 func (s *sdEditorWorkerImpl) Start(ctx context.Context) {
-	s.logger.Info("Запуск воркера SDEditorWorker")
+	s.logger.Info("Запуск воркера SDEditorWorker (запись во внешние системы)")
 	s.bus.Subscribe(events.ServiceDeskCreateRequested, s.handleCreateRequest)
 	s.bus.Subscribe(events.ServiceDeskUpdateRequested, s.handleUpdateRequest)
 }
 
-// handleUpdateRequest обрабатывает запрос на обновление сущности в ServiceDesk.
+// handleUpdateRequest - обновление сущности.
 func (s *sdEditorWorkerImpl) handleUpdateRequest(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServiceDeskModificationPayload)
 	if !ok {
 		return
 	}
-
 	log := s.logger.With("taskID", payload.TaskID, "internalUUID", payload.EntityUUID)
-	log.Info("Получен запрос на обновление сущности в ServiceDesk")
+	log.Info("Запрос на обновление сущности во внешней системе")
 
-	link, err := s.linkRepo.GetByInternalID(ctx, nil, "naumen", payload.EntityUUID)
-	if err != nil || link == nil {
-		msg := fmt.Sprintf("Не найдена связь с ServiceDesk для сущности с внутренним ID %s", payload.EntityUUID)
-		log.Error(msg, "error", err)
-		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", msg)
+	// 1. Получаем провайдеров (пока шлём во все подключенные Inventory системы)
+	providers := s.manager.GetInventoryProviders()
+	if len(providers) == 0 {
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", "Нет активных провайдеров интеграции")
 		return
 	}
 
-	payloadForSD, err := s.buildUpdatePayload(ctx, payload.EntityType, payload.EntityUUID)
-	if err != nil {
-		log.Error("Не удалось собрать payload для обновления", "error", err)
-		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка сборки данных для SD: %v", err))
-		return
-	}
-	log.Info("Подготовлен payload для обновления сущности в ServiceDesk", "payload", payloadForSD)
+	successCount := 0
 
-	err = s.sdClient.UpdateEntity(ctx, link.ServiceDeskUUID, payload.EntityType, payloadForSD)
-	if err != nil {
-		log.Error("Ошибка при обновлении сущности в ServiceDesk", "error", err, "sent_payload", payloadForSD)
-		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка API ServiceDesk: %v", err))
-		return
+	// 2. Итерируем провайдеров
+	for _, provider := range providers {
+		// Ищем связь именно для этой системы
+		link, err := s.linkRepo.GetByInternalID(ctx, nil, provider.SystemName(), payload.EntityUUID)
+		if err != nil || link == nil {
+			log.Warn("Не найдена связь с системой", "system", provider.SystemName())
+			continue
+		}
+
+		var errUpdate error
+		switch payload.EntityType {
+		case "FiscalRegister":
+			fr, err := s.frRepo.GetByID(ctx, payload.EntityUUID)
+			if err == nil && fr != nil {
+				errUpdate = provider.UpdateFiscalRegister(ctx, link.ServiceDeskUUID, fr)
+			} else {
+				errUpdate = fmt.Errorf("сущность не найдена в БД")
+			}
+		default:
+			errUpdate = fmt.Errorf("обновление типа '%s' не поддерживается", payload.EntityType)
+		}
+
+		if errUpdate != nil {
+			log.Error("Ошибка обновления в системе", "system", provider.SystemName(), "error", errUpdate)
+		} else {
+			successCount++
+		}
 	}
 
-	log.Info("Сущность в ServiceDesk успешно обновлена (или выполнен dry run)")
-	s.updateTaskStatus(ctx, payload.TaskID, "resolved", "Сущность успешно обновлена в ServiceDesk.")
+	if successCount > 0 {
+		s.updateTaskStatus(ctx, payload.TaskID, "resolved", "Сущность успешно обновлена.")
+	} else {
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", "Не удалось обновить сущность ни в одной системе.")
+	}
 }
 
-// handleCreateRequest обрабатывает запрос на создание сущности в ServiceDesk.
+// handleCreateRequest - создание сущности.
 func (s *sdEditorWorkerImpl) handleCreateRequest(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ServiceDeskModificationPayload)
 	if !ok {
 		return
 	}
 	log := s.logger.With("taskID", payload.TaskID)
-	log.Info("Получен запрос на создание сущности в ServiceDesk")
+	log.Info("Запрос на создание сущности во внешней системе")
 
-	var newExternalUUID string
-	var err error
-
-	switch payload.EntityType {
-	case "FiscalRegister":
-		newExternalUUID, err = s.createFiscalRegisterFromTask(ctx, payload.TaskID)
-	default:
-		err = fmt.Errorf("создание сущности типа '%s' не поддерживается", payload.EntityType)
-	}
-
-	if err != nil {
-		log.Error("Ошибка при создании сущности в ServiceDesk", "error", err)
-		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка API ServiceDesk: %v", err))
+	providers := s.manager.GetInventoryProviders()
+	if len(providers) == 0 {
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", "Нет активных провайдеров интеграции")
 		return
 	}
 
-	task, _ := s.taskRepo.GetByID(ctx, payload.TaskID)
-	if task != nil {
-		var internalID string
-		switch task.EntityType {
-		case "FiscalRegister":
-			// В задаче add_equipment EntityUUID - это серийный номер. Ищем по нему.
-			fr, _ := s.frRepo.FindBySerialNumber(ctx, task.EntityUUID)
-			if fr != nil {
-				internalID = fr.ID
-			}
-		}
-
-		if internalID != "" {
-			newLink := models.ExternalSystemLink{
-				InternalID:      internalID,
-				SystemName:      "naumen",
-				ServiceDeskUUID: newExternalUUID,
-				EntityType:      task.EntityType,
-				LastSyncedAt:    time.Now(),
-			}
-			if err := s.linkRepo.Create(ctx, nil, &newLink); err != nil {
-				log.Error("Критическая ошибка: сущность в SD создана, но не удалось создать для нее связь в локальной БД", "error", err)
-				s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Создано в SD (extUUID: %s), но не удалось создать связь в БД!", newExternalUUID))
-				return
-			}
-		} else {
-			log.Warn("Не удалось найти локальную сущность для создания связи после создания в SD", "task_id", task.ID, "entity_type", task.EntityType, "entity_identifier", task.EntityUUID)
-		}
-	}
-
-	log.Info("Сущность в ServiceDesk успешно создана и связана", "newExternalUUID", newExternalUUID)
-	s.updateTaskStatus(ctx, payload.TaskID, "resolved", fmt.Sprintf("Сущность успешно создана в ServiceDesk с UUID: %s", newExternalUUID))
-}
-
-func (s *sdEditorWorkerImpl) buildUpdatePayload(ctx context.Context, entityType, internalID string) (map[string]interface{}, error) {
-	payload := make(map[string]interface{})
-
-	switch entityType {
-	case "FiscalRegister":
-		fr, err := s.frRepo.GetByID(ctx, internalID)
-		if err != nil || fr == nil {
-			return nil, fmt.Errorf("не удалось найти ФР с ID %s в локальной БД: %w", internalID, err)
-		}
-		payload["RNKKT"] = utils.FormatRNKKT(utils.SafeStringDereference(fr.RNKKT))
-		payload["FNNumber"] = utils.SafeStringDereference(fr.FNNumber)
-		payload["FRDownloader"] = utils.SafeStringDereference(fr.FRDownloader)
-		payload["FRFirmware"] = utils.SafeStringDereference(fr.FRFirmware)
-
-		var legalName string
-		if fr.LegalName != nil && *fr.LegalName != "" {
-			legalName = *fr.LegalName
-			if fr.INN != nil && *fr.INN != "" {
-				legalName = fmt.Sprintf("%s ИНН:%s", *fr.LegalName, *fr.INN)
-			}
-		}
-		payload["LegalName"] = legalName
-
-		if fr.FNExpireDate != nil {
-			payload["FNExpireDate"] = fr.FNExpireDate.Format(utils.TimeLayoutServiceDesk)
-		}
-		if fr.KKTRegDate != nil {
-			payload["KKTRegDate"] = fr.KKTRegDate.Format(utils.TimeLayoutServiceDesk)
-		}
-
-		for k, v := range payload {
-			if strVal, ok := v.(string); ok && strVal == "" {
-				delete(payload, k)
-			}
-		}
-
-	default:
-		return nil, fmt.Errorf("обновление для типа сущности '%s' не поддерживается", entityType)
-	}
-
-	return payload, nil
-}
-
-func (s *sdEditorWorkerImpl) createFiscalRegisterFromTask(ctx context.Context, taskID uint) (string, error) {
-	task, err := s.taskRepo.GetByID(ctx, taskID)
+	task, err := s.taskRepo.GetByID(ctx, payload.TaskID)
 	if err != nil || task == nil {
-		return "", fmt.Errorf("ошибка получения задачи %d: %w", taskID, err)
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", "Задача не найдена")
+		return
 	}
 
+	// Подготавливаем модель из данных задачи (AgentData)
+	// Это нужно для того, чтобы передать в адаптер унифицированный объект
+	model, internalID, err := s.prepareModelFromTask(ctx, task)
+	if err != nil {
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", fmt.Sprintf("Ошибка подготовки данных: %v", err))
+		return
+	}
+
+	successCount := 0
+
+	for _, provider := range providers {
+		var newExtUUID string
+		var createErr error
+
+		switch v := model.(type) {
+		case *fiscal.FiscalRegister:
+			newExtUUID, createErr = provider.CreateFiscalRegister(ctx, v)
+		default:
+			createErr = fmt.Errorf("создание типа '%s' не поддерживается", payload.EntityType)
+		}
+
+		if createErr != nil {
+			log.Error("Ошибка создания в системе", "system", provider.SystemName(), "error", createErr)
+			continue
+		}
+
+		// Создаем связь
+		newLink := models.ExternalSystemLink{
+			InternalID:      internalID,
+			SystemName:      provider.SystemName(),
+			ServiceDeskUUID: newExtUUID,
+			EntityType:      payload.EntityType,
+			LastSyncedAt:    time.Now(),
+		}
+		if err := s.linkRepo.Create(ctx, nil, &newLink); err != nil {
+			log.Error("Критическая ошибка: связь не создана", "system", provider.SystemName(), "error", err)
+		} else {
+			successCount++
+		}
+	}
+
+	if successCount > 0 {
+		s.updateTaskStatus(ctx, payload.TaskID, "resolved", "Сущность успешно создана во внешних системах.")
+	} else {
+		s.updateTaskStatus(ctx, payload.TaskID, "sd_error", "Не удалось создать сущность ни в одной системе.")
+	}
+}
+
+// prepareModelFromTask извлекает данные из задачи и формирует доменную модель.
+// Возвращает (Model Interface, InternalID, error).
+func (s *sdEditorWorkerImpl) prepareModelFromTask(ctx context.Context, task *models.ReconciliationTask) (interface{}, string, error) {
 	var details struct {
-		AgentData   api.AgentDataDTO `json:"agent_data"`
-		EtalonOwner struct {
-			ExternalID string `json:"external_id"`
-		} `json:"etalon_owner"`
+		AgentData     api.AgentDataDTO `json:"agent_data"`
+		EtalonOwnerID string           `json:"etalon_owner_id"` // Internal ID
 	}
 	if err := json.Unmarshal(task.Details, &details); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	if details.EtalonOwner.ExternalID == "" {
-		return "", fmt.Errorf("в деталях задачи отсутствует внешний ID владельца (etalon_owner.external_id)")
-	}
-
-	agentData := details.AgentData
-	log := s.logger.With("taskID", taskID)
-	log.Debug("Начало сборки payload для создания ФР")
-	payload := make(map[string]interface{})
-
-	addStringFieldToPayload(log, payload, "owner", details.EtalonOwner.ExternalID)
-	addStringFieldToPayload(log, payload, "RNKKT", utils.FormatRNKKT(agentData.RNM))
-	addStringFieldToPayload(log, payload, "FRSerialNumber", strings.TrimSpace(agentData.SerialNumber))
-	addStringFieldToPayload(log, payload, "FNNumber", strings.TrimSpace(agentData.FNSerial))
-
-	var legalName string
-	if agentData.OrganizationName != "" && agentData.INN != "" {
-		legalName = fmt.Sprintf("%s ИНН:%s", strings.TrimSpace(agentData.OrganizationName), strings.TrimSpace(agentData.INN))
-	} else {
-		legalName = strings.TrimSpace(agentData.OrganizationName)
-	}
-	addStringFieldToPayload(log, payload, "LegalName", legalName)
-
-	if regDate := utils.ParseAgentTime(agentData.DateTimeReg); regDate != nil {
-		addStringFieldToPayload(log, payload, "KKTRegDate", regDate.Format(utils.TimeLayoutServiceDesk))
-	}
-	if expDate := utils.ParseAgentTime(agentData.DateTimeEnd); expDate != nil {
-		addStringFieldToPayload(log, payload, "FNExpireDate", expDate.Format(utils.TimeLayoutServiceDesk))
+	if details.EtalonOwnerID == "" {
+		return nil, "", fmt.Errorf("в задаче нет owner_id")
 	}
 
-	addStringFieldToPayload(log, payload, "FRDownloader", strings.TrimSpace(agentData.BootVersion))
-	frFirmwareValue := utils.CalculateFRFirmware(agentData.Licenses)
-	addStringFieldToPayload(log, payload, "FRFirmware", frFirmwareValue)
+	switch task.EntityType {
+	case "FiscalRegister":
+		// Ищем уже созданную (в TaskResolutionService) запись в БД по серийнику
+		fr, err := s.frRepo.FindBySerialNumber(ctx, details.AgentData.SerialNumber)
+		if err != nil || fr == nil {
+			return nil, "", fmt.Errorf("ФР с serial=%s не найден в БД (должен быть создан при resolve)", details.AgentData.SerialNumber)
+		}
 
-	modelName := strings.TrimSpace(agentData.ModelName)
-	modelUUID, err := s.sdClient.FindReferenceID(ctx, "ModeliFR", modelName, false)
-	if err != nil {
-		return "", fmt.Errorf("не удалось найти модель ККТ '%s': %w", modelName, err)
-	}
-	addStringFieldToPayload(log, payload, "ModelKKT", modelUUID)
+		// Обогащаем модель данными, которые не хранятся в полях БД, но нужны адаптеру (через Attributes)
+		// Например, FNExecution для справочника сроков
+		attrs := make(map[string]interface{})
+		attrs["fn_execution"] = details.AgentData.FNExecution
+		if b, err := json.Marshal(attrs); err == nil {
+			fr.Attributes = datatypes.JSON(b)
+		}
 
-	ffdVersion := utils.FormatFFDVersion(agentData.FFDVersion)
-	ffdUUID, err := s.sdClient.FindReferenceID(ctx, "FFD", ffdVersion, false)
-	if err != nil {
-		return "", fmt.Errorf("не удалось найти версию ФФД '%s': %w", ffdVersion, err)
-	}
-	addStringFieldToPayload(log, payload, "FFD", ffdUUID)
+		// Обновляем поля, которые могли прийти свежими
+		fr.FRFirmware = utils.StringPtr(utils.CalculateFRFirmware(details.AgentData.Licenses))
+		fr.FRDownloader = utils.StringPtr(details.AgentData.BootVersion)
 
-	srokMatches := srokFnRegex.FindStringSubmatch(agentData.FNExecution)
-	if len(srokMatches) < 2 {
-		return "", fmt.Errorf("не удалось извлечь срок ФН из '%s'", agentData.FNExecution)
-	}
-	srokUUID, err := s.sdClient.FindReferenceID(ctx, "SrokiFN", srokMatches[1], true)
-	if err != nil {
-		return "", fmt.Errorf("не удалось найти срок ФН '%s': %w", srokMatches[1], err)
-	}
-	addStringFieldToPayload(log, payload, "SrokFN", srokUUID)
-
-	log.Info("Подготовлен итоговый payload для создания ФР в ServiceDesk", "payload", payload)
-
-	response, err := s.sdClient.CreateEntity(ctx, "FiscalRegister", payload)
-	if err != nil {
-		return "", fmt.Errorf("ошибка создания ФР в ServiceDesk: %w", err)
+		return fr, fr.ID, nil
 	}
 
-	newUUID, _ := response["UUID"].(string)
-	return newUUID, nil
+	return nil, "", fmt.Errorf("неподдерживаемый тип: %s", task.EntityType)
 }
 
 func (s *sdEditorWorkerImpl) updateTaskStatus(ctx context.Context, taskID uint, newStatus, commentText string) {
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		task, err := s.taskRepo.GetByID(ctx, taskID)
 		if err != nil {
 			return err
 		}
 		if task == nil {
-			return fmt.Errorf("задача с ID %d не найдена для обновления статуса", taskID)
+			return nil
 		}
 		task.Status = newStatus
 		task.Comment = fmt.Sprintf("%s\n[SD_WORKER] %s", task.Comment, commentText)
 		return tx.Save(task).Error
 	})
-	if err != nil {
-		s.logger.Error("Критическая ошибка: не удалось обновить статус задачи после операции с SD",
-			"taskID", taskID,
-			"newStatus", newStatus,
-			"error", err,
-		)
-	}
-}
-
-var srokFnRegex = regexp.MustCompile(`(13|15|36)`)
-
-func addStringFieldToPayload(log logger.LoggerInterface, payload map[string]interface{}, key, value string) {
-	if value != "" {
-		log.Debug("Добавление поля в payload", "поле", key, "значение", value)
-		payload[key] = value
-	} else {
-		log.Debug("Пропуск пустого поля", "поле", key)
-	}
 }

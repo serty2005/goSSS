@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"etalon-server/internal/core/gateways"
+	"etalon-server/internal/core/integrations"
 	"etalon-server/internal/core/processing"
 	"etalon-server/internal/core/workers"
 	"etalon-server/internal/domain/company"
@@ -12,7 +13,7 @@ import (
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/task"
 	"etalon-server/internal/domain/tickets"
-	"etalon-server/internal/domain/user" // <-- Новый импорт
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/db"
@@ -54,6 +55,9 @@ type Application struct {
 	DB       *gorm.DB
 	EventBus eventbus.EventBus
 	Seeder   *seeder.Seeder
+
+	// Integration Manager
+	IntegrationManager *integrations.Manager
 
 	// Gateways & Workers
 	SDeskGateway          gateways.ServiceDeskGateway
@@ -197,7 +201,7 @@ type Repositories struct {
 	FRRepo          fiscal.Repository
 	AgentRepo       repositories.AgentRepo
 	TaskRepo        repositories.TaskRepo
-	UserRepo        user.Repository // <-- Обновленный тип интерфейса
+	UserRepo        user.Repository
 	LinkRepo        repositories.LinkRepo
 }
 
@@ -211,7 +215,7 @@ func setupRepositories(db *gorm.DB) Repositories {
 		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
 		AgentRepo:       repositories.NewAgentRepo(db),
 		TaskRepo:        repositories.NewTaskRepo(db),
-		UserRepo:        infraRepos.NewUserRepo(db), // <-- infra реализация
+		UserRepo:        infraRepos.NewUserRepo(db),
 		LinkRepo:        repositories.NewLinkRepo(db),
 	}
 }
@@ -257,28 +261,52 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
-		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, clients.SDClient, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		ServerService:         serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
-		WorkstationService:    workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
-		FiscalService:         fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
+		// ИЗМЕНЕНИЕ: Убран clients.SDClient из конструктора ContractService
+		ContractService:    contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		ServerService:      serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
+		WorkstationService: workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
+		FiscalService:      fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
 	}
 }
 
 func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
+	// --- 1. Инициализация Менеджера Интеграций ---
+	app.IntegrationManager = integrations.NewManager(app.Logger.With("component", "integration_manager"))
+
+	// --- 2. Настройка Адаптера Naumen ---
+	mapperCtx := &external.MapperContext{
+		DB:       app.DB,
+		LinkRepo: repos.LinkRepo,
+		Logger:   app.Logger,
+	}
+	// Используем существующий клиент, оборачивая его в адаптер
+	naumenAdapter := naumen.NewNaumenAdapter(clients.SDClient, app.Logger.With("component", "naumen_adapter"), mapperCtx)
+
+	// --- 3. Регистрация Провайдеров ---
+	app.IntegrationManager.RegisterInventoryProvider(naumenAdapter)
+	app.IntegrationManager.RegisterContractProvider(naumenAdapter)
+	app.IntegrationManager.RegisterTicketProvider(naumenAdapter)
+
+	// --- 4. Настройка остальных сервисов ---
 	reconciliationEngine := processing.NewReconciliationEngine(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, srvs.EntityMatcherService, app.Logger.With("component", "reconciliation_engine"))
 	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.TaskRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, reconciliationEngine, srvs.EntityMatcherService)
 	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
 	orchestrator.Start(context.Background())
 
-	app.SDeskGateway = gateways.NewServiceDeskGateway(app.Config, clients.SDClient, app.EventBus, app.Logger.With("component", "sdesk_gateway"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	// Передаем IntegrationManager вместо SDClient
+	app.SDeskGateway = gateways.NewServiceDeskGateway(app.Config, app.IntegrationManager, app.EventBus, app.Logger.With("component", "sdesk_gateway"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+
 	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
 	app.PollingGateway = gateways.NewServerPollingGateway(app.Config, app.Logger.With("component", "iiko_polling_gateway"), repos.ServerRepo, clients.IikoClient, app.EventBus)
 	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, app.EventBus)
-	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, clients.SDClient)
-	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, clients.SDClient, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	// ИЗМЕНЕНИЕ: В FRUpdateFounder передаем Manager
+	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, app.IntegrationManager)
+	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, app.IntegrationManager, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
-	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), clients.SDClient, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
-	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), clients.SDClient, srvs.ContractService)
+	// ИЗМЕНЕНИЕ: В TicketGateway передаем Manager
+	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
+	// ИЗМЕНЕНИЕ: В ContractGateway передаем Manager
+	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {

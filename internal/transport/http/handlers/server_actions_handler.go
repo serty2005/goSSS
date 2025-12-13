@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -42,17 +43,17 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 	log := middleware.GetLogger(r.Context())
 	serverID := chi.URLParam(r, "id")
 	if serverID == "" {
-		RespondWithError(w, http.StatusBadRequest, "ID сервера не указан")
+		response.RespondWithError(w, http.StatusBadRequest, "ID сервера не указан")
 		return
 	}
 
 	var dto installLicenseRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 	if dto.UniqueID == "" {
-		RespondWithError(w, http.StatusBadRequest, "Поле 'unique_id' обязательно для заполнения")
+		response.RespondWithError(w, http.StatusBadRequest, "Поле 'unique_id' обязательно для заполнения")
 		return
 	}
 
@@ -63,20 +64,20 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 		if errors.As(err, &httpErr) {
 			if httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden {
 				log.Warn("Ошибка авторизации при установке лицензии", "serverID", serverID, "error", err)
-				RespondWithError(w, http.StatusUnauthorized, "Неверный логин или пароль для доступа к iikoRMS серверу")
+				response.RespondWithError(w, http.StatusUnauthorized, "Неверный логин или пароль для доступа к iikoRMS серверу")
 				return
 			}
 		}
 
 		if errors.Is(err, domain.ErrNotFound) {
-			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
+			response.RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		} else {
 			log.Error("Ошибка при установке лицензии", "serverID", serverID, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при установке лицензии")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при установке лицензии")
 		}
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии выполнена успешно"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии выполнена успешно"})
 }
 
 // pollServerStatus обрабатывает запрос на принудительный асинхронный опрос статуса сервера.
@@ -84,7 +85,7 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 	log := middleware.GetLogger(r.Context())
 	serverID := chi.URLParam(r, "id")
 	if serverID == "" {
-		RespondWithError(w, http.StatusBadRequest, "ID сервера не указан")
+		response.RespondWithError(w, http.StatusBadRequest, "ID сервера не указан")
 		return
 	}
 
@@ -92,16 +93,16 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrRateLimitExceeded):
-			RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
+			response.RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
 		case errors.Is(err, domain.ErrNotFound):
-			RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
+			response.RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		default:
 			log.Error("Ошибка при запуске принудительного опроса", "serverID", serverID, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
 	}
-	RespondWithJSON(w, http.StatusAccepted, map[string]string{"message": "Задача на опрос статуса сервера принята в обработку"})
+	response.RespondWithJSON(w, http.StatusAccepted, map[string]string{"message": "Задача на опрос статуса сервера принята в обработку"})
 }
 
 type additionalOwnerRequestDTO struct {
@@ -114,11 +115,11 @@ func (h *ServerActionsHandler) addAdditionalOwner(w http.ResponseWriter, r *http
 	serverID := chi.URLParam(r, "serverID")
 	var dto additionalOwnerRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 	if serverID == "" || dto.CompanyID == "" {
-		RespondWithError(w, http.StatusBadRequest, "ID сервера и компании обязательны")
+		response.RespondWithError(w, http.StatusBadRequest, "ID сервера и компании обязательны")
 		return
 	}
 
@@ -127,14 +128,14 @@ func (h *ServerActionsHandler) addAdditionalOwner(w http.ResponseWriter, r *http
 	err := h.actionsSvc.AddAdditionalOwner(r.Context(), serverID, dto.CompanyID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
+			response.RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
 			log.Error("Ошибка при добавлении дополнительного владельца", "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Дополнительный владелец успешно добавлен"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Дополнительный владелец успешно добавлен"})
 }
 
 // removeAdditionalOwner обрабатывает запрос на удаление дополнительного владельца.
@@ -144,7 +145,7 @@ func (h *ServerActionsHandler) removeAdditionalOwner(w http.ResponseWriter, r *h
 	companyID := chi.URLParam(r, "companyID")
 
 	if serverID == "" || companyID == "" {
-		RespondWithError(w, http.StatusBadRequest, "ID сервера и компании обязательны")
+		response.RespondWithError(w, http.StatusBadRequest, "ID сервера и компании обязательны")
 		return
 	}
 	log.Debug("Запрос на удаление допвладельца у сервера", "serverID", serverID, "companyID", companyID)
@@ -152,10 +153,10 @@ func (h *ServerActionsHandler) removeAdditionalOwner(w http.ResponseWriter, r *h
 	err := h.actionsSvc.RemoveAdditionalOwner(r.Context(), serverID, companyID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
+			response.RespondWithError(w, http.StatusNotFound, "Сервер или компания не найдены")
 		} else {
 			log.Error("Ошибка при удалении дополнительного владельца", "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
 	}

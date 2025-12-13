@@ -41,11 +41,11 @@ const (
 )
 
 // ServiceDeskEntityPayload - полезная нагрузка для события ServiceDeskEntityUpdated.
-// Содержит сырые данные из внешней системы.
 type ServiceDeskEntityPayload struct {
-	EntityType      string                 // Внутренний тип сущности: "Company", "Server"
-	ServiceDeskUUID string                 // UUID сущности во внешней системе
-	Data            map[string]interface{} // Полные данные сущности, полученные от внешней системы
+	EntityType      string // Внутренний тип сущности: "Company", "Server"
+	ServiceDeskUUID string // UUID сущности во внешней системе
+	// Data теперь interface{}, чтобы принимать как map (legacy), так и Struct (Model)
+	Data interface{} // Полные данные сущности (map[string]interface{} ИЛИ *server.Server и т.д.)
 }
 
 // ServiceDeskEntityDeletePayload - полезная нагрузка для события ServiceDeskEntityDeleted.

@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/domain/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -41,21 +42,21 @@ func (h *ContractHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		log.Error("get failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, contract)
+	response.RespondWithJSON(w, http.StatusOK, contract)
 }
 
 func (h *ContractHandler) CreateContract(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	var dto api.ContractCreateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -63,10 +64,10 @@ func (h *ContractHandler) CreateContract(w http.ResponseWriter, r *http.Request)
 	contract, err := h.service.CreateContract(r.Context(), &dto)
 	if err != nil {
 		log.Error("Failed to create contract", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to create contract")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create contract")
 		return
 	}
-	RespondWithJSON(w, http.StatusCreated, contract)
+	response.RespondWithJSON(w, http.StatusCreated, contract)
 }
 
 func (h *ContractHandler) UpdateContract(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +75,7 @@ func (h *ContractHandler) UpdateContract(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "id")
 	var updateData map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -82,14 +83,14 @@ func (h *ContractHandler) UpdateContract(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		log.Error("update failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "contract updated successfully"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"message": "contract updated successfully"})
 }
 
 func (h *ContractHandler) DeleteContract(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +101,11 @@ func (h *ContractHandler) DeleteContract(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		log.Error("delete failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

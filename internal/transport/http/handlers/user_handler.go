@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
 
@@ -33,7 +34,7 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.userRepo.GetAll(r.Context())
 	if err != nil {
 		log.Error("Failed to get users", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to retrieve users")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to retrieve users")
 		return
 	}
 
@@ -52,14 +53,14 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	RespondWithJSON(w, http.StatusOK, userDTOs)
+	response.RespondWithJSON(w, http.StatusOK, userDTOs)
 }
 
 func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	var dto api.UserCreateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -72,7 +73,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		role, err := h.userRepo.EnsureRoleExists(r.Context(), roleName, "")
 		if err != nil {
 			log.Error("Failed to find/create role", "role", roleName, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Error processing roles")
+			response.RespondWithError(w, http.StatusInternalServerError, "Error processing roles")
 			return
 		}
 		roles = append(roles, *role)
@@ -87,13 +88,13 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	if err := newUser.HashPassword(dto.Password); err != nil {
 		log.Error("Failed to hash password", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to create user")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
 
 	if err := h.userRepo.Create(r.Context(), newUser); err != nil {
 		log.Error("Failed to create user", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to create user")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
 
@@ -104,7 +105,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Roles:    dto.Roles,
 	}
 
-	RespondWithJSON(w, http.StatusCreated, userDTO)
+	response.RespondWithJSON(w, http.StatusCreated, userDTO)
 }
 
 func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -112,24 +113,24 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid user ID")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid user ID")
 		return
 	}
 
 	var dto api.UserUpdateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	u, err := h.userRepo.GetByID(r.Context(), uint(id))
 	if err != nil {
 		log.Error("Failed to get user", "id", id, "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to get user")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to get user")
 		return
 	}
 	if u == nil {
-		RespondWithError(w, http.StatusNotFound, "User not found")
+		response.RespondWithError(w, http.StatusNotFound, "User not found")
 		return
 	}
 
@@ -156,18 +157,18 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if dto.Password != nil {
 		if err := u.HashPassword(*dto.Password); err != nil {
-			RespondWithError(w, http.StatusInternalServerError, "Failed to update password")
+			response.RespondWithError(w, http.StatusInternalServerError, "Failed to update password")
 			return
 		}
 	}
 
 	if err := h.userRepo.Update(r.Context(), u); err != nil {
 		log.Error("Failed to update user", "id", id, "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to update user")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to update user")
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, map[string]string{"message": "user updated successfully"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"message": "user updated successfully"})
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -175,13 +176,13 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid user ID")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid user ID")
 		return
 	}
 
 	if err := h.userRepo.Delete(r.Context(), uint(id)); err != nil {
 		log.Error("Failed to delete user", "id", id, "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Failed to delete user")
+		response.RespondWithError(w, http.StatusInternalServerError, "Failed to delete user")
 		return
 	}
 

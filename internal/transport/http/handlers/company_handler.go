@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/domain/company"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
 
@@ -38,14 +39,14 @@ func (h *CompanyHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		middleware.GetLogger(r.Context()).Error("get failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, comp)
+	response.RespondWithJSON(w, http.StatusOK, comp)
 }
 
 func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -63,33 +64,33 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	comps, err := h.service.SearchCompanies(r.Context(), term, limit, offset)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("failed to search companies", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, comps)
+	response.RespondWithJSON(w, http.StatusOK, comps)
 }
 
 func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var dto api.CompanyCreateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid request body")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	comp, err := h.service.CreateCompany(r.Context(), &dto)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("failed to create company", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Creation failed")
+		response.RespondWithError(w, http.StatusInternalServerError, "Creation failed")
 		return
 	}
-	RespondWithJSON(w, http.StatusCreated, comp)
+	response.RespondWithJSON(w, http.StatusCreated, comp)
 }
 
 func (h *CompanyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var data map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 
@@ -97,14 +98,14 @@ func (h *CompanyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		middleware.GetLogger(r.Context()).Error("update failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func (h *CompanyHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -113,11 +114,11 @@ func (h *CompanyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		middleware.GetLogger(r.Context()).Error("delete failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -127,7 +128,7 @@ func (h *CompanyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		RespondWithError(w, http.StatusBadRequest, "Company ID is required")
+		response.RespondWithError(w, http.StatusBadRequest, "Company ID is required")
 		return
 	}
 
@@ -135,15 +136,15 @@ func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Warn("company not found for infrastructure request", "id", id)
-			RespondWithError(w, http.StatusNotFound, "Company not found")
+			response.RespondWithError(w, http.StatusNotFound, "Company not found")
 			return
 		}
 		middleware.GetLogger(r.Context()).Error("failed to get company infrastructure", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
 	// Если оборудования нет, items будет пустым слайсом (инициализирован в сервисе),
 	// json.Marshal сериализует его как [] (не null).
-	RespondWithJSON(w, http.StatusOK, items)
+	response.RespondWithJSON(w, http.StatusOK, items)
 }

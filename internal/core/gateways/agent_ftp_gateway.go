@@ -1,3 +1,4 @@
+// internal/core/gateways/agent_ftp_gateway.go
 package gateways
 
 import (
@@ -46,7 +47,12 @@ func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
 	g.logger.Info("Запуск шлюза агентов (FTP)", "interval", g.cfg.AgentFTPInterval)
 	ticker := time.NewTicker(g.cfg.AgentFTPInterval)
 	defer ticker.Stop()
-	g.runReconciliationCycle(ctx)
+
+	// Запускаем первый раз сразу, но проверяем контекст перед этим
+	if ctx.Err() == nil {
+		g.runReconciliationCycle(ctx)
+	}
+
 	for {
 		select {
 		case <-ticker.C:
@@ -186,8 +192,16 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 }
 
 // syncLocalCacheWithFTP скачивает новые или обновленные файлы с FTP-сервера в локальный кэш.
-func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
+func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(ctx context.Context) error {
 	s.logger.Info("Синхронизация локального кэша с FTP...")
+
+	// Проверка контекста перед началом операции
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ftpFiles, err := s.ftpClient.ListFiles(s.cfg.FTPPath)
 	if err != nil {
 		return fmt.Errorf("не удалось получить список файлов с FTP: %w", err)
@@ -204,7 +218,16 @@ func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
 			localFileInfos[f.Name()] = info
 		}
 	}
+
 	for _, ftpFile := range ftpFiles {
+		// КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Проверка отмены контекста внутри цикла скачивания
+		select {
+		case <-ctx.Done():
+			s.logger.Info("Прерывание синхронизации FTP (получен сигнал остановки)")
+			return ctx.Err()
+		default:
+		}
+
 		if ftpFile.Type != ftp.EntryTypeFile || !strings.HasSuffix(strings.ToLower(ftpFile.Name), ".json") || ftpFile.Size == 0 {
 			continue
 		}
@@ -233,10 +256,16 @@ func (s *agentFTPGatewayImpl) syncLocalCacheWithFTP(_ context.Context) error {
 func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
 	cycleStartTime := time.Now()
 	g.logger.Info("Начало нового цикла сверки данных с FTP...")
+
 	if err := g.syncLocalCacheWithFTP(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			g.logger.Info("Цикл FTP прерван из-за остановки приложения")
+			return
+		}
 		g.logger.Error("Ошибка синхронизации кэша с FTP, цикл прерван", "error", err)
 		return
 	}
+
 	localFiles, err := os.ReadDir(g.cfg.FTPCachePath)
 	if err != nil {
 		g.logger.Error("Не удалось прочитать директорию с кэшем, цикл прерван", "error", err)
@@ -267,6 +296,7 @@ func (g *agentFTPGatewayImpl) runReconciliationCycle(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
+			g.logger.Info("Цикл обработки файлов прерван из-за остановки приложения")
 			return
 		default:
 			processedFiles++

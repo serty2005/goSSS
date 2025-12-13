@@ -2,14 +2,14 @@ package gateways
 
 import (
 	"context"
+	"etalon-server/internal/core/integrations"
 	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/integration"
 	"etalon-server/internal/infra/config"
-	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"time"
 )
 
-// ContractGateway отвечает за периодическую синхронизацию контрактов.
 type ContractGateway interface {
 	Start(ctx context.Context)
 }
@@ -17,21 +17,20 @@ type ContractGateway interface {
 type contractGatewayImpl struct {
 	cfg             *config.Config
 	logger          logger.LoggerInterface
-	sdClient        external.ExternalSystemClient
+	manager         *integrations.Manager
 	contractService contract.Service
 }
 
-// NewContractGateway создает новый экземпляр шлюза контрактов.
 func NewContractGateway(
 	cfg *config.Config,
 	logger logger.LoggerInterface,
-	sdClient external.ExternalSystemClient,
+	manager *integrations.Manager,
 	contractService contract.Service,
 ) ContractGateway {
 	return &contractGatewayImpl{
 		cfg:             cfg,
 		logger:          logger,
-		sdClient:        sdClient,
+		manager:         manager,
 		contractService: contractService,
 	}
 }
@@ -46,7 +45,6 @@ func (g *contractGatewayImpl) Start(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Запускаем первый раз немедленно
 	g.sync(ctx)
 
 	for {
@@ -63,20 +61,28 @@ func (g *contractGatewayImpl) Start(ctx context.Context) {
 func (g *contractGatewayImpl) sync(ctx context.Context) {
 	g.logger.Info("Начало цикла синхронизации контрактов...")
 
-	// Запрашиваем список контрактов из внешней системы (Naumen)
-	// Используем entityType="Contract", маппер клиента знает, что это "agreement$agreement"
-	rawContracts, err := g.sdClient.FetchEntityList(ctx, "Contract")
+	providers := g.manager.GetContractProviders()
+	for _, provider := range providers {
+		g.processProvider(ctx, provider)
+	}
+
+	g.logger.Info("Цикл синхронизации контрактов завершен.")
+}
+
+func (g *contractGatewayImpl) processProvider(ctx context.Context, provider integration.ContractProvider) {
+	log := g.logger.With("system", provider.SystemName())
+
+	// Получаем MAP контрактов (ExternalID -> Model)
+	contracts, err := provider.GetContracts(ctx)
 	if err != nil {
-		g.logger.Error("Не удалось получить список контрактов из ServiceDesk", "error", err)
+		log.Error("Не удалось получить список контрактов", "error", err)
 		return
 	}
 
-	g.logger.Info("Получено контрактов из ServiceDesk", "count", len(rawContracts))
+	log.Info("Получено контрактов от провайдера", "count", len(contracts))
 
-	// Передаем данные в сервис для обработки
-	if err := g.contractService.SyncContracts(ctx, rawContracts); err != nil {
-		g.logger.Error("Ошибка при синхронизации контрактов в сервисе", "error", err)
-	} else {
-		g.logger.Info("Цикл синхронизации контрактов успешно завершен.")
+	// Передаем карту в сервис (сервис уже обновлен и принимает map)
+	if err := g.contractService.SyncContracts(ctx, contracts); err != nil {
+		log.Error("Ошибка при синхронизации контрактов в сервисе", "error", err)
 	}
 }

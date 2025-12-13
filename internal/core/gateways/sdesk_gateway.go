@@ -1,17 +1,17 @@
+// internal/core/gateways/sdesk_gateway.go
 package gateways
 
 import (
 	"context"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/core/integrations" // Новый импорт
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
-	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/integration"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
-	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
-	"etalon-server/internal/pkg/utils"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"sync"
@@ -20,12 +20,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// ServiceDeskGateway отвечает за получение данных из ServiceDesk и публикацию событий.
+// ServiceDeskGateway отвечает за получение данных из внешних систем (через Provider) и публикацию событий.
 type ServiceDeskGateway interface {
 	Start(ctx context.Context)
 }
 
-// localEntityInfo - внутренняя структура для хранения минимально необходимых данных из локальной БД для сравнения.
+// localEntityInfo - внутренняя структура для хранения минимально необходимых данных из локальной БД.
 type localEntityInfo struct {
 	InternalID       string
 	LastModifiedDate *time.Time
@@ -34,10 +34,10 @@ type localEntityInfo struct {
 
 type serviceDeskGatewayImpl struct {
 	cfg             *config.Config
-	sdClient        external.ExternalSystemClient
+	manager         *integrations.Manager // Используем менеджер вместо SDClient
 	bus             eventbus.EventBus
 	logger          logger.LoggerInterface
-	db              *gorm.DB // Добавляем прямое подключение для работы со связями
+	db              *gorm.DB
 	companyRepo     company.Repository
 	serverRepo      server.Repository
 	workstationRepo workstation.Repository
@@ -46,14 +46,24 @@ type serviceDeskGatewayImpl struct {
 	isSyncing       bool
 }
 
-// NewServiceDeskGateway создает новый экземпляр шлюза ServiceDesk.
-func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemClient, bus eventbus.EventBus, logger logger.LoggerInterface, db *gorm.DB, companyRepo company.Repository, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) ServiceDeskGateway {
+// NewServiceDeskGateway создает новый экземпляр шлюза.
+func NewServiceDeskGateway(
+	cfg *config.Config,
+	manager *integrations.Manager, // Внедряем Manager
+	bus eventbus.EventBus,
+	logger logger.LoggerInterface,
+	db *gorm.DB,
+	companyRepo company.Repository,
+	serverRepo server.Repository,
+	workstationRepo workstation.Repository,
+	frRepo fiscal.Repository,
+) ServiceDeskGateway {
 	return &serviceDeskGatewayImpl{
 		cfg:             cfg,
-		sdClient:        sdClient,
+		manager:         manager,
 		bus:             bus,
 		logger:          logger,
-		db:              db, // Инициализируем
+		db:              db,
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
@@ -63,7 +73,7 @@ func NewServiceDeskGateway(cfg *config.Config, sdClient external.ExternalSystemC
 
 // Start запускает воркер в фоновом режиме.
 func (g *serviceDeskGatewayImpl) Start(ctx context.Context) {
-	g.logger.Info("Запуск шлюза ServiceDesk", "interval", g.cfg.SDeskSyncInterval)
+	g.logger.Info("Запуск универсального шлюза инвентаризации", "interval", g.cfg.SDeskSyncInterval)
 	ticker := time.NewTicker(g.cfg.SDeskSyncInterval)
 	defer ticker.Stop()
 
@@ -74,17 +84,17 @@ func (g *serviceDeskGatewayImpl) Start(ctx context.Context) {
 		case <-ticker.C:
 			g.runSyncCycle(ctx)
 		case <-ctx.Done():
-			g.logger.Info("Остановка шлюза ServiceDesk...")
+			g.logger.Info("Остановка шлюза инвентаризации...")
 			return
 		}
 	}
 }
 
-// runSyncCycle выполняет один полный цикл синхронизации.
+// runSyncCycle выполняет один полный цикл синхронизации по всем провайдерам.
 func (g *serviceDeskGatewayImpl) runSyncCycle(ctx context.Context) {
 	g.mu.Lock()
 	if g.isSyncing {
-		g.logger.Warn("Цикл синхронизации шлюза ServiceDesk уже запущен. Пропуск.")
+		g.logger.Warn("Цикл синхронизации уже запущен. Пропуск.")
 		g.mu.Unlock()
 		return
 	}
@@ -97,58 +107,111 @@ func (g *serviceDeskGatewayImpl) runSyncCycle(ctx context.Context) {
 		g.mu.Unlock()
 	}()
 
-	g.logger.Info("Начало нового цикла получения данных из ServiceDesk.")
+	g.logger.Info("Начало нового цикла синхронизации по провайдерам.")
 
-	entityTypes := []string{"Company", "Server", "Workstation", "FiscalRegister"}
-	for _, entityType := range entityTypes {
+	providers := g.manager.GetInventoryProviders()
+	for _, provider := range providers {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			g.processEntityType(ctx, entityType)
+			g.processProvider(ctx, provider)
 		}
 	}
-	g.logger.Info("Цикл получения данных из ServiceDesk завершен.")
+	g.logger.Info("Цикл синхронизации завершен.")
 }
 
-// processEntityType выполняет инкрементальную синхронизацию для одного типа сущности.
-func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityType string) {
-	log := g.logger.With("entityType", entityType)
-	log.Info("Начало синхронизации типа сущности")
+// processProvider обрабатывает все типы сущностей для одного провайдера.
+func (g *serviceDeskGatewayImpl) processProvider(ctx context.Context, provider integration.InventoryProvider) {
+	log := g.logger.With("system", provider.SystemName())
+	log.Info("Обработка провайдера")
 
-	// 1. Получаем КРАТКИЙ список сущностей из внешней системы.
-	remoteList, err := g.sdClient.FetchEntitySummaries(ctx, entityType)
+	// Последовательно обрабатываем типы сущностей
+	g.syncCompanies(ctx, provider, log)
+	g.syncServers(ctx, provider, log)
+	g.syncWorkstations(ctx, provider, log)
+	g.syncFiscalRegisters(ctx, provider, log)
+}
+
+// syncCompanies синхронизирует компании.
+func (g *serviceDeskGatewayImpl) syncCompanies(ctx context.Context, p integration.InventoryProvider, log logger.LoggerInterface) {
+	summaries, err := p.GetCompanySummaries(ctx)
 	if err != nil {
-		log.Error("Не удалось получить список сущностей из ServiceDesk", "error", err)
+		log.Error("Не удалось получить список компаний", "error", err)
+		return
+	}
+	g.processDiffs(ctx, p, "Company", summaries, func(extID string) (interface{}, error) {
+		return p.GetCompany(ctx, extID)
+	}, log)
+}
+
+// syncServers синхронизирует серверы.
+func (g *serviceDeskGatewayImpl) syncServers(ctx context.Context, p integration.InventoryProvider, log logger.LoggerInterface) {
+	summaries, err := p.GetServerSummaries(ctx)
+	if err != nil {
+		log.Error("Не удалось получить список серверов", "error", err)
+		return
+	}
+	g.processDiffs(ctx, p, "Server", summaries, func(extID string) (interface{}, error) {
+		return p.GetServer(ctx, extID)
+	}, log)
+}
+
+// syncWorkstations синхронизирует рабочие станции.
+func (g *serviceDeskGatewayImpl) syncWorkstations(ctx context.Context, p integration.InventoryProvider, log logger.LoggerInterface) {
+	summaries, err := p.GetWorkstationSummaries(ctx)
+	if err != nil {
+		log.Error("Не удалось получить список рабочих станций", "error", err)
+		return
+	}
+	g.processDiffs(ctx, p, "Workstation", summaries, func(extID string) (interface{}, error) {
+		return p.GetWorkstation(ctx, extID)
+	}, log)
+}
+
+// syncFiscalRegisters синхронизирует ФР.
+func (g *serviceDeskGatewayImpl) syncFiscalRegisters(ctx context.Context, p integration.InventoryProvider, log logger.LoggerInterface) {
+	summaries, err := p.GetFiscalRegisterSummaries(ctx)
+	if err != nil {
+		log.Error("Не удалось получить список ФР", "error", err)
+		return
+	}
+	g.processDiffs(ctx, p, "FiscalRegister", summaries, func(extID string) (interface{}, error) {
+		return p.GetFiscalRegister(ctx, extID)
+	}, log)
+}
+
+// FetcherFunc - функция для получения полной модели по ID.
+type FetcherFunc func(externalID string) (interface{}, error)
+
+// processDiffs - универсальная функция сверки и публикации событий.
+func (g *serviceDeskGatewayImpl) processDiffs(
+	ctx context.Context,
+	provider integration.InventoryProvider,
+	entityType string,
+	remoteList []integration.EntitySummary,
+	fetcher FetcherFunc,
+	log logger.LoggerInterface,
+) {
+	// 1. Получаем локальные связи для этой системы и типа сущности
+	localMap, err := g.getLocalEntityLinks(ctx, provider.SystemName(), entityType)
+	if err != nil {
+		log.Error("Не удалось получить локальные связи", "entityType", entityType, "error", err)
 		return
 	}
 
-	// 2. Получаем все существующие связи для этого типа сущности.
-	localMap, err := g.getLocalEntityLinks(ctx, entityType)
-	if err != nil {
-		log.Error("Не удалось получить локальные связи для сущностей", "error", err)
-		return
-	}
-
-	// 3. Сравниваем списки и формируем задачи на создание, обновление и удаление.
+	// 2. Сравниваем списки
 	remoteExternalIDs := make(map[string]struct{}, len(remoteList))
 	var toCreate, toUpdate, toDelete []string
 
 	for _, remoteItem := range remoteList {
-		remoteUUID, _ := remoteItem["UUID"].(string)
-		if remoteUUID == "" {
-			continue
-		}
+		remoteUUID := remoteItem.ExternalID
 		remoteExternalIDs[remoteUUID] = struct{}{}
-		remoteLMD := utils.ParseServiceDeskTime(remoteItem["lastModifiedDate"].(string))
-		if remoteLMD == nil {
-			continue // Пропускаем сущности без даты модификации (можно добавить creationDate?)
-		}
 
 		localLink, exists := localMap[remoteUUID]
 		if !exists {
 			toCreate = append(toCreate, remoteUUID)
-		} else if localLink.DeletedAt.Valid || (localLink.LastModifiedDate != nil && remoteLMD.After(*localLink.LastModifiedDate)) {
+		} else if localLink.DeletedAt.Valid || (!remoteItem.UpdatedAt.IsZero() && localLink.LastModifiedDate != nil && remoteItem.UpdatedAt.After(*localLink.LastModifiedDate)) {
 			toUpdate = append(toUpdate, remoteUUID)
 		}
 	}
@@ -160,6 +223,7 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityTy
 	}
 
 	log.Info("Сравнение завершено",
+		"entityType", entityType,
 		"remote_count", len(remoteList),
 		"local_count", len(localMap),
 		"to_create", len(toCreate),
@@ -167,74 +231,68 @@ func (g *serviceDeskGatewayImpl) processEntityType(ctx context.Context, entityTy
 		"to_delete", len(toDelete),
 	)
 
-	// 4. Обрабатываем задачи и публикуем события.
+	// 3. Обрабатываем удаление
 	if len(toDelete) > 0 {
-		g.publishDeleteEvents(entityType, toDelete, log)
+		for _, uuid := range toDelete {
+			g.bus.Publish(eventbus.Event{
+				Type: events.ServiceDeskEntityDeleted,
+				Payload: events.ServiceDeskEntityDeletePayload{
+					EntityType:      entityType,
+					ServiceDeskUUID: uuid,
+				},
+			})
+		}
 	}
 
+	// 4. Обрабатываем создание и обновление
 	if len(toCreate) > 0 || len(toUpdate) > 0 {
 		uuidsToFetch := append(toCreate, toUpdate...)
-		g.fetchAndPublishUpdateEvents(ctx, entityType, uuidsToFetch, log)
+		g.fetchAndPublishEvents(ctx, entityType, uuidsToFetch, fetcher, log)
 	}
 }
 
-// publishDeleteEvents публикует события об удалении сущностей.
-func (g *serviceDeskGatewayImpl) publishDeleteEvents(entityType string, externalUUIDs []string, log logger.LoggerInterface) {
-	log.Info("Публикация событий об удалении...", "count", len(externalUUIDs))
-	for _, uuid := range externalUUIDs {
-		g.bus.Publish(eventbus.Event{
-			Type: events.ServiceDeskEntityDeleted,
-			Payload: events.ServiceDeskEntityDeletePayload{
-				EntityType:      entityType,
-				ServiceDeskUUID: uuid,
-			},
-		})
-	}
-}
-
-// fetchAndPublishUpdateEvents получает полные данные для сущностей и публикует события.
-func (g *serviceDeskGatewayImpl) fetchAndPublishUpdateEvents(ctx context.Context, entityType string, externalUUIDs []string, log logger.LoggerInterface) {
-	log.Info("Получение полных данных для новых/обновленных сущностей...", "count", len(externalUUIDs))
+func (g *serviceDeskGatewayImpl) fetchAndPublishEvents(
+	ctx context.Context,
+	entityType string,
+	externalUUIDs []string,
+	fetcher FetcherFunc,
+	log logger.LoggerInterface,
+) {
+	// Ограничение конкурентности
+	limit := make(chan struct{}, g.cfg.ConcurrentRequests)
 	var wg sync.WaitGroup
-	tasks := make(chan string, len(externalUUIDs))
-
-	for i := 0; i < g.cfg.ConcurrentRequests; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for uuid := range tasks {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					details, err := g.sdClient.FetchEntityDetails(ctx, uuid, entityType)
-					if err != nil {
-						log.Error("Не удалось получить детали для сущности", "external_uuid", uuid, "error", err)
-						continue
-					}
-					g.bus.Publish(eventbus.Event{
-						Type: events.ServiceDeskEntityUpdated,
-						Payload: events.ServiceDeskEntityPayload{
-							EntityType:      entityType,
-							ServiceDeskUUID: uuid,
-							Data:            details,
-						},
-					})
-				}
-			}
-		}()
-	}
 
 	for _, uuid := range externalUUIDs {
-		tasks <- uuid
+		wg.Add(1)
+		limit <- struct{}{} // Acquire token
+
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-limit }() // Release token
+
+			// Используем переданный fetcher (он внутри вызывает Adapter.GetEntity)
+			model, err := fetcher(id)
+			if err != nil {
+				log.Error("Не удалось получить детали сущности", "id", id, "error", err)
+				return
+			}
+
+			// Публикуем событие с МОДЕЛЬЮ, а не картой
+			g.bus.Publish(eventbus.Event{
+				Type: events.ServiceDeskEntityUpdated,
+				Payload: events.ServiceDeskEntityPayload{
+					EntityType:      entityType,
+					ServiceDeskUUID: id,
+					Data:            model, // Теперь это struct pointer
+				},
+			})
+		}(uuid)
 	}
-	close(tasks)
 	wg.Wait()
 }
 
-// getLocalEntityLinks извлекает из БД мапу с информацией о связях для данного типа сущности.
-func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entityType string) (map[string]localEntityInfo, error) {
-
+// getLocalEntityLinks получает связи из БД с фильтром по systemName.
+func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, systemName, entityType string) (map[string]localEntityInfo, error) {
 	type result struct {
 		ExternalID       string
 		InternalID       string
@@ -243,9 +301,6 @@ func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entity
 	}
 
 	var results []result
-	var err error
-
-	// Выбираем таблицу для JOIN в зависимости от entityType
 	var tableName string
 	switch entityType {
 	case "Company":
@@ -257,28 +312,17 @@ func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entity
 	case "FiscalRegister":
 		tableName = "fiscal_registers"
 	default:
-		return nil, fmt.Errorf("неизвестный тип сущности для получения связей: %s", entityType)
+		return nil, fmt.Errorf("unknown entity type: %s", entityType)
 	}
 
-	g.logger.Info("Получение локальных связей", "entityType", entityType, "tableName", tableName)
-
-	// Проверяем существование таблицы external_system_links
-	if !g.db.Migrator().HasTable(&models.ExternalSystemLink{}) {
-		g.logger.Error("Таблица external_system_links не существует", "entityType", entityType)
-		return nil, fmt.Errorf("таблица external_system_links не существует")
-	}
-
-	// Выполняем запрос с JOIN
-	err = g.db.WithContext(ctx).Table("external_system_links as l").
+	// JOIN с конкретной таблицей сущности, чтобы получить LMD и DeletedAt
+	err := g.db.WithContext(ctx).Table("external_system_links as l").
 		Select("l.service_desk_uuid as external_id, l.internal_id, t.last_modified_date, t.deleted_at").
 		Joins(fmt.Sprintf("JOIN %s as t ON l.internal_id = t.id", tableName)).
-		Where("l.system_name = ? AND l.entity_type = ?", "naumen", entityType).
+		Where("l.system_name = ? AND l.entity_type = ?", systemName, entityType).
 		Scan(&results).Error
 
-	g.logger.Info("Результат запроса связей", "entityType", entityType, "results_count", len(results), "error", err)
-
 	if err != nil {
-		g.logger.Error("Ошибка при запросе связей", "entityType", entityType, "error", err)
 		return nil, err
 	}
 
@@ -290,6 +334,5 @@ func (g *serviceDeskGatewayImpl) getLocalEntityLinks(ctx context.Context, entity
 			DeletedAt:        res.DeletedAt,
 		}
 	}
-
 	return infoMap, nil
 }

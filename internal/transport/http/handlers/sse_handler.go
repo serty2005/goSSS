@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"net/http"
@@ -34,7 +35,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	// 1. Проверка поддержки стриминга клиентом/сервером
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		RespondWithError(w, http.StatusInternalServerError, "Streaming not supported")
+		response.RespondWithError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
 

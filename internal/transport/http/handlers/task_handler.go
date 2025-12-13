@@ -16,6 +16,7 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -82,7 +83,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := h.taskSvc.GetTasks(r.Context(), status, limit, offset)
 	if err != nil {
 		log.Error("Не удалось получить задачи из БД", "error", err)
-		middleware.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка задач")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка задач")
 		return
 	}
 
@@ -95,7 +96,7 @@ func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		taskDTOs = append(taskDTOs, *dto)
 	}
-	middleware.RespondWithJSON(w, http.StatusOK, taskDTOs)
+	response.RespondWithJSON(w, http.StatusOK, taskDTOs)
 }
 
 // buildTaskDTO - это метод-фабрика, который преобразует модель задачи в DTO, обогащая ее данными.
@@ -209,18 +210,18 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 	taskIDStr := chi.URLParam(r, "id")
 	taskID, err := strconv.ParseUint(taskIDStr, 10, 32)
 	if err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Некорректный ID задачи")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный ID задачи")
 		return
 	}
 
 	var dto api.ResolveTaskRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Некорректное тело запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректное тело запроса")
 		return
 	}
 
 	if dto.Status == "" {
-		RespondWithError(w, http.StatusBadRequest, "Поле 'status' обязательно для заполнения")
+		response.RespondWithError(w, http.StatusBadRequest, "Поле 'status' обязательно для заполнения")
 		return
 	}
 
@@ -228,28 +229,28 @@ func (h *TaskHandler) ResolveTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTaskNotFound):
-			RespondWithError(w, http.StatusNotFound, "Задача не найдена")
+			response.RespondWithError(w, http.StatusNotFound, "Задача не найдена")
 		case errors.Is(err, services.ErrTaskAlreadyDone):
-			RespondWithError(w, http.StatusConflict, "Задача уже была решена или отклонена")
+			response.RespondWithError(w, http.StatusConflict, "Задача уже была решена или отклонена")
 		case errors.Is(err, services.ErrInvalidPayload):
-			RespondWithError(w, http.StatusBadRequest, err.Error())
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
 		default:
 			log.Error("Ошибка при решении задачи", "taskID", taskID, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при решении задачи")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при решении задачи")
 		}
 		return
 	}
 
 	// Проверяем статус для корректного HTTP-ответа
 	if updatedTask.Status == "pending_sd_action" {
-		response := api.AcceptedResponseDTO{
+		resp := api.AcceptedResponseDTO{
 			Message: "Запрос на операцию в ServiceDesk принят в обработку.",
 			TaskID:  updatedTask.ID,
 		}
-		RespondWithJSON(w, http.StatusAccepted, response)
+		response.RespondWithJSON(w, http.StatusAccepted, resp)
 	} else {
 		// Для всех остальных случаев (включая 'resolved', 'rejected') возвращаем 200 OK
-		RespondWithJSON(w, http.StatusOK, updatedTask)
+		response.RespondWithJSON(w, http.StatusOK, updatedTask)
 	}
 }
 
@@ -259,13 +260,13 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 	taskIDStr := chi.URLParam(r, "id")
 	taskID, err := strconv.ParseUint(taskIDStr, 10, 32)
 	if err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Некорректный ID задачи")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный ID задачи")
 		return
 	}
 
 	var dto api.CreateEntityInSDRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 	// TODO: Добавить валидацию DTO
@@ -276,26 +277,26 @@ func (h *TaskHandler) createEntityFromTask(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTaskNotFound):
-			RespondWithError(w, http.StatusNotFound, "Задача не найдена")
+			response.RespondWithError(w, http.StatusNotFound, "Задача не найдена")
 		case errors.Is(err, services.ErrTaskAlreadyDone):
-			RespondWithError(w, http.StatusConflict, "Задача уже находится в обработке или решена")
+			response.RespondWithError(w, http.StatusConflict, "Задача уже находится в обработке или решена")
 		default:
 			log.Error("Ошибка при отправке запроса на создание сущности в ServiceDesk",
 				"taskID", taskID,
 				"entityType", dto.EntityType,
 				"error", err,
 			)
-			RespondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Внутренняя ошибка: %v", err))
+			response.RespondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Внутренняя ошибка: %v", err))
 		}
 		return
 	}
 
 	// Отвечаем 202 Accepted
-	response := api.AcceptedResponseDTO{
+	resp := api.AcceptedResponseDTO{
 		Message: "Запрос на создание сущности в ServiceDesk принят в обработку.",
 		TaskID:  updatedTask.ID,
 	}
-	RespondWithJSON(w, http.StatusAccepted, response)
+	response.RespondWithJSON(w, http.StatusAccepted, resp)
 }
 
 // GetDuplicates находит и возвращает группы дубликатов в формате JSON.
@@ -304,7 +305,7 @@ func (h *TaskHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 	groups, err := h.taskSvc.GetDuplicates(r.Context())
 	if err != nil {
 		log.Error("Ошибка поиска дубликатов", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка поиска дубликатов")
 		return
 	}
 
@@ -319,7 +320,7 @@ func (h *TaskHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	RespondWithJSON(w, http.StatusOK, allGroups)
+	response.RespondWithJSON(w, http.StatusOK, allGroups)
 }
 
 // --- Вспомогательные функции-мапперы ---

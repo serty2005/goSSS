@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -39,7 +40,7 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 	var dto api.RegistrationRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		log.Debug("Ошибка декодирования тела запроса регистрации агента", "error", err)
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 
@@ -51,11 +52,11 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {
 			log.Info("Попытка повторной регистрации существующего агента", "uuid", dto.AgentUUID)
-			RespondWithError(w, http.StatusConflict, "Агент с таким UUID уже зарегистрирован")
+			response.RespondWithError(w, http.StatusConflict, "Агент с таким UUID уже зарегистрирован")
 			return
 		}
 		log.Error("register failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
@@ -64,7 +65,7 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 	// В соответствии с протоколом, отвечаем 202 Accepted.
 	// Агент поймет, что его запрос принят в обработку.
 	w.WriteHeader(http.StatusAccepted)
-	RespondWithJSON(w, http.StatusAccepted, map[string]string{"status": "регистрация принята в обработку"})
+	response.RespondWithJSON(w, http.StatusAccepted, map[string]string{"status": "регистрация принята в обработку"})
 }
 
 // getAgentConfig возвращает конфигурацию для агента.
@@ -75,7 +76,7 @@ func (h *AgentHandler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
 	uuid := chi.URLParam(r, "uuid")
 	if uuid == "" {
 		log.Warn("Запрос конфигурации агента без указания UUID", "remote_addr", r.RemoteAddr)
-		RespondWithError(w, http.StatusBadRequest, "UUID агента не указан")
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента не указан")
 		return
 	}
 
@@ -85,16 +86,16 @@ func (h *AgentHandler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		log.Error("get config failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
 	log.Info("Конфигурация агента успешно отправлена", "uuid", uuid)
-	RespondWithJSON(w, http.StatusOK, config)
+	response.RespondWithJSON(w, http.StatusOK, config)
 }
 
 // postAgentData принимает и обрабатывает оперативные данные от агента.
@@ -105,7 +106,7 @@ func (h *AgentHandler) postAgentData(w http.ResponseWriter, r *http.Request) {
 	uuid := chi.URLParam(r, "uuid")
 	if uuid == "" {
 		log.Warn("Запрос данных от агента без указания UUID", "remote_addr", r.RemoteAddr)
-		RespondWithError(w, http.StatusBadRequest, "UUID агента не указан")
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента не указан")
 		return
 	}
 
@@ -114,7 +115,7 @@ func (h *AgentHandler) postAgentData(w http.ResponseWriter, r *http.Request) {
 	var dto api.AgentDataDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		log.Debug("Ошибка декодирования тела запроса с данными агента", "uuid", uuid, "error", err)
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 
@@ -124,14 +125,14 @@ func (h *AgentHandler) postAgentData(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
-			RespondWithError(w, http.StatusNotFound, "Not Found")
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
 		log.Error("process data failed", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
 	log.Info("Данные от агента успешно обработаны", "uuid", uuid)
-	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "данные приняты"})
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "данные приняты"})
 }

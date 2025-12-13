@@ -1,0 +1,64 @@
+
+name: etalon
+services:
+  # 1. База данных
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - etalon-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Инициализатор (Сидер)
+  init-seeder:
+    container_name: seeder
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - .env
+    command: ["./etalon-server", "--seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - etalon-net
+
+  # 3. Основной сервер
+  server:
+    container_name: server
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9999:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      init-seeder:
+        condition: service_completed_successfully
+    volumes:
+      # [HOST_PATH] : [CONTAINER_PATH]
+      # Монтируем папку из корня проекта внутрь контейнера
+      - ../ftp_cache:/app/ftp_cache
+    networks:
+      - etalon-net
+
+volumes:
+  pg_data:
+
+networks:
+  etalon-net:
+    driver: bridge

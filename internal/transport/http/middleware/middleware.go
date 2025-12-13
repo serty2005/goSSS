@@ -2,11 +2,10 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
-	"etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/response"
 	"fmt"
 	"net/http"
 	"strings"
@@ -59,7 +58,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 
 			// 3. Если токен все еще не найден — ошибка
 			if tokenString == "" {
-				RespondWithError(w, http.StatusUnauthorized, "Отсутствует токен авторизации")
+				response.RespondWithError(w, http.StatusUnauthorized, "Отсутствует токен авторизации")
 				return
 			}
 
@@ -72,7 +71,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			})
 
 			if err != nil || !token.Valid {
-				RespondWithError(w, http.StatusUnauthorized, "Невалидный токен")
+				response.RespondWithError(w, http.StatusUnauthorized, "Невалидный токен")
 				return
 			}
 
@@ -82,7 +81,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				if sub, ok := claims["sub"].(string); ok {
 					ctx = context.WithValue(ctx, contextkeys.UserIDContextKey, sub)
 				} else {
-					RespondWithError(w, http.StatusUnauthorized, "Невалидный sub в токене")
+					response.RespondWithError(w, http.StatusUnauthorized, "Невалидный sub в токене")
 					return
 				}
 				if roles, ok := claims["roles"].([]interface{}); ok {
@@ -94,12 +93,12 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 					}
 					ctx = context.WithValue(ctx, contextkeys.UserRolesContextKey, rolesStr)
 				} else {
-					RespondWithError(w, http.StatusUnauthorized, "Невалидные roles в токене")
+					response.RespondWithError(w, http.StatusUnauthorized, "Невалидные roles в токене")
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(ctx))
 			} else {
-				RespondWithError(w, http.StatusUnauthorized, "Невалидные claims в токене")
+				response.RespondWithError(w, http.StatusUnauthorized, "Невалидные claims в токене")
 			}
 		})
 	}
@@ -110,7 +109,7 @@ func AdminRequiredMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		roles, ok := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
 		if !ok {
-			RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
+			response.RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
 			return
 		}
 
@@ -123,7 +122,7 @@ func AdminRequiredMiddleware(next http.Handler) http.Handler {
 		}
 
 		if !isAdmin {
-			RespondWithError(w, http.StatusForbidden, "Доступ запрещен: требуется роль администратора")
+			response.RespondWithError(w, http.StatusForbidden, "Доступ запрещен: требуется роль администратора")
 			return
 		}
 
@@ -136,46 +135,29 @@ func AgentAuthMiddleware(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if apiKey == "" {
-				RespondWithError(w, http.StatusInternalServerError, "Сервер не настроен для аутентификации агентов")
+				response.RespondWithError(w, http.StatusInternalServerError, "Сервер не настроен для аутентификации агентов")
 				return
 			}
 
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				RespondWithError(w, http.StatusUnauthorized, "Отсутствует заголовок Authorization")
+				response.RespondWithError(w, http.StatusUnauthorized, "Отсутствует заголовок Authorization")
 				return
 			}
 
 			headerParts := strings.Split(authHeader, " ")
 			if len(headerParts) != 2 || strings.ToLower(headerParts[0]) != "bearer" {
-				RespondWithError(w, http.StatusUnauthorized, "Неверный формат заголовка Authorization")
+				response.RespondWithError(w, http.StatusUnauthorized, "Неверный формат заголовка Authorization")
 				return
 			}
 
 			token := headerParts[1]
 			if token != apiKey {
-				RespondWithError(w, http.StatusUnauthorized, "Неверный ключ API агента")
+				response.RespondWithError(w, http.StatusUnauthorized, "Неверный ключ API агента")
 				return
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// RespondWithError и RespondWithJSON теперь тоже часть этого пакета
-func RespondWithError(w http.ResponseWriter, code int, message string) {
-	RespondWithJSON(w, code, dtos.ErrorResponseDTO{Error: message})
-}
-
-func RespondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, err := json.Marshal(payload)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal Server Error"))
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	w.Write(response)
 }

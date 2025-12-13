@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
+	"etalon-server/internal/transport/http/response"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -31,24 +32,24 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	var dto api.LoginRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		log.Debug("Ошибка декодирования тела запроса авторизации", "error", err)
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат запроса")
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат запроса")
 		return
 	}
 
 	log.Debug("Декодирован запрос авторизации", "username", dto.Username)
 
-	response, err := h.authService.Login(r.Context(), dto.Username, dto.Password)
+	resp, err := h.authService.Login(r.Context(), dto.Username, dto.Password)
 	if err != nil {
 		if errors.Is(err, services.ErrInvalidCredentials) {
 			log.Info("Неудачная попытка авторизации - неверные учетные данные", "username", dto.Username)
-			RespondWithError(w, http.StatusUnauthorized, "Неверное имя пользователя или пароль")
+			response.RespondWithError(w, http.StatusUnauthorized, "Неверное имя пользователя или пароль")
 		} else {
 			log.Error("Ошибка входа в систему", "username", dto.Username, "error", err)
-			RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		}
 		return
 	}
 
 	log.Info("Успешная авторизация пользователя", "username", dto.Username)
-	RespondWithJSON(w, http.StatusOK, response)
+	response.RespondWithJSON(w, http.StatusOK, resp)
 }
