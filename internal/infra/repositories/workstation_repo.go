@@ -32,6 +32,7 @@ func (r *workstationRepo) Create(ctx context.Context, tx *gorm.DB, ws *workstati
 }
 
 func (r *workstationRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class")
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&workstation.Workstation{}).Where("id = ?", internalID).Updates(updateData)
 	if res.Error != nil {
 		var pgErr *pgconn.PgError

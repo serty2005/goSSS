@@ -2,9 +2,8 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/user" // <-- Новый импорт
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
@@ -23,11 +22,11 @@ type AuthService interface {
 
 type authServiceImpl struct {
 	cfg      *config.Config
-	userRepo repositories.UserRepo
+	userRepo user.Repository
 	logger   logger.LoggerInterface
 }
 
-func NewAuthService(cfg *config.Config, userRepo repositories.UserRepo, logger logger.LoggerInterface) AuthService {
+func NewAuthService(cfg *config.Config, userRepo user.Repository, logger logger.LoggerInterface) AuthService {
 	return &authServiceImpl{cfg, userRepo, logger}
 }
 
@@ -35,65 +34,66 @@ func NewAuthService(cfg *config.Config, userRepo repositories.UserRepo, logger l
 func (s *authServiceImpl) Login(ctx context.Context, username, password string) (*api.LoginResponseDTO, error) {
 	s.logger.Debug("Начало проверки учетных данных", "username", username)
 
-	user, err := s.userRepo.GetByUsername(ctx, username)
+	u, err := s.userRepo.GetByUsername(ctx, username)
 	if err != nil {
 		s.logger.Error("Ошибка получения пользователя из БД", "username", username, "error", err)
 		return nil, fmt.Errorf("ошибка получения пользователя: %w", err)
 	}
 
-	if user == nil {
+	if u == nil {
 		s.logger.Info("Пользователь не найден", "username", username)
 		return nil, ErrInvalidCredentials
 	}
 
-	s.logger.Debug("Пользователь найден, проверка пароля", "username", username, "user_id", user.ID)
-
-	if !user.CheckPassword(password) {
-		s.logger.Info("Неверный пароль для пользователя", "username", username, "user_id", user.ID)
+	// Проверка пароля
+	if !u.CheckPassword(password) {
+		s.logger.Info("Неверный пароль", "username", username)
 		return nil, ErrInvalidCredentials
 	}
 
-	s.logger.Info("Успешная аутентификация пользователя", "username", username, "user_id", user.ID)
+	if !u.IsActive {
+		s.logger.Warn("Попытка входа заблокированного пользователя", "username", username)
+		return nil, errors.New("пользователь заблокирован")
+	}
+
+	s.logger.Info("Успешная аутентификация", "username", username, "user_id", u.ID)
 
 	// Генерация токена
-	s.logger.Debug("Генерация JWT токена", "user_id", user.ID)
-
 	expirationTime := time.Now().Add(time.Duration(s.cfg.JWTExpirationMin) * time.Minute)
-	var roles []string
-	_ = json.Unmarshal(user.Roles, &roles)
 
-	s.logger.Debug("Извлечены роли пользователя", "user_id", user.ID, "roles_count", len(roles))
+	// Преобразуем []user.Role в []string для токена
+	var rolesStr []string
+	for _, r := range u.Roles {
+		rolesStr = append(rolesStr, r.Name)
+	}
 
 	claims := &jwt.RegisteredClaims{
-		Subject:   fmt.Sprint(user.ID),
+		Subject:   fmt.Sprint(u.ID),
 		ExpiresAt: jwt.NewNumericDate(expirationTime),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 
-	// Добавляем кастомные поля
 	tokenClaims := jwt.MapClaims{
 		"sub":   claims.Subject,
 		"exp":   claims.ExpiresAt.Unix(),
 		"iat":   claims.IssuedAt.Unix(),
-		"roles": roles,
+		"roles": rolesStr, // Массив строк
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, tokenClaims)
 	tokenString, err := token.SignedString([]byte(s.cfg.JWTSecret))
 	if err != nil {
-		s.logger.Error("Ошибка генерации JWT токена", "user_id", user.ID, "error", err)
+		s.logger.Error("Ошибка генерации JWT токена", "error", err)
 		return nil, fmt.Errorf("ошибка генерации токена: %w", err)
 	}
-
-	s.logger.Info("JWT токен успешно сгенерирован", "user_id", user.ID, "expires_at", expirationTime)
 
 	response := &api.LoginResponseDTO{
 		AccessToken: tokenString,
 		User: api.UserDTO{
-			ID:       user.ID,
-			Username: user.Username,
-			FullName: user.FullName,
-			Roles:    roles,
+			ID:       u.ID,
+			Username: u.Username,
+			FullName: u.FullName,
+			Roles:    rolesStr,
 		},
 	}
 

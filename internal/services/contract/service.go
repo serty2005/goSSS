@@ -186,7 +186,6 @@ func (s *serviceImpl) CreateContract(ctx context.Context, dto *api.ContractCreat
 		StateStartTime: dto.StateStartTime,
 		ServiceLevel:   dto.ServiceLevel,
 	}
-	contractModel.MetaClass = "agreement$agreement"
 
 	// Конвертация Services и Recipients в JSON
 	// (предполагается импорт "encoding/json" и "gorm.io/datatypes")

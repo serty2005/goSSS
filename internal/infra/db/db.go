@@ -2,18 +2,17 @@
 package db
 
 import (
-	"encoding/json"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 
-	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -33,18 +32,33 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 // Migrate выполняет автомиграцию схемы базы данных.
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
-		&company.Company{}, &tickets.Ticket{},
-		&server.Server{}, &workstation.Workstation{},
-		&fiscal.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &contract.Contract{}, &models.CompanyContract{},
-		&models.User{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
+		// Домен Users & RBAC
+		&user.User{}, &user.Role{},
+
+		// Домен Tickets
+		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{},
+
+		// CMDB (Используют обновленный common.Base без MetaClass)
+		&company.Company{},
+		&server.Server{},
+		&workstation.Workstation{},
+		&fiscal.FiscalRegister{},
+		&contract.Contract{},
+
+		// Вспомогательные модели
+		&models.AgentFile{},
+		&models.ReconciliationTask{},
+		&models.Agent{},
+		&models.CompanyContract{},
+		&models.ExternalSystemLink{},
+		&models.EquipmentStatusLog{},
 	)
 }
 
 // SeedAdminUser создает пользователя-администратора, если он не существует.
 func SeedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterface) error {
 	var count int64
-	db.Model(&models.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
+	db.Model(&user.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
 
 	if count > 0 {
 		logger.Info("Пользователь-администратор уже существует, пропуск создания.")
@@ -52,11 +66,17 @@ func SeedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterfac
 	}
 
 	logger.Info("Создание пользователя-администратора по умолчанию...")
-	rolesJSON, _ := json.Marshal([]string{"admin"})
-	admin := &models.User{
+
+	// 1. Создаем роль admin, если её нет
+	adminRole := user.Role{Name: "admin", Description: "Super Administrator"}
+	db.FirstOrCreate(&adminRole, user.Role{Name: "admin"})
+
+	// 2. Создаем пользователя
+	admin := &user.User{
 		Username: cfg.AdminUsername,
 		FullName: cfg.AdminFullName,
-		Roles:    datatypes.JSON(rolesJSON),
+		IsActive: true,
+		Roles:    []user.Role{adminRole},
 	}
 	if err := admin.HashPassword(cfg.AdminPassword); err != nil {
 		return err

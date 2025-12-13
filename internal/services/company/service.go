@@ -55,7 +55,6 @@ func (s *serviceImpl) CreateCompany(ctx context.Context, dto *api.CompanyCreateD
 		Address:        dto.Address,
 		AdditionalName: dto.AdditionalName,
 	}
-	entity.MetaClass = "ou$company"
 
 	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		if err := s.companyRepo.Create(txCtx, entity); err != nil {
@@ -73,7 +72,6 @@ func (s *serviceImpl) CreateCompany(ctx context.Context, dto *api.CompanyCreateD
 
 func (s *serviceImpl) UpdateCompany(ctx context.Context, id string, data map[string]interface{}) error {
 	delete(data, "id")
-	delete(data, "meta_class")
 	delete(data, "created_at")
 	delete(data, "updated_at")
 	delete(data, "deleted_at")

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
@@ -23,13 +24,74 @@ func NewTicketHandler(service services.TicketService) *TicketHandler {
 
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
+	r.Post("/", h.Create) // Создание внутреннего тикета
 	r.Get("/{id}", h.GetDetails)
 	r.Post("/{id}/link", h.LinkAsset)
+	r.Patch("/{id}/status", h.ChangeStatus)
+	r.Patch("/{id}/assign", h.Assign)
+}
+
+// Create создает новый тикет (внутренний).
+func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+	var dto api.TicketCreateInternalDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	// Получаем ID текущего пользователя
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		RespondWithError(w, http.StatusUnauthorized, "User ID not found in context")
+		return
+	}
+
+	ticket, err := h.service.CreateInternal(r.Context(), dto, userID)
+	if err != nil {
+		log.Error("Failed to create ticket", "error", err)
+		RespondWithError(w, http.StatusInternalServerError, "Failed to create ticket")
+		return
+	}
+	RespondWithJSON(w, http.StatusCreated, ticket)
+}
+
+func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var dto api.TicketStatusChangeDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, userID)
+	if err != nil {
+		RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var dto api.TicketAssignDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	ticket, err := h.service.Assign(r.Context(), id, dto.AssigneeID, userID)
+	if err != nil {
+		RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 // List возвращает список заявок с фильтрацией.
 func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 
 	// Парсинг параметров пагинации
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -46,16 +108,16 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		Limit:       limit,
 		Offset:      offset,
 		CompanyID:   r.URL.Query().Get("company_id"),
-		SortBy:      r.URL.Query().Get("sort_by"),
 		SearchQuery: r.URL.Query().Get("search"),
+		SortBy:      r.URL.Query().Get("sort_by"),
 	}
 
 	// Фильтр по оборудованию
+	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
+		filter.Statuses = strings.Split(statusStr, ",")
+	}
 	if assetID := r.URL.Query().Get("asset_id"); assetID != "" {
 		filter.AssetID = &assetID
-	}
-	if assetType := r.URL.Query().Get("asset_type"); assetType != "" {
-		filter.AssetType = &assetType
 	}
 
 	// Фильтр по статусам (через запятую)
@@ -65,8 +127,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {
-		log.Error("Failed to list tickets", "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка заявок")
+		RespondWithError(w, http.StatusInternalServerError, "Error listing tickets")
 		return
 	}
 
@@ -74,22 +135,20 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	dtos := make([]api.TicketListDTO, len(items))
 	for i, item := range items {
 		dtos[i] = api.TicketListDTO{
-			ID:               item.ID,
-			Number:           item.Number,
-			ServiceDeskUUID:  item.ServiceDeskUUID, // Теперь это поле заполнено благодаря JOIN
-			Status:           item.Status,
-			Subject:          item.Subject,
-			LastComment:      item.LastComment,
-			LastActivityDate: item.LastModifiedDate,
-			CompanyID:        item.CompanyID,
+			ID:              item.ID,
+			Number:          item.Number,
+			ServiceDeskUUID: item.ServiceDeskUUID,
+			Status:          item.Status,
+			Subject:         item.Subject,
+			CompanyID:       item.CompanyID,
+			// LastActivityDate is basically UpdatedAt or CreatedAt
+			LastActivityDate: item.UpdatedAt,
 		}
 	}
 
 	RespondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"data":   dtos,
-		"total":  total,
-		"limit":  filter.Limit,
-		"offset": filter.Offset,
+		"data":  dtos,
+		"total": total,
 	})
 }
 
@@ -119,23 +178,28 @@ type LinkAssetRequest struct {
 // LinkAsset привязывает заявку к оборудованию.
 func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	var req LinkAssetRequest
+	var req struct {
+		AssetID   string `json:"asset_id"`
+		AssetType string `json:"asset_type"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, http.StatusBadRequest, "Неверный формат запроса")
+		RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-
-	if req.AssetID == "" || req.AssetType == "" {
-		RespondWithError(w, http.StatusBadRequest, "AssetID и AssetType обязательны")
-		return
-	}
-
 	err := h.service.LinkToAsset(r.Context(), id, req.AssetID, req.AssetType)
 	if err != nil {
-		middleware.GetLogger(r.Context()).Error("Failed to link asset", "ticket_id", id, "error", err)
-		RespondWithError(w, http.StatusInternalServerError, "Ошибка привязки оборудования")
+		RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "linked"})
+}
 
-	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func getUserIDFromContext(r *http.Request) uint {
+	// Используем contextkeys
+	userIDStr, ok := r.Context().Value(contextkeys.UserIDContextKey).(string)
+	if !ok {
+		return 0
+	}
+	id, _ := strconv.ParseUint(userIDStr, 10, 32)
+	return uint(id)
 }

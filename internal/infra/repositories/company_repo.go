@@ -28,6 +28,8 @@ func (r *companyRepo) Create(ctx context.Context, entity *company.Company) error
 }
 
 func (r *companyRepo) Update(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class")
+
 	res := r.getDB(ctx).WithContext(ctx).Model(&company.Company{}).Where("id = ?", internalID).Updates(updateData)
 	if res.Error != nil {
 		var pgErr *pgconn.PgError
@@ -42,10 +44,6 @@ func (r *companyRepo) Update(ctx context.Context, internalID string, updateData 
 func (r *companyRepo) Delete(ctx context.Context, internalID string) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).Delete(&company.Company{})
 	if res.Error != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
-			return false, domain.ErrAlreadyExists
-		}
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil

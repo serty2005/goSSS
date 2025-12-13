@@ -137,7 +137,7 @@ func (m *mockMapper) DataToComment(data map[string]interface{}) (*tickets.Commen
 
 func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*company.Company, error) {
 	company := &company.Company{}
-	company.MetaClass = "ou$company"
+	// MetaClass удален
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
 	}
@@ -150,18 +150,13 @@ func (m *mockMapper) DataToCompany(ctx context.Context, mc *external.MapperConte
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
 		company.LastModifiedDate = utils.ParseServiceDeskTime(lmd)
 	}
-	if parent, ok := data["parent"].(map[string]interface{}); ok {
-		if parentUUID, p_ok := parent["UUID"].(string); p_ok {
-			// ВАЖНО: В режиме сидинга мы временно сохраняем внешний ID родителя в поле MetaClass
-			company.MetaClass = parentUUID
-		}
-	}
+	// TODO: Логику сохранения Parent UUID для Seeder-а нужно вынести из MetaClass.
+	// Seeder будет использовать Raw Data для построения дерева, а не MetaClass.
 	return company, nil
 }
 
 func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*server.Server, error) {
 	server := &server.Server{}
-	server.MetaClass = "objectBase$Server"
 	ownerExtID := getOwnerUUID(data)
 	server.OwnerID = &ownerExtID
 	rawUniqueID, _ := data["UniqueID"].(string)
@@ -203,7 +198,6 @@ func (m *mockMapper) DataToServer(ctx context.Context, mc *external.MapperContex
 
 func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*workstation.Workstation, error) {
 	ws := &workstation.Workstation{}
-	ws.MetaClass = "objectBase$Workstation"
 	ownerExtID := getOwnerUUID(data)
 	ws.OwnerID = &ownerExtID
 	if tv, ok := data["Teamviewer"].(string); ok {
@@ -229,7 +223,6 @@ func (m *mockMapper) DataToWorkstation(ctx context.Context, mc *external.MapperC
 
 func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*fiscal.FiscalRegister, error) {
 	fr := &fiscal.FiscalRegister{}
-	fr.MetaClass = "objectBase$FR"
 	ownerExtID := getOwnerUUID(data)
 	fr.OwnerID = &ownerExtID
 	if val, ok := data["ModelKKT"].(map[string]interface{}); ok {
@@ -289,7 +282,6 @@ func (m *mockMapper) DataToFiscalRegister(ctx context.Context, mc *external.Mapp
 
 func (m *mockMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*contract.Contract, error) {
 	contract := &contract.Contract{}
-	contract.MetaClass = "agreement$agreement"
 	if state, ok := data["state"].(string); ok {
 		contract.State = &state
 	}

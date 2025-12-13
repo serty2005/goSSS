@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/transport/http/dtos"
@@ -14,23 +15,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// ContextKey - тип для ключей контекста, чтобы избежать коллизий.
-type ContextKey string
-
-// Константы для ключей, используемых в context.Context
-const (
-	UserRolesContextKey ContextKey = "userRoles"
-	UserIDContextKey    ContextKey = "userID"
-	LoggerContextKey    ContextKey = "logger"
-)
-
 // LoggerInjector — это middleware, которое внедряет логгер с request-id в контекст запроса.
 func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestID := middleware.GetReqID(r.Context())
 			ctxLogger := baseLogger.With("request_id", requestID)
-			ctx := context.WithValue(r.Context(), LoggerContextKey, ctxLogger)
+			ctx := context.WithValue(r.Context(), contextkeys.LoggerContextKey, ctxLogger)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -38,7 +29,7 @@ func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.H
 
 // GetLogger извлекает логгер из контекста. Если логгер не найден, возвращает no-op логгер.
 func GetLogger(ctx context.Context) logger.LoggerInterface {
-	if l, ok := ctx.Value(LoggerContextKey).(logger.LoggerInterface); ok && l != nil {
+	if l, ok := ctx.Value(contextkeys.LoggerContextKey).(logger.LoggerInterface); ok && l != nil {
 		return l
 	}
 	// Возвращаем "пустой" логгер, чтобы избежать паники, если что-то пошло не так
@@ -89,7 +80,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
 				ctx := r.Context()
 				if sub, ok := claims["sub"].(string); ok {
-					ctx = context.WithValue(ctx, UserIDContextKey, sub)
+					ctx = context.WithValue(ctx, contextkeys.UserIDContextKey, sub)
 				} else {
 					RespondWithError(w, http.StatusUnauthorized, "Невалидный sub в токене")
 					return
@@ -101,7 +92,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 							rolesStr = append(rolesStr, role)
 						}
 					}
-					ctx = context.WithValue(ctx, UserRolesContextKey, rolesStr)
+					ctx = context.WithValue(ctx, contextkeys.UserRolesContextKey, rolesStr)
 				} else {
 					RespondWithError(w, http.StatusUnauthorized, "Невалидные roles в токене")
 					return
@@ -117,7 +108,7 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 // AdminRequiredMiddleware проверяет, есть ли у пользователя роль "admin".
 func AdminRequiredMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		roles, ok := r.Context().Value(UserRolesContextKey).([]string)
+		roles, ok := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
 		if !ok {
 			RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
 			return

@@ -16,13 +16,10 @@ type serverRepo struct {
 	db *gorm.DB
 }
 
-// NewServerRepo создает новый экземпляр репозитория.
 func NewServerRepo(db *gorm.DB) server.Repository {
 	return &serverRepo{db: db}
 }
 
-// dbOrTx возвращает DB из аргумента, из контекста или базовый.
-// Приоритет: Аргумент tx -> Контекст (Transactor) -> Базовый db.
 func (r *serverRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
 	if tx != nil {
 		return tx
@@ -31,10 +28,12 @@ func (r *serverRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
 }
 
 func (r *serverRepo) Create(ctx context.Context, tx *gorm.DB, s *server.Server) error {
+	// MetaClass удален
 	return r.dbOrTx(ctx, tx).WithContext(ctx).Create(s).Error
 }
 
 func (r *serverRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class") // Защита
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&server.Server{}).Where("id = ?", internalID).Updates(updateData)
 	if res.Error != nil {
 		var pgErr *pgconn.PgError

@@ -1,4 +1,3 @@
-// Файл: internal/app/app.go
 package app
 
 import (
@@ -13,6 +12,7 @@ import (
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/task"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/user" // <-- Новый импорт
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/db"
@@ -158,7 +158,6 @@ func (a *Application) Run() {
 	a.Logger.Info("Приложение успешно завершило работу.")
 }
 
-// SeedDBAndExit выполняет наполнение БД и завершает работу.
 func (a *Application) SeedDBAndExit() {
 	a.Logger.Info("Запуск в режиме наполнения базы данных (seeding)...")
 	mockClient := seeder.NewMockServiceDeskClient(a.Logger, "./tools/seeder/mock_data")
@@ -168,8 +167,6 @@ func (a *Application) SeedDBAndExit() {
 	a.Logger.Info("Наполнение базы данных успешно завершено. Программа завершает работу.")
 	os.Exit(0)
 }
-
-// --- Функции-строители для декомпозиции New() ---
 
 func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, error) {
 	database, err := db.NewConnection(cfg)
@@ -200,7 +197,7 @@ type Repositories struct {
 	FRRepo          fiscal.Repository
 	AgentRepo       repositories.AgentRepo
 	TaskRepo        repositories.TaskRepo
-	UserRepo        repositories.UserRepo
+	UserRepo        user.Repository // <-- Обновленный тип интерфейса
 	LinkRepo        repositories.LinkRepo
 }
 
@@ -214,7 +211,7 @@ func setupRepositories(db *gorm.DB) Repositories {
 		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
 		AgentRepo:       repositories.NewAgentRepo(db),
 		TaskRepo:        repositories.NewTaskRepo(db),
-		UserRepo:        repositories.NewUserRepo(db),
+		UserRepo:        infraRepos.NewUserRepo(db), // <-- infra реализация
 		LinkRepo:        repositories.NewLinkRepo(db),
 	}
 }
@@ -258,7 +255,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), transactor, app.DB),
 		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
 		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, clients.SDClient, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		ServerService:         serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
@@ -271,7 +268,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	reconciliationEngine := processing.NewReconciliationEngine(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, srvs.EntityMatcherService, app.Logger.With("component", "reconciliation_engine"))
 	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.TaskRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, reconciliationEngine, srvs.EntityMatcherService)
 	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
-	orchestrator.Start(context.Background()) // Оркестратор только подписывается, активной работы не ведет
+	orchestrator.Start(context.Background())
 
 	app.SDeskGateway = gateways.NewServiceDeskGateway(app.Config, clients.SDClient, app.EventBus, app.Logger.With("component", "sdesk_gateway"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
@@ -285,7 +282,6 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
-	// app.CrudHandler = handlers.NewCrudHandler(app.DB, repos.CompanyRepo, srvs.CompanyService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.ServerHandler = handlers.NewServerHandler(srvs.ServerService)
 	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService)
 	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService)
@@ -303,8 +299,6 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
 }
 
-// --- Функции-хелперы для Run() ---
-
 func (a *Application) setupRouter() *chi.Mux {
 	r := chi.NewRouter()
 
@@ -316,15 +310,11 @@ func (a *Application) setupRouter() *chi.Mux {
 		MaxAge:           300,
 	})
 	r.Use(corsMiddleware.Handler)
-	// Сначала RequestID, чтобы он был доступен для логгера
 	r.Use(chi_middleware.RequestID)
-	// Затем наш LoggerInjector
 	r.Use(middleware.LoggerInjector(a.Logger))
-	// Стандартные middleware от chi
 	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
 	r.Use(chi_middleware.Timeout(60 * time.Second))
 
-	// Публичные роуты
 	r.Route("/api/auth", func(r chi.Router) {
 		a.AuthHandler.RegisterRoutes(r)
 	})
@@ -333,7 +323,6 @@ func (a *Application) setupRouter() *chi.Mux {
 		a.AgentHandler.RegisterRoutes(r)
 	})
 
-	// Защищенная группа роутов для UI
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.JwtAuthMiddleware(a.Config))
 		a.CompanyHandler.RegisterRoutes(r)
@@ -344,10 +333,9 @@ func (a *Application) setupRouter() *chi.Mux {
 		a.TaskHandler.RegisterRoutes(r)
 		a.ServerActionsHandler.RegisterRoutes(r)
 		a.ContractHandler.RegisterRoutes(r)
-		a.SSEHandler.RegisterRoutes(r) // Server-Sent Events
+		a.SSEHandler.RegisterRoutes(r)
 
 		r.Route("/tickets", func(r chi.Router) {
-			// r.Use(middleware.AdminRequiredMiddleware)
 			a.TicketHandler.RegisterRoutes(r)
 		})
 
@@ -357,7 +345,6 @@ func (a *Application) setupRouter() *chi.Mux {
 		})
 	})
 
-	// Системные и отладочные роуты
 	r.Route("/sync", func(r chi.Router) {
 		a.SyncHandler.RegisterRoutes(r)
 	})
@@ -368,15 +355,7 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to Etalon Server"))
 	})
-	// --- СТАТИКА ДЛЯ ВЛОЖЕНИЙ ---
-	// Раздаем файлы из папки storage/tickets по URL /static/tickets/
 
-	// Создаем путь к папке с тикетами
-	// workDir, _ := os.Getwd()
-	// Важно: TicketStoragePath из конфига может быть относительным (./storage...),
-	// http.Dir требует чистого пути.
-
-	// Используем стандартный обработчик chi для статики
 	fileServer(r, "/static/tickets", http.Dir(a.Config.TicketStoragePath))
 
 	return r
@@ -392,28 +371,28 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.DuplicatesGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Шлюз поиска дубликатов отключен в конфигурации.")
+		a.Logger.Info("Шлюз поиска дубликатов отключен.")
 	}
 
 	if a.Config.EnableFRDiscrepancyFinder {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.FRUpdateFounder.Start(ctx) }()
 	} else {
-		a.Logger.Info("Воркер поиска обновлений для ФР (FRUpdateFounder) отключен в конфигурации.")
+		a.Logger.Info("Воркер поиска обновлений для ФР отключен.")
 	}
 
 	if a.Config.EnableAgentFTPGateway {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.AgentFTPGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Шлюз агентов (FTP) отключен в конфигурации.")
+		a.Logger.Info("Шлюз агентов (FTP) отключен.")
 	}
 
 	if a.Config.EnablePollingGateway {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.PollingGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Опрос статусов RMS-серверов отключен в конфигурации.")
+		a.Logger.Info("Опрос статусов RMS-серверов отключен.")
 	}
 
 	if a.Config.EnableSDeskGateway {
@@ -422,7 +401,7 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.TicketGateway.Start(ctx) }()
 	} else {
-		a.Logger.Info("Синхронизация сущностей с ServiceDesk отключена в конфигурации.")
+		a.Logger.Info("Синхронизация сущностей с ServiceDesk отключена.")
 	}
 	if a.Config.EnableContractGateway && a.ContractGateway != nil {
 		wg.Add(1)
@@ -432,12 +411,10 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.StatusActualityWorker.Start(ctx) }()
 	} else {
-		a.Logger.Info("Проверка актуальности статусов отключена в конфигурации.")
+		a.Logger.Info("Проверка актуальности статусов отключена.")
 	}
-
 }
 
-// Вспомогательная функция для статики в Chi
 func fileServer(r chi.Router, path string, root http.FileSystem) {
 	if strings.ContainsAny(path, "{}*") {
 		panic("FileServer does not permit any URL parameters")

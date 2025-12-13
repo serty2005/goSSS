@@ -33,29 +33,15 @@ const (
 	EntityTypeAgent          = "Agent"
 )
 
-// ReconciliationEngine отвечает за логику сверки данных агента с существующими сущностями,
-// определение владельцев, проверку конфликтов и создание задач.
 type ReconciliationEngine interface {
-	// DetermineOwner определяет владельца на основе данных агента (сервер, РС, ФР).
 	DetermineOwner(ctx context.Context, data *events.AgentDataPayload) (string, error)
-
-	// AreCompaniesRelated проверяет, связаны ли компании (родительские связи).
 	AreCompaniesRelated(owner1, owner2 string) bool
-
-	// CreateConflictTask создает задачу на конфликт (owner_mismatch, need_update и т.д.).
 	CreateConflictTask(ctx context.Context, conflictType string, etalonOwnerID string, data *api.AgentDataDTO, entities ...interface{}) *Action
-
-	// CompareEntityData сравнивает данные агента с сущностью и определяет необходимость обновления.
 	CompareEntityData(ctx context.Context, entityType string, agentData map[string]interface{}, entity interface{}) (bool, *Action)
-
-	// GetEnrichmentDataForEntity собирает полную информацию о сущности для записи в детали.
 	GetEnrichmentDataForEntity(ctx context.Context, entityType string, entityID string) (map[string]interface{}, error)
-
-	// CompareModelsForUpdate сравнивает две модели одного типа и возвращает map для обновления.
 	CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error)
 }
 
-// reconciliationEngineImpl реализация ReconciliationEngine.
 type reconciliationEngineImpl struct {
 	companyRepo     company.Repository
 	serverRepo      server.Repository
@@ -67,7 +53,6 @@ type reconciliationEngineImpl struct {
 	logger          logger.LoggerInterface
 }
 
-// NewReconciliationEngine создает новый экземпляр ReconciliationEngine.
 func NewReconciliationEngine(
 	companyRepo company.Repository,
 	serverRepo server.Repository,
@@ -282,7 +267,6 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 	detailsMap["agent_data"] = data
 
 	if etalonOwnerID != "" {
-		// ... (код заполнения owner_info без изменений) ...
 		etalonOwner, err := r.companyRepo.GetByID(ctx, etalonOwnerID)
 		if err == nil && etalonOwner != nil {
 			link, _ := r.linkRepo.GetByInternalID(ctx, nil, "naumen", etalonOwnerID)
@@ -306,7 +290,6 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 		}
 	}
 
-	// ... (код заполнения entity_X без изменений) ...
 	for i, entity := range entities {
 		var eID, eType string
 		switch e := entity.(type) {
@@ -553,6 +536,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 	return false, nil
 }
 
+// CompareModelsForUpdate сравнивает две модели одного типа и возвращает map для обновления.
 func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, current, new interface{}) (map[string]interface{}, error) {
 	switch entityType {
 	case "Company":
@@ -587,6 +571,69 @@ func (r *reconciliationEngineImpl) CompareModelsForUpdate(entityType string, cur
 	return nil, fmt.Errorf("неподдерживаемый тип для сравнения: %s", entityType)
 }
 
+// Вспомогательные функции для сравнения полей
+
+func compareAndLog[T comparable](updates map[string]interface{}, key string, current, new *T) {
+	isCurrentNil := current == nil || reflect.ValueOf(current).IsNil()
+	isNewNil := new == nil || reflect.ValueOf(new).IsNil()
+	if isCurrentNil && isNewNil {
+		return
+	}
+	if isCurrentNil != isNewNil || *current != *new {
+		updates[key] = new
+	}
+}
+
+func getCompanyDiff(current *company.Company, new *company.Company) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "title", current.Title, new.Title)
+	compareAndLog(updates, "address", current.Address, new.Address)
+	compareAndLog(updates, "additional_name", current.AdditionalName, new.AdditionalName)
+	compareAndLog(updates, "parent_id", current.ParentID, new.ParentID)
+
+	// Удалено сравнение MetaClass
+
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getServerDiff(current *server.Server, new *server.Server) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	compareAndLog(updates, "unique_id", current.UniqueID, new.UniqueID)
+	compareAndLog(updates, "rdp", current.RDP, new.RDP)
+	compareAndLog(updates, "server_version", current.ServerVersion, new.ServerVersion)
+
+	// Удалено сравнение MetaClass
+
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getWorkstationDiff(current *workstation.Workstation, new *workstation.Workstation) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	// Удалено сравнение MetaClass
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
+func getFiscalRegisterDiff(current *fiscal.FiscalRegister, new *fiscal.FiscalRegister) map[string]interface{} {
+	updates := make(map[string]interface{})
+	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
+	// Удалено сравнение MetaClass
+	if current.DeletedAt.Valid {
+		updates["deleted_at"] = gorm.Expr("NULL")
+	}
+	return updates
+}
+
 func compareAndSet(updates map[string]interface{}, key string, currentPtr *string, newVal interface{}) {
 	if newVal == nil {
 		return
@@ -616,65 +663,4 @@ func checkDateChanged(current *time.Time, newDateInterface interface{}) bool {
 		return true
 	}
 	return false
-}
-
-func compareAndLog[T comparable](updates map[string]interface{}, key string, current, new *T) {
-	isCurrentNil := current == nil || reflect.ValueOf(current).IsNil()
-	isNewNil := new == nil || reflect.ValueOf(new).IsNil()
-	if isCurrentNil && isNewNil {
-		return
-	}
-	if isCurrentNil != isNewNil || *current != *new {
-		updates[key] = new
-	}
-}
-
-func getCompanyDiff(current *company.Company, new *company.Company) map[string]interface{} {
-	updates := make(map[string]interface{})
-	compareAndLog(updates, "title", current.Title, new.Title)
-	compareAndLog(updates, "address", current.Address, new.Address)
-	compareAndLog(updates, "additional_name", current.AdditionalName, new.AdditionalName)
-	compareAndLog(updates, "parent_id", current.ParentID, new.ParentID)
-	if current.DeletedAt.Valid {
-		updates["deleted_at"] = gorm.Expr("NULL")
-	}
-	return updates
-}
-
-func getServerDiff(current *server.Server, new *server.Server) map[string]interface{} {
-	updates := make(map[string]interface{})
-	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
-	compareAndLog(updates, "unique_id", current.UniqueID, new.UniqueID)
-	compareAndLog(updates, "rdp", current.RDP, new.RDP)
-	compareAndLog(updates, "server_version", current.ServerVersion, new.ServerVersion)
-	if current.DeletedAt.Valid {
-		updates["deleted_at"] = gorm.Expr("NULL")
-	}
-	return updates
-}
-
-func getWorkstationDiff(current *workstation.Workstation, new *workstation.Workstation) map[string]interface{} {
-	updates := make(map[string]interface{})
-	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
-	if current.DeletedAt.Valid {
-		updates["deleted_at"] = gorm.Expr("NULL")
-	}
-	return updates
-}
-
-func getFiscalRegisterDiff(current *fiscal.FiscalRegister, new *fiscal.FiscalRegister) map[string]interface{} {
-	updates := make(map[string]interface{})
-	compareAndLog(updates, "owner_id", current.OwnerID, new.OwnerID)
-	if current.DeletedAt.Valid {
-		updates["deleted_at"] = gorm.Expr("NULL")
-	}
-	return updates
-}
-
-func getMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }

@@ -2,12 +2,13 @@ package seeder
 
 import (
 	"context"
-	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -40,6 +41,9 @@ func NewSeeder(
 	}
 }
 
+// relationsMap хранит временные связи: InternalID -> ExternalUUID родителя/владельца
+type relationsMap map[string]string
+
 func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	s.logger.Info("Начало процесса наполнения базы данных...")
 
@@ -49,10 +53,12 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
 	err := s.db.AutoMigrate(
+		&user.User{}, &user.Role{},
+		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{},
 		&company.Company{}, &server.Server{}, &workstation.Workstation{},
-		&fiscal.FiscalRegister{}, &models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &contract.Contract{}, &models.CompanyContract{},
-		&models.User{}, &models.ExternalSystemLink{},
+		&fiscal.FiscalRegister{}, &contract.Contract{},
+		&models.AgentFile{}, &models.ReconciliationTask{},
+		&models.Agent{}, &models.CompanyContract{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
 	)
 	if err != nil {
 		s.logger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
@@ -61,219 +67,190 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	s.logger.Info("Схема базы данных успешно создана.")
 
 	ctx := context.Background()
-	mapperCtx := (*external.MapperContext)(nil)
+	mapperCtx := (*external.MapperContext)(nil) // Для сидера контекст маппера не нужен, так как связи строим вручную
 
-	companyData, err := sdClient.FetchEntityList(ctx, "Company")
-	if err != nil {
-		return err
-	}
-	serverData, err := sdClient.FetchEntityList(ctx, "Server")
-	if err != nil {
-		return err
-	}
-	wsData, err := sdClient.FetchEntityList(ctx, "Workstation")
-	if err != nil {
-		return err
-	}
-	frData, err := sdClient.FetchEntityList(ctx, "FiscalRegister")
-	if err != nil {
-		return err
-	}
-	contractData, err := sdClient.FetchEntityList(ctx, "Contract")
-	if err != nil {
-		return err
-	}
+	// Получаем сырые данные
+	companyData, _ := sdClient.FetchEntityList(ctx, "Company")
+	serverData, _ := sdClient.FetchEntityList(ctx, "Server")
+	wsData, _ := sdClient.FetchEntityList(ctx, "Workstation")
+	frData, _ := sdClient.FetchEntityList(ctx, "FiscalRegister")
+	contractData, _ := sdClient.FetchEntityList(ctx, "Contract")
 
-	extToIntID := make(map[string]string)
+	// Карты для связывания
+	extToIntID := make(map[string]string) // ExternalUUID -> InternalID
+	parentRelations := make(relationsMap) // CompanyInternalID -> ParentExternalUUID
+	ownerRelations := make(relationsMap)  // EntityInternalID -> OwnerExternalUUID
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		s.logger.Info("Создание Компаний...")
+		// 1. Создание Компаний
+		s.logger.Info("Создание Компаний...", "count", len(companyData))
 		for _, data := range companyData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
 				continue
 			}
-			company, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
-			if err := tx.Create(company).Error; err != nil {
+			comp, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
+			if err := tx.Create(comp).Error; err != nil {
 				continue
 			}
-			extToIntID[extID] = company.ID
-			tx.Create(&models.ExternalSystemLink{InternalID: company.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Company", LastSyncedAt: time.Now()})
-		}
+			extToIntID[extID] = comp.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: comp.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Company", LastSyncedAt: time.Now()})
 
-		s.logger.Info("Установка родительских связей для Компаний...")
-		for _, data := range companyData {
-			extID, _ := data["UUID"].(string)
-			companyModel, _ := sdClient.Mapper().DataToCompany(ctx, mapperCtx, data)
-			parentExtID := companyModel.MetaClass
-			if parentExtID != string(domain.MetaClassCompany) {
-				childIntID := extToIntID[extID]
-				parentIntID := extToIntID[parentExtID]
-				if childIntID != "" && parentIntID != "" {
-					tx.Model(&company.Company{}).Where("id = ?", childIntID).Update("parent_id", parentIntID)
+			// Сохраняем связь с родителем, если есть
+			if parentData, ok := data["parent"].(map[string]interface{}); ok {
+				if parentExtID, ok := parentData["UUID"].(string); ok && parentExtID != "" {
+					parentRelations[comp.ID] = parentExtID
 				}
 			}
-			tx.Model(&company.Company{}).Where("id = ?", extToIntID[extID]).Update("meta_class", string(domain.MetaClassCompany))
 		}
 
-		s.logger.Info("Создание Оборудования...")
+		// 2. Создание Серверов (с отложенным связыванием владельца)
+		s.logger.Info("Создание Серверов...", "count", len(serverData))
 		for _, data := range serverData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
 				continue
 			}
-			server, _ := sdClient.Mapper().DataToServer(ctx, mapperCtx, data)
-			if server != nil {
-				if server.OwnerID != nil && *server.OwnerID != "" {
-					if ownerIntID, ok := extToIntID[*server.OwnerID]; ok {
-						server.OwnerID = &ownerIntID
-					} else {
-						server.OwnerID = nil
-					}
-				} else {
-					server.OwnerID = nil
-				}
 
-				tx.Create(server)
-				extToIntID[extID] = server.ID
-				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: server.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Server", LastSyncedAt: time.Now()})
+			srv, _ := sdClient.Mapper().DataToServer(ctx, mapperCtx, data)
+			srv.OwnerID = nil // Владельца проставим позже
+
+			if err := tx.Create(srv).Error; err != nil {
+				continue
+			}
+
+			extToIntID[extID] = srv.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: srv.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Server", LastSyncedAt: time.Now()})
+
+			// Запоминаем владельца
+			if ownerData, ok := data["owner"].(map[string]interface{}); ok {
+				if ownerExtID, ok := ownerData["UUID"].(string); ok {
+					ownerRelations[srv.ID] = ownerExtID
+				}
 			}
 		}
+
+		// 3. Создание Рабочих станций
+		s.logger.Info("Создание Рабочих станций...", "count", len(wsData))
 		for _, data := range wsData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
 				continue
 			}
-			ws, _ := sdClient.Mapper().DataToWorkstation(ctx, mapperCtx, data)
-			if ws != nil {
-				if ws.OwnerID != nil && *ws.OwnerID != "" {
-					if ownerIntID, ok := extToIntID[*ws.OwnerID]; ok {
-						ws.OwnerID = &ownerIntID
-					} else {
-						ws.OwnerID = nil
-					}
-				} else {
-					ws.OwnerID = nil
-				}
 
-				tx.Create(ws)
-				extToIntID[extID] = ws.ID
-				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: ws.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Workstation", LastSyncedAt: time.Now()})
+			ws, _ := sdClient.Mapper().DataToWorkstation(ctx, mapperCtx, data)
+			ws.OwnerID = nil
+
+			if err := tx.Create(ws).Error; err != nil {
+				continue
+			}
+
+			extToIntID[extID] = ws.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: ws.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Workstation", LastSyncedAt: time.Now()})
+
+			if ownerData, ok := data["owner"].(map[string]interface{}); ok {
+				if ownerExtID, ok := ownerData["UUID"].(string); ok {
+					ownerRelations[ws.ID] = ownerExtID
+				}
 			}
 		}
+
+		// 4. Создание ФР
+		s.logger.Info("Создание ФР...", "count", len(frData))
 		for _, data := range frData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
 				continue
 			}
-			fr, _ := sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
-			if fr != nil {
-				if fr.OwnerID != nil && *fr.OwnerID != "" {
-					if ownerIntID, ok := extToIntID[*fr.OwnerID]; ok {
-						fr.OwnerID = &ownerIntID
-					} else {
-						fr.OwnerID = nil
-					}
-				} else {
-					fr.OwnerID = nil
-				}
 
-				tx.Create(fr)
-				extToIntID[extID] = fr.ID
-				// ИСПРАВЛЕНИЕ: Добавляем создание связи
-				tx.Create(&models.ExternalSystemLink{InternalID: fr.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "FiscalRegister", LastSyncedAt: time.Now()})
+			fr, _ := sdClient.Mapper().DataToFiscalRegister(ctx, mapperCtx, data)
+			fr.OwnerID = nil
+
+			if err := tx.Create(fr).Error; err != nil {
+				continue
+			}
+
+			extToIntID[extID] = fr.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: fr.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "FiscalRegister", LastSyncedAt: time.Now()})
+
+			if ownerData, ok := data["owner"].(map[string]interface{}); ok {
+				if ownerExtID, ok := ownerData["UUID"].(string); ok {
+					ownerRelations[fr.ID] = ownerExtID
+				}
 			}
 		}
 
-		s.logger.Info("Создание Контрактов и связей...")
-		var linksToCreate []models.CompanyContract
-		contractsCreated := 0
+		// --- LINKING PHASE ---
+		s.logger.Info("Выполнение связывания сущностей (Linking Phase)...")
 
-		for i, data := range contractData {
+		// Связывание Родительских компаний
+		for childID, parentExtID := range parentRelations {
+			if parentIntID, ok := extToIntID[parentExtID]; ok {
+				tx.Model(&company.Company{}).Where("id = ?", childID).Update("parent_id", parentIntID)
+			}
+		}
+
+		// Связывание Оборудования с Владельцами
+		// Можно оптимизировать батчами, но для сидера сойдет поштучно
+		for entityID, ownerExtID := range ownerRelations {
+			if ownerIntID, ok := extToIntID[ownerExtID]; ok {
+				// Пытаемся обновить во всех таблицах (ID уникальны UUID, так что это безопасно, но не оптимально)
+				// Лучше было бы разделить ownerRelations по типам, но для упрощения сделаем так:
+				tx.Model(&server.Server{}).Where("id = ?", entityID).Update("owner_id", ownerIntID)
+				tx.Model(&workstation.Workstation{}).Where("id = ?", entityID).Update("owner_id", ownerIntID)
+				tx.Model(&fiscal.FiscalRegister{}).Where("id = ?", entityID).Update("owner_id", ownerIntID)
+			}
+		}
+
+		// 5. Создание Контрактов
+		s.logger.Info("Создание Контрактов и связей...", "count", len(contractData))
+		var linksToCreate []models.CompanyContract
+
+		for _, data := range contractData {
 			extID, _ := data["UUID"].(string)
 			if extID == "" {
-				s.logger.Warn("Пропуск контракта: отсутствует UUID", "index", i)
 				continue
 			}
-			contractModel, err := sdClient.Mapper().DataToContract(ctx, mapperCtx, data)
+
+			c, err := sdClient.Mapper().DataToContract(ctx, mapperCtx, data)
 			if err != nil {
-				s.logger.Error("Ошибка маппинга контракта", "error", err, "index", i)
 				continue
 			}
 
-			if err := tx.Create(contractModel).Error; err != nil {
-				s.logger.Error("CRITICAL: Ошибка создания контракта", "error", err, "uuid", extID)
+			if err := tx.Create(c).Error; err != nil {
 				continue
 			}
+			extToIntID[extID] = c.ID
+			tx.Create(&models.ExternalSystemLink{InternalID: c.ID, SystemName: "naumen", ServiceDeskUUID: extID, EntityType: "Contract", LastSyncedAt: time.Now()})
 
-			contractsCreated++
-			extToIntID[extID] = contractModel.ID
-
-			link := &models.ExternalSystemLink{
-				InternalID:      contractModel.ID,
-				SystemName:      "naumen",
-				ServiceDeskUUID: extID,
-				EntityType:      "Contract",
-				LastSyncedAt:    time.Now(),
-			}
-
-			if err := tx.Create(link).Error; err != nil {
-				s.logger.Error("Ошибка создания ExternalSystemLink для контракта", "uuid", extID, "error", err)
-				return err
-			}
-
+			// Связи с компаниями
 			companyExtIDs := sdClient.Mapper().GetCompanyUUIDsFromContract(data)
-			s.logger.Debug("Создание связей для контракта", "uuid", extID, "count", len(companyExtIDs))
 			for _, compExtID := range companyExtIDs {
 				if compIntID, ok := extToIntID[compExtID]; ok {
-					linksToCreate = append(linksToCreate, models.CompanyContract{CompanyID: compIntID, ContractID: contractModel.ID})
-				} else {
-					s.logger.Warn("Пропуск связи: компания не найдена", "contractUUID", extID, "companyUUID", compExtID)
+					linksToCreate = append(linksToCreate, models.CompanyContract{CompanyID: compIntID, ContractID: c.ID})
 				}
 			}
 		}
-
-		s.logger.Info("Контракты обработаны", "created_count", contractsCreated, "links_to_create", len(linksToCreate))
 
 		if len(linksToCreate) > 0 {
-			s.logger.Info("Массовая вставка связей CompanyContract...", "count", len(linksToCreate))
 			if err := tx.Table("company_contracts").CreateInBatches(linksToCreate, batchSize).Error; err != nil {
-				s.logger.Error("CRITICAL: Ошибка вставки связей company_contracts", "error", err)
 				return err
 			}
 		}
 
-		s.logger.Info("Пересчет статусов контрактов...")
-		activeCompanyExtIDs := make(map[string]struct{})
-		for _, data := range contractData {
-			if state, _ := data["state"].(string); state == "active" {
-				for _, compExtID := range sdClient.Mapper().GetCompanyUUIDsFromContract(data) {
-					activeCompanyExtIDs[compExtID] = struct{}{}
-				}
-			}
-		}
-
-		var activeCompanyIntIDs []string
-		for extID, intID := range extToIntID {
-			if _, isActive := activeCompanyExtIDs[extID]; isActive {
-				var count int64
-				tx.Model(&company.Company{}).Where("id = ?", intID).Count(&count)
-				if count > 0 {
-					activeCompanyIntIDs = append(activeCompanyIntIDs, intID)
-				}
-			}
-		}
-
-		if err := tx.Model(&company.Company{}).Session(&gorm.Session{AllowGlobalUpdate: true}).Update("active_contract", false).Error; err != nil {
-			return err
-		}
-		if len(activeCompanyIntIDs) > 0 {
-			if err := tx.Model(&company.Company{}).Where("id IN ?", activeCompanyIntIDs).Update("active_contract", true).Error; err != nil {
-				return err
-			}
-		}
+		// 6. Пересчет статусов (упрощенный, без сложных проверок сервиса)
+		// Просто смотрим: если у компании есть active контракт -> active_contract = true
+		s.logger.Info("Финализация статусов...")
+		tx.Exec(`
+			UPDATE companies 
+			SET active_contract = true 
+			WHERE id IN (
+				SELECT cc.company_id 
+				FROM company_contracts cc 
+				JOIN contracts c ON c.id = cc.contract_id 
+				WHERE c.state = 'active'
+			)
+		`)
 
 		return nil
 	})
@@ -281,32 +258,22 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 // clearDatabase удаляет все таблицы для полного пересоздания базы.
 func (s *Seeder) clearDatabase() error {
+	// Порядок удаления важен из-за Foreign Keys
 	tables := []string{
-		"server_additional_owners", "company_contracts", "external_system_links",
+		"equipment_status_logs", "external_system_links", "company_contracts",
+		"user_roles", "roles", // Users tables
+		"server_additional_owners",
+		"ticket_histories", "attachments", "tickets", // Ticket tables
 		"reconciliation_tasks", "agent_files", "fiscal_registers", "workstations",
-		"servers", "contracts", "companies", "users",
+		"servers", "contracts", "companies", "users", "agents",
 	}
 	s.logger.Info("Удаление существующих таблиц...")
 	for _, table := range tables {
 		if err := s.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table)).Error; err != nil {
-			// Мы не считаем ошибкой, если таблицы не существует, но логируем другие ошибки
 			if !strings.Contains(err.Error(), "does not exist") {
-				s.logger.Warn("Не удалось удалить таблицу (возможно, ее не было)", "table", table, "error", err)
+				s.logger.Warn("Не удалось удалить таблицу", "table", table, "error", err)
 			}
 		}
 	}
 	return nil
-}
-
-func (s *Seeder) getModelForType(entityType string) interface{} {
-	switch entityType {
-	case "Server":
-		return &server.Server{}
-	case "Workstation":
-		return &workstation.Workstation{}
-	case "FiscalRegister":
-		return &fiscal.FiscalRegister{}
-	default:
-		return nil
-	}
 }

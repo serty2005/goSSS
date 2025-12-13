@@ -17,21 +17,21 @@ type contractRepo struct {
 	db *gorm.DB
 }
 
-// NewContractRepo создает новый экземпляр репозитория.
 func NewContractRepo(db *gorm.DB) contract.Repository {
 	return &contractRepo{db: db}
 }
 
-// getDB извлекает транзакцию из контекста или возвращает базовый DB.
 func (r *contractRepo) getDB(ctx context.Context) *gorm.DB {
 	return infraDB.ExtractDB(ctx, r.db)
 }
 
 func (r *contractRepo) Create(ctx context.Context, c *contract.Contract) error {
+	// MetaClass удален
 	return r.getDB(ctx).WithContext(ctx).Create(c).Error
 }
 
 func (r *contractRepo) Update(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class")
 	res := r.getDB(ctx).WithContext(ctx).Model(&contract.Contract{}).Where("id = ?", internalID).Updates(updateData)
 	if res.Error != nil {
 		var pgErr *pgconn.PgError

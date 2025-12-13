@@ -27,10 +27,12 @@ func (r *frRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
 }
 
 func (r *frRepo) Create(ctx context.Context, tx *gorm.DB, fr *fiscal.FiscalRegister) error {
+	// MetaClass удален
 	return r.dbOrTx(ctx, tx).WithContext(ctx).Create(fr).Error
 }
 
 func (r *frRepo) Update(ctx context.Context, tx *gorm.DB, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class")
 	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&fiscal.FiscalRegister{}).Where("id = ?", internalID).Updates(updateData)
 	if res.Error != nil {
 		var pgErr *pgconn.PgError

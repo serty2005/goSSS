@@ -7,7 +7,6 @@ import (
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
 )
 
@@ -82,28 +81,4 @@ type ReconciliationTask struct {
 	Comment    string         `gorm:"type:text"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
-}
-
-type User struct {
-	ID           uint           `gorm:"primarykey"`
-	Username     string         `gorm:"type:varchar(100);uniqueIndex;not null"`
-	PasswordHash string         `gorm:"type:text;not null"`
-	FullName     string         `gorm:"type:text"`
-	Roles        datatypes.JSON `gorm:"type:jsonb"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-func (u *User) HashPassword(password string) error {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
-	if err != nil {
-		return err
-	}
-	u.PasswordHash = string(bytes)
-	return nil
-}
-
-func (u *User) CheckPassword(password string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password))
-	return err == nil
 }

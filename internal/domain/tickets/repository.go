@@ -7,39 +7,34 @@ import (
 // TicketFilter содержит параметры для поиска заявок.
 type TicketFilter struct {
 	CompanyID   string   // Фильтр по компании
-	AssetID     *string  // Фильтр по конкретному оборудованию
-	AssetType   *string  // Фильтр по типу оборудования
-	Statuses    []string // Список статусов для выборки
-	SearchQuery string   // Полнотекстовый поиск (по номеру или статусу)
+	AssetID     *string  // Фильтр по оборудованию
+	Statuses    []string // Список статусов
+	AssigneeID  *uint    // Фильтр по исполнителю
+	ReporterID  *uint    // Фильтр по автору
+	SearchQuery string   // Полнотекстовый поиск
 	Limit       int
 	Offset      int
-	SortBy      string // Поле для сортировки
+	SortBy      string
 }
 
 // TicketRepository определяет методы для работы с хранилищем заявок.
 type TicketRepository interface {
-	// Upsert создает заявку, если её нет (по ServiceDeskUUID), или обновляет существующую.
-	// Возвращает обновленную модель.
-	Upsert(ctx context.Context, ticket *Ticket) error
-
-	// GetByID возвращает заявку по внутреннему ID.
+	// Основные операции
+	Create(ctx context.Context, ticket *Ticket) error
+	Update(ctx context.Context, ticket *Ticket) error
 	GetByID(ctx context.Context, id string) (*Ticket, error)
-
-	// GetByNumber возвращает заявку по номеру.
 	GetByNumber(ctx context.Context, number int) (*Ticket, error)
-
-	// GetByServiceDeskUUID возвращает заявку по внешнему UUID (ServiceDesk).
 	GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*Ticket, error)
 
-	// Find ищет заявки по фильтру.
 	Find(ctx context.Context, filter TicketFilter) ([]Ticket, error)
-
-	// Count возвращает количество заявок, соответствующих фильтру (для пагинации).
 	Count(ctx context.Context, filter TicketFilter) (int64, error)
 
-	// AssociateAsset привязывает заявку к оборудованию (обновляет AssetID/AssetType).
-	AssociateAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
+	// История и Вложения
+	AddHistory(ctx context.Context, history *TicketHistory) error
+	GetHistory(ctx context.Context, ticketID string) ([]TicketHistory, error)
 
-	// GetActive возвращает список всех заявок, которые локально не находятся в конечных статусах (closed, resolved).
-	GetActive(ctx context.Context) ([]Ticket, error)
+	AddAttachment(ctx context.Context, attachment *Attachment) error
+	GetAttachments(ctx context.Context, ticketID string) ([]Attachment, error)
+
+	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

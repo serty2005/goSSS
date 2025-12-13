@@ -444,7 +444,7 @@ func newNaumenMapper(db *gorm.DB, linkRepo repositories.LinkRepo, logger logger.
 // DataToCompany преобразует мапу от Naumen в модель Company.
 func (m *naumenMapper) DataToCompany(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*company.Company, error) {
 	company := &company.Company{}
-	company.MetaClass = string(domain.MetaClassCompany)
+	// MetaClass удален из модели, больше не присваиваем.
 
 	if title, ok := data["title"].(string); ok {
 		company.Title = &title
@@ -503,7 +503,6 @@ func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperCont
 		return nil, fmt.Errorf("сервер (ext: %s): %w", externalUUID, err)
 	}
 	server := &server.Server{OwnerID: &ownerInternalID}
-	server.MetaClass = string(domain.MetaClassServer)
 
 	rawUniqueID, _ := data["UniqueID"].(string)
 	rawTeamviewer, _ := data["Teamviewer"].(string)
@@ -570,7 +569,6 @@ func (m *naumenMapper) DataToWorkstation(ctx context.Context, mc *external.Mappe
 		return nil, fmt.Errorf("рабочая станция (ext: %s): %w", externalUUID, err)
 	}
 	ws := &workstation.Workstation{OwnerID: &ownerInternalID}
-	ws.MetaClass = string(domain.MetaClassWorkstation)
 	if tv, ok := data["Teamviewer"].(string); ok {
 		ws.Teamviewer = validators.ValidateRemoteAccessID(tv)
 	}
@@ -598,7 +596,6 @@ func (m *naumenMapper) DataToFiscalRegister(ctx context.Context, mc *external.Ma
 		return nil, fmt.Errorf("фискальный регистратор (ext: %s): %w", externalUUID, err)
 	}
 	fr := &fiscal.FiscalRegister{OwnerID: &ownerInternalID}
-	fr.MetaClass = string(domain.MetaClassFR)
 
 	if val, ok := data["ModelKKT"].(map[string]interface{}); ok {
 		if title, ok2 := val["title"].(string); ok2 {
@@ -658,7 +655,6 @@ var innRegex = regexp.MustCompile(`ИНН:\s*(\d{10,12})`)
 // DataToContract преобразует мапу от Naumen в модель Contract.
 func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*contract.Contract, error) {
 	c := &contract.Contract{}
-	c.MetaClass = string(domain.MetaClassAgreement)
 
 	if state, ok := data["state"].(string); ok {
 		c.State = &state
@@ -715,7 +711,6 @@ func (m *naumenMapper) DataToContract(ctx context.Context, mc *external.MapperCo
 // DataToTicket преобразует данные из Naumen в модель Ticket.
 func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperContext, data map[string]interface{}) (*tickets.Ticket, error) {
 	ticket := &tickets.Ticket{}
-	ticket.MetaClass = string(domain.MetaClassServiceCall)
 
 	// Обязательные поля
 	if uuid, ok := data["UUID"].(string); ok {
@@ -724,7 +719,7 @@ func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperCont
 		return nil, fmt.Errorf("missing UUID in ticket data")
 	}
 
-	// Номер заявки (number может приходить как float64 из json.Unmarshal)
+	// Номер заявки
 	if num, ok := data["number"].(float64); ok {
 		ticket.Number = int(num)
 	} else if num, ok := data["number"].(int); ok {
@@ -737,46 +732,37 @@ func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperCont
 
 	if description, ok := data["descriptionRTF"].(string); ok {
 		ticket.Subject = utils.StripHTML(description)
+		// В новой модели Description хранит HTML описание
+		ticket.Description = description
 	}
 
-	// Naumen может возвращать объект или строку.
-	if lastComment, ok := data["lastComment"].(map[string]interface{}); ok {
-		// Пытаемся достать текст, если он там есть (обычно там title или plainText)
-		if text, ok := lastComment["title"].(string); ok {
-			ticket.LastComment = text
-		}
-	} else if lastCommentStr, ok := data["lastComment"].(string); ok {
-		ticket.LastComment = lastCommentStr
-	}
+	// LastComment больше нет в модели Ticket. Игнорируем или добавляем логику истории,
+	// но здесь это переусложнит маппер. Просто пропускаем.
 
-	// Даты
+	// Даты -> мапим в CreatedAt / UpdatedAt
 	if reqDate, ok := data["requestDate"].(string); ok {
 		if t := utils.ParseServiceDeskTime(reqDate); t != nil {
-			ticket.RequestDate = *t
+			ticket.CreatedAt = *t
 		}
 	}
 	if lmd, ok := data["lastModifiedDate"].(string); ok {
 		if t := utils.ParseServiceDeskTime(lmd); t != nil {
-			ticket.LastModifiedDate = *t
+			ticket.UpdatedAt = *t
 		}
 	}
 
-	// Связь с компанией (clientOU)
+	// Связи
 	if clientOU, ok := data["clientOU"].(map[string]interface{}); ok {
 		if ouUUID, ok := clientOU["UUID"].(string); ok {
-			// Ищем внутренний ID компании через LinkRepo
 			internalID, err := mc.LinkRepo.FindInternalIDByExternalID(ctx, mc.DB, "naumen", ouUUID)
 			if err == nil && internalID != "" {
 				ticket.CompanyID = internalID
 			} else {
-				// Если компания не найдена, заявка остается "сиротой" или требует ручной привязки.
-				// Логируем это как Warning, но не прерываем маппинг.
 				mc.Logger.Warn("Ticket linked to unknown company", "ticket_uuid", ticket.ServiceDeskUUID, "company_uuid", ouUUID)
 			}
 		}
 	}
 
-	// Связь с контрактом (agreement)
 	if agr, ok := data["agreement"].(map[string]interface{}); ok {
 		if agrUUID, ok := agr["UUID"].(string); ok {
 			internalID, err := mc.LinkRepo.FindInternalIDByExternalID(ctx, mc.DB, "naumen", agrUUID)

@@ -131,6 +131,30 @@ type TicketListDTO struct {
 	CompanyID        string    `json:"company_id"`
 }
 
+// --- DTO для операций с тикетами ---
+
+// TicketAssignDTO - запрос на назначение исполнителя.
+type TicketAssignDTO struct {
+	AssigneeID *uint `json:"assignee_id"` // null, чтобы снять исполнителя
+}
+
+// TicketStatusChangeDTO - запрос на смену статуса.
+type TicketStatusChangeDTO struct {
+	Status  string `json:"status" validate:"required"`
+	Comment string `json:"comment"` // Опциональный комментарий при смене статуса
+}
+
+// TicketCreateInternalDTO - создание тикета вручную (через API).
+type TicketCreateInternalDTO struct {
+	Subject     string  `json:"subject" validate:"required"`
+	Description string  `json:"description"`
+	Priority    string  `json:"priority"` // low, medium, high, critical
+	Type        string  `json:"type"`     // incident, service_request
+	CompanyID   string  `json:"company_id" validate:"required"`
+	AssetID     *string `json:"asset_id"`
+	AssetType   *string `json:"asset_type"`
+}
+
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
 func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	// Сначала парсим JSON в map для доступа к сырым значениям
