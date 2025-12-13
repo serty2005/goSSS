@@ -15,6 +15,7 @@ import {
   SunOutlined,
   MoonOutlined
 } from '@ant-design/icons';
+import HeaderSearch from '@/components/common/HeaderSearch';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 
@@ -114,11 +115,11 @@ const MainLayout: React.FC = () => {
       <Layout>
         <Header style={{ 
           padding: '0 24px', 
-          background: token.colorBgContainer, // Прозрачность задана в теме
+          background: token.colorBgContainer,
           backdropFilter: 'blur(10px)',
           display: 'flex', 
           alignItems: 'center', 
-          justifyContent: 'space-between',
+          justifyContent: 'space-between', // Важно: разносим элементы
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
           position: 'sticky',
           top: 0,
@@ -131,10 +132,10 @@ const MainLayout: React.FC = () => {
               onClick={() => setCollapsed(!collapsed)}
               style={{ fontSize: '16px', width: 64, height: 64 }}
             />
-            <Text strong style={{ fontSize: 18, marginLeft: 16 }}>
-              {/* Заголовок страницы можно сделать динамическим позже */}
-              Dashboard
-            </Text>
+          </div>
+          {/* ЦЕНТР: Глобальный поиск */}
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+             <HeaderSearch />
           </div>
 
           <Space size="middle">

@@ -7,6 +7,8 @@ import ruRU from 'antd/locale/ru_RU';
 import MainLayout from '@/components/layout/MainLayout';
 import LoginPage from '@/pages/auth/LoginPage';
 import Dashboard from '@/pages/Dashboard';
+import SearchPage from '@/pages/SearchPage';
+import TasksPage from '@/pages/TasksPage';
 
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
@@ -58,7 +60,8 @@ const App: React.FC = () => {
             }>
               {/* Вложенные роуты внутри MainLayout */}
               <Route index element={<Dashboard />} />
-              <Route path="tasks" element={<div>Задачи</div>} />
+              <Route path="search" element={<SearchPage />} />
+              <Route path="tasks" element={<TasksPage />} />
               <Route path="tickets" element={<div>Тикеты</div>} />
               <Route path="companies" element={<div>Компании</div>} />
               <Route path="servers" element={<div>Серверы</div>} />
