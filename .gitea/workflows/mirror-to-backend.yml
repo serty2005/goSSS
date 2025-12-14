@@ -1,0 +1,46 @@
+name: Mirror frontend to backend repo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 2222 10.25.100.250 >> ~/.ssh/known_hosts
+
+      - name: Clone backend monorepo
+        run: |
+          git clone ssh://git@10.25.100.250:2222/serty/goSSS.git
+          cd goSSS
+          git checkout main
+          git config user.name "gitea-ci-bot"
+          git config user.email "gitea-ci-bot@serty.top"
+
+      - name: Add frontend remote
+        run: |
+          cd goSSS
+          git remote add front ssh://git@10.25.100.250:2222/serty/goSSS-front.git
+
+      - name: Subtree pull frontend
+        run: |
+          cd goSSS
+          git fetch front main
+          git subtree pull \
+            --prefix=front-ui \
+            front main \
+            --squash \
+            -m "Merge frontend changes"
+
+      - name: Push to backend repo
+        run: |
+          cd goSSS
+          git push origin main
