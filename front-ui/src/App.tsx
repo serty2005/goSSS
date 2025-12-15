@@ -11,6 +11,11 @@ import SearchPage from '@/pages/SearchPage';
 import TasksPage from '@/pages/TasksPage';
 import CompanyPage from '@/pages/companies/CompanyPage';
 
+// Импорт детальных страниц
+import ServerDetails from '@/pages/equipment/ServerDetails';
+import FiscalDetails from '@/pages/equipment/FiscalDetails';
+import WorkstationDetails from '@/pages/equipment/WorkstationDetails';
+
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { getThemeConfig } from '@/theme/themeConfig';
@@ -37,9 +42,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 const App: React.FC = () => {
   const themeMode = useUiStore((state) => state.themeMode);
   
-  // Обновляем логику фона: синхронизируем с themeConfig
   useEffect(() => {
-    // #000000 для темной, #f0f2f5 для светлой
     const colorBgLayout = themeMode === 'dark' ? '#000000' : '#f0f2f5';
     document.body.style.backgroundColor = colorBgLayout;
   }, [themeMode]);
@@ -69,13 +72,13 @@ const App: React.FC = () => {
               
               {/* Роуты для оборудования */}
               <Route path="servers" element={<div>Список серверов</div>} />
-              <Route path="servers/:id" element={<div>Детали сервера (в разработке)</div>} />
+              <Route path="servers/:id" element={<ServerDetails />} />
               
               <Route path="workstations" element={<div>Список РС</div>} />
-              <Route path="workstations/:id" element={<div>Детали РС (в разработке)</div>} />
+              <Route path="workstations/:id" element={<WorkstationDetails />} />
               
               <Route path="fiscals" element={<div>Список ФР</div>} />
-              <Route path="fiscals/:id" element={<div>Детали ФР (в разработке)</div>} />
+              <Route path="fiscals/:id" element={<FiscalDetails />} />
               
               <Route path="admin" element={<div>Админка</div>} />
             </Route>
