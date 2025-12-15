@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, Modal, Form, Input, message } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, Modal, Form, Input, message, Table } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
-import { UpdateFiscalDTO } from '@/types/api';
+import { UpdateFiscalPayload } from '@/types/api';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -25,7 +25,7 @@ const FiscalDetails: React.FC = () => {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (values: UpdateFiscalDTO) => equipmentApi.updateFiscal(id!, values),
+    mutationFn: (values: UpdateFiscalPayload) => equipmentApi.updateFiscal(id!, values),
     onSuccess: () => {
       message.success('Данные обновлены');
       queryClient.invalidateQueries({ queryKey: ['fiscal', id] });
@@ -39,7 +39,6 @@ const FiscalDetails: React.FC = () => {
 
   const fiscal = fiscalRes.data;
 
-  // Логика цвета даты окончания ФН
   const getFnDateColor = (dateStr?: string) => {
      if (!dateStr) return undefined;
      const diff = dayjs(dateStr).diff(dayjs(), 'day');
@@ -50,10 +49,21 @@ const FiscalDetails: React.FC = () => {
 
   const handleEdit = () => {
     form.setFieldsValue({
-      description: fiscal.description,
+      description: fiscal.Description,
     });
     setIsEditModalOpen(true);
   };
+
+  // Преобразуем лицензии из объекта в массив для таблицы
+  const licensesData = fiscal.Licenses 
+    ? Object.entries(fiscal.Licenses).map(([id, data]) => ({ id, ...data }))
+    : [];
+
+  const licenseColumns = [
+    { title: 'ID', dataIndex: 'id', width: 60 },
+    { title: 'Название', dataIndex: 'name' },
+    { title: 'До', dataIndex: 'dateUntil', render: (d: string) => d ? d.split(' ')[0] : '-' },
+  ];
 
   return (
     <div>
@@ -63,11 +73,11 @@ const FiscalDetails: React.FC = () => {
           <Space>
              <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('FiscalRegister')}</div>
              <div>
-               <Title level={4} style={{ margin: 0 }}>{fiscal.model_kkt || 'ККТ'}</Title>
-               <Text type="secondary">{fiscal.serial_number}</Text>
+               <Title level={4} style={{ margin: 0 }}>{fiscal.ModelKKT || 'ККТ'}</Title>
+               <Text type="secondary">{fiscal.FRSerialNumber}</Text>
              </div>
           </Space>
-          <Badge status={getStatusColor(fiscal.health_status)} text={fiscal.health_status} />
+          <Badge status={getStatusColor(fiscal.HealthStatus)} text={fiscal.HealthStatus} />
         </Space>
         
         <Space>
@@ -78,24 +88,22 @@ const FiscalDetails: React.FC = () => {
 
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           
-          {/* Main Info */}
           <Card title="Информация о ККТ" className="glass-panel" size="small">
             <Descriptions bordered column={2}>
               <Descriptions.Item label="РНМ">
-                  <Text code>{formatRnm(fiscal.rn_kkt)}</Text>
+                  <Text code>{formatRnm(fiscal.RNKKT)}</Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Заводской номер">{fiscal.serial_number}</Descriptions.Item>
-              <Descriptions.Item label="Модель">{fiscal.model_kkt}</Descriptions.Item>
-              <Descriptions.Item label="Описание">{fiscal.description || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Заводской номер">{fiscal.FRSerialNumber}</Descriptions.Item>
+              <Descriptions.Item label="Модель">{fiscal.ModelKKT}</Descriptions.Item>
+              <Descriptions.Item label="Описание">{fiscal.Description || '-'}</Descriptions.Item>
             </Descriptions>
           </Card>
 
-          {/* FN Info */}
           <Card title="Фискальный Накопитель" className="glass-panel" size="small">
              <Descriptions bordered column={2}>
-               <Descriptions.Item label="Номер ФН">{fiscal.fn_number || '-'}</Descriptions.Item>
+               <Descriptions.Item label="Номер ФН">{fiscal.FNNumber || '-'}</Descriptions.Item>
                <Descriptions.Item label="Дата регистрации">
-                  {fiscal.fn_registration_date ? dayjs(fiscal.fn_registration_date).format('DD.MM.YYYY') : '-'}
+                  {fiscal.kkt_reg_date ? dayjs(fiscal.kkt_reg_date).format('DD.MM.YYYY') : '-'}
                </Descriptions.Item>
                <Descriptions.Item label="Дата окончания">
                   <Text strong style={{ color: getFnDateColor(fiscal.fn_expire_date) }}>
@@ -105,23 +113,33 @@ const FiscalDetails: React.FC = () => {
              </Descriptions>
           </Card>
 
-          {/* Firmware Info */}
           <Card title="Прошивки и ПО" className="glass-panel" size="small">
              <Descriptions bordered column={3}>
-               <Descriptions.Item label="Прошивка ФР">{fiscal.fr_firmware || '-'}</Descriptions.Item>
-               <Descriptions.Item label="Загрузчик">{fiscal.fr_downloader || '-'}</Descriptions.Item>
-               <Descriptions.Item label="Драйвер">{fiscal.driver_version || '-'}</Descriptions.Item>
+               <Descriptions.Item label="Прошивка ФР">{fiscal.FRFirmware || '-'}</Descriptions.Item>
+               <Descriptions.Item label="Загрузчик">{fiscal.FRDownloader || '-'}</Descriptions.Item>
+               <Descriptions.Item label="Драйвер">{fiscal.DriverVersion || '-'}</Descriptions.Item>
              </Descriptions>
           </Card>
 
-           {/* Legal Info */}
            <Card title="Юридическое лицо" className="glass-panel" size="small">
              <Descriptions bordered column={1}>
-               <Descriptions.Item label="Организация">{fiscal.organization_name || '-'}</Descriptions.Item>
-               <Descriptions.Item label="ИНН">{fiscal.inn || '-'}</Descriptions.Item>
+               <Descriptions.Item label="Организация">{fiscal.LegalName || '-'}</Descriptions.Item>
+               <Descriptions.Item label="ИНН">{fiscal.INN || '-'}</Descriptions.Item>
                <Descriptions.Item label="Адрес установки">{fiscal.address || '-'}</Descriptions.Item>
              </Descriptions>
           </Card>
+          
+          {licensesData.length > 0 && (
+            <Card title="Лицензии ККТ" className="glass-panel" size="small">
+              <Table 
+                 dataSource={licensesData} 
+                 columns={licenseColumns} 
+                 rowKey="id" 
+                 pagination={false} 
+                 size="small"
+              />
+            </Card>
+          )}
       </Space>
 
       <Modal

@@ -5,7 +5,7 @@ import { Card, Descriptions, Button, Space, Typography, Spin, Badge, Modal, Form
 import { ArrowLeftOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
-import { UpdateWorkstationDTO } from '@/types/api';
+import { UpdateWorkstationPayload } from '@/types/api';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -23,7 +23,7 @@ const WorkstationDetails: React.FC = () => {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (values: UpdateWorkstationDTO) => equipmentApi.updateWorkstation(id!, values),
+    mutationFn: (values: UpdateWorkstationPayload) => equipmentApi.updateWorkstation(id!, values),
     onSuccess: () => {
       message.success('Данные обновлены');
       queryClient.invalidateQueries({ queryKey: ['workstation', id] });
@@ -39,10 +39,10 @@ const WorkstationDetails: React.FC = () => {
 
   const handleEdit = () => {
     form.setFieldsValue({
-      device_name: ws.device_name,
-      anydesk: ws.anydesk,
-      teamviewer: ws.teamviewer,
-      description: ws.description,
+      device_name: ws.DeviceName,
+      anydesk: ws.Anydesk,
+      teamviewer: ws.Teamviewer,
+      description: ws.Description,
     });
     setIsEditModalOpen(true);
   };
@@ -55,11 +55,11 @@ const WorkstationDetails: React.FC = () => {
           <Space>
              <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Workstation')}</div>
              <div>
-               <Title level={4} style={{ margin: 0 }}>{ws.device_name || 'Workstation'}</Title>
-               <Text type="secondary">{ws.uuid}</Text>
+               <Title level={4} style={{ margin: 0 }}>{ws.DeviceName || 'Workstation'}</Title>
+               <Text type="secondary">{ws.ID}</Text>
              </div>
           </Space>
-          <Badge status={getStatusColor(ws.health_status)} text={ws.health_status} />
+          <Badge status={getStatusColor(ws.HealthStatus)} text={ws.HealthStatus} />
         </Space>
         
         <Space>
@@ -71,16 +71,16 @@ const WorkstationDetails: React.FC = () => {
       <Card title="Детали рабочей станции" className="glass-panel" size="small">
         <Descriptions bordered column={1}>
           <Descriptions.Item label="Описание">
-             {ws.description || '-'}
+             {ws.Description || '-'}
           </Descriptions.Item>
           <Descriptions.Item label="AnyDesk">
-             {ws.anydesk ? <Paragraph copyable>{ws.anydesk}</Paragraph> : '-'}
+             {ws.Anydesk ? <Paragraph copyable>{ws.Anydesk}</Paragraph> : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="TeamViewer">
-             {ws.teamviewer ? <Paragraph copyable>{ws.teamviewer}</Paragraph> : '-'}
+             {ws.Teamviewer ? <Paragraph copyable>{ws.Teamviewer}</Paragraph> : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="LiteManager">
-             {ws.litemanager ? <Paragraph copyable>{ws.litemanager}</Paragraph> : '-'}
+             {ws.Litemanager ? <Paragraph copyable>{ws.Litemanager}</Paragraph> : '-'}
           </Descriptions.Item>
         </Descriptions>
       </Card>

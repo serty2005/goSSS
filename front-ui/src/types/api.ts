@@ -207,3 +207,110 @@ export interface UpdateFiscalDTO {
   description?: string;
   // ККТ поля обычно read-only, т.к. приходят из железа, но description можно править
 }
+
+// --- Detail DTOs (Strictly matching Backend JSON) ---
+
+export interface LicensesDict {
+  [key: string]: {
+    name: string;
+    dateFrom: string;
+    dateUntil: string;
+  };
+}
+
+export interface FiscalDetailDTO {
+  ID: string;
+  ModelKKT?: string;
+  RNKKT?: string;
+  LegalName?: string;
+  INN?: string;
+  FRSerialNumber?: string;
+  FNNumber?: string;
+  
+  // Внимание: смешанный регистр в JSON
+  kkt_reg_date?: string;
+  fn_expire_date?: string;
+  
+  FRFirmware?: string;
+  FRDownloader?: string;
+  DriverVersion?: string;
+  
+  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+  
+  // Внимание: lowercase в JSON
+  address?: string;
+  Description?: string;
+  
+  Licenses?: LicensesDict;
+}
+
+export interface WorkstationDetailDTO {
+  ID: string;
+  DeviceName?: string;
+  Teamviewer?: string;
+  Anydesk?: string;
+  Litemanager?: string;
+  Description?: string;
+  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+}
+
+export interface ServerDetailDTO {
+  ID: string;
+  UniqueID?: string;
+  IP?: string;
+  DeviceName?: string;
+  ServerName?: string;
+  ServerVersion?: string;
+  ServerEdition?: string;
+  
+  // PascalCase
+  LastPolledAt?: string;
+  Status?: 'active' | 'offline' | 'unknown'; // Operational Status
+  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+  
+  CabinetLink?: string;
+  CRMid?: string;
+  
+  RDP?: string;
+  Teamviewer?: string;
+  Anydesk?: string;
+  Litemanager?: string;
+  Description?: string;
+}
+
+// ... (предыдущие TaskDTO и прочее остаются)
+export interface ApiResponse<T> {
+  status: 'success' | 'error';
+  data: T;
+  meta?: PaginationMeta;
+  error?: {
+    error: string;
+  };
+}
+// Необходимо убедиться, что PaginationMeta и другие типы на месте
+export interface PaginationMeta {
+  total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+export interface UpdateServerPayload {
+  device_name?: string;
+  ip?: string;
+  anydesk?: string;
+  teamviewer?: string;
+  description?: string;
+}
+
+export interface UpdateWorkstationPayload {
+  device_name?: string;
+  anydesk?: string;
+  teamviewer?: string;
+  description?: string;
+}
+
+export interface UpdateFiscalPayload {
+  description?: string;
+}
