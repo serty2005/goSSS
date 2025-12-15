@@ -1,13 +1,14 @@
 import React, { useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card } from 'antd';
-import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button } from 'antd';
+import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { ServerEntity, WorkstationEntity, FiscalEntity } from '@/types/api';
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
+import TicketTable from '@/components/tickets/TicketTable'; // Import
 
 const { Title, Text } = Typography;
 
@@ -29,7 +30,6 @@ const CompanyPage: React.FC = () => {
   });
 
   const company = companyRes?.data;
-  // Не используем '|| []' здесь, чтобы ссылка на данные была стабильной для useMemo
   const rawInfrastructure = infraRes?.data;
 
   // Группировка инфраструктуры
@@ -38,7 +38,6 @@ const CompanyPage: React.FC = () => {
     const workstations: WorkstationEntity[] = [];
     const fiscals: FiscalEntity[] = [];
     
-    // Безопасно обрабатываем undefined внутри useMemo
     const list = rawInfrastructure || [];
 
     list.forEach(item => {
@@ -112,7 +111,17 @@ const CompanyPage: React.FC = () => {
     {
       key: 'tickets',
       label: 'Тикеты',
-      children: <Empty description="Раздел в разработке" style={{ marginTop: 20 }} />,
+      children: (
+        <div style={{ marginTop: 16 }}>
+           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+             <Button type="primary" icon={<PlusOutlined />} onClick={() => console.log('Create Ticket')}>
+               Создать тикет
+             </Button>
+           </div>
+           {/* Передаем ID компании для фильтрации */}
+           <TicketTable companyId={company.ID} limit={10} />
+        </div>
+      ),
     },
     {
       key: 'contracts',

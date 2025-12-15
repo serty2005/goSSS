@@ -65,7 +65,6 @@ export interface ServerEntity {
   
   crm_id?: string;
   
-  // Добавлено поле address
   address?: string;
   description?: string;
 
@@ -84,7 +83,6 @@ export interface WorkstationEntity {
   health_status: 'ok' | 'attention_required' | 'locked';
   status_details?: unknown;
 
-  // Добавлено поле description
   description?: string;
   address?: string;
 
@@ -113,7 +111,6 @@ export interface FiscalEntity {
   health_status: 'ok' | 'attention_required' | 'locked';
   status_details?: unknown;
 
-  // Добавлено поле address
   address?: string;
   description?: string;
 
@@ -163,4 +160,50 @@ export interface TaskResolutionPayload {
     new_owner_id?: string;
     [key: string]: unknown;
   };
+}
+
+// --- Tickets DTO ---
+export interface TicketDTO {
+  id: number;
+  number: number;
+  subject: string;
+  description?: string;
+  status: 'registered' | 'inprogress' | 'closed' | 'wait';
+  priority?: string;
+  created_at: string;
+  updated_at: string;
+  assignee?: {
+    id: number;
+    fullName: string;
+  };
+  company_id: string;
+}
+
+export interface TicketListParams {
+  company_id?: string;
+  limit?: number;
+  offset?: number;
+  status?: string;
+}
+
+// DTO для обновления оборудования
+export interface UpdateServerDTO {
+  device_name?: string;
+  ip?: string;
+  anydesk?: string;
+  teamviewer?: string;
+  description?: string;
+  // Добавляем другие поля по мере необходимости
+}
+
+export interface UpdateWorkstationDTO {
+  device_name?: string;
+  anydesk?: string;
+  teamviewer?: string;
+  description?: string;
+}
+
+export interface UpdateFiscalDTO {
+  description?: string;
+  // ККТ поля обычно read-only, т.к. приходят из железа, но description можно править
 }
