@@ -27,7 +27,7 @@ var (
 // AgentService определяет интерфейс для бизнес-логики управления агентами.
 type AgentService interface {
 	RegisterAgent(ctx context.Context, req *api.RegistrationRequestDTO) (*models.Agent, error)
-	ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) error
+	ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) (*api.AgentHeartbeatResponseDTO, error)
 	GetAgentConfig(ctx context.Context, uuid string) (*api.AgentConfigDTO, error)
 }
 
@@ -90,35 +90,106 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 }
 
 // ProcessData обрабатывает данные от уже зарегистрированного агента.
-func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) error {
-	agent, err := s.agentRepo.GetByUUID(ctx, agentUUID)
+// В файле internal/services/agent_service.go
+
+func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) (*api.AgentHeartbeatResponseDTO, error) {
+	targetUUID := agentUUID
+	if targetUUID == "" {
+		targetUUID = data.AgentUUID
+	}
+
+	// Определяем тип (handler уже должен был проставить 'getad', но на всякий случай)
+	agentType := data.AgentType
+	if agentType == "" {
+		agentType = "workstation"
+	}
+
+	// 1. Поиск или Создание агента (Auto-Registration)
+	agent, err := s.agentRepo.GetByUUID(ctx, targetUUID)
 	if err != nil {
-		return fmt.Errorf("ошибка получения агента: %w", err)
+		// Ошибка БД
+		return nil, fmt.Errorf("ошибка поиска агента: %w", err)
 	}
+
 	if agent == nil {
-		return ErrAgentNotFound
+		// АГЕНТ НЕ НАЙДЕН -> СОЗДАЕМ НОВОГО
+		s.logger.Info("Обнаружен новый агент (авто-регистрация)", "uuid", targetUUID, "type", agentType)
+
+		newAgent := &models.Agent{
+			UUID:          targetUUID,
+			Type:          agentType,
+			Status:        models.StatusActive, // Считаем активным, раз шлет данные
+			LastHeartbeat: time.Now(),
+			Hostname:      data.Hostname,
+			Version:       data.AgentVersion,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+		}
+
+		if err := s.agentRepo.Create(ctx, newAgent); err != nil {
+			return nil, fmt.Errorf("не удалось создать агента при авто-регистрации: %w", err)
+		}
+	} else {
+		// АГЕНТ НАЙДЕН -> ОБНОВЛЯЕМ
+		agent.LastHeartbeat = time.Now()
+		if data.AgentVersion != "" {
+			agent.Version = data.AgentVersion
+		}
+		// Если тип сменился (например, был workstation, стал getad или наоборот)
+		if data.AgentType != "" && agent.Type != data.AgentType {
+			agent.Type = data.AgentType
+		}
+		// Обновляем hostname, если пришел
+		if data.Hostname != "" {
+			agent.Hostname = data.Hostname
+		}
+
+		if err := s.agentRepo.Update(ctx, agent); err != nil {
+			s.logger.Error("Не удалось обновить heartbeat агента", "uuid", targetUUID, "error", err)
+		}
 	}
 
-	agent.LastHeartbeat = time.Now()
-	if data.AgentVersion != "" {
-		agent.Version = data.AgentVersion
-	}
-	if err := s.agentRepo.Update(ctx, agent); err != nil {
-		s.logger.Error("Не удалось обновить heartbeat агента", "uuid", agentUUID, "error", err)
+	// 2. Публикация данных в шину (Orchestrator разберет сущности)
+	// Для getad всегда считаем, что данные есть
+	hasData := true
+
+	if hasData {
+		payload := events.AgentDataPayload{
+			Source: targetUUID,
+			Data:   *data,
+		}
+		s.bus.Publish(eventbus.Event{
+			Type:    events.AgentDataReceived,
+			Payload: payload,
+		})
+		s.logger.Info("Данные от агента отправлены в шину", "uuid", targetUUID)
 	}
 
-	payload := events.AgentDataPayload{
-		Source: agentUUID,
-		Data:   *data,
+	// 3. Формирование ответа
+	response := &api.AgentHeartbeatResponseDTO{
+		Status: "ok",
+		Tasks:  make([]api.AgentTaskDTO, 0),
 	}
-	// Просто публикуем событие, вся логика сверки  выполняeтся в Оркестраторе.
-	s.bus.Publish(eventbus.Event{
-		Type:    events.AgentDataReceived,
-		Payload: payload,
-	})
-	s.logger.Info("Данные от агента получены, событие на обработку отправлено", "uuid", agentUUID)
 
-	return nil
+	// Для getad задачи не возвращаем, для sssruner - возвращаем
+	if agentType == "sssruner" {
+		commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
+		if err == nil && len(commands) > 0 {
+			var commandIDs []uint
+			for _, cmd := range commands {
+				response.Tasks = append(response.Tasks, api.AgentTaskDTO{
+					ID:        cmd.ID,
+					Type:      cmd.Type,
+					Payload:   json.RawMessage(cmd.Payload),
+					CreatedAt: cmd.CreatedAt,
+				})
+				commandIDs = append(commandIDs, cmd.ID)
+			}
+			_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
+		}
+	}
+
+	return response, nil
 }
 
 // GetAgentConfig возвращает конфигурацию для агента, если он активен.

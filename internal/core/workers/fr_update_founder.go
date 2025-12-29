@@ -96,45 +96,73 @@ func (w *frUpdateFounderImpl) processProvider(ctx context.Context, p integration
 	}
 	log.Info("Загружено ФР из провайдера", "system", p.SystemName(), "count", len(remoteFRsMap))
 
-	// 2. Получаем все ФР из нашей локальной базы.
-	localFRs, err := w.frRepo.Search(ctx, "", 10000, 0)
-	if err != nil {
-		log.Error("Не удалось получить список ФР из локальной БД", "error", err)
-		return
-	}
-
 	publishedEvents := 0
-	// 3. Итерируем по локальным ФР
-	for _, localFR := range localFRs {
-		// Находим внешний ID для нашего локального ФР и текущей системы
-		link, err := w.linkRepo.GetByInternalID(ctx, nil, p.SystemName(), localFR.ID)
-		if err != nil || link == nil {
-			continue
-		}
+	limit := 100
+	offset := 0
+	consecutiveErrors := 0
 
-		// Ищем в карте по ExternalUUID
-		remoteFR, ok := remoteFRsMap[link.ServiceDeskUUID]
-		if !ok {
-			// ФР есть локально, но нет в выгрузке (удалена?)
-			continue
-		}
-
-		discrepancies := w.compareFiscalRegisters(&localFR, remoteFR)
-
-		if len(discrepancies) > 0 {
-			log.Info("Обнаружено расхождение данных ФР", "internal_id", localFR.ID, "diffs", len(discrepancies))
-
-			payload := events.FiscalRegisterDiscrepancyPayload{
-				FRInternalUUID:    link.InternalID,
-				FRServiceDeskUUID: link.ServiceDeskUUID,
-				Discrepancies:     discrepancies,
+	for {
+		// 2. Получаем батч ФР из нашей локальной базы.
+		localFRs, err := w.frRepo.Search(ctx, "", limit, offset)
+		if err != nil {
+			consecutiveErrors++
+			log.Error("Не удалось получить батч ФР из локальной БД", "offset", offset, "error", err, "consecutive_errors", consecutiveErrors)
+			if consecutiveErrors >= 5 {
+				log.Error("Превышен лимит последовательных ошибок при получении батча ФР, прерываем цикл", "consecutive_errors", consecutiveErrors)
+				break
 			}
-			w.bus.Publish(eventbus.Event{
-				Type:    events.FiscalRegisterDiscrepancyFound,
-				Payload: payload,
-			})
-			publishedEvents++
+			continue
+		} else {
+			consecutiveErrors = 0
 		}
+
+		if len(localFRs) == 0 {
+			break
+		}
+
+		batchPublished := 0
+		// 3. Итерируем по локальным ФР в батче
+		for _, localFR := range localFRs {
+			// Находим внешний ID для нашего локального ФР и текущей системы
+			link, err := w.linkRepo.GetByInternalID(ctx, nil, p.SystemName(), localFR.ID)
+			if err != nil || link == nil {
+				log.Debug("Пропуск ФР без связи", "fr_id", localFR.ID)
+				continue
+			}
+
+			// Ищем в карте по ExternalUUID
+			remoteFR, ok := remoteFRsMap[link.ServiceDeskUUID]
+			if !ok {
+				// ФР есть локально, но нет в выгрузке (удалена?)
+				log.Warn("Пропуск ФР с связью но без объекта в remoteFRsMap", "fr_id", localFR.ID, "external_id", link.ServiceDeskUUID)
+				continue
+			}
+
+			discrepancies := w.compareFiscalRegisters(&localFR, remoteFR)
+
+			if len(discrepancies) > 0 {
+				log.Info("Обнаружено расхождение данных ФР", "internal_id", localFR.ID, "diffs", len(discrepancies))
+
+				payload := events.FiscalRegisterDiscrepancyPayload{
+					FRInternalUUID:    link.InternalID,
+					FRServiceDeskUUID: link.ServiceDeskUUID,
+					Discrepancies:     discrepancies,
+				}
+				w.bus.Publish(eventbus.Event{
+					Type:    events.FiscalRegisterDiscrepancyFound,
+					Payload: payload,
+				})
+				batchPublished++
+			}
+		}
+
+		publishedEvents += batchPublished
+		log.Info("Обработан батч ФР", "offset", offset, "count", len(localFRs), "batch_published", batchPublished)
+
+		if len(localFRs) < limit {
+			break
+		}
+		offset += limit
 	}
 
 	log.Info("Цикл сверки данных ФР завершен.", "system", p.SystemName(), "published_events", publishedEvents)

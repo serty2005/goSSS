@@ -4,6 +4,7 @@ import (
 	"context"
 	"etalon-server/internal/infra/logger"
 	"sync"
+	"time"
 )
 
 // Event представляет собой событие, передаваемое по шине.
@@ -69,13 +70,24 @@ func (b *InMemoryEventBus) Publish(event Event) {
 		b.logger.Debug("Публикация события в шину", "type", event.Type)
 	}
 
-	// Используем select-default для отправки в главную очередь, чтобы не блокировать паблишера,
-	// если шина переполнена.
+	// Попробуем отправить событие без блокировки
 	select {
 	case b.events <- event:
+		return
 	default:
+		// Канал полон, переходим в блокирующий режим
 		if b.logger != nil {
-			b.logger.Error("Шина событий переполнена! Событие сброшено.", "type", event.Type)
+			b.logger.Warn("Шина переполнена, переходим в блокирующий режим", "type", event.Type)
+		}
+	}
+
+	// Блокирующая отправка с тайм-аутом 5 секунд
+	select {
+	case b.events <- event:
+		// Успешно отправлено
+	case <-time.After(5 * time.Second):
+		if b.logger != nil {
+			b.logger.Error("CRITICAL: Event dropped", "type", event.Type)
 		}
 	}
 }

@@ -6,6 +6,10 @@ import (
 	"log"
 )
 
+// @title Etalon Server API
+// @version 1.0.0
+// @description API documentation for Etalon Server ServiceDesk system
+
 func main() {
 	// Обработка флагов командной строки
 	seedFlag := flag.Bool("seed", false, "Наполнить базу данных тестовыми данными из файлов и выйти.")

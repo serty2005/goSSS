@@ -71,6 +71,18 @@ type AgentFile struct {
 	UpdatedAt             time.Time
 }
 
+// AgentCommand представляет техническую команду для выполнения агентом (sssruner).
+// Не путать с ReconciliationTask (задачи для людей).
+type AgentCommand struct {
+	ID        uint           `gorm:"primaryKey"`
+	AgentUUID string         `gorm:"type:text;index;not null"`
+	Type      string         `gorm:"type:varchar(50);not null"`            // update_config, inventory, exec
+	Payload   datatypes.JSON `gorm:"type:jsonb"`                           // Аргументы команды
+	Status    string         `gorm:"type:varchar(20);default:'new';index"` // new, sent, completed, failed
+	CreatedAt time.Time
+	SentAt    *time.Time
+}
+
 type ReconciliationTask struct {
 	ID         uint           `gorm:"primarykey"`
 	TaskType   string         `gorm:"type:varchar(50);not null;index"`

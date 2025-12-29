@@ -103,20 +103,35 @@ type AgentDataDTO struct {
 	CurrentTime      string        `json:"current_time"`
 	AgentVersion     string        `json:"agent_version"`
 	InstalledDriver  string        `json:"installed_driver,omitempty"`
-	BootVersion      string        `json:"bootVersion,omitempty"` // Версия прошивки (для FRFirmware)
-	Licenses         LicensesField `json:"licenses,omitempty"`    // Используем кастомный тип
-
-	// Новые поля для фискальных регистраторов
-	Address         string  `json:"address,omitempty"`          // Адрес фискального регистратора
-	AttributeExcise *string `json:"attribute_excise,omitempty"` // Признак работы с акцизными товарами (строковый)
-	AttributeMarked *string `json:"attribute_marked,omitempty"` // Признак работы с маркированными товарами (строковый)
-	OFDName         string  `json:"ofd_name,omitempty"`         // Название оператора фискальных данных
+	BootVersion      string        `json:"bootVersion,omitempty"`      // Версия прошивки (для FRFirmware)
+	Licenses         LicensesField `json:"licenses,omitempty"`         // Используем кастомный тип
+	Address          string        `json:"address,omitempty"`          // Адрес фискального регистратора
+	AttributeExcise  *string       `json:"attribute_excise,omitempty"` // Признак работы с акцизными товарами (строковый)
+	AttributeMarked  *string       `json:"attribute_marked,omitempty"` // Признак работы с маркированными товарами (строковый)
+	OFDName          string        `json:"ofd_name,omitempty"`         // Название оператора фискальных данных
 
 	// Временные поля для парсинга строковых значений
 	AttributeExciseStr string `json:"attribute_excise_str,omitempty"`
 	AttributeMarkedStr string `json:"attribute_marked_str,omitempty"`
 
+	AgentUUID string `json:"uuid,omitempty"`       // UUID, присылаемый самим агентом (из конфига или аргументов)
+	AgentType string `json:"agent_type,omitempty"` // Тип агента: "getad", "sssruner", "workstation"
+
 	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AgentTaskDTO описывает задачу, которую агент должен выполнить (для sssruner).
+type AgentTaskDTO struct {
+	ID        uint            `json:"id"`
+	Type      string          `json:"type"`              // Тип задачи: "inventory", "update_config", "exec_script"
+	Payload   json.RawMessage `json:"payload,omitempty"` // Аргументы задачи
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// AgentHeartbeatResponseDTO — ответ сервера на передачу данных/пинг.
+type AgentHeartbeatResponseDTO struct {
+	Status string         `json:"status"`          // "ok", "accepted"
+	Tasks  []AgentTaskDTO `json:"tasks,omitempty"` // Список задач для выполнения (если агент sssruner)
 }
 
 // TicketListDTO - DTO для списка заявок (для таблицы на UI).

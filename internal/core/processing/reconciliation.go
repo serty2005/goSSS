@@ -439,7 +439,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 
 		// Hostname (DeviceName)
 		if val, ok := agentData["hostname"].(string); ok && val != "" {
-			if ws.DeviceName == nil || *ws.DeviceName != val {
+			if ws.DeviceName == nil || *ws.DeviceName == "" {
 				updates["device_name"] = val
 				hasChanges = true
 			}

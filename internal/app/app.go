@@ -45,6 +45,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chi_middleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/swaggo/http-swagger"
 	"gorm.io/gorm"
 )
 
@@ -106,7 +107,7 @@ func New() (*Application, error) {
 		return nil, err
 	}
 
-	app.EventBus = eventbus.NewInMemoryEventBus(1000)
+	app.EventBus = eventbus.NewInMemoryEventBus(10000)
 
 	// Инициализация слоев
 	repos := setupRepositories(app.DB)
@@ -317,7 +318,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
 	app.TaskHandler = handlers.NewTaskHandler(srvs.TaskResolutionService, app.SDEditor, srvs.TaskService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
-	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService)
+	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService, app.Config.AgentAPIKey)
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
@@ -343,11 +344,15 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
 	r.Use(chi_middleware.Timeout(60 * time.Second))
 
+	// Без Auth Middleware, авторизация внутри хендлера
+	r.Post("/api/submit_json", a.AgentHandler.HandleSubmitJSON)
+
 	r.Route("/api/auth", func(r chi.Router) {
 		a.AuthHandler.RegisterRoutes(r)
 	})
+
 	r.Route("/api/agents", func(r chi.Router) {
-		r.Use(middleware.AgentAuthMiddleware(a.Config.AgentAPIKey))
+		// r.Use(middleware.AgentAuthMiddleware(a.Config.AgentAPIKey))
 		a.AgentHandler.RegisterRoutes(r)
 	})
 
@@ -383,6 +388,11 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to Etalon Server"))
 	})
+
+	// Роут для Swagger документации
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	fileServer(r, "/static/tickets", http.Dir(a.Config.TicketStoragePath))
 

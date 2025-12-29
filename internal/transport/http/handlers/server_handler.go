@@ -32,6 +32,15 @@ func (h *ServerHandler) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// @Summary Получение списка серверов
+// @Description Возвращает список серверов с пагинацией
+// @Tags Servers
+// @Accept json
+// @Produce json
+// @Param limit query int false "Limit"
+// @Param offset query int false "Offset"
+// @Success 200 {object} api.PaginatedResponse
+// @Router /api/servers [get]
 func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
