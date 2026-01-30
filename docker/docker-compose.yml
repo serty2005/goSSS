@@ -10,6 +10,7 @@ services:
       - .env
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ${HOST_PROJECT_PATH}/etalon-mcp/init-mcp-user.sh:/docker-entrypoint-initdb.d/99-init-mcp.sh
     ports:
       - "5456:5432"
     networks:
@@ -52,9 +53,8 @@ services:
       init-seeder:
         condition: service_completed_successfully
     volumes:
-      # [HOST_PATH] : [CONTAINER_PATH]
       # Монтируем папку из корня проекта внутрь контейнера
-      - ../ftp_cache:/app/ftp_cache
+      - ${HOST_PROJECT_PATH}/ftp_cache:/app/ftp_cache
     networks:
       - etalon-net
 
@@ -71,6 +71,25 @@ services:
       - "80:80"
     depends_on:
       - server
+    networks:
+      - etalon-net
+
+  mcp:
+    build:
+      context: ../etalon-mcp
+      dockerfile: Dockerfile
+    container_name: mcp
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgres://${MCP_DB_USER}:${MCP_DB_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+      - CODEBASE_PATH=/app/codebase
+    volumes:
+      - ${HOST_PROJECT_PATH}:/app/codebase:ro
     networks:
       - etalon-net
 
