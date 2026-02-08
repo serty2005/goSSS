@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"strings"
 
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
@@ -19,6 +20,15 @@ func NewTicketRepo(db *gorm.DB) tickets.TicketRepository {
 }
 
 func (r *ticketRepo) Create(ctx context.Context, ticket *tickets.Ticket) error {
+	if ticket.Number == 0 {
+		var nextNumber int
+		if err := r.db.WithContext(ctx).
+			Raw("SELECT COALESCE(MAX(number), 0) + 1 FROM tickets").
+			Scan(&nextNumber).Error; err != nil {
+			return err
+		}
+		ticket.Number = nextNumber
+	}
 	return r.db.WithContext(ctx).Create(ticket).Error
 }
 
@@ -31,9 +41,11 @@ func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, e
 	var ticket tickets.Ticket
 	// Preload связей: Исполнитель, Репортер
 	err := r.db.WithContext(ctx).
+		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
+		Select("tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name").
 		Preload("Assignee").
 		Preload("Reporter").
-		Where("id = ?", id).
+		Where("tickets.id = ?", id).
 		First(&ticket).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -72,7 +84,9 @@ func (r *ticketRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*
 
 func (r *ticketRepo) Find(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, error) {
 	var items []tickets.Ticket
-	query := r.buildQuery(ctx, filter)
+	query := r.buildQuery(ctx, filter).
+		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
+		Select("tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name")
 
 	if filter.SortBy != "" {
 		query = query.Order(filter.SortBy)
@@ -106,7 +120,10 @@ func (r *ticketRepo) Count(ctx context.Context, filter tickets.TicketFilter) (in
 
 func (r *ticketRepo) buildQuery(ctx context.Context, filter tickets.TicketFilter) *gorm.DB {
 	query := r.db.WithContext(ctx).Model(&tickets.Ticket{})
+	return r.applyFilters(query, filter)
+}
 
+func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *gorm.DB {
 	if filter.CompanyID != "" {
 		query = query.Where("company_id = ?", filter.CompanyID)
 	}
@@ -124,8 +141,14 @@ func (r *ticketRepo) buildQuery(ctx context.Context, filter tickets.TicketFilter
 	}
 	if filter.SearchQuery != "" {
 		q := "%" + filter.SearchQuery + "%"
-		// Поиск по номеру (преобразуем в текст) или теме
-		query = query.Where("CAST(number AS TEXT) ILIKE ? OR subject ILIKE ?", q, q)
+		clauses := []string{
+			"CAST(tickets.number AS TEXT) ILIKE ?",
+			"tickets.subject ILIKE ?",
+			"tickets.description ILIKE ?",
+			"EXISTS (SELECT 1 FROM ticket_comments tc WHERE tc.ticket_id = tickets.id AND tc.text ILIKE ?)",
+		}
+		args := []interface{}{q, q, q, q}
+		query = query.Where("("+strings.Join(clauses, " OR ")+")", args...)
 	}
 
 	return query
@@ -153,4 +176,74 @@ func (r *ticketRepo) GetAttachments(ctx context.Context, ticketID string) ([]tic
 		Where("entity_id = ? AND entity_type = ?", ticketID, "Ticket").
 		Find(&attachments).Error
 	return attachments, err
+}
+
+// --- Comments ---
+
+func (r *ticketRepo) AddComments(ctx context.Context, comments []tickets.TicketComment) error {
+	if len(comments) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).CreateInBatches(comments, 200).Error
+}
+
+func (r *ticketRepo) GetComments(ctx context.Context, ticketID string) ([]tickets.TicketComment, error) {
+	var comments []tickets.TicketComment
+	err := r.db.WithContext(ctx).
+		Where("ticket_id = ?", ticketID).
+		Order("creation_date asc").
+		Find(&comments).Error
+	return comments, err
+}
+
+func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error) {
+	result := make(map[string]string)
+	if len(ticketIDs) == 0 {
+		return result, nil
+	}
+
+	type row struct {
+		TicketID string `gorm:"column:ticket_id"`
+		Text     string `gorm:"column:text"`
+	}
+
+	var rows []row
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT tc.ticket_id, tc.text
+		 FROM ticket_comments tc
+		 WHERE tc.ticket_id IN ?
+		 ORDER BY tc.ticket_id, tc.creation_date DESC`,
+		ticketIDs,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, r := range rows {
+		if _, exists := result[r.TicketID]; !exists {
+			result[r.TicketID] = r.Text
+		}
+	}
+
+	return result, nil
+}
+
+func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error) {
+	var rows []tickets.CompanyFilterItem
+
+	query := r.db.WithContext(ctx).Table("tickets").
+		Select("tickets.company_id as id, COALESCE(c.title, c.additional_name, tickets.company_id) as name, COUNT(*) as count").
+		Joins("LEFT JOIN companies c ON c.id = tickets.company_id")
+
+	query = r.applyFilters(query, filter)
+
+	err := query.
+		Group("tickets.company_id, name").
+		Order("name").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
 }

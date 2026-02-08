@@ -28,6 +28,8 @@ var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 type TicketService interface {
 	// Чтение
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
+	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error)
+	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
 
 	// Действия
@@ -81,6 +83,22 @@ func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilte
 		return nil, 0, fmt.Errorf("service: count tickets: %w", err)
 	}
 	return items, count, nil
+}
+
+func (s *ticketServiceImpl) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error) {
+	comments, err := s.ticketRepo.GetLastComments(ctx, ticketIDs)
+	if err != nil {
+		return nil, fmt.Errorf("service: get last comments: %w", err)
+	}
+	return comments, nil
+}
+
+func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error) {
+	items, err := s.ticketRepo.GetCompanyFilters(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("service: get company filters: %w", err)
+	}
+	return items, nil
 }
 
 // CreateInternal создает внутренний тикет.
@@ -220,8 +238,22 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		Comments:    make([]tickets.Comment, 0),
 	}
 
+	// Комментарии из локальной БД (офлайн/сидер)
+	localComments, _ := s.ticketRepo.GetComments(ctx, ticketID)
+	if len(localComments) > 0 {
+		for _, c := range localComments {
+			details.Comments = append(details.Comments, tickets.Comment{
+				UUID:         c.ServiceDeskUUID,
+				Text:         c.Text,
+				AuthorName:   c.AuthorName,
+				CreationDate: c.CreationDate,
+				IsInternal:   c.IsInternal,
+			})
+		}
+	}
+
 	// Попытка получить данные из SD для легаси тикетов
-	if ticket.ServiceDeskUUID != "" {
+	if ticket.ServiceDeskUUID != "" && s.cfg.ServiceDeskKey != "" && len(localComments) == 0 {
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
 			if desc, ok := sdData["descriptionRTF"].(string); ok {

@@ -2,8 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -87,8 +89,8 @@ type Config struct {
 
 // New загружает конфигурацию из файла .env и переменных окружения.
 func New() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	if err := loadEnv(); err != nil {
+		log.Printf("Failed to load .env (%v). Using environment variables.", err)
 	}
 
 	allowedOriginsStr := getEnv("ALLOWED_ORIGINS", "http://localhost:5173")
@@ -162,6 +164,59 @@ func New() *Config {
 		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", true),
 		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
 	}
+}
+
+func loadEnv() error {
+	envPath, err := findEnvPath()
+	if err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return err
+	}
+
+	// Strip UTF-8 BOM if present
+	if bytes.HasPrefix(data, []byte{0xEF, 0xBB, 0xBF}) {
+		data = data[3:]
+	}
+
+	envMap, err := godotenv.UnmarshalBytes(data)
+	if err != nil {
+		return err
+	}
+
+	for key, value := range envMap {
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, value)
+		}
+	}
+
+	log.Printf("Loaded .env from %s", envPath)
+	return nil
+}
+
+func findEnvPath() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		envPath := filepath.Join(cwd, ".env")
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath, nil
+		}
+
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			break
+		}
+		cwd = parent
+	}
+
+	return "", os.ErrNotExist
 }
 
 // Вспомогательная функция для получения переменной окружения с значением по умолчанию.

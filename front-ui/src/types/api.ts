@@ -27,13 +27,20 @@ export interface CompanyOwner {
 }
 
 export interface CompanyModel {
-  ID: string;
+  ID?: string;
+  id?: string;
   Title?: string;
+  title?: string;
   Address?: string;
+  address?: string;
   AdditionalName?: string;
+  additional_name?: string;
   ActiveContract?: boolean;
+  active_contract?: boolean;
   ParentID?: string;
+  parent_id?: string;
   LastModifiedDate?: string;
+  last_modified_date?: string;
 }
 
 export type AntBadgeStatus = 'success' | 'processing' | 'error' | 'default' | 'warning';
@@ -163,12 +170,32 @@ export interface TaskResolutionPayload {
 }
 
 // --- Tickets DTO ---
+export type TicketStatus = 'new' | 'in_progress' | 'pending' | 'resolved' | 'closed';
+
+export interface TicketListItemDTO {
+  id: string;
+  number: number;
+  subject: string;
+  company_name?: string;
+  description?: string;
+  status: TicketStatus;
+  last_comment?: string;
+  last_activity: string;
+  created_at?: string;
+  company_id: string;
+  assignee?: {
+    id: number;
+    fullName: string;
+  };
+}
+
+// --- Tickets DTO ---
 export interface TicketDTO {
   id: number;
   number: number;
   subject: string;
   description?: string;
-  status: 'registered' | 'inprogress' | 'closed' | 'wait';
+  status: TicketStatus;
   priority?: string;
   created_at: string;
   updated_at: string;
@@ -179,11 +206,46 @@ export interface TicketDTO {
   company_id: string;
 }
 
+export interface TicketCreatePayload {
+  subject: string;
+  description: string;
+  type: string;
+  company_id: string;
+  priority?: string;
+}
+
+export interface TicketCommentDTO {
+  uuid: string;
+  text: string;
+  author_name: string;
+  creation_date: string;
+  is_internal: boolean;
+}
+
+export interface TicketDetailsDTO {
+  metadata: TicketDTO;
+  company_name?: string;
+  comments: TicketCommentDTO[];
+  history?: unknown[];
+  attachments?: unknown[];
+}
+
 export interface TicketListParams {
   company_id?: string;
   limit?: number;
   offset?: number;
-  status?: string;
+  status?: string | string[];
+  search?: string;
+}
+
+export interface TicketCompanyFilterItem {
+  id: string;
+  name: string;
+  count: number;
+}
+
+export interface TicketFiltersResponse {
+  companies: TicketCompanyFilterItem[];
 }
 
 // DTO для обновления оборудования

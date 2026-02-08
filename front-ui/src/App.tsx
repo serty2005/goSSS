@@ -9,6 +9,7 @@ import LoginPage from '@/pages/auth/LoginPage';
 import Dashboard from '@/pages/Dashboard';
 import SearchPage from '@/pages/SearchPage';
 import TasksPage from '@/pages/TasksPage';
+import TicketsPage from '@/pages/TicketsPage';
 import CompanyPage from '@/pages/companies/CompanyPage';
 
 // Импорт детальных страниц
@@ -65,7 +66,7 @@ const App: React.FC = () => {
               <Route index element={<Dashboard />} />
               <Route path="search" element={<SearchPage />} />
               <Route path="tasks" element={<TasksPage />} />
-              <Route path="tickets" element={<div>Тикеты</div>} />
+              <Route path="tickets" element={<TicketsPage />} />
               
               <Route path="companies" element={<div>Список компаний</div>} />
               <Route path="companies/:id" element={<CompanyPage />} />

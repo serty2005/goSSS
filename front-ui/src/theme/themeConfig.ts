@@ -37,7 +37,7 @@ export const getThemeConfig = (mode: 'light' | 'dark'): ThemeConfig => {
     components: {
       Layout: {
         // Хедер в светлой теме делаем чисто белым (или с легким блюром), чтобы отделить от серого фона
-        colorBgHeader: isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.7)',
+        headerBg: isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.7)',
       },
       Menu: {
         colorBgContainer: 'transparent',

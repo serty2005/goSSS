@@ -1,8 +1,9 @@
-import React from 'react';
+﻿import React from 'react';
 import { Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
 import dayjs from 'dayjs';
+import { TicketStatus } from '@/types/api';
 
 interface Props {
   companyId?: string;
@@ -18,12 +19,13 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
     queryFn: () => ticketsApi.getTickets({ company_id: companyId, limit }),
   });
 
-  const getStatusTag = (status: string) => {
+  const getStatusTag = (status: TicketStatus) => {
     switch (status) {
-      case 'registered': return <Tag color="blue">Новая</Tag>;
-      case 'inprogress': return <Tag color="processing">В работе</Tag>;
-      case 'wait': return <Tag color="orange">Ожидание</Tag>;
-      case 'closed': return <Tag color="green">Закрыта</Tag>;
+      case 'new': return <Tag color="blue">Новая</Tag>;
+      case 'in_progress': return <Tag color="processing">В работе</Tag>;
+      case 'pending': return <Tag color="orange">Ожидание</Tag>;
+      case 'resolved': return <Tag color="green">Решена</Tag>;
+      case 'closed': return <Tag color="default">Закрыта</Tag>;
       default: return <Tag>{status}</Tag>;
     }
   };
@@ -40,19 +42,19 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       title: 'Тема',
       dataIndex: 'subject',
       key: 'subject',
-      render: (text: string) => <Text style={{ color: '#1890ff', cursor: 'pointer' }}>{text}</Text>,
+      render: (textValue: string) => <Text style={{ color: '#1890ff', cursor: 'pointer' }}>{textValue}</Text>,
     },
     {
       title: 'Статус',
       dataIndex: 'status',
       key: 'status',
       width: 120,
-      render: (status: string) => getStatusTag(status),
+      render: (status: TicketStatus) => getStatusTag(status),
     },
     {
       title: 'Дата',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
+      dataIndex: 'last_activity',
+      key: 'last_activity',
       width: 150,
       render: (date: string) => dayjs(date).format('DD.MM.YYYY HH:mm'),
     },
@@ -74,10 +76,10 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       size="small"
       onRow={() => ({
         onClick: () => {
-           // Заглушка перехода, пока нет страницы тикета
-           console.log('Go to ticket details');
+          // Заглушка перехода, пока нет страницы тикета
+          console.log('Go to ticket details');
         },
-        style: { cursor: 'pointer' } 
+        style: { cursor: 'pointer' },
       })}
     />
   );

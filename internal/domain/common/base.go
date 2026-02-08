@@ -11,12 +11,12 @@ import (
 // Base содержит общие поля для всех сущностей (CMDB и Tickets).
 // MetaClass удален, так как мы переходим к собственной схеме типов.
 type Base struct {
-	ID            string         `gorm:"primaryKey;type:text"`
-	Attributes    datatypes.JSON `gorm:"type:jsonb"` // Хранилище произвольных атрибутов от внешних систем
-	LastUpdatedBy string         `gorm:"type:varchar(50);default:'unknown'"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	ID            string         `json:"id" gorm:"primaryKey;type:text"`
+	Attributes    datatypes.JSON `json:"attributes" gorm:"type:jsonb"` // Хранилище произвольных атрибутов от внешних систем
+	LastUpdatedBy string         `json:"last_updated_by" gorm:"type:varchar(50);default:'unknown'"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `json:"deleted_at" gorm:"index"`
 }
 
 // BeforeCreate генерирует UUID перед созданием.

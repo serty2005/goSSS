@@ -36,7 +36,7 @@ func Migrate(db *gorm.DB) error {
 		&user.User{}, &user.Role{},
 
 		// Домен Tickets
-		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{},
+		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
 
 		// CMDB (Используют обновленный common.Base без MetaClass)
 		&company.Company{},

@@ -17,6 +17,13 @@ type TicketFilter struct {
 	SortBy      string
 }
 
+// CompanyFilterItem описывает агрегированные данные по компаниям для фильтра.
+type CompanyFilterItem struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
 // TicketRepository определяет методы для работы с хранилищем заявок.
 type TicketRepository interface {
 	// Основные операции
@@ -35,6 +42,12 @@ type TicketRepository interface {
 
 	AddAttachment(ctx context.Context, attachment *Attachment) error
 	GetAttachments(ctx context.Context, ticketID string) ([]Attachment, error)
+
+	// Комментарии (офлайн/сидер)
+	AddComments(ctx context.Context, comments []TicketComment) error
+	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)
+	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error)
+	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

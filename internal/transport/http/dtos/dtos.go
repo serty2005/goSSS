@@ -141,9 +141,16 @@ type TicketListDTO struct {
 	ServiceDeskUUID  string    `json:"service_desk_uuid"` // Внешний UUID
 	Status           string    `json:"status"`            // Статус
 	Subject          string    `json:"subject"`           // Описание/Тема
+	Description      string    `json:"description"`       // ?Описание (HTML/Markdown)
 	LastComment      string    `json:"last_comment"`      // Последний комментарий
 	LastActivityDate time.Time `json:"last_activity"`     // Дата последнего изменения
+	CreatedAt        time.Time `json:"created_at"`        // Дата создания
 	CompanyID        string    `json:"company_id"`
+	CompanyName      string    `json:"company_name"`
+	Assignee         *struct {
+		ID       uint   `json:"id"`
+		FullName string `json:"fullName"`
+	} `json:"assignee,omitempty"`
 }
 
 // --- DTO для операций с тикетами ---

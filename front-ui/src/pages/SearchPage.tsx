@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Typography, Spin, Empty, Space, Row, Col, Button } from 'antd';
@@ -9,12 +9,15 @@ import { SearchFoundEntity, ServerEntity, WorkstationEntity, FiscalEntity } from
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
+import NewTicketModal from '@/components/tickets/NewTicketModal';
 
 const { Title, Text } = Typography;
 
 const SearchPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const term = searchParams.get('term') || '';
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [presetCompany, setPresetCompany] = useState<{ id: string; title?: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['search', term],
@@ -74,9 +77,21 @@ const SearchPage: React.FC = () => {
               }
               className="glass-panel"
               extra={
-                 <Link to={`/companies/${group.owner.uuid}`}>
-                    <Button type="link">Перейти к компании <ArrowRightOutlined /></Button>
-                 </Link>
+                 <Space>
+                    <Button
+                      type="link"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setPresetCompany({ id: group.owner.uuid, title: group.owner.name });
+                        setIsCreateOpen(true);
+                      }}
+                    >
+                      Создать заявку
+                    </Button>
+                    <Link to={`/companies/${group.owner.uuid}`}>
+                      <Button type="link">Перейти к компании <ArrowRightOutlined /></Button>
+                    </Link>
+                 </Space>
               }
             >
               <Row gutter={[16, 16]}>
@@ -90,6 +105,12 @@ const SearchPage: React.FC = () => {
           ))}
         </Space>
       )}
+      <NewTicketModal
+        open={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        presetCompany={presetCompany}
+        onCreated={() => {}}
+      />
     </div>
   );
 };

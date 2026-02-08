@@ -2,6 +2,14 @@ import apiClient from './axios';
 import { ApiResponse, CompanyModel, InfrastructureItem } from '@/types/api';
 
 export const companiesApi = {
+  // Поиск/листинг компаний
+  searchCompanies: async (term: string, limit = 20, offset = 0) => {
+    const response = await apiClient.get<ApiResponse<CompanyModel[]>>('/companies', {
+      params: { term, limit, offset },
+    });
+    return response.data;
+  },
+
   // Получение профиля компании
   getCompany: async (id: string) => {
     // В URL передаем ID компании

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Tag, Space, Typography, Spin, Badge, Modal, Form, Input, message } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, SyncOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -13,6 +13,7 @@ const { Title, Text, Paragraph } = Typography;
 const ServerDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -57,12 +58,21 @@ const ServerDetails: React.FC = () => {
     setIsEditModalOpen(true);
   };
 
+  const handleBack = () => {
+    const backTo = (location.state as { backTo?: string } | null)?.backTo;
+    if (backTo) {
+      navigate(backTo);
+      return;
+    }
+    navigate(-1);
+  };
+
   return (
     <div>
       {/* Header */}
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Space align="center">
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} />
+          <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <Space>
              <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Server')}</div>
              <div>

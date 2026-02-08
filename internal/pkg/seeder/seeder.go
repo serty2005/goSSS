@@ -2,6 +2,8 @@ package seeder
 
 import (
 	"context"
+	"encoding/json"
+	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -12,10 +14,14 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/utils"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -54,7 +60,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
 	err := s.db.AutoMigrate(
 		&user.User{}, &user.Role{},
-		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{},
+		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
 		&company.Company{}, &server.Server{}, &workstation.Workstation{},
 		&fiscal.FiscalRegister{}, &contract.Contract{},
 		&models.AgentFile{}, &models.ReconciliationTask{},
@@ -252,6 +258,11 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 			)
 		`)
 
+		// 7. Загрузка тикетов и комментариев (если файл присутствует)
+		if err := s.seedTicketsWithComments(tx, extToIntID); err != nil {
+			return err
+		}
+
 		return nil
 	})
 }
@@ -263,7 +274,7 @@ func (s *Seeder) clearDatabase() error {
 		"equipment_status_logs", "external_system_links", "company_contracts",
 		"user_roles", "roles", // Users tables
 		"server_additional_owners",
-		"ticket_histories", "attachments", "tickets", // Ticket tables
+		"ticket_comments", "ticket_histories", "attachments", "tickets", // Ticket tables
 		"reconciliation_tasks", "agent_files", "fiscal_registers", "workstations",
 		"servers", "contracts", "companies", "users", "agents",
 	}
@@ -275,5 +286,231 @@ func (s *Seeder) clearDatabase() error {
 			}
 		}
 	}
+	return nil
+}
+
+type ticketExport struct {
+	UUID             string          `json:"UUID"`
+	Number           json.Number     `json:"number"`
+	Agreement        exportRef       `json:"agreement"`
+	ClientOU         exportRef       `json:"clientOU"`
+	DescriptionRTF   string          `json:"descriptionRTF"`
+	RequestDate      string          `json:"requestDate"`
+	LastModifiedDate string          `json:"lastModifiedDate"`
+	State            string          `json:"state"`
+	Comments         []commentExport `json:"comments_list"`
+}
+
+type commentExport struct {
+	UUID    string       `json:"UUID"`
+	Text    string       `json:"text"`
+	Author  exportAuthor `json:"author"`
+	Private bool         `json:"private"`
+	Files   []any        `json:"files"`
+}
+
+type exportRef struct {
+	UUID string `json:"UUID"`
+}
+
+type exportAuthor struct {
+	Title string `json:"title"`
+}
+
+func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]string) error {
+	filePath := filepath.Join("tools", "seeder", "mock_data", "2_full_export_with_comments.json")
+	if _, err := os.Stat(filePath); err != nil {
+		s.logger.Warn("Файл тикетов не найден, пропускаем сидинг тикетов", "file", filePath)
+		return nil
+	}
+
+	s.logger.Info("Загрузка тикетов и комментариев из файла...", "file", filePath)
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	dec.UseNumber()
+
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+		return fmt.Errorf("ожидался JSON-массив в файле %s", filePath)
+	}
+
+	var (
+		ticketBatch   []tickets.Ticket
+		commentBatch  []tickets.TicketComment
+		linkBatch     []models.ExternalSystemLink
+		ticketsCount  int
+		commentsCount int
+	)
+
+	flushTickets := func() error {
+		if len(ticketBatch) == 0 {
+			return nil
+		}
+		if err := tx.CreateInBatches(ticketBatch, batchSize).Error; err != nil {
+			return err
+		}
+		ticketsCount += len(ticketBatch)
+		ticketBatch = ticketBatch[:0]
+		return nil
+	}
+
+	flushComments := func() error {
+		if len(commentBatch) == 0 {
+			return nil
+		}
+		if err := tx.CreateInBatches(commentBatch, 500).Error; err != nil {
+			return err
+		}
+		commentsCount += len(commentBatch)
+		commentBatch = commentBatch[:0]
+		return nil
+	}
+
+	flushLinks := func() error {
+		if len(linkBatch) == 0 {
+			return nil
+		}
+		if err := tx.CreateInBatches(linkBatch, 500).Error; err != nil {
+			return err
+		}
+		linkBatch = linkBatch[:0]
+		return nil
+	}
+
+	for dec.More() {
+		var raw ticketExport
+		if err := dec.Decode(&raw); err != nil {
+			return err
+		}
+		if raw.UUID == "" {
+			continue
+		}
+
+		number := 0
+		if raw.Number != "" {
+			if n, err := raw.Number.Int64(); err == nil {
+				number = int(n)
+			}
+		}
+		if number == 0 {
+			s.logger.Warn("Пропуск тикета без номера", "uuid", raw.UUID)
+			continue
+		}
+
+		ticketID := uuid.New().String()
+		ticket := tickets.Ticket{
+			Base:            common.Base{ID: ticketID},
+			Number:          number,
+			Subject:         utils.StripHTML(raw.DescriptionRTF),
+			Description:     raw.DescriptionRTF,
+			Status:          raw.State,
+			Priority:        tickets.PriorityMedium,
+			Type:            tickets.TypeIncident,
+			ServiceDeskUUID: raw.UUID,
+		}
+
+		if raw.RequestDate != "" {
+			if t := utils.ParseServiceDeskTime(raw.RequestDate); t != nil {
+				ticket.CreatedAt = *t
+			}
+		}
+
+		if raw.LastModifiedDate != "" {
+			if t := utils.ParseServiceDeskTime(raw.LastModifiedDate); t != nil {
+				ticket.UpdatedAt = *t
+			}
+		}
+
+		if ticket.CreatedAt.IsZero() && !ticket.UpdatedAt.IsZero() {
+			ticket.CreatedAt = ticket.UpdatedAt
+		}
+
+		if raw.ClientOU.UUID != "" {
+			if compID, ok := extToIntID[raw.ClientOU.UUID]; ok {
+				ticket.CompanyID = compID
+			}
+		}
+		if raw.Agreement.UUID != "" {
+			if contractID, ok := extToIntID[raw.Agreement.UUID]; ok {
+				ticket.ContractID = &contractID
+			}
+		}
+
+		ticketBatch = append(ticketBatch, ticket)
+		linkBatch = append(linkBatch, models.ExternalSystemLink{
+			InternalID:      ticketID,
+			SystemName:      "naumen",
+			ServiceDeskUUID: raw.UUID,
+			EntityType:      "Ticket",
+			LastSyncedAt:    time.Now(),
+		})
+		if len(ticketBatch) >= batchSize {
+			if err := flushTickets(); err != nil {
+				return err
+			}
+		}
+		if len(linkBatch) >= 500 {
+			if err := flushLinks(); err != nil {
+				return err
+			}
+		}
+
+		for _, c := range raw.Comments {
+			comment := tickets.TicketComment{
+				TicketID:        ticketID,
+				ServiceDeskUUID: c.UUID,
+				Text:            c.Text,
+				AuthorName:      c.Author.Title,
+				IsInternal:      c.Private,
+			}
+			comment.ID = uuid.New().String()
+			comment.CreationDate = ticket.CreatedAt
+			commentBatch = append(commentBatch, comment)
+			if c.UUID != "" {
+				linkBatch = append(linkBatch, models.ExternalSystemLink{
+					InternalID:      comment.ID,
+					SystemName:      "naumen",
+					ServiceDeskUUID: c.UUID,
+					EntityType:      "TicketComment",
+					LastSyncedAt:    time.Now(),
+				})
+			}
+			if len(commentBatch) >= 500 {
+				if err := flushComments(); err != nil {
+					return err
+				}
+			}
+			if len(linkBatch) >= 500 {
+				if err := flushLinks(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+
+	if err := flushTickets(); err != nil {
+		return err
+	}
+	if err := flushComments(); err != nil {
+		return err
+	}
+	if err := flushLinks(); err != nil {
+		return err
+	}
+
+	s.logger.Info("Сидинг тикетов завершен", "tickets", ticketsCount, "comments", commentsCount)
 	return nil
 }
