@@ -63,6 +63,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
+	showInactive := parseBoolParam(r.URL.Query().Get("show_inactive"))
 
 	log.Debug("Параметры поиска", "search_term", term, "limit", limit)
 
@@ -77,7 +78,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var initialWorkstations []workstation.Workstation
 	var initialFRs []fiscal.FiscalRegister
 	wg.Add(4)
-	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, true, limit, 0) }()
+	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, showInactive, limit, 0) }()
 	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0) }()
 	go func() { defer wg.Done(); initialWorkstations, _ = h.workstationRepo.Search(ctx, term, limit, 0) }()
 	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
@@ -154,6 +155,11 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		if _, ok := initialOwnerIDs[ownerID]; !ok {
 			continue
 		}
+		if !showInactive {
+			if owner.ActiveContract == nil || !*owner.ActiveContract {
+				continue
+			}
+		}
 
 		link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", owner.ID)
 		var externalUUID *string
@@ -214,6 +220,15 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("Поиск завершен успешно", "groups_count", len(finalResponse.SearchResults), "search_term", term)
 	response.RespondWithJSON(w, http.StatusOK, finalResponse)
+}
+
+func parseBoolParam(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // --- Вспомогательные функции-группировщики ---

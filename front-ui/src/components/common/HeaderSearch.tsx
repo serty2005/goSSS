@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Dropdown, Grid, Input, Select, Space } from 'antd';
+import { Button, Dropdown, Grid, Input, Select, Space, Switch } from 'antd';
 import { FilterOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,10 +12,36 @@ const HeaderSearch: React.FC = () => {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const currentTerm = searchParams.get('term') || '';
+  const showInactive = ['1', 'true', 'yes', 'on'].includes((searchParams.get('show_inactive') || '').toLowerCase());
+  const [searchTerm, setSearchTerm] = useState(currentTerm);
+
+  useEffect(() => {
+    setSearchTerm(currentTerm);
+  }, [currentTerm]);
 
   const onSearch = (value: string) => {
-    if (value.trim()) {
-      navigate(`/search?term=${encodeURIComponent(value.trim())}`);
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const params = new URLSearchParams();
+    params.set('term', trimmed);
+    if (showInactive) {
+      params.set('show_inactive', '1');
+    }
+    navigate(`/search?${params.toString()}`);
+  };
+
+  const onToggleShowInactive = (nextValue: boolean) => {
+    const params = new URLSearchParams(searchParams);
+    if (nextValue) {
+      params.set('show_inactive', '1');
+    } else {
+      params.delete('show_inactive');
+    }
+    if (currentTerm || searchTerm) {
+      params.set('term', (searchTerm || currentTerm).trim());
+      navigate(`/search?${params.toString()}`);
+    } else if (location.pathname.startsWith('/search')) {
+      navigate(`/search?${params.toString()}`);
     }
   };
 
@@ -129,14 +155,21 @@ const HeaderSearch: React.FC = () => {
   }
 
   return (
-    <Input.Search
-      placeholder="Поиск по IP, Serial, Name..."
-      allowClear
-      defaultValue={currentTerm}
-      onSearch={onSearch}
-      style={{ width: 400 }}
-      className="header-search-input"
-    />
+    <Space size="small">
+      <Input.Search
+        placeholder="Поиск по IP, Serial, Name..."
+        allowClear
+        value={searchTerm}
+        onChange={(event) => setSearchTerm(event.target.value)}
+        onSearch={onSearch}
+        style={{ width: 360 }}
+        className="header-search-input"
+      />
+      <Space size={6}>
+        <Switch size="small" checked={showInactive} onChange={onToggleShowInactive} />
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Без контракта</span>
+      </Space>
+    </Space>
   );
 };
 

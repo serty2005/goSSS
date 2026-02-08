@@ -1,8 +1,13 @@
-﻿import React, { useMemo, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Col, Descriptions, Divider, Empty, Input, List, Modal, Pagination, Row, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+﻿import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Card, Col, Descriptions, Divider, Empty, Input, List, Modal, Pagination, Row, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { MenuOutlined, SearchOutlined } from '@ant-design/icons';
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { Resizable } from 'react-resizable';
+import { useAuthStore } from '@/store/authStore';
 import type { ColumnsType, ColumnType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { companiesApi } from '@/api/companies';
@@ -81,13 +86,108 @@ const renderFnInfo = (dateStr?: string) => {
   );
 };
 
+type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & {
+  id?: string;
+  width?: number;
+  onResize?: (event: React.SyntheticEvent, data: { size: { width: number; height: number } }) => void;
+  onResizeStart?: () => void;
+  onResizeStop?: () => void;
+  isResizing?: boolean;
+};
+
+const ResizableHeaderCell = React.forwardRef<HTMLTableCellElement, HeaderCellProps>((props, ref) => {
+  const { onResize, onResizeStart, onResizeStop, width, children, ...rest } = props;
+  if (!width) {
+    return (
+      <th ref={ref} {...rest}>
+        {children}
+      </th>
+    );
+  }
+  return (
+    <Resizable
+      width={width}
+      height={0}
+      handle={(
+        <span
+          className="resize-handle"
+          onMouseDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => event.stopPropagation()}
+        />
+      )}
+      onResize={onResize}
+      onResizeStart={onResizeStart}
+      onResizeStop={onResizeStop}
+      draggableOpts={{ enableUserSelectHack: false }}
+    >
+      <th ref={ref} {...rest}>
+        {children}
+      </th>
+    </Resizable>
+  );
+});
+
+ResizableHeaderCell.displayName = 'ResizableHeaderCell';
+
+const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing, children, ...rest }) => {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: id || '', disabled: Boolean(isResizing) });
+
+  const mergedStyle: React.CSSProperties = {
+    ...style,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    cursor: 'move',
+    ...(isDragging ? { position: 'relative', zIndex: 2 } : {}),
+  };
+
+  return (
+    <ResizableHeaderCell
+      ref={setNodeRef}
+      style={mergedStyle}
+      {...attributes}
+      {...rest}
+    >
+      <div className="tickets-table-header">
+        <span className="tickets-table-header-title">{children}</span>
+        <span
+          ref={setActivatorNodeRef}
+          className={`tickets-table-drag-handle${isResizing ? ' is-disabled' : ''}`}
+          {...listeners}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => event.stopPropagation()}
+        >
+          <MenuOutlined />
+        </span>
+      </div>
+    </ResizableHeaderCell>
+  );
+};
+
 const TicketsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const user = useAuthStore((state) => state.user);
   const [viewMode, setViewMode] = useState<'cards' | 'list' | 'table'>('cards');
   const [commentText, setCommentText] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+  const [statusComment, setStatusComment] = useState('');
+  const [isResizingColumn, setIsResizingColumn] = useState(false);
+  const queryClient = useQueryClient();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const term = searchParams.get('q') || '';
   const statusParam = searchParams.get('status') || '';
@@ -244,13 +344,14 @@ const TicketsPage: React.FC = () => {
     ...ticket,
     company_display: ticket.company_name || ticket.company_id || 'Компания не указана',
     assignee_display: ticket.assignee?.fullName || '-',
-    updated_display: dayjs(ticket.last_activity).format('DD.MM.YYYY HH:mm'),
-    created_display: ticket.created_at ? dayjs(ticket.created_at).format('DD.MM.YYYY HH:mm') : '-',
+    description_display: compactDescription(ticket.description),
+    last_comment_display: compactDescription(ticket.last_comment),
   })), [cards]);
 
   type TableRow = typeof tableData[number];
 
-  const getColumnSearchProps = (dataIndex: keyof TableRow, placeholder: string): ColumnType<TableRow> => ({
+
+  const getColumnSearchProps = React.useCallback((dataIndex: keyof TableRow, placeholder: string): ColumnType<TableRow> => ({
     filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
       <div style={{ padding: 8 }}>
         <Input
@@ -269,9 +370,9 @@ const TicketsPage: React.FC = () => {
     filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
     onFilter: (value, record) =>
       String(record[dataIndex] ?? '').toLowerCase().includes(String(value).toLowerCase()),
-  });
+  }), []);
 
-  const tableColumns: ColumnsType<TableRow> = [
+  const tableColumnsBase: ColumnsType<TableRow> = useMemo(() => [
     {
       title: 'Номер',
       dataIndex: 'number',
@@ -282,23 +383,54 @@ const TicketsPage: React.FC = () => {
       render: (val: number) => <Text strong>#{val}</Text>,
     },
     {
-      title: 'Компания',
-      dataIndex: 'company_display',
-      key: 'company_display',
-      sorter: (a, b) => a.company_display.localeCompare(b.company_display),
-      ...getColumnSearchProps('company_display', 'Компания'),
-    },
-    {
       title: 'Статус',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
+      width: 140,
       filters: Object.entries(STATUS_META).map(([value, meta]) => ({ text: meta.label, value })),
       onFilter: (value, record) => record.status === value,
-      render: (status: string) => {
+      render: (status: string, record) => {
         const meta = resolveStatusMeta(status);
-        return <Tag color={meta.color}>{meta.label}</Tag>;
+        return (
+          <Space size={4} wrap>
+            <Tag color={meta.color}>{meta.label}</Tag>
+            {record.is_common_contract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
       },
+    },
+    {
+      title: 'Компания',
+      dataIndex: 'company_display',
+      key: 'company_display',
+      width: 200,
+      sorter: (a, b) => a.company_display.localeCompare(b.company_display),
+      ...getColumnSearchProps('company_display', 'Компания'),
+      ellipsis: true,
+    },
+    {
+      title: 'Описание',
+      dataIndex: 'description_display',
+      key: 'description',
+      width: 260,
+      ellipsis: true,
+      render: (value: string) => (
+        <Text type="secondary" ellipsis style={{ width: '100%', display: 'block' }}>
+          {value}
+        </Text>
+      ),
+    },
+    {
+      title: 'Последний комментарий',
+      dataIndex: 'last_comment_display',
+      key: 'last_comment',
+      width: 260,
+      ellipsis: true,
+      render: (value: string) => (
+        <Text type="secondary" ellipsis style={{ width: '100%', display: 'block' }}>
+          {value}
+        </Text>
+      ),
     },
     {
       title: 'Исполнитель',
@@ -307,22 +439,92 @@ const TicketsPage: React.FC = () => {
       sorter: (a, b) => a.assignee_display.localeCompare(b.assignee_display),
       ...getColumnSearchProps('assignee_display', 'Исполнитель'),
     },
-    {
-      title: 'Обновлено',
-      dataIndex: 'last_activity',
-      key: 'last_activity',
-      sorter: (a, b) => dayjs(a.last_activity).valueOf() - dayjs(b.last_activity).valueOf(),
-      render: (_: unknown, record) => record.updated_display,
-    },
-    {
-      title: 'Создано',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      sorter: (a, b) =>
-        (a.created_at ? dayjs(a.created_at).valueOf() : 0) - (b.created_at ? dayjs(b.created_at).valueOf() : 0),
-      render: (_: unknown, record) => record.created_display,
-    },
-  ];
+  ], [getColumnSearchProps]);
+
+  const [tableColumnsState, setTableColumnsState] = useState<ColumnsType<TableRow>>(tableColumnsBase);
+
+  const tableLayoutStorageKey = useMemo(() => {
+    const userKey = user?.id ? String(user.id) : 'guest';
+    return `tickets-table-layout-${userKey}`;
+  }, [user?.id]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(tableLayoutStorageKey);
+    if (!raw) {
+      setTableColumnsState(tableColumnsBase);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Array<{ key: string; width?: number }>;
+      const baseByKey = new Map(tableColumnsBase.map((col) => [col.key, col]));
+      const next: ColumnsType<TableRow> = [];
+      const seen = new Set<string>();
+
+      for (const entry of parsed) {
+        const base = baseByKey.get(entry.key);
+        if (!base) {
+          continue;
+        }
+        next.push({
+          ...base,
+          width: entry.width ?? base.width,
+        });
+        seen.add(entry.key);
+      }
+      for (const col of tableColumnsBase) {
+        const key = col.key as string;
+        if (seen.has(key)) {
+          continue;
+        }
+        next.push(col);
+      }
+      setTableColumnsState(next.length ? next : tableColumnsBase);
+    } catch {
+      setTableColumnsState(tableColumnsBase);
+    }
+  }, [tableColumnsBase, tableLayoutStorageKey]);
+
+  useEffect(() => {
+    if (!tableColumnsState.length) return;
+    const payload = tableColumnsState.map((col) => ({
+      key: col.key as string,
+      width: col.width as number | undefined,
+    }));
+    localStorage.setItem(tableLayoutStorageKey, JSON.stringify(payload));
+  }, [tableColumnsState, tableLayoutStorageKey]);
+
+  const handleResize = (index: number) => (_event: React.SyntheticEvent, data: { size: { width: number } }) => {
+    setTableColumnsState((columns) => {
+      const nextColumns = [...columns];
+      nextColumns[index] = {
+        ...nextColumns[index],
+        width: data.size.width,
+      };
+      return nextColumns;
+    });
+  };
+
+  const handleDragEnd = ({ active, over }: { active: { id: string }; over?: { id: string } | null }) => {
+    if (!over || active.id === over.id) return;
+    setTableColumnsState((columns) => {
+      const oldIndex = columns.findIndex((col) => col.key === active.id);
+      const newIndex = columns.findIndex((col) => col.key === over.id);
+      if (oldIndex === -1 || newIndex === -1) return columns;
+      return arrayMove(columns, oldIndex, newIndex);
+    });
+  };
+
+  const tableColumns = tableColumnsState.map((col, index) => ({
+    ...col,
+    onHeaderCell: () => ({
+      id: col.key as string,
+      width: col.width,
+      onResize: handleResize(index),
+      onResizeStart: () => setIsResizingColumn(true),
+      onResizeStop: () => setIsResizingColumn(false),
+      isResizing: isResizingColumn,
+    }),
+  }));
 
   const metadata = ticketDetails?.metadata as Record<string, unknown> | undefined;
   const metadataCreatedAt = (metadata?.created_at as string | undefined) || (metadata?.CreatedAt as string | undefined);
@@ -331,6 +533,9 @@ const TicketsPage: React.FC = () => {
   const metadataCompanyId = (metadata?.company_id as string | undefined) || (metadata?.CompanyID as string | undefined);
   const metadataStatus = (metadata?.status as string | undefined) || (metadata?.Status as string | undefined);
   const metadataNumber = (metadata?.number as number | undefined) || (metadata?.Number as number | undefined);
+  const metadataContractId = (metadata?.contract_id as string | undefined) || (metadata?.ContractID as string | undefined);
+  const metadataIsCommonContract =
+    (metadata?.is_common_contract as boolean | undefined) || (metadata?.IsCommonContract as boolean | undefined);
 
   const modalNumber = selectedTicket?.number ?? metadataNumber;
   const modalCompany = selectedTicket?.company_name || metadataCompany || selectedTicket?.company_id || metadataCompanyId;
@@ -338,6 +543,48 @@ const TicketsPage: React.FC = () => {
   const modalUpdated = selectedTicket?.last_activity || metadataUpdatedAt;
   const modalCreated = metadataCreatedAt;
   const modalStatus = selectedTicket?.status || metadataStatus;
+  const modalContractId = selectedTicket?.contract_id || metadataContractId;
+  const modalIsCommonContract = selectedTicket?.is_common_contract ?? metadataIsCommonContract ?? false;
+
+  useEffect(() => {
+    if (!ticketParam) return;
+    const rawDescription =
+      (metadata?.description as string | undefined) ||
+      selectedTicket?.description ||
+      '';
+    setDescriptionDraft(normalizeDescription(rawDescription));
+    setIsEditingDescription(false);
+  }, [metadata?.description, selectedTicket?.description, ticketParam]);
+
+  const changeStatusMutation = useMutation({
+    mutationFn: async (payload: { id: string; status: string; comment: string }) =>
+      ticketsApi.changeStatus(payload.id, payload.status, payload.comment),
+    onSuccess: () => {
+      message.success('Статус обновлен');
+      setIsStatusModalOpen(false);
+      setPendingStatus(null);
+      setStatusComment('');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
+    },
+    onError: () => {
+      message.error('Не удалось обновить статус');
+    },
+  });
+
+  const updateDescriptionMutation = useMutation({
+    mutationFn: async (payload: { id: string; description: string }) =>
+      ticketsApi.updateDescription(payload.id, payload.description),
+    onSuccess: () => {
+      message.success('Описание обновлено');
+      setIsEditingDescription(false);
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
+    },
+    onError: () => {
+      message.error('Не удалось обновить описание');
+    },
+  });
 
   if (isLoading) {
     return (
@@ -395,7 +642,10 @@ const TicketsPage: React.FC = () => {
                       <Space orientation="vertical" size={4} style={{ width: '100%' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Text strong>#{ticket.number}</Text>
-                          <Tag color={meta.color}>{meta.label}</Tag>
+                          <Space size={4}>
+                            <Tag color={meta.color}>{meta.label}</Tag>
+                            {ticket.is_common_contract && <Tag color="gold">Платный</Tag>}
+                          </Space>
                         </div>
                         <Text strong>{companyTitle}</Text>
                         {description && (
@@ -449,7 +699,10 @@ const TicketsPage: React.FC = () => {
                           <Text strong>#{ticket.number}</Text>
                           <Text strong>{companyTitle}</Text>
                         </Space>
-                        <Tag color={meta.color}>{meta.label}</Tag>
+                        <Space size={4}>
+                          <Tag color={meta.color}>{meta.label}</Tag>
+                          {ticket.is_common_contract && <Tag color="gold">Платный</Tag>}
+                        </Space>
                       </div>
                       {description && (
                         <Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>
@@ -472,17 +725,35 @@ const TicketsPage: React.FC = () => {
             }}
           />
         ) : (
-          <Table
-            dataSource={tableData}
-            columns={tableColumns}
-            rowKey="id"
-            size="small"
-            pagination={false}
-            onRow={(record) => ({
-              onClick: () => onOpenTicket(record),
-              style: { cursor: 'pointer' },
-            })}
-          />
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={tableColumns.map((col) => col.key as string)}
+              strategy={horizontalListSortingStrategy}
+            >
+              <Table
+                dataSource={tableData}
+                columns={tableColumns}
+                rowKey="id"
+                size="small"
+                bordered
+                className="tickets-table"
+                pagination={false}
+                components={{
+                  header: {
+                    cell: DraggableHeaderCell,
+                  },
+                }}
+                onRow={(record) => ({
+                  onClick: () => onOpenTicket(record),
+                  style: { cursor: 'pointer' },
+                })}
+              />
+            </SortableContext>
+          </DndContext>
         )}
 
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
@@ -501,7 +772,24 @@ const TicketsPage: React.FC = () => {
         onCancel={onCloseTicket}
         footer={null}
         width={760}
-        title={modalNumber ? `Заявка #${modalNumber}` : 'Заявка'}
+        title={(
+          <div style={{ display: 'grid', alignItems: 'center', gridTemplateColumns: '1fr auto 1fr' }}>
+            <span>{modalNumber ? `Заявка #${modalNumber}` : 'Заявка'}</span>
+            <Button
+              size="small"
+              onClick={() => {
+                if (!selectedTicketId) return;
+                setPendingStatus('resolved');
+                setStatusComment('');
+                setIsStatusModalOpen(true);
+              }}
+              disabled={modalStatus === 'resolved'}
+            >
+              Завершить
+            </Button>
+            <span />
+          </div>
+        )}
       >
         <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           <Row gutter={[16, 16]}>
@@ -509,29 +797,99 @@ const TicketsPage: React.FC = () => {
               <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
                 <Descriptions size="small" column={1} bordered>
                   <Descriptions.Item label="Статус">
-                    <Tag color={resolveStatusMeta(modalStatus).color}>
-                      {resolveStatusMeta(modalStatus).label}
-                    </Tag>
+                    <Space size="small" wrap>
+                      <Select
+                        value={modalStatus}
+                        style={{ minWidth: 180 }}
+                        options={[
+                          { value: 'new', label: 'Новая' },
+                          { value: 'in_progress', label: 'В работе' },
+                          { value: 'pending', label: 'Ожидание' },
+                          { value: 'resolved', label: 'Решена' },
+                          { value: 'closed', label: 'Закрыта' },
+                        ]}
+                        optionRender={(option) => {
+                          const meta = resolveStatusMeta(String(option.value));
+                          return <Tag color={meta.color}>{meta.label}</Tag>;
+                        }}
+                        onChange={(nextStatus) => {
+                          if (!selectedTicketId) return;
+                          if (nextStatus === modalStatus) return;
+                          if (nextStatus === 'resolved') {
+                            setPendingStatus(nextStatus);
+                            setStatusComment('');
+                            setIsStatusModalOpen(true);
+                            return;
+                          }
+                          changeStatusMutation.mutate({
+                            id: selectedTicketId,
+                            status: nextStatus,
+                            comment: '',
+                          });
+                        }}
+                      />
+                      {modalIsCommonContract && <Tag color="gold">Платный</Tag>}
+                    </Space>
                   </Descriptions.Item>
                   <Descriptions.Item label="Компания">
-                    {modalCompany || '-'}
+                    {metadataCompanyId ? (
+                      <Link to={`/companies/${metadataCompanyId}`}>{modalCompany || metadataCompanyId}</Link>
+                    ) : (
+                      modalCompany || '-'
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Контракт">
+                    {modalIsCommonContract ? (
+                      <Tag color="gold">Общий контракт</Tag>
+                    ) : modalContractId ? (
+                      <Text>{modalContractId}</Text>
+                    ) : (
+                      '-'
+                    )}
                   </Descriptions.Item>
                   <Descriptions.Item label="Исполнитель">
                     {modalAssignee}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Обновлено">
-                    {modalUpdated ? dayjs(modalUpdated).format('DD.MM.YYYY HH:mm') : '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Создано">
-                    {modalCreated ? dayjs(modalCreated).format('DD.MM.YYYY HH:mm') : '-'}
-                  </Descriptions.Item>
                 </Descriptions>
 
                 <div>
-                  <Text strong>Описание</Text>
-                  <Paragraph type="secondary" style={{ marginBottom: 0, whiteSpace: 'pre-line' }}>
-                    {normalizeDescription((metadata?.description as string | undefined) || selectedTicket?.description) || 'Нет описания'}
-                  </Paragraph>
+                  <Space size="small" style={{ marginBottom: 8 }}>
+                    <Text strong>Описание</Text>
+                    {!isEditingDescription && (
+                      <Button size="small" onClick={() => setIsEditingDescription(true)}>
+                        Редактировать
+                      </Button>
+                    )}
+                  </Space>
+                  {isEditingDescription ? (
+                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+                      <Input.TextArea
+                        rows={4}
+                        value={descriptionDraft}
+                        onChange={(event) => setDescriptionDraft(event.target.value)}
+                      />
+                      <Space>
+                        <Button
+                          type="primary"
+                          loading={updateDescriptionMutation.isPending}
+                          onClick={() => {
+                            if (!selectedTicketId) return;
+                            updateDescriptionMutation.mutate({
+                              id: selectedTicketId,
+                              description: descriptionDraft.trim(),
+                            });
+                          }}
+                        >
+                          Сохранить
+                        </Button>
+                        <Button onClick={() => setIsEditingDescription(false)}>Отмена</Button>
+                      </Space>
+                    </Space>
+                  ) : (
+                    <Paragraph type="secondary" style={{ marginBottom: 0, whiteSpace: 'pre-line' }}>
+                      {normalizeDescription((metadata?.description as string | undefined) || selectedTicket?.description) || 'Нет описания'}
+                    </Paragraph>
+                  )}
                 </div>
 
                 <Divider style={{ margin: '8px 0' }} />
@@ -681,7 +1039,44 @@ const TicketsPage: React.FC = () => {
               </Button>
             </Space>
           </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#8c8c8c' }}>
+            <Text type="secondary">
+              Создано: {modalCreated ? dayjs(modalCreated).format('DD.MM.YYYY HH:mm') : '-'}
+            </Text>
+            <Text type="secondary">
+              Обновлено: {modalUpdated ? dayjs(modalUpdated).format('DD.MM.YYYY HH:mm') : '-'}
+            </Text>
+          </div>
         </Space>
+      </Modal>
+
+      <Modal
+        open={isStatusModalOpen}
+        onCancel={() => {
+          setIsStatusModalOpen(false);
+          setPendingStatus(null);
+          setStatusComment('');
+        }}
+        onOk={() => {
+          if (!selectedTicketId || !pendingStatus) return;
+          changeStatusMutation.mutate({
+            id: selectedTicketId,
+            status: pendingStatus,
+            comment: statusComment.trim(),
+          });
+        }}
+        okText="Ок"
+        cancelText="Отмена"
+        okButtonProps={{ disabled: !statusComment.trim() }}
+        confirmLoading={changeStatusMutation.isPending}
+        title="Итоговый результат"
+      >
+        <Input.TextArea
+          rows={4}
+          placeholder="Опишите результат"
+          value={statusComment}
+          onChange={(event) => setStatusComment(event.target.value)}
+        />
       </Modal>
 
       <NewTicketModal

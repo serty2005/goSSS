@@ -180,9 +180,12 @@ export interface TicketListItemDTO {
   description?: string;
   status: TicketStatus;
   last_comment?: string;
+  last_comment_author?: string;
   last_activity: string;
   created_at?: string;
   company_id: string;
+  contract_id?: string;
+  is_common_contract?: boolean;
   assignee?: {
     id: number;
     fullName: string;
@@ -204,6 +207,8 @@ export interface TicketDTO {
     fullName: string;
   };
   company_id: string;
+  contract_id?: string;
+  is_common_contract?: boolean;
 }
 
 export interface TicketCreatePayload {

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Typography, Spin, Empty, Space, Row, Col, Button } from 'antd';
+import { Card, Typography, Spin, Empty, Space, Row, Col, Button, Tag } from 'antd';
 import { searchApi } from '@/api/search';
 import { getEntityIcon } from '@/utils/mappers';
 import { ArrowRightOutlined } from '@ant-design/icons';
@@ -16,12 +16,13 @@ const { Title, Text } = Typography;
 const SearchPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const term = searchParams.get('term') || '';
+  const showInactive = ['1', 'true', 'yes', 'on'].includes((searchParams.get('show_inactive') || '').toLowerCase());
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [presetCompany, setPresetCompany] = useState<{ id: string; title?: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['search', term],
-    queryFn: () => searchApi.searchEntities(term),
+    queryKey: ['search', term, showInactive],
+    queryFn: () => searchApi.searchEntities(term, 50, showInactive),
     enabled: !!term,
     staleTime: 1000 * 60,
   });
@@ -72,6 +73,9 @@ const SearchPage: React.FC = () => {
                         {group.owner.name}
                      </Text>
                      <Text type="secondary" style={{ fontSize: 12 }}>{group.owner.address}</Text>
+                     <Tag color={group.owner.active_contract ? 'success' : 'default'}>
+                        {group.owner.active_contract ? 'Активен' : 'Завершён'}
+                     </Tag>
                   </Space>
                 </Link>
               }

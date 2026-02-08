@@ -33,4 +33,19 @@ export const ticketsApi = {
     const response = await apiClient.post<ApiResponse<TicketDTO>>('/tickets', payload);
     return response.data;
   },
+
+  changeStatus: async (id: number | string, status: string, comment?: string) => {
+    const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/status`, {
+      status,
+      comment,
+    });
+    return response.data;
+  },
+
+  updateDescription: async (id: number | string, description: string) => {
+    const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/description`, {
+      description,
+    });
+    return response.data;
+  },
 };

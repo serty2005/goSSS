@@ -158,9 +158,9 @@ const CompanyPage: React.FC = () => {
           
           <div style={{ textAlign: 'right' }}>
              {company.ActiveContract ? (
-               <Tag icon={<CheckCircleOutlined />} color="success">Контракт Активен</Tag>
+               <Tag icon={<CheckCircleOutlined />} color="success">Активен</Tag>
              ) : (
-               <Tag icon={<CloseCircleOutlined />} color="error">Нет контракта</Tag>
+               <Tag icon={<CloseCircleOutlined />} color="default">Завершён</Tag>
              )}
              <div style={{ marginTop: 8 }}>
                <Text type="secondary" style={{ fontSize: 12 }}>ID: {company.ID}</Text>

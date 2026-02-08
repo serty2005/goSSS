@@ -54,6 +54,9 @@ type Config struct {
 	EnableContractGateway bool
 	ContractSyncInterval  time.Duration
 
+	// Общий контракт для платных тикетов
+	CommonContractID string
+
 	// Шлюз опроса статусов серверов (RMS Polling)
 	EnablePollingGateway   bool
 	ServerPollingInterval  time.Duration
@@ -132,6 +135,9 @@ func New() *Config {
 		// Contract Gateway
 		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
 		ContractSyncInterval:  time.Duration(getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)) * time.Minute,
+
+		// Общий контракт
+		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 
 		// Server Polling Gateway
 		EnablePollingGateway:   getEnvAsBool("ENABLE_POLLING_GATEWAY", true),

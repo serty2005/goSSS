@@ -196,20 +196,21 @@ func (r *ticketRepo) GetComments(ctx context.Context, ticketID string) ([]ticket
 	return comments, err
 }
 
-func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error) {
-	result := make(map[string]string)
+func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error) {
+	result := make(map[string]tickets.LastCommentInfo)
 	if len(ticketIDs) == 0 {
 		return result, nil
 	}
 
 	type row struct {
-		TicketID string `gorm:"column:ticket_id"`
-		Text     string `gorm:"column:text"`
+		TicketID   string `gorm:"column:ticket_id"`
+		Text       string `gorm:"column:text"`
+		AuthorName string `gorm:"column:author_name"`
 	}
 
 	var rows []row
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT tc.ticket_id, tc.text
+		`SELECT tc.ticket_id, tc.text, tc.author_name
 		 FROM ticket_comments tc
 		 WHERE tc.ticket_id IN ?
 		 ORDER BY tc.ticket_id, tc.creation_date DESC`,
@@ -221,7 +222,10 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 
 	for _, r := range rows {
 		if _, exists := result[r.TicketID]; !exists {
-			result[r.TicketID] = r.Text
+			result[r.TicketID] = tickets.LastCommentInfo{
+				Text:       r.Text,
+				AuthorName: r.AuthorName,
+			}
 		}
 	}
 

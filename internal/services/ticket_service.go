@@ -2,6 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
+	domain "etalon-server/internal/domain"
+	"etalon-server/internal/domain/common"
+	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
@@ -28,13 +33,14 @@ var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 type TicketService interface {
 	// Чтение
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
-	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error)
+	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
 
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
+	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
 }
@@ -43,6 +49,8 @@ type ticketServiceImpl struct {
 	logger          logger.LoggerInterface
 	ticketRepo      tickets.TicketRepository
 	userRepo        user.Repository
+	companyRepo     company.Repository
+	contractRepo    contract.Repository
 	sdClient        external.ExternalSystemClient
 	cfg             *config.Config
 	serverRepo      server.Repository
@@ -54,6 +62,8 @@ func NewTicketService(
 	logger logger.LoggerInterface,
 	ticketRepo tickets.TicketRepository,
 	userRepo user.Repository,
+	companyRepo company.Repository,
+	contractRepo contract.Repository,
 	sdClient external.ExternalSystemClient,
 	cfg *config.Config,
 	serverRepo server.Repository,
@@ -64,6 +74,8 @@ func NewTicketService(
 		logger:          logger,
 		ticketRepo:      ticketRepo,
 		userRepo:        userRepo,
+		companyRepo:     companyRepo,
+		contractRepo:    contractRepo,
 		sdClient:        sdClient,
 		cfg:             cfg,
 		serverRepo:      serverRepo,
@@ -78,6 +90,7 @@ func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilte
 	if err != nil {
 		return nil, 0, fmt.Errorf("service: list tickets: %w", err)
 	}
+	s.applyCommonContractFlag(items)
 	count, err := s.ticketRepo.Count(ctx, filter)
 	if err != nil {
 		return nil, 0, fmt.Errorf("service: count tickets: %w", err)
@@ -85,7 +98,7 @@ func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilte
 	return items, count, nil
 }
 
-func (s *ticketServiceImpl) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error) {
+func (s *ticketServiceImpl) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error) {
 	comments, err := s.ticketRepo.GetLastComments(ctx, ticketIDs)
 	if err != nil {
 		return nil, fmt.Errorf("service: get last comments: %w", err)
@@ -103,6 +116,11 @@ func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter ticket
 
 // CreateInternal создает внутренний тикет.
 func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error) {
+	ownerCompany, err := s.companyRepo.GetByID(ctx, dto.CompanyID)
+	if err != nil {
+		return nil, err
+	}
+
 	ticket := &tickets.Ticket{
 		Subject:     dto.Subject,
 		Description: dto.Description,
@@ -114,6 +132,19 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		AssetID:     dto.AssetID,
 		AssetType:   dto.AssetType,
 	}
+
+	if ownerCompany == nil {
+		return nil, fmt.Errorf("company not found")
+	}
+
+	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
+		commonContract, err := s.getOrCreateCommonContract(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ticket.ContractID = &commonContract.ID
+	}
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	// Валидация полей
 	if ticket.Priority == "" {
 		ticket.Priority = tickets.PriorityMedium
@@ -130,6 +161,33 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	s.recordHistory(ctx, ticket.ID, &authorID, "status", "", tickets.StatusNew)
 
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*contract.Contract, error) {
+	commonID := strings.TrimSpace(s.cfg.CommonContractID)
+	if commonID == "" {
+		return nil, fmt.Errorf("common contract id is empty")
+	}
+
+	existing, err := s.contractRepo.GetByID(ctx, commonID)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		return nil, err
+	}
+
+	state := "active"
+	now := time.Now()
+	commonContract := &contract.Contract{
+		Base:           common.Base{ID: commonID},
+		State:          &state,
+		StateStartTime: &now,
+	}
+	if err := s.contractRepo.Create(ctx, commonContract); err != nil {
+		return nil, err
+	}
+	return commonContract, nil
 }
 
 // ChangeStatus меняет статус тикета и пишет историю.
@@ -223,6 +281,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	if ticket == nil {
 		return nil, nil
 	}
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 
 	// Загрузка истории
 	history, _ := s.ticketRepo.GetHistory(ctx, ticketID)
@@ -276,6 +335,40 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 
 	return details, nil
+}
+
+// UpdateDescription обновляет описание тикета.
+func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, fmt.Errorf("ticket not found")
+	}
+
+	oldValue := ticket.Description
+	ticket.Description = description
+	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+
+	s.recordHistory(ctx, ticket.ID, &userID, "description", oldValue, description)
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+	return ticket, nil
+}
+
+func (s *ticketServiceImpl) applyCommonContractFlag(items []tickets.Ticket) {
+	for i := range items {
+		items[i].IsCommonContract = s.isCommonContractID(items[i].ContractID)
+	}
+}
+
+func (s *ticketServiceImpl) isCommonContractID(contractID *string) bool {
+	if contractID == nil || *contractID == "" {
+		return false
+	}
+	return strings.TrimSpace(*contractID) == strings.TrimSpace(s.cfg.CommonContractID)
 }
 
 func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error {

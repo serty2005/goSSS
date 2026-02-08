@@ -1,9 +1,9 @@
 ﻿import React from 'react';
-import { Table, Tag, Typography } from 'antd';
+import { Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
 import dayjs from 'dayjs';
-import { TicketStatus } from '@/types/api';
+import { TicketListItemDTO, TicketStatus } from '@/types/api';
 
 interface Props {
   companyId?: string;
@@ -19,14 +19,50 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
     queryFn: () => ticketsApi.getTickets({ company_id: companyId, limit }),
   });
 
-  const getStatusTag = (status: TicketStatus) => {
+  const getStatusTag = (status: TicketStatus, isCommonContract?: boolean) => {
     switch (status) {
-      case 'new': return <Tag color="blue">Новая</Tag>;
-      case 'in_progress': return <Tag color="processing">В работе</Tag>;
-      case 'pending': return <Tag color="orange">Ожидание</Tag>;
-      case 'resolved': return <Tag color="green">Решена</Tag>;
-      case 'closed': return <Tag color="default">Закрыта</Tag>;
-      default: return <Tag>{status}</Tag>;
+      case 'new':
+        return (
+          <Space size={4}>
+            <Tag color="blue">Новая</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'in_progress':
+        return (
+          <Space size={4}>
+            <Tag color="processing">В работе</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'pending':
+        return (
+          <Space size={4}>
+            <Tag color="orange">Ожидание</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'resolved':
+        return (
+          <Space size={4}>
+            <Tag color="green">Решена</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'closed':
+        return (
+          <Space size={4}>
+            <Tag color="default">Закрыта</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      default:
+        return (
+          <Space size={4}>
+            <Tag>{status}</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
     }
   };
 
@@ -49,7 +85,7 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       dataIndex: 'status',
       key: 'status',
       width: 120,
-      render: (status: TicketStatus) => getStatusTag(status),
+      render: (status: TicketStatus, record: TicketListItemDTO) => getStatusTag(status, record.is_common_contract),
     },
     {
       title: 'Дата',

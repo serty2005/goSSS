@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
@@ -30,6 +32,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/{id}", h.GetDetails)
 	r.Post("/{id}/link", h.LinkAsset)
 	r.Patch("/{id}/status", h.ChangeStatus)
+	r.Patch("/{id}/description", h.UpdateDescription)
 	r.Patch("/{id}/assign", h.Assign)
 }
 
@@ -69,6 +72,35 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	userID := getUserIDFromContext(r)
 	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, userID)
 	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+// UpdateDescription обновляет описание тикета.
+func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var dto struct {
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "User ID not found in context")
+		return
+	}
+
+	ticket, err := h.service.UpdateDescription(r.Context(), id, dto.Description, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
+		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -158,16 +190,19 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		dtos[i] = api.TicketListDTO{
-			ID:              item.ID,
-			Number:          item.Number,
-			ServiceDeskUUID: item.ServiceDeskUUID,
-			Status:          item.Status,
-			Subject:         item.Subject,
-			Description:     item.Description,
-			LastComment:     lastComments[item.ID],
-			CompanyID:       item.CompanyID,
-			CompanyName:     item.CompanyName,
-			Assignee:        assignee,
+			ID:                item.ID,
+			Number:            item.Number,
+			ServiceDeskUUID:   item.ServiceDeskUUID,
+			Status:            item.Status,
+			Subject:           item.Subject,
+			Description:       item.Description,
+			LastComment:       lastComments[item.ID].Text,
+			LastCommentAuthor: lastComments[item.ID].AuthorName,
+			CompanyID:         item.CompanyID,
+			CompanyName:       item.CompanyName,
+			ContractID:        item.ContractID,
+			IsCommonContract:  item.IsCommonContract,
+			Assignee:          assignee,
 			// LastActivityDate is basically UpdatedAt or CreatedAt
 			LastActivityDate: item.UpdatedAt,
 			CreatedAt:        item.CreatedAt,

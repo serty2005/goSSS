@@ -25,6 +25,78 @@ body {
   -webkit-backdrop-filter: blur(12px);
 }
 
+/* Усиливаем границы таблиц для видимости */
+.tickets-table .ant-table-container {
+  border: 1.5px solid rgba(0, 0, 0, 0.18);
+}
+.tickets-table .ant-table-container table > thead > tr > th,
+.tickets-table .ant-table-container table > tbody > tr > td {
+  border-right: 1.5px solid rgba(0, 0, 0, 0.18);
+  border-bottom: 1.5px solid rgba(0, 0, 0, 0.18);
+}
+.tickets-table .ant-table-container table > thead > tr > th:last-child,
+.tickets-table .ant-table-container table > tbody > tr > td:last-child {
+  border-right: 0;
+}
+
+.tickets-table .ant-table-thead > tr > th {
+  position: relative;
+}
+
+.tickets-table .resize-handle {
+  position: absolute;
+  right: -6px;
+  top: 0;
+  width: 12px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.tickets-table .resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  top: 25%;
+  width: 2px;
+  height: 50%;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.tickets-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tickets-table-header-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.tickets-table-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: grab;
+  border-radius: 4px;
+}
+
+.tickets-table-drag-handle:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.tickets-table-drag-handle.is-disabled {
+  cursor: default;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* Скроллбары */
 ::-webkit-scrollbar {
   width: 8px;

@@ -136,18 +136,21 @@ type AgentHeartbeatResponseDTO struct {
 
 // TicketListDTO - DTO для списка заявок (для таблицы на UI).
 type TicketListDTO struct {
-	ID               string    `json:"id"`                // Внутренний ID
-	Number           int       `json:"number"`            // Номер заявки
-	ServiceDeskUUID  string    `json:"service_desk_uuid"` // Внешний UUID
-	Status           string    `json:"status"`            // Статус
-	Subject          string    `json:"subject"`           // Описание/Тема
-	Description      string    `json:"description"`       // ?Описание (HTML/Markdown)
-	LastComment      string    `json:"last_comment"`      // Последний комментарий
-	LastActivityDate time.Time `json:"last_activity"`     // Дата последнего изменения
-	CreatedAt        time.Time `json:"created_at"`        // Дата создания
-	CompanyID        string    `json:"company_id"`
-	CompanyName      string    `json:"company_name"`
-	Assignee         *struct {
+	ID                string    `json:"id"`                // Внутренний ID
+	Number            int       `json:"number"`            // Номер заявки
+	ServiceDeskUUID   string    `json:"service_desk_uuid"` // Внешний UUID
+	Status            string    `json:"status"`            // Статус
+	Subject           string    `json:"subject"`           // Описание/Тема
+	Description       string    `json:"description"`       // ?Описание (HTML/Markdown)
+	LastComment       string    `json:"last_comment"`      // Последний комментарий
+	LastCommentAuthor string    `json:"last_comment_author,omitempty"`
+	LastActivityDate  time.Time `json:"last_activity"` // Дата последнего изменения
+	CreatedAt         time.Time `json:"created_at"`    // Дата создания
+	CompanyID         string    `json:"company_id"`
+	CompanyName       string    `json:"company_name"`
+	ContractID        *string   `json:"contract_id,omitempty"`
+	IsCommonContract  bool      `json:"is_common_contract,omitempty"`
+	Assignee          *struct {
 		ID       uint   `json:"id"`
 		FullName string `json:"fullName"`
 	} `json:"assignee,omitempty"`

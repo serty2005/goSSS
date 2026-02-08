@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography } from 'antd';
+import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
@@ -19,7 +19,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
   const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode }>>([]);
-  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string }>>({});
+  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; activeContract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
 
@@ -33,13 +33,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!companiesData?.data) return;
 
-    const nextMeta: Record<string, { address?: string; additional?: string; title?: string }> = {};
+    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; activeContract?: boolean }> = {};
     const nextOptions = companiesData.data
       .map((company) => {
         const rawId = (company as { ID?: string; id?: string }).ID ?? (company as { id?: string }).id;
         const rawTitle = (company as { Title?: string; title?: string }).Title ?? (company as { title?: string }).title;
         const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
         const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
+        const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
         const id = rawId ? String(rawId) : '';
         const title = rawTitle || rawAdditional || id;
         if (!id) {
@@ -50,6 +51,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           address: rawAddress ?? undefined,
           additional: rawAdditional ?? undefined,
           title: rawTitle ?? undefined,
+          activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
         };
         return {
           value: id,
@@ -98,6 +100,42 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     enabled: open && Boolean(selectedCompanyId),
     staleTime: 30_000,
   });
+
+  const shouldFetchCompanyDetail = open && Boolean(selectedCompanyId) && !companyMeta[selectedCompanyId ?? ''];
+  const { data: companyDetailData } = useQuery({
+    queryKey: ['company', selectedCompanyId],
+    queryFn: () => companiesApi.getCompany(selectedCompanyId ?? ''),
+    enabled: shouldFetchCompanyDetail,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    const company = companyDetailData?.data;
+    if (!company || !selectedCompanyId) return;
+
+    const rawTitle = (company as { Title?: string; title?: string }).Title ?? (company as { title?: string }).title;
+    const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
+    const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
+    const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
+
+    setCompanyMeta((prev) => ({
+      ...prev,
+      [selectedCompanyId]: {
+        address: rawAddress ?? undefined,
+        additional: rawAdditional ?? undefined,
+        title: rawTitle ?? undefined,
+        activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
+      },
+    }));
+
+    if (rawTitle || rawAdditional) {
+      const label = rawTitle || rawAdditional || selectedCompanyId;
+      setCompanyOptions((prev) => {
+        const exists = prev.some((opt) => opt.value === selectedCompanyId);
+        return exists ? prev : [{ value: selectedCompanyId, label }, ...prev];
+      });
+    }
+  }, [companyDetailData, selectedCompanyId]);
 
   const infrastructure = infrastructureData?.data || [];
 
@@ -206,7 +244,20 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       <Form
         form={form}
         layout="vertical"
-        onFinish={(values) => createMutation.mutate(values)}
+        onFinish={(values) => {
+          const isActive = selectedCompanyMeta?.activeContract === true;
+          if (!isActive) {
+            Modal.confirm({
+              title: 'Контракт неактивен',
+              content: 'Данный тикет будет платным. Продолжить?',
+              okText: 'Ок',
+              cancelText: 'Отмена',
+              onOk: () => createMutation.mutate(values),
+            });
+            return;
+          }
+          createMutation.mutate(values);
+        }}
       >
         <Row gutter={24}>
           <Col xs={24} md={selectedCompanyId ? 12 : 24}>
@@ -244,6 +295,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             </Form.Item>
             {selectedCompanyMeta && (
               <div style={{ marginTop: -6, marginBottom: 12 }}>
+                <Tag color={selectedCompanyMeta.activeContract ? 'success' : 'default'}>
+                  {selectedCompanyMeta.activeContract ? 'Активен' : 'Завершён'}
+                </Tag>
                 {selectedCompanyMeta.address && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                     Адрес: {selectedCompanyMeta.address}

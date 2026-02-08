@@ -1,4 +1,4 @@
-﻿package tickets
+package tickets
 
 import (
 	"etalon-server/internal/domain/common"
@@ -71,6 +71,8 @@ type Ticket struct {
 	// `->` РѕР·РЅР°С‡Р°РµС‚, С‡С‚Рѕ РїРѕР»Рµ С‚РѕР»СЊРєРѕ РґР»СЏ С‡С‚РµРЅРёСЏ (РЅРµ Р±СѓРґРµС‚ СЃРѕР·РґР°РЅР° РєРѕР»РѕРЅРєР° РІ С‚Р°Р±Р»РёС†Рµ tickets).
 	CompanyName string  `json:"company_name,omitempty" gorm:"->"`
 	ContractID  *string `json:"contract_id,omitempty" gorm:"type:text"`
+	// Признак тикета по общему контракту (вычисляется, не хранится в БД).
+	IsCommonContract bool `json:"is_common_contract,omitempty" gorm:"-"`
 
 	// РџРѕР»РёРјРѕСЂС„РЅР°СЏ СЃРІСЏР·СЊ СЃ РѕР±РѕСЂСѓРґРѕРІР°РЅРёРµРј
 	AssetID   *string `json:"asset_id,omitempty" gorm:"type:text;index"`
@@ -109,10 +111,15 @@ type TicketComment struct {
 	IsInternal      bool      `json:"is_internal"`
 }
 
+// LastCommentInfo содержит данные о последнем комментарии.
+type LastCommentInfo struct {
+	Text       string `json:"text"`
+	AuthorName string `json:"author_name"`
+}
+
 func (c *TicketComment) BeforeCreate(tx *gorm.DB) (err error) {
 	if c.ID == "" {
 		c.ID = uuid.New().String()
 	}
 	return
 }
-

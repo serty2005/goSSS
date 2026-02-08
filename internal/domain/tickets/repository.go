@@ -46,7 +46,7 @@ type TicketRepository interface {
 	// Комментарии (офлайн/сидер)
 	AddComments(ctx context.Context, comments []TicketComment) error
 	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)
-	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]string, error)
+	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
