@@ -395,6 +395,7 @@ func (a *Application) setupRouter() *chi.Mux {
 	))
 
 	fileServer(r, "/static/tickets", http.Dir(a.Config.TicketStoragePath))
+	fileServer(r, "/api/static/tickets", http.Dir(a.Config.TicketStoragePath))
 
 	return r
 }

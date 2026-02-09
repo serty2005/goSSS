@@ -355,6 +355,77 @@ func (a *NaumenAdapter) GetTickets(ctx context.Context, statuses []string) (map[
 	return result, nil
 }
 
+func (a *NaumenAdapter) GetComments(ctx context.Context, ticketExternalID string) ([]*tickets.Comment, error) {
+	rawData, err := a.client.FetchComments(ctx, ticketExternalID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*tickets.Comment, 0, len(rawData))
+	for _, item := range rawData {
+		c, mapErr := a.client.Mapper().DataToComment(item)
+		if mapErr != nil || c == nil {
+			continue
+		}
+		result = append(result, c)
+	}
+	return result, nil
+}
+
+func (a *NaumenAdapter) GetFilesBySource(ctx context.Context, sourceUUID string) ([]integration.RemoteFile, error) {
+	rawData, err := a.client.FetchFilesBySource(ctx, sourceUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make([]integration.RemoteFile, 0, len(rawData))
+	for _, item := range rawData {
+		uuid, _ := item["UUID"].(string)
+		if uuid == "" {
+			continue
+		}
+
+		name := ""
+		for _, key := range []string{"fileName", "filename", "name", "title"} {
+			if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
+				name = strings.TrimSpace(val)
+				break
+			}
+		}
+
+		mimeType := ""
+		for _, key := range []string{"mimeType", "contentType"} {
+			if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
+				mimeType = strings.TrimSpace(val)
+				break
+			}
+		}
+
+		size := int64(0)
+		switch v := item["size"].(type) {
+		case float64:
+			size = int64(v)
+		case int64:
+			size = v
+		case int:
+			size = int64(v)
+		}
+
+		files = append(files, integration.RemoteFile{
+			UUID:     uuid,
+			Name:     name,
+			MimeType: mimeType,
+			Size:     size,
+		})
+	}
+
+	return files, nil
+}
+
+func (a *NaumenAdapter) DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error) {
+	return a.client.DownloadFile(ctx, fileUUID)
+}
+
 func (a *NaumenAdapter) CreateTicket(ctx context.Context, ticket *tickets.Ticket) (string, error) {
 	// TODO: Реализовать обратный маппинг (Model -> Map) для создания тикета
 	return "", fmt.Errorf("CreateTicket not implemented in adapter yet")

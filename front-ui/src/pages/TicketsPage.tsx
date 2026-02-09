@@ -53,6 +53,18 @@ const normalizeDescription = (value?: string) => {
 
 const compactDescription = (value?: string) => normalizeDescription(value).replace(/\s*\n\s*/g, ' ').trim();
 
+const sanitizeRichHtml = (value?: string) => {
+  if (!value) return '';
+  return value
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/\son\w+='[^']*'/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/(src|href)=["']\/static\//gi, '$1="/api/static/')
+    .replace(/(src|href)=["']static\//gi, '$1="/api/static/')
+    .replace(/<img\b/gi, '<img style="max-width:100%;height:auto;display:block;"');
+};
+
 const resolveStatusMeta = (status?: string) => {
   if (status && STATUS_META[status]) {
     return STATUS_META[status];
@@ -183,6 +195,7 @@ const TicketsPage: React.FC = () => {
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+  const [isAttachmentsModalOpen, setIsAttachmentsModalOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [statusComment, setStatusComment] = useState('');
   const [isResizingColumn, setIsResizingColumn] = useState(false);
@@ -255,6 +268,7 @@ const TicketsPage: React.FC = () => {
     const params = new URLSearchParams(searchParams);
     params.delete('ticket');
     setSearchParams(params);
+    setIsAttachmentsModalOpen(false);
   };
 
   const resolveEquipmentTitle = (item: InfrastructureItem) => {
@@ -317,8 +331,23 @@ const TicketsPage: React.FC = () => {
     id: comment.uuid,
     author: comment.author_name || 'Сотрудник',
     created_at: dayjs(comment.creation_date).format('DD.MM.YYYY HH:mm'),
-    text: normalizeDescription(comment.text),
+    text: comment.text || '',
   }));
+  const attachments = ((ticketDetails?.attachments || []) as Array<Record<string, unknown>>)
+    .map((item) => {
+      const fileName = String(item.file_name || item.FileName || 'Файл');
+      const rawPath = String(item.file_path || item.FilePath || '');
+      const filePath = rawPath
+        .replace(/^\/static\//, '/api/static/')
+        .replace(/^static\//, '/api/static/');
+      const mimeType = String(item.mime_type || item.MimeType || '');
+      return {
+        fileName,
+        filePath,
+        mimeType,
+      };
+    })
+    .filter((item) => item.filePath !== '');
 
   const connectionsGroups = useMemo(() => {
     return equipment
@@ -775,18 +804,26 @@ const TicketsPage: React.FC = () => {
         title={(
           <div style={{ display: 'grid', alignItems: 'center', gridTemplateColumns: '1fr auto 1fr' }}>
             <span>{modalNumber ? `Заявка #${modalNumber}` : 'Заявка'}</span>
-            <Button
-              size="small"
-              onClick={() => {
-                if (!selectedTicketId) return;
-                setPendingStatus('resolved');
-                setStatusComment('');
-                setIsStatusModalOpen(true);
-              }}
-              disabled={modalStatus === 'resolved'}
-            >
-              Завершить
-            </Button>
+            <Space>
+              <Button
+                size="small"
+                onClick={() => setIsAttachmentsModalOpen(true)}
+              >
+                Вложения ({attachments.length})
+              </Button>
+              <Button
+                size="small"
+                onClick={() => {
+                  if (!selectedTicketId) return;
+                  setPendingStatus('resolved');
+                  setStatusComment('');
+                  setIsStatusModalOpen(true);
+                }}
+                disabled={modalStatus === 'resolved'}
+              >
+                Завершить
+              </Button>
+            </Space>
             <span />
           </div>
         )}
@@ -886,9 +923,12 @@ const TicketsPage: React.FC = () => {
                       </Space>
                     </Space>
                   ) : (
-                    <Paragraph type="secondary" style={{ marginBottom: 0, whiteSpace: 'pre-line' }}>
-                      {normalizeDescription((metadata?.description as string | undefined) || selectedTicket?.description) || 'Нет описания'}
-                    </Paragraph>
+                    <div
+                      style={{ width: '100%', color: 'rgba(0,0,0,0.65)' }}
+                      dangerouslySetInnerHTML={{
+                        __html: sanitizeRichHtml((metadata?.description as string | undefined) || selectedTicket?.description || '<span>Нет описания</span>'),
+                      }}
+                    />
                   )}
                 </div>
 
@@ -1016,7 +1056,10 @@ const TicketsPage: React.FC = () => {
                         </Text>
                         <Text type="secondary">{item.created_at}</Text>
                       </Space>
-                      <Text style={{ whiteSpace: 'pre-line' }}>{item.text}</Text>
+                      <div
+                        style={{ width: '100%' }}
+                        dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }}
+                      />
                     </Space>
                   </List.Item>
                 )}
@@ -1048,6 +1091,43 @@ const TicketsPage: React.FC = () => {
             </Text>
           </div>
         </Space>
+      </Modal>
+
+      <Modal
+        open={isAttachmentsModalOpen}
+        onCancel={() => setIsAttachmentsModalOpen(false)}
+        footer={null}
+        width={640}
+        title={`Вложения (${attachments.length})`}
+      >
+        {attachments.length === 0 ? (
+          <Empty description="Вложений нет" />
+        ) : (
+          <List
+            dataSource={attachments}
+            renderItem={(item) => {
+              const isImage = item.mimeType.startsWith('image/');
+              return (
+                <List.Item>
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <a href={item.filePath} target="_blank" rel="noreferrer">
+                      {item.fileName}
+                    </a>
+                    {isImage && (
+                      <a href={item.filePath} target="_blank" rel="noreferrer">
+                        <img
+                          src={item.filePath}
+                          alt={item.fileName}
+                          style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 8 }}
+                        />
+                      </a>
+                    )}
+                  </Space>
+                </List.Item>
+              );
+            }}
+          />
+        )}
       </Modal>
 
       <Modal

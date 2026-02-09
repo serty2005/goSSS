@@ -31,28 +31,33 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 
 // Migrate выполняет автомиграцию схемы базы данных.
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		// Домен Users & RBAC
+	if err := db.AutoMigrate(
 		&user.User{}, &user.Role{},
-
-		// Домен Tickets
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
-
-		// CMDB (Используют обновленный common.Base без MetaClass)
+		&tickets.FileAsset{}, &tickets.TicketFileLink{},
 		&company.Company{},
 		&server.Server{},
 		&workstation.Workstation{},
 		&fiscal.FiscalRegister{},
 		&contract.Contract{},
-
-		// Вспомогательные модели
 		&models.AgentFile{},
 		&models.ReconciliationTask{},
 		&models.Agent{},
 		&models.CompanyContract{},
 		&models.ExternalSystemLink{},
 		&models.EquipmentStatusLog{},
-	)
+	); err != nil {
+		return err
+	}
+
+	if err := ensureTicketFileIndexes(db); err != nil {
+		return err
+	}
+	if err := migrateLegacyAttachments(db); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // SeedAdminUser создает пользователя-администратора, если он не существует.

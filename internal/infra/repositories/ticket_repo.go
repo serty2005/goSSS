@@ -8,7 +8,9 @@ import (
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ticketRepo struct {
@@ -33,13 +35,11 @@ func (r *ticketRepo) Create(ctx context.Context, ticket *tickets.Ticket) error {
 }
 
 func (r *ticketRepo) Update(ctx context.Context, ticket *tickets.Ticket) error {
-	// Обновляем все поля модели
 	return r.db.WithContext(ctx).Save(ticket).Error
 }
 
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket
-	// Preload связей: Исполнитель, Репортер
 	err := r.db.WithContext(ctx).
 		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
 		Select("tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name").
@@ -77,7 +77,7 @@ func (r *ticketRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*
 		First(&ticket).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil // Возвращаем nil, если не найдено (для логики синхронизации)
+		return nil, nil
 	}
 	return &ticket, err
 }
@@ -154,8 +154,6 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	return query
 }
 
-// --- History & Attachments ---
-
 func (r *ticketRepo) AddHistory(ctx context.Context, history *tickets.TicketHistory) error {
 	return r.db.WithContext(ctx).Create(history).Error
 }
@@ -172,13 +170,87 @@ func (r *ticketRepo) AddAttachment(ctx context.Context, attachment *tickets.Atta
 
 func (r *ticketRepo) GetAttachments(ctx context.Context, ticketID string) ([]tickets.Attachment, error) {
 	var attachments []tickets.Attachment
-	err := r.db.WithContext(ctx).
-		Where("entity_id = ? AND entity_type = ?", ticketID, "Ticket").
-		Find(&attachments).Error
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT
+			fa.id as id,
+			tfl.ticket_id as entity_id,
+			'Ticket' as entity_type,
+			fa.original_name as file_name,
+			('/api/static/tickets/' || fa.storage_key) as file_path,
+			fa.mime_type,
+			fa.size,
+			tfl.created_at
+		FROM ticket_file_links tfl
+		JOIN file_assets fa ON fa.id = tfl.file_id
+		WHERE tfl.ticket_id = ? AND tfl.relation_type = ?
+		ORDER BY tfl.created_at DESC`,
+		ticketID,
+		tickets.RelationTypeDirectTicketAttachment,
+	).Scan(&attachments).Error
 	return attachments, err
 }
 
-// --- Comments ---
+func (r *ticketRepo) UpsertFileAsset(ctx context.Context, file *tickets.FileAsset) (*tickets.FileAsset, error) {
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "storage_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"original_name", "mime_type", "size", "checksum", "updated_at"}),
+	}).Create(file).Error; err != nil {
+		return nil, err
+	}
+
+	var persisted tickets.FileAsset
+	if err := r.db.WithContext(ctx).Where("storage_key = ?", file.StorageKey).First(&persisted).Error; err != nil {
+		return nil, err
+	}
+	return &persisted, nil
+}
+
+func (r *ticketRepo) GetFileAssetByID(ctx context.Context, id string) (*tickets.FileAsset, error) {
+	var file tickets.FileAsset
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&file).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &file, nil
+}
+
+func (r *ticketRepo) GetFileAssetByStorageKey(ctx context.Context, storageKey string) (*tickets.FileAsset, error) {
+	var file tickets.FileAsset
+	err := r.db.WithContext(ctx).Where("storage_key = ?", storageKey).First(&file).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &file, nil
+}
+
+func (r *ticketRepo) UpsertTicketFileLink(ctx context.Context, link *tickets.TicketFileLink) error {
+	if strings.TrimSpace(link.ID) == "" {
+		link.ID = uuid.New().String()
+	}
+	return r.db.WithContext(ctx).Exec(
+		`INSERT INTO ticket_file_links (id, ticket_id, file_id, relation_type, comment_uuid, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+		 ON CONFLICT (ticket_id, file_id, relation_type, COALESCE(comment_uuid, ''))
+		 DO UPDATE SET updated_at = NOW()`,
+		link.ID, link.TicketID, link.FileID, link.RelationType, link.CommentUUID,
+	).Error
+}
+
+func (r *ticketRepo) GetTicketFileLinksByRelation(ctx context.Context, ticketID string, relationTypes []string) ([]tickets.TicketFileLink, error) {
+	var links []tickets.TicketFileLink
+	query := r.db.WithContext(ctx).Where("ticket_id = ?", ticketID)
+	if len(relationTypes) > 0 {
+		query = query.Where("relation_type IN ?", relationTypes)
+	}
+	err := query.Find(&links).Error
+	return links, err
+}
 
 func (r *ticketRepo) AddComments(ctx context.Context, comments []tickets.TicketComment) error {
 	if len(comments) == 0 {

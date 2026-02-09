@@ -14,9 +14,7 @@ import (
 )
 
 // Config хранит всю конфигурацию приложения.
-// Значения считываются из переменных окружения или из файла .env.
 type Config struct {
-	// --- Общие настройки ---
 	ServerPort         string
 	DatabaseURL        string
 	LogDir             string
@@ -25,7 +23,6 @@ type Config struct {
 	RequestTimeout     time.Duration
 	AllowedOrigins     []string
 
-	// --- Настройки API ---
 	AgentAPIKey      string
 	SeederKey        string
 	JWTSecret        string
@@ -34,7 +31,6 @@ type Config struct {
 	AdminPassword    string
 	AdminFullName    string
 
-	// --- Настройки ServiceDesk Client ---
 	ServiceDeskBaseURL string
 	ServiceDeskKey     string
 	RateLimit          int
@@ -42,22 +38,15 @@ type Config struct {
 	ConcurrentRequests int
 	ServiceDeskDryRun  bool
 
-	// --- Настройки фоновых шлюзов (Gateways) ---
-
-	// Шлюз синхронизации с ServiceDesk (сущности)
 	EnableSDeskGateway bool
 	SDeskSyncInterval  time.Duration
-	// Путь для хранения вложений тикетов
-	TicketStoragePath string
+	TicketStoragePath  string
 
-	// Шлюз синхронизации контрактов
 	EnableContractGateway bool
 	ContractSyncInterval  time.Duration
 
-	// Общий контракт для платных тикетов
 	CommonContractID string
 
-	// Шлюз опроса статусов серверов (RMS Polling)
 	EnablePollingGateway   bool
 	ServerPollingInterval  time.Duration
 	ServerPollingBatchSize int
@@ -65,9 +54,8 @@ type Config struct {
 	RMSPassword1           string
 	RMSPassword2           string
 
-	// Шлюз для данных от агентов (FTP)
 	EnableAgentFTPGateway bool
-	AgentFTPInterval      time.Duration // Бывший ReconcileInterval
+	AgentFTPInterval      time.Duration
 	FTPHost               string
 	FTPUser               string
 	FTPPassword           string
@@ -75,22 +63,16 @@ type Config struct {
 	FTPPath               string
 	FTPCachePath          string
 
-	// Шлюз поиска дубликатов
 	EnableDuplicatesGateway  bool
 	DuplicatesSearchInterval time.Duration
 
-	// --- Настройки фоновых воркеров ---
-
-	// Воркер поиска расхождений для ФР
 	EnableFRDiscrepancyFinder  bool
 	FRDiscrepancyCheckInterval time.Duration
 
-	// Воркер проверки актуальности статусов
 	EnableStatusWorker   bool
 	StatusWorkerInterval time.Duration
 }
 
-// New загружает конфигурацию из файла .env и переменных окружения.
 func New() *Config {
 	if err := loadEnv(); err != nil {
 		log.Printf("Failed to load .env (%v). Using environment variables.", err)
@@ -99,7 +81,6 @@ func New() *Config {
 	allowedOriginsStr := getEnv("ALLOWED_ORIGINS", "http://localhost:5173")
 
 	return &Config{
-		// Общие
 		ServerPort:         getEnv("PORT", "8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
 		LogDir:             getEnv("LOG_DIR", "./logs"),
@@ -108,16 +89,14 @@ func New() *Config {
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
-		// API
 		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
 		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
 		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
-		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440), // 24 часа
+		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
 		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
 		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
 		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
 
-		// ServiceDesk Client
 		ServiceDeskBaseURL: getEnv("BASE_URL", "https://servicedesk.example.com"),
 		ServiceDeskKey:     getEnv("SDKEY", ""),
 		RateLimit:          getEnvAsInt("RATE_LIMIT", 45),
@@ -125,21 +104,15 @@ func New() *Config {
 		ConcurrentRequests: getEnvAsInt("CONCURRENT_REQUESTS", 10),
 		ServiceDeskDryRun:  getEnvAsBool("SD_DRY_RUN", false),
 
-		// --- Шлюзы ---
-
-		// ServiceDesk Gateway
 		EnableSDeskGateway: getEnvAsBool("ENABLE_SDESK_GATEWAY", true),
 		SDeskSyncInterval:  time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
-		// Contract Gateway
 		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
 		ContractSyncInterval:  time.Duration(getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)) * time.Minute,
 
-		// Общий контракт
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 
-		// Server Polling Gateway
 		EnablePollingGateway:   getEnvAsBool("ENABLE_POLLING_GATEWAY", true),
 		ServerPollingInterval:  time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour,
 		ServerPollingBatchSize: getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),
@@ -147,7 +120,6 @@ func New() *Config {
 		RMSPassword1:           getEnv("RMS_PASSWORD_1", ""),
 		RMSPassword2:           getEnv("RMS_PASSWORD_2", ""),
 
-		// Agent FTP Gateway
 		EnableAgentFTPGateway: getEnvAsBool("ENABLE_AGENT_FTP_GATEWAY", true),
 		AgentFTPInterval:      time.Duration(getEnvAsInt("AGENT_FTP_INTERVAL_MIN", 60)) * time.Minute,
 		FTPHost:               getEnv("FTP_HOST", "localhost"),
@@ -157,16 +129,12 @@ func New() *Config {
 		FTPPath:               getEnv("FTP_PATH", "/"),
 		FTPCachePath:          getEnv("FTP_CACHE_PATH", "./ftp_cache"),
 
-		// Duplicates Gateway
 		EnableDuplicatesGateway:  getEnvAsBool("ENABLE_DUPLICATES_GATEWAY", true),
-		DuplicatesSearchInterval: time.Duration(getEnvAsInt("DUPLICATES_SEARCH_INTERVAL_HOURS", 24)) * time.Hour, // Раз в сутки по умолчанию
+		DuplicatesSearchInterval: time.Duration(getEnvAsInt("DUPLICATES_SEARCH_INTERVAL_HOURS", 24)) * time.Hour,
 
-		// --- Воркеры ---
-		// FR Discrepancy Finder
 		EnableFRDiscrepancyFinder:  getEnvAsBool("ENABLE_FR_DISCREPANCY_FINDER", true),
-		FRDiscrepancyCheckInterval: time.Duration(getEnvAsInt("FR_DISCREPANCY_CHECK_INTERVAL_HOURS", 6)) * time.Hour, // Раз в 6 часов
+		FRDiscrepancyCheckInterval: time.Duration(getEnvAsInt("FR_DISCREPANCY_CHECK_INTERVAL_HOURS", 6)) * time.Hour,
 
-		// Status Actuality Worker
 		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", true),
 		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
 	}
@@ -183,7 +151,6 @@ func loadEnv() error {
 		return err
 	}
 
-	// Strip UTF-8 BOM if present
 	if bytes.HasPrefix(data, []byte{0xEF, 0xBB, 0xBF}) {
 		data = data[3:]
 	}
@@ -225,7 +192,6 @@ func findEnvPath() (string, error) {
 	return "", os.ErrNotExist
 }
 
-// Вспомогательная функция для получения переменной окружения с значением по умолчанию.
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -233,7 +199,6 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// Вспомогательная функция для получения int из переменной окружения.
 func getEnvAsInt(key string, fallback int) int {
 	if valueStr := getEnv(key, ""); valueStr != "" {
 		if value, err := strconv.Atoi(valueStr); err == nil {
@@ -243,7 +208,6 @@ func getEnvAsInt(key string, fallback int) int {
 	return fallback
 }
 
-// Вспомогательная функция для получения bool из переменной окружения.
 func getEnvAsBool(key string, fallback bool) bool {
 	if valueStr := getEnv(key, ""); valueStr != "" {
 		if value, err := strconv.ParseBool(valueStr); err == nil {

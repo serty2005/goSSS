@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/domain/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // LinkRepo определяет интерфейс для работы с хранилищем связей с внешними системами.
@@ -13,6 +14,7 @@ type LinkRepo interface {
 	GetByExternalID(ctx context.Context, tx *gorm.DB, systemName, externalID string) (*models.ExternalSystemLink, error)
 	GetByInternalID(ctx context.Context, tx *gorm.DB, systemName, internalID string) (*models.ExternalSystemLink, error)
 	Create(ctx context.Context, tx *gorm.DB, link *models.ExternalSystemLink) error
+	Upsert(ctx context.Context, tx *gorm.DB, link *models.ExternalSystemLink) error
 	DeleteByInternalID(ctx context.Context, tx *gorm.DB, systemName, internalID string) error
 	FindInternalIDByExternalID(ctx context.Context, tx *gorm.DB, systemName, externalID string) (string, error)
 }
@@ -62,6 +64,14 @@ func (r *linkRepo) Create(ctx context.Context, tx *gorm.DB, link *models.Externa
 	return r.dbOrTx(tx).WithContext(ctx).Create(link).Error
 }
 
+// Upsert выполняет идемпотентную запись/обновление внешней связи.
+func (r *linkRepo) Upsert(ctx context.Context, tx *gorm.DB, link *models.ExternalSystemLink) error {
+	return r.dbOrTx(tx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "system_name"}, {Name: "service_desk_uuid"}},
+		DoUpdates: clause.AssignmentColumns([]string{"internal_id", "entity_type", "last_synced_at"}),
+	}).Create(link).Error
+}
+
 // DeleteByInternalID удаляет связь по внутреннему ID.
 func (r *linkRepo) DeleteByInternalID(ctx context.Context, tx *gorm.DB, systemName, internalID string) error {
 	return r.dbOrTx(tx).WithContext(ctx).
@@ -76,7 +86,7 @@ func (r *linkRepo) FindInternalIDByExternalID(ctx context.Context, tx *gorm.DB, 
 		Where("system_name = ? AND service_desk_uuid = ?", systemName, externalID).
 		Pluck("internal_id", &internalID).Error
 	if err == gorm.ErrRecordNotFound {
-		return "", nil // Возвращаем пустую строку, а не ошибку, если не найдено
+		return "", nil
 	}
 	return internalID, err
 }

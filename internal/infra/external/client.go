@@ -97,4 +97,10 @@ type ExternalSystemClient interface {
 
 	// FetchComments получает список комментариев для конкретной сущности (заявки).
 	FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error)
+
+	// FetchFilesBySource получает список файлов по source UUID (например, serviceCall$...).
+	FetchFilesBySource(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error)
+
+	// DownloadFile скачивает бинарный файл по UUID и возвращает его содержимое и MIME-тип.
+	DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error)
 }

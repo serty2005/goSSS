@@ -61,6 +61,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	err := s.db.AutoMigrate(
 		&user.User{}, &user.Role{},
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
+		&tickets.FileAsset{}, &tickets.TicketFileLink{},
 		&company.Company{}, &server.Server{}, &workstation.Workstation{},
 		&fiscal.FiscalRegister{}, &contract.Contract{},
 		&models.AgentFile{}, &models.ReconciliationTask{},
@@ -274,6 +275,7 @@ func (s *Seeder) clearDatabase() error {
 		"equipment_status_logs", "external_system_links", "company_contracts",
 		"user_roles", "roles", // Users tables
 		"server_additional_owners",
+		"ticket_file_links", "file_assets",
 		"ticket_comments", "ticket_histories", "attachments", "tickets", // Ticket tables
 		"reconciliation_tasks", "agent_files", "fiscal_registers", "workstations",
 		"servers", "contracts", "companies", "users", "agents",

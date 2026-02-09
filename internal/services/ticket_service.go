@@ -474,14 +474,14 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 
 		// 3. Заменяем ссылку в HTML
 		// Исходная: ... src="./download?uuid=file$13205558" ...
-		// Целевая:  ... src="/static/tickets/serviceCall$123/file$13205558" ...
+		// Целевая:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
 
 		// Находим полный кусок "./download?uuid=file$XXXX" и заменяем его
 		// Регулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
-		// "./download?uuid=" + fileUUID -> "/static/tickets/" + sdUUID + "/" + fileUUID
+		// "./download?uuid=" + fileUUID -> "/api/static/tickets/" + sdUUID + "/" + fileUUID
 
 		oldLink := fmt.Sprintf("./download?uuid=%s", fileUUID)
-		newLink := fmt.Sprintf("/static/tickets/%s/%s", sdUUID, fileUUID)
+		newLink := fmt.Sprintf("/api/static/tickets/%s/%s", sdUUID, fileUUID)
 		processedHtml = strings.ReplaceAll(processedHtml, oldLink, newLink)
 
 		// На случай, если ссылка без точки в начале (бывает по-разному)
@@ -521,4 +521,62 @@ func (s *ticketServiceImpl) downloadFileFromNaumen(fileUUID, destPath string) er
 
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func filterDirectTicketAttachments(
+	attachments []tickets.Attachment,
+	descriptionHTML string,
+	comments []tickets.Comment,
+) []tickets.Attachment {
+	if len(attachments) == 0 {
+		return attachments
+	}
+
+	texts := make([]string, 0, len(comments)+1)
+	if descriptionHTML != "" {
+		texts = append(texts, descriptionHTML)
+	}
+	for _, c := range comments {
+		if c.Text != "" {
+			texts = append(texts, c.Text)
+		}
+	}
+
+	result := make([]tickets.Attachment, 0, len(attachments))
+	for _, a := range attachments {
+		if a.FilePath == "" {
+			result = append(result, a)
+			continue
+		}
+		if isPathReferencedInTexts(a.FilePath, texts) {
+			continue
+		}
+		result = append(result, a)
+	}
+	return result
+}
+
+func isPathReferencedInTexts(path string, texts []string) bool {
+	if path == "" || len(texts) == 0 {
+		return false
+	}
+
+	candidates := []string{path}
+	if strings.HasPrefix(path, "/api/static/") {
+		candidates = append(candidates, strings.TrimPrefix(path, "/api"))
+	} else if strings.HasPrefix(path, "/static/") {
+		candidates = append(candidates, "/api"+path)
+	}
+
+	for _, t := range texts {
+		if t == "" {
+			continue
+		}
+		for _, c := range candidates {
+			if c != "" && strings.Contains(t, c) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -65,8 +65,25 @@ type TicketProvider interface {
 	// GetTickets возвращает Map: ExternalID -> Ticket Model
 	GetTickets(ctx context.Context, statuses []string) (map[string]*tickets.Ticket, error)
 
+	// GetComments возвращает комментарии тикета из внешней системы.
+	GetComments(ctx context.Context, ticketExternalID string) ([]*tickets.Comment, error)
+
+	// GetFilesBySource возвращает файлы, связанные с source UUID (например, тикетом).
+	GetFilesBySource(ctx context.Context, sourceUUID string) ([]RemoteFile, error)
+
+	// DownloadFile скачивает файл по его внешнему UUID.
+	DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error)
+
 	// CreateTicket создает заявку во внешней системе и возвращает её ID.
 	CreateTicket(ctx context.Context, ticket *tickets.Ticket) (string, error)
 	// UpdateTicket обновляет заявку во внешней системе.
 	UpdateTicket(ctx context.Context, externalID string, data map[string]interface{}) error
+}
+
+// RemoteFile метаданные файла во внешней системе.
+type RemoteFile struct {
+	UUID     string
+	Name     string
+	MimeType string
+	Size     int64
 }

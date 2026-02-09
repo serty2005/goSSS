@@ -84,6 +84,16 @@ func (m *MockServiceDeskClient) FetchComments(ctx context.Context, sourceUUID st
 	return []map[string]interface{}{}, nil
 }
 
+// FetchFilesBySource возвращает пустой список файлов.
+func (m *MockServiceDeskClient) FetchFilesBySource(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{}, nil
+}
+
+// DownloadFile возвращает пустой контент.
+func (m *MockServiceDeskClient) DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error) {
+	return []byte{}, "application/octet-stream", nil
+}
+
 // --- Заглушки для остальных методов интерфейса ---
 
 func (m *MockServiceDeskClient) FetchEntitySummaries(ctx context.Context, entityType string) ([]map[string]interface{}, error) {
