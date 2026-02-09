@@ -1,33 +1,29 @@
-# Stage 1: Builder
-FROM golang:1.25-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
-# Копируем зависимости
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Копируем исходный код
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o etalon-server ./cmd/etalon-server
 
-# Собираем бинарник
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o etalon-server ./cmd/etalon-server
-
-# Stage 2: Runtime
-FROM alpine:latest
+FROM alpine:3.20
 
 WORKDIR /app
 
-# Копируем бинарник из билдера
-COPY --from=builder /app/etalon-server .
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S app \
+    && adduser -S -G app app
 
-# Копируем папку с мок-данными для сидера, чтобы они были доступны внутри контейнера
+COPY --from=builder /app/etalon-server ./etalon-server
 COPY --from=builder /app/tools/seeder/mock_data ./tools/seeder/mock_data
 
-RUN mkdir -p ./ftp_cache
+RUN mkdir -p /app/ftp_cache /app/storage/tickets /app/logs \
+    && chown -R app:app /app
 
-# Открываем порт
+USER app
+
 EXPOSE 8080
 
-# По умолчанию запускаем сервер
-CMD ["./etalon-server"]
+ENTRYPOINT ["./etalon-server"]

@@ -152,13 +152,23 @@ type fakeTicketProvider struct {
 	directBySource map[string][]integration.RemoteFile
 	bodyByFileUUID map[string][]byte
 	mimeByFileUUID map[string]string
+	downloadCalls  map[string]int
 }
 
 func (p *fakeTicketProvider) GetFilesBySource(ctx context.Context, sourceUUID string) ([]integration.RemoteFile, error) {
 	return p.directBySource[sourceUUID], nil
 }
 
+func (p *fakeTicketProvider) GetFilesBySources(ctx context.Context, sourceUUIDs []string) (map[string][]integration.RemoteFile, error) {
+	result := make(map[string][]integration.RemoteFile, len(sourceUUIDs))
+	for _, sourceUUID := range sourceUUIDs {
+		result[sourceUUID] = p.directBySource[sourceUUID]
+	}
+	return result, nil
+}
+
 func (p *fakeTicketProvider) DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error) {
+	p.downloadCalls[fileUUID]++
 	body, ok := p.bodyByFileUUID[fileUUID]
 	if !ok {
 		return nil, "", fmt.Errorf("файл %s не найден", fileUUID)
@@ -180,6 +190,7 @@ func newTestFileSyncService(t *testing.T) (*ticketFileSyncService, *fakeTicketFi
 		directBySource: make(map[string][]integration.RemoteFile),
 		bodyByFileUUID: make(map[string][]byte),
 		mimeByFileUUID: make(map[string]string),
+		downloadCalls:  make(map[string]int),
 	}
 
 	svc := newTicketFileSyncService(cfg, log, repo, linkRepo)
@@ -217,8 +228,8 @@ func TestTicketFileSyncService_IdempotentDirectAndInline(t *testing.T) {
 	assert.Equal(t, 1, repo.countRelationByType(tickets.RelationTypeInlineComment))
 	assert.Equal(t, 3, len(repo.filesByID))
 
-	assert.Contains(t, description, "/api/static/tickets/files/")
-	assert.Contains(t, comment, "/api/static/tickets/files/")
+	assert.Contains(t, description, "/api/static/tickets/")
+	assert.Contains(t, comment, "/api/static/tickets/")
 
 	for _, f := range repo.filesByID {
 		abs := filepath.Join(storageRoot, filepath.FromSlash(f.StorageKey))
@@ -254,7 +265,7 @@ func TestTicketFileSyncService_RestoreByExistingExternalLink(t *testing.T) {
 	provider.mimeByFileUUID["file$777"] = "image/png"
 
 	html := svc.ProcessInlineContent(ctx, provider, "ticket-1", "serviceCall$1", `<img src="./download?uuid=file$777">`, tickets.RelationTypeInlineDescription, nil)
-	assert.Contains(t, html, "/api/static/tickets/files/")
+	assert.Contains(t, html, "/api/static/tickets/")
 
 	assert.Equal(t, 1, len(repo.filesByID))
 	ids := repo.relationFileIDsByType(tickets.RelationTypeInlineDescription)
@@ -274,6 +285,7 @@ func TestTicketFileSyncService_RenameSameExternalUUID(t *testing.T) {
 
 	err := svc.SyncDirectTicketFiles(ctx, provider, "ticket-1", "serviceCall$1")
 	require.NoError(t, err)
+	assert.Equal(t, 1, provider.downloadCalls["file$500"])
 
 	link, err := linkRepo.GetByExternalID(ctx, nil, "naumen", "file$500")
 	require.NoError(t, err)
@@ -288,6 +300,7 @@ func TestTicketFileSyncService_RenameSameExternalUUID(t *testing.T) {
 	}
 	err = svc.SyncDirectTicketFiles(ctx, provider, "ticket-1", "serviceCall$1")
 	require.NoError(t, err)
+	assert.Equal(t, 1, provider.downloadCalls["file$500"])
 
 	fileAfter, err := repo.GetFileAssetByID(ctx, link.InternalID)
 	require.NoError(t, err)
@@ -295,4 +308,23 @@ func TestTicketFileSyncService_RenameSameExternalUUID(t *testing.T) {
 	assert.Equal(t, "new_name.png", fileAfter.OriginalName)
 	assert.Equal(t, 1, len(repo.filesByID))
 	assert.Equal(t, 1, repo.countRelationByType(tickets.RelationTypeDirectTicketAttachment))
+}
+
+func TestTicketFileSyncService_SkipDownloadForUnchangedDirectFile(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, provider, _ := newTestFileSyncService(t)
+
+	provider.directBySource["serviceCall$1"] = []integration.RemoteFile{
+		{UUID: "file$900", Name: "report.pdf", MimeType: "application/pdf", Size: 10},
+	}
+	provider.bodyByFileUUID["file$900"] = []byte("0123456789")
+	provider.mimeByFileUUID["file$900"] = "application/pdf"
+
+	err := svc.SyncDirectTicketFiles(ctx, provider, "ticket-1", "serviceCall$1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, provider.downloadCalls["file$900"])
+
+	err = svc.SyncDirectTicketFiles(ctx, provider, "ticket-1", "serviceCall$1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, provider.downloadCalls["file$900"])
 }

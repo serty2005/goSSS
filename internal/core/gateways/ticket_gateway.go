@@ -2,6 +2,7 @@ package gateways
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,7 +18,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// TicketGateway отвечает за синхронизацию заявок.
+var (
+	descriptionDownloadFileLinkPattern = regexp.MustCompile(`(?i)(src|href)\s*=\s*["'](?:\.?/)?download\?uuid=file\$[0-9]+["']`)
+	descriptionStaticFileLinkPattern   = regexp.MustCompile(`(?i)(src|href)\s*=\s*["'](?:/api)?/static/tickets/[^"']+["']`)
+)
+
 type TicketGateway interface {
 	Start(ctx context.Context)
 }
@@ -101,6 +106,34 @@ func (g *ticketGatewayImpl) processProvider(ctx context.Context, provider integr
 
 	log.Info("Получено заявок от провайдера", "count", len(receivedTickets))
 
+	externalUUIDs := make([]string, 0, len(receivedTickets))
+	for extUUID, ticket := range receivedTickets {
+		if extUUID == "" || ticket == nil {
+			continue
+		}
+		externalUUIDs = append(externalUUIDs, extUUID)
+	}
+
+	var filesBySource map[string][]integration.RemoteFile
+	if len(externalUUIDs) > 0 {
+		batchFiles, batchErr := provider.GetFilesBySources(ctx, externalUUIDs)
+		if batchErr != nil {
+			log.Warn("Ошибка batch-получения файлов тикетов, будет использован поштучный fallback", "error", batchErr)
+		} else {
+			filesBySource = batchFiles
+		}
+	}
+
+	var commentsBySource map[string][]*tickets.Comment
+	if len(externalUUIDs) > 0 {
+		batchComments, batchErr := provider.GetCommentsBySources(ctx, externalUUIDs)
+		if batchErr != nil {
+			log.Warn("Ошибка batch-получения комментариев тикетов, будет использован поштучный fallback", "error", batchErr)
+		} else {
+			commentsBySource = batchComments
+		}
+	}
+
 	countUpserted := 0
 	countRestored := 0
 	countContentOK := 0
@@ -119,7 +152,9 @@ func (g *ticketGatewayImpl) processProvider(ctx context.Context, provider integr
 			countRestored++
 		}
 
-		if err := g.syncTicketContent(ctx, provider, localTicket, log); err != nil {
+		prefetchedFiles, hasPrefetchedFiles := filesBySource[extUUID]
+		prefetchedComments, hasPrefetchedComments := commentsBySource[extUUID]
+		if err := g.syncTicketContent(ctx, provider, localTicket, prefetchedFiles, hasPrefetchedFiles, prefetchedComments, hasPrefetchedComments, log); err != nil {
 			log.Warn("Ошибка синхронизации комментариев/файлов тикета", "ticket_id", localTicket.ID, "external_uuid", extUUID, "error", err)
 			continue
 		}
@@ -143,10 +178,12 @@ func (g *ticketGatewayImpl) upsertTicket(
 	link, _ := g.linkRepo.GetByExternalID(ctx, nil, provider.SystemName(), extUUID)
 	if link != nil {
 		ticket.ID = link.InternalID
+		before, _ := g.ticketRepo.GetByID(ctx, ticket.ID)
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Error("Ошибка обновления заявки", "id", ticket.ID, "error", err)
 			return nil, false, err
 		}
+		g.recordSyncFieldHistory(ctx, ticket.ID, before, ticket)
 		return ticket, false, nil
 	}
 
@@ -164,10 +201,12 @@ func (g *ticketGatewayImpl) upsertTicket(
 		}
 		_ = g.linkRepo.Upsert(ctx, nil, newLink)
 
+		before, _ := g.ticketRepo.GetByID(ctx, ticket.ID)
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Error("Ошибка обновления заявки после восстановления связи", "id", ticket.ID, "error", err)
 			return nil, false, err
 		}
+		g.recordSyncFieldHistory(ctx, ticket.ID, before, ticket)
 		return ticket, true, nil
 	}
 
@@ -175,6 +214,7 @@ func (g *ticketGatewayImpl) upsertTicket(
 		log.Error("Ошибка создания заявки", "uuid", extUUID, "error", err)
 		return nil, false, err
 	}
+	g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, "", ticket.Status)
 
 	newLink := &models.ExternalSystemLink{
 		InternalID:      ticket.ID,
@@ -191,6 +231,10 @@ func (g *ticketGatewayImpl) syncTicketContent(
 	ctx context.Context,
 	provider integration.TicketProvider,
 	ticket *tickets.Ticket,
+	prefetchedFiles []integration.RemoteFile,
+	hasPrefetchedFiles bool,
+	prefetchedComments []*tickets.Comment,
+	hasPrefetchedComments bool,
 	log logger.LoggerInterface,
 ) error {
 	if ticket == nil || ticket.ServiceDeskUUID == "" {
@@ -207,17 +251,43 @@ func (g *ticketGatewayImpl) syncTicketContent(
 		nil,
 	)
 	if processedDescription != ticket.Description {
+		oldDescription := ticket.Description
 		ticket.Description = processedDescription
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Warn("Ошибка обновления описания тикета с обработанными ссылками", "ticket_id", ticket.ID, "error", err)
+		} else if isMeaningfulDescriptionChange(oldDescription, processedDescription) {
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, oldDescription, processedDescription)
 		}
 	}
 
-	if err := g.syncTicketComments(ctx, provider, ticket, log); err != nil {
+	processedResult := g.fileSyncService.ProcessInlineContent(
+		ctx,
+		provider,
+		ticket.ID,
+		ticket.ServiceDeskUUID,
+		ticket.Result,
+		tickets.RelationTypeInlineResult,
+		nil,
+	)
+	if processedResult != ticket.Result {
+		oldResult := ticket.Result
+		ticket.Result = processedResult
+		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
+			log.Warn("Ошибка обновления результата тикета с обработанными ссылками", "ticket_id", ticket.ID, "error", err)
+		} else if isMeaningfulDescriptionChange(oldResult, processedResult) {
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, oldResult, processedResult)
+		}
+	}
+
+	if err := g.syncTicketComments(ctx, provider, ticket, prefetchedComments, hasPrefetchedComments, log); err != nil {
 		return err
 	}
 
-	if err := g.fileSyncService.SyncDirectTicketFiles(ctx, provider, ticket.ID, ticket.ServiceDeskUUID); err != nil {
+	if hasPrefetchedFiles {
+		if err := g.fileSyncService.SyncDirectTicketFilesWithRemote(ctx, provider, ticket.ID, prefetchedFiles); err != nil {
+			return err
+		}
+	} else if err := g.fileSyncService.SyncDirectTicketFiles(ctx, provider, ticket.ID, ticket.ServiceDeskUUID); err != nil {
 		return err
 	}
 
@@ -228,11 +298,17 @@ func (g *ticketGatewayImpl) syncTicketComments(
 	ctx context.Context,
 	provider integration.TicketProvider,
 	ticket *tickets.Ticket,
+	prefetchedComments []*tickets.Comment,
+	hasPrefetchedComments bool,
 	log logger.LoggerInterface,
 ) error {
-	remoteComments, err := provider.GetComments(ctx, ticket.ServiceDeskUUID)
-	if err != nil {
-		return err
+	remoteComments := prefetchedComments
+	if !hasPrefetchedComments {
+		var err error
+		remoteComments, err = provider.GetComments(ctx, ticket.ServiceDeskUUID)
+		if err != nil {
+			return err
+		}
 	}
 	if len(remoteComments) == 0 {
 		return nil
@@ -289,7 +365,9 @@ func (g *ticketGatewayImpl) syncTicketComments(
 			}
 			if err := g.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
 				log.Warn("Ошибка сохранения комментария", "ticket_id", ticket.ID, "comment_uuid", c.UUID, "error", err)
+				continue
 			}
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", processedText)
 		}
 	}
 
@@ -309,4 +387,41 @@ func (g *ticketGatewayImpl) loadCommentMap(ctx context.Context, ticketID string)
 		result[item.ServiceDeskUUID] = item
 	}
 	return result, nil
+}
+
+func (g *ticketGatewayImpl) recordSyncFieldHistory(ctx context.Context, ticketID string, before *tickets.Ticket, after *tickets.Ticket) {
+	if before == nil || after == nil {
+		return
+	}
+
+	if before.Status != after.Status {
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, before.Status, after.Status)
+	}
+	if isMeaningfulDescriptionChange(before.Description, after.Description) {
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, before.Description, after.Description)
+	}
+	if isMeaningfulDescriptionChange(before.Result, after.Result) {
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, before.Result, after.Result)
+	}
+}
+
+func isMeaningfulDescriptionChange(oldDescription, newDescription string) bool {
+	return normalizeDescriptionForHistory(oldDescription) != normalizeDescriptionForHistory(newDescription)
+}
+
+func normalizeDescriptionForHistory(value string) string {
+	normalized := descriptionDownloadFileLinkPattern.ReplaceAllString(value, `$1="__ticket_file__"`)
+	normalized = descriptionStaticFileLinkPattern.ReplaceAllString(normalized, `$1="__ticket_file__"`)
+	return normalized
+}
+
+func (g *ticketGatewayImpl) addHistory(ctx context.Context, ticketID, action, field, oldVal, newVal string) {
+	_ = g.ticketRepo.AddHistory(ctx, &tickets.TicketHistory{
+		TicketID:  ticketID,
+		Action:    action,
+		Field:     field,
+		OldValue:  oldVal,
+		NewValue:  newVal,
+		CreatedAt: time.Now(),
+	})
 }

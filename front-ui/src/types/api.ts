@@ -178,6 +178,7 @@ export interface TicketListItemDTO {
   subject: string;
   company_name?: string;
   description?: string;
+  result?: string;
   status: TicketStatus;
   last_comment?: string;
   last_comment_author?: string;
@@ -194,10 +195,12 @@ export interface TicketListItemDTO {
 
 // --- Tickets DTO ---
 export interface TicketDTO {
-  id: number;
+  id: string;
   number: number;
   subject: string;
   description?: string;
+  result?: string;
+  company_name?: string;
   status: TicketStatus;
   priority?: string;
   created_at: string;
@@ -219,6 +222,17 @@ export interface TicketCreatePayload {
   priority?: string;
 }
 
+export interface TicketHistoryDTO {
+  id: number;
+  ticket_id: string;
+  user_id?: number;
+  action: string;
+  field: string;
+  old_value: string;
+  new_value: string;
+  created_at: string;
+}
+
 export interface TicketCommentDTO {
   uuid: string;
   text: string;
@@ -231,7 +245,7 @@ export interface TicketDetailsDTO {
   metadata: TicketDTO;
   company_name?: string;
   comments: TicketCommentDTO[];
-  history?: unknown[];
+  history?: TicketHistoryDTO[];
   attachments?: unknown[];
 }
 

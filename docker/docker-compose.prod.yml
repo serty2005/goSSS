@@ -1,0 +1,67 @@
+name: gosss-prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gosss-net
+
+  server:
+    image: ${BACKEND_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${SERVER_PORT:-9999}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ftp_cache:/app/ftp_cache
+      - storage_tickets:/app/storage/tickets
+      - app_logs:/app/logs
+    networks:
+      - gosss-net
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - server
+    networks:
+      - gosss-net
+
+  init-seeder:
+    image: ${BACKEND_IMAGE}
+    profiles:
+      - seed
+    env_file:
+      - .env
+    command: ["--seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - gosss-net
+
+volumes:
+  pg_data:
+  ftp_cache:
+  storage_tickets:
+  app_logs:
+
+networks:
+  gosss-net:
+    driver: bridge

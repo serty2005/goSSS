@@ -38,7 +38,7 @@ var attrsMap = map[string]string{
 	string(domain.MetaClassWorkstation): "Commentariy,Teamviewer,AnyDesk,DeviceName,litemanagerID,lastModifiedDate,UUID,owner",
 	string(domain.MetaClassFR):          "UUID,ModelKKT,lastModifiedDate,owner,FFD,FRDownloader,RNKKT,KKTRegDate,FNExpireDate,LegalName,FRSerialNumber,FNNumber,FRFirmware",
 	string(domain.MetaClassAgreement):   "state,stateStartTime,services,recipientsOU,lastModifiedDate",
-	string(domain.MetaClassServiceCall): "number,lastComment,agreement,requestDate,descriptionRTF,clientOU,lastModifiedDate,UUID,state",
+	string(domain.MetaClassServiceCall): "number,lastComment,agreement,requestDate,descriptionRTF,resultDescr,clientOU,lastModifiedDate,UUID,state",
 	string(domain.MetaClassComment):     "UUID,text,author,creationDate,private,files",
 }
 
@@ -307,30 +307,50 @@ func (s *naumenClientImpl) FindReferenceID(ctx context.Context, referenceType, t
 
 // FetchComments получает список комментариев для заявки.
 func (s *naumenClientImpl) FetchComments(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
-	metaClass := string(domain.MetaClassComment)
-	// attrs := attrsMap[metaClass]
-	url := fmt.Sprintf("%s/find/%s", s.baseURL, metaClass)
-
-	// Формируем тело запроса: фильтр по источнику (заявке)
-	filter := map[string]string{
-		"source": sourceUUID,
-	}
-	bodyBytes, err := json.Marshal(filter)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка сериализации фильтра: %w", err)
-	}
-
-	// // Атрибуты передаем через query params, а фильтр - через body
-	// params := map[string]string{
-	// 	"attrs": attrs,
-	// }
-
-	var responseList []map[string]interface{}
-	// Передаем bytes.NewBuffer(bodyBytes) вместо nil
-	err = s.doWithRetry(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes), &responseList)
+	s.logger.Info("Запрос комментариев Naumen по одной заявке", "source_uuid", sourceUUID)
+	responseList, err := s.FetchCommentsBySources(ctx, []string{sourceUUID})
 	if err != nil {
 		return nil, fmt.Errorf("ошибка получения комментариев к заявке %s: %w", sourceUUID, err)
 	}
+	s.logger.Info("Получены комментарии Naumen по одной заявке", "source_uuid", sourceUUID, "count", len(responseList))
+	return responseList, nil
+}
+
+// FetchCommentsBySources получает список комментариев по набору source UUID.
+func (s *naumenClientImpl) FetchCommentsBySources(ctx context.Context, sourceUUIDs []string) ([]map[string]interface{}, error) {
+	metaClass := string(domain.MetaClassComment)
+	url := fmt.Sprintf("%s/find/%s", s.baseURL, metaClass)
+
+	unique := make([]string, 0, len(sourceUUIDs))
+	seen := make(map[string]struct{}, len(sourceUUIDs))
+	for _, sourceUUID := range sourceUUIDs {
+		sourceUUID = strings.TrimSpace(sourceUUID)
+		if sourceUUID == "" {
+			continue
+		}
+		if _, ok := seen[sourceUUID]; ok {
+			continue
+		}
+		seen[sourceUUID] = struct{}{}
+		unique = append(unique, sourceUUID)
+	}
+	if len(unique) == 0 {
+		return []map[string]interface{}{}, nil
+	}
+	s.logger.Info("Запрос batch-комментариев Naumen", "sources_count", len(unique))
+
+	filter := map[string][]string{"source": unique}
+	bodyBytes, err := json.Marshal(filter)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сериализации фильтра комментариев: %w", err)
+	}
+
+	var responseList []map[string]interface{}
+	err = s.doWithRetry(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes), &responseList)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения комментариев по source: %w", err)
+	}
+	s.logger.Info("Получены batch-комментарии Naumen", "sources_count", len(unique), "comments_count", len(responseList))
 	return responseList, nil
 }
 
@@ -734,6 +754,9 @@ func (m *naumenMapper) DataToTicket(ctx context.Context, mc *external.MapperCont
 		ticket.Subject = utils.StripHTML(description)
 		// В новой модели Description хранит HTML описание
 		ticket.Description = description
+	}
+	if result, ok := data["resultDescr"].(string); ok {
+		ticket.Result = result
 	}
 
 	// LastComment больше нет в модели Ticket. Игнорируем или добавляем логику истории,

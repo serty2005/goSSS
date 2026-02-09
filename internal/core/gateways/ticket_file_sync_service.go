@@ -32,6 +32,7 @@ var (
 
 type ticketProvider interface {
 	GetFilesBySource(ctx context.Context, sourceUUID string) ([]integration.RemoteFile, error)
+	GetFilesBySources(ctx context.Context, sourceUUIDs []string) (map[string][]integration.RemoteFile, error)
 	DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error)
 }
 
@@ -132,9 +133,23 @@ func (s *ticketFileSyncService) SyncDirectTicketFiles(
 	ticketID string,
 	ticketExternalUUID string,
 ) error {
+	remoteFiles, err := provider.GetFilesBySource(ctx, ticketExternalUUID)
+	if err != nil {
+		return err
+	}
+	return s.SyncDirectTicketFilesWithRemote(ctx, provider, ticketID, remoteFiles)
+}
+
+func (s *ticketFileSyncService) SyncDirectTicketFilesWithRemote(
+	ctx context.Context,
+	provider ticketProvider,
+	ticketID string,
+	remoteFiles []integration.RemoteFile,
+) error {
 	inlineLinks, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, []string{
 		tickets.RelationTypeInlineDescription,
 		tickets.RelationTypeInlineComment,
+		tickets.RelationTypeInlineResult,
 	})
 	if err != nil {
 		return err
@@ -145,11 +160,6 @@ func (s *ticketFileSyncService) SyncDirectTicketFiles(
 		if strings.TrimSpace(link.FileID) != "" {
 			inlineFileIDs[link.FileID] = struct{}{}
 		}
-	}
-
-	remoteFiles, err := provider.GetFilesBySource(ctx, ticketExternalUUID)
-	if err != nil {
-		return err
 	}
 
 	for _, rf := range remoteFiles {
@@ -238,39 +248,50 @@ func (s *ticketFileSyncService) ensureFileAsset(
 		return "", nil, err
 	}
 
-	fileBytes, contentType, err := provider.DownloadFile(ctx, fileUUID)
-	if err != nil {
-		return "", nil, err
-	}
+	shouldDownload := s.shouldDownloadFile(existing, absPath, remoteSize)
+	downloaded := false
+	checksum := strings.TrimSpace(existing.Checksum)
+	var fileBytes []byte
+	var contentType string
 
-	sum := sha256.Sum256(fileBytes)
-	checksum := hex.EncodeToString(sum[:])
-
-	needWrite := true
-	if st, statErr := os.Stat(absPath); statErr == nil {
-		existingChecksum := existing.Checksum
-		if existingChecksum == "" {
-			if b, readErr := os.ReadFile(absPath); readErr == nil {
-				hash := sha256.Sum256(b)
-				existingChecksum = hex.EncodeToString(hash[:])
-			}
+	if shouldDownload {
+		fileBytes, contentType, err = provider.DownloadFile(ctx, fileUUID)
+		if err != nil {
+			return "", nil, err
 		}
-		if existingChecksum != "" && existingChecksum == checksum {
-			needWrite = false
-		} else if st.Size() == int64(len(fileBytes)) {
-			if b, readErr := os.ReadFile(absPath); readErr == nil {
-				hash := sha256.Sum256(b)
-				if hex.EncodeToString(hash[:]) == checksum {
-					needWrite = false
+		downloaded = true
+
+		sum := sha256.Sum256(fileBytes)
+		checksum = hex.EncodeToString(sum[:])
+
+		needWrite := true
+		if st, statErr := os.Stat(absPath); statErr == nil {
+			existingChecksum := existing.Checksum
+			if existingChecksum == "" {
+				if b, readErr := os.ReadFile(absPath); readErr == nil {
+					hash := sha256.Sum256(b)
+					existingChecksum = hex.EncodeToString(hash[:])
+				}
+			}
+			if existingChecksum != "" && existingChecksum == checksum {
+				needWrite = false
+			} else if st.Size() == int64(len(fileBytes)) {
+				if b, readErr := os.ReadFile(absPath); readErr == nil {
+					hash := sha256.Sum256(b)
+					if hex.EncodeToString(hash[:]) == checksum {
+						needWrite = false
+					}
 				}
 			}
 		}
-	}
 
-	if needWrite {
-		if err := os.WriteFile(absPath, fileBytes, 0644); err != nil {
-			return "", nil, err
+		if needWrite {
+			if err := os.WriteFile(absPath, fileBytes, 0644); err != nil {
+				return "", nil, err
+			}
 		}
+	} else {
+		s.logger.Info("Пропуск загрузки файла: метаданные не изменились", "file_uuid", fileUUID, "storage_key", existing.StorageKey)
 	}
 
 	if cleanName == "" {
@@ -283,7 +304,11 @@ func (s *ticketFileSyncService) ensureFileAsset(
 
 	finalMime := strings.TrimSpace(preferredMime)
 	if finalMime == "" {
-		finalMime = strings.TrimSpace(contentType)
+		if downloaded {
+			finalMime = strings.TrimSpace(contentType)
+		} else {
+			finalMime = strings.TrimSpace(existing.MimeType)
+		}
 	}
 	if finalMime == "" {
 		finalMime = mime.TypeByExtension(ext)
@@ -291,7 +316,13 @@ func (s *ticketFileSyncService) ensureFileAsset(
 
 	finalSize := remoteSize
 	if finalSize <= 0 {
-		finalSize = int64(len(fileBytes))
+		if downloaded {
+			finalSize = int64(len(fileBytes))
+		} else if st, statErr := os.Stat(absPath); statErr == nil {
+			finalSize = st.Size()
+		} else {
+			finalSize = existing.Size
+		}
 	}
 
 	existing.OriginalName = cleanName
@@ -317,6 +348,29 @@ func (s *ticketFileSyncService) ensureFileAsset(
 
 	publicURL := fmt.Sprintf("/api/static/tickets/%s", filepath.ToSlash(persisted.StorageKey))
 	return publicURL, persisted, nil
+}
+
+func (s *ticketFileSyncService) shouldDownloadFile(
+	existing *tickets.FileAsset,
+	absPath string,
+	remoteSize int64,
+) bool {
+	if existing == nil || strings.TrimSpace(existing.StorageKey) == "" {
+		return true
+	}
+
+	st, err := os.Stat(absPath)
+	if err != nil || st.IsDir() {
+		return true
+	}
+
+	if remoteSize > 0 {
+		if existing.Size > 0 {
+			return existing.Size != remoteSize
+		}
+		return st.Size() != remoteSize
+	}
+	return false
 }
 
 func sanitizeFileNameFS(name string) string {

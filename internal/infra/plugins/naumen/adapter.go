@@ -361,15 +361,70 @@ func (a *NaumenAdapter) GetComments(ctx context.Context, ticketExternalID string
 		return nil, err
 	}
 
-	result := make([]*tickets.Comment, 0, len(rawData))
-	for _, item := range rawData {
-		c, mapErr := a.client.Mapper().DataToComment(item)
-		if mapErr != nil || c == nil {
+	return mapNaumenComments(rawData, a.client.Mapper()), nil
+}
+
+func (a *NaumenAdapter) GetCommentsBySources(ctx context.Context, sourceUUIDs []string) (map[string][]*tickets.Comment, error) {
+	result := make(map[string][]*tickets.Comment, len(sourceUUIDs))
+
+	cleanSources := make([]string, 0, len(sourceUUIDs))
+	seen := make(map[string]struct{}, len(sourceUUIDs))
+	for _, sourceUUID := range sourceUUIDs {
+		sourceUUID = strings.TrimSpace(sourceUUID)
+		if sourceUUID == "" {
 			continue
 		}
-		result = append(result, c)
+		if _, ok := seen[sourceUUID]; ok {
+			continue
+		}
+		seen[sourceUUID] = struct{}{}
+		cleanSources = append(cleanSources, sourceUUID)
+		result[sourceUUID] = []*tickets.Comment{}
 	}
+	if len(cleanSources) == 0 {
+		return result, nil
+	}
+
+	rawData, err := a.client.FetchCommentsBySources(ctx, cleanSources)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, item := range rawData {
+		sourceUUID, _ := item["source"].(string)
+		sourceUUID = strings.TrimSpace(sourceUUID)
+		if sourceUUID == "" {
+			continue
+		}
+
+		comment, ok := mapNaumenComment(item, a.client.Mapper())
+		if !ok {
+			continue
+		}
+		result[sourceUUID] = append(result[sourceUUID], comment)
+	}
+
 	return result, nil
+}
+
+func mapNaumenComments(rawData []map[string]interface{}, mapper external.Mapper) []*tickets.Comment {
+	result := make([]*tickets.Comment, 0, len(rawData))
+	for _, item := range rawData {
+		comment, ok := mapNaumenComment(item, mapper)
+		if !ok {
+			continue
+		}
+		result = append(result, comment)
+	}
+	return result
+}
+
+func mapNaumenComment(item map[string]interface{}, mapper external.Mapper) (*tickets.Comment, bool) {
+	comment, err := mapper.DataToComment(item)
+	if err != nil || comment == nil {
+		return nil, false
+	}
+	return comment, true
 }
 
 func (a *NaumenAdapter) GetFilesBySource(ctx context.Context, sourceUUID string) ([]integration.RemoteFile, error) {
@@ -378,48 +433,114 @@ func (a *NaumenAdapter) GetFilesBySource(ctx context.Context, sourceUUID string)
 		return nil, err
 	}
 
-	files := make([]integration.RemoteFile, 0, len(rawData))
+	return mapNaumenRemoteFiles(rawData), nil
+}
+
+func (a *NaumenAdapter) GetFilesBySources(ctx context.Context, sourceUUIDs []string) (map[string][]integration.RemoteFile, error) {
+	result := make(map[string][]integration.RemoteFile, len(sourceUUIDs))
+
+	cleanSources := make([]string, 0, len(sourceUUIDs))
+	seen := make(map[string]struct{}, len(sourceUUIDs))
+	for _, sourceUUID := range sourceUUIDs {
+		sourceUUID = strings.TrimSpace(sourceUUID)
+		if sourceUUID == "" {
+			continue
+		}
+		if _, ok := seen[sourceUUID]; ok {
+			continue
+		}
+		seen[sourceUUID] = struct{}{}
+		cleanSources = append(cleanSources, sourceUUID)
+		result[sourceUUID] = []integration.RemoteFile{}
+	}
+	if len(cleanSources) == 0 {
+		return result, nil
+	}
+
+	rawData, err := a.client.FetchFilesBySources(ctx, cleanSources)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, item := range rawData {
-		uuid, _ := item["UUID"].(string)
-		if uuid == "" {
+		sourceUUID, _ := item["source"].(string)
+		sourceUUID = strings.TrimSpace(sourceUUID)
+		if sourceUUID == "" {
 			continue
 		}
 
-		name := ""
-		for _, key := range []string{"fileName", "filename", "name", "title"} {
-			if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
-				name = strings.TrimSpace(val)
-				break
-			}
+		file, ok := mapNaumenRemoteFile(item)
+		if !ok {
+			continue
 		}
-
-		mimeType := ""
-		for _, key := range []string{"mimeType", "contentType"} {
-			if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
-				mimeType = strings.TrimSpace(val)
-				break
-			}
-		}
-
-		size := int64(0)
-		switch v := item["size"].(type) {
-		case float64:
-			size = int64(v)
-		case int64:
-			size = v
-		case int:
-			size = int64(v)
-		}
-
-		files = append(files, integration.RemoteFile{
-			UUID:     uuid,
-			Name:     name,
-			MimeType: mimeType,
-			Size:     size,
-		})
+		result[sourceUUID] = append(result[sourceUUID], file)
 	}
 
-	return files, nil
+	return result, nil
+}
+
+func mapNaumenRemoteFiles(rawData []map[string]interface{}) []integration.RemoteFile {
+	files := make([]integration.RemoteFile, 0, len(rawData))
+	for _, item := range rawData {
+		file, ok := mapNaumenRemoteFile(item)
+		if !ok {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files
+}
+
+func mapNaumenRemoteFile(item map[string]interface{}) (integration.RemoteFile, bool) {
+	uuid, _ := item["UUID"].(string)
+	if uuid == "" {
+		return integration.RemoteFile{}, false
+	}
+
+	name := ""
+	for _, key := range []string{"fileName", "filename", "name", "title"} {
+		if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
+			name = strings.TrimSpace(val)
+			break
+		}
+	}
+
+	mimeType := ""
+	for _, key := range []string{"mimeType", "contentType"} {
+		if val, ok := item[key].(string); ok && strings.TrimSpace(val) != "" {
+			mimeType = strings.TrimSpace(val)
+			break
+		}
+	}
+
+	size := parseNaumenFileSize(item["size"])
+	if size == 0 {
+		size = parseNaumenFileSize(item["fileSize"])
+	}
+
+	return integration.RemoteFile{
+		UUID:     uuid,
+		Name:     name,
+		MimeType: mimeType,
+		Size:     size,
+	}, true
+}
+
+func parseNaumenFileSize(raw interface{}) int64 {
+	switch v := raw.(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func (a *NaumenAdapter) DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error) {

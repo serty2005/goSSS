@@ -11,6 +11,7 @@ const (
 	RelationTypeDirectTicketAttachment = "direct_ticket_attachment"
 	RelationTypeInlineDescription      = "inline_description"
 	RelationTypeInlineComment          = "inline_comment"
+	RelationTypeInlineResult           = "inline_result"
 )
 
 // FileAsset описывает внутреннюю сущность файла в хранилище.

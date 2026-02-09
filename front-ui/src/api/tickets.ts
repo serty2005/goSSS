@@ -48,4 +48,24 @@ export const ticketsApi = {
     });
     return response.data;
   },
+
+  addComment: async (id: number | string, comment: string) => {
+    const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/comments`, {
+      comment,
+    });
+    return response.data;
+  },
+
+  refreshCommentsFromServiceDesk: async (id: number | string) => {
+    const response = await apiClient.post<ApiResponse<{ status: string; added: number }>>(`/tickets/${id}/refresh-comments`);
+    return response.data;
+  },
+
+  recordConnectionCopy: async (id: number | string, label: string, value: string) => {
+    const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/connection-copy`, {
+      label,
+      value,
+    });
+    return response.data;
+  },
 };

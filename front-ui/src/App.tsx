@@ -10,6 +10,7 @@ import Dashboard from '@/pages/Dashboard';
 import SearchPage from '@/pages/SearchPage';
 import TasksPage from '@/pages/TasksPage';
 import TicketsPage from '@/pages/TicketsPage';
+import TicketDetailsPage from '@/pages/TicketDetailsPage';
 import CompanyPage from '@/pages/companies/CompanyPage';
 
 // Импорт детальных страниц
@@ -67,6 +68,7 @@ const App: React.FC = () => {
               <Route path="search" element={<SearchPage />} />
               <Route path="tasks" element={<TasksPage />} />
               <Route path="tickets" element={<TicketsPage />} />
+              <Route path="tickets/:id" element={<TicketDetailsPage />} />
               
               <Route path="companies" element={<div>Список компаний</div>} />
               <Route path="companies/:id" element={<CompanyPage />} />

@@ -84,8 +84,18 @@ func (m *MockServiceDeskClient) FetchComments(ctx context.Context, sourceUUID st
 	return []map[string]interface{}{}, nil
 }
 
+// FetchCommentsBySources возвращает пустой список комментариев.
+func (m *MockServiceDeskClient) FetchCommentsBySources(ctx context.Context, sourceUUIDs []string) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{}, nil
+}
+
 // FetchFilesBySource возвращает пустой список файлов.
 func (m *MockServiceDeskClient) FetchFilesBySource(ctx context.Context, sourceUUID string) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{}, nil
+}
+
+// FetchFilesBySources возвращает пустой список файлов.
+func (m *MockServiceDeskClient) FetchFilesBySources(ctx context.Context, sourceUUIDs []string) ([]map[string]interface{}, error) {
 	return []map[string]interface{}{}, nil
 }
 

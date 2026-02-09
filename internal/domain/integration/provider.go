@@ -67,9 +67,13 @@ type TicketProvider interface {
 
 	// GetComments возвращает комментарии тикета из внешней системы.
 	GetComments(ctx context.Context, ticketExternalID string) ([]*tickets.Comment, error)
+	// GetCommentsBySources возвращает комментарии, сгруппированные по source UUID.
+	GetCommentsBySources(ctx context.Context, sourceUUIDs []string) (map[string][]*tickets.Comment, error)
 
 	// GetFilesBySource возвращает файлы, связанные с source UUID (например, тикетом).
 	GetFilesBySource(ctx context.Context, sourceUUID string) ([]RemoteFile, error)
+	// GetFilesBySources возвращает файлы, сгруппированные по source UUID.
+	GetFilesBySources(ctx context.Context, sourceUUIDs []string) (map[string][]RemoteFile, error)
 
 	// DownloadFile скачивает файл по его внешнему UUID.
 	DownloadFile(ctx context.Context, fileUUID string) ([]byte, string, error)

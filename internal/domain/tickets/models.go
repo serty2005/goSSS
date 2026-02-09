@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Р–РµСЃС‚РєРёР№ Workflow СЃС‚Р°С‚СѓСЃРѕРІ.
+// Жесткий Workflow статусов.
 const (
 	StatusNew        = "new"
 	StatusInProgress = "in_progress"
@@ -18,7 +18,7 @@ const (
 	StatusClosed     = "closed"
 )
 
-// РџСЂРёРѕСЂРёС‚РµС‚С‹.
+// Приоритеты.
 const (
 	PriorityCritical = "critical"
 	PriorityHigh     = "high"
@@ -26,72 +26,73 @@ const (
 	PriorityLow      = "low"
 )
 
-// РўРёРїС‹ Р·Р°СЏРІРѕРє.
+// Типы заявок.
 const (
 	TypeIncident       = "incident"
 	TypeServiceRequest = "service_request"
 )
 
-// РўРёРїС‹ Р°РєС‚РёРІРѕРІ РґР»СЏ РїРѕР»РёРјРѕСЂС„РЅРѕР№ СЃРІСЏР·Рё.
+// Типы активов для полиморфной связи.
 const (
 	AssetTypeServer         = "Server"
 	AssetTypeFiscalRegister = "FiscalRegister"
 	AssetTypeWorkstation    = "Workstation"
 )
 
-// Ticket РїСЂРµРґСЃС‚Р°РІР»СЏРµС‚ СЃРѕР±РѕР№ Р·Р°СЏРІРєСѓ ServiceDesk.
-// РўРµРїРµСЂСЊ СЌС‚Рѕ РїРѕР»РЅРѕС†РµРЅРЅР°СЏ СЃСѓС‰РЅРѕСЃС‚СЊ СЃРёСЃС‚РµРјС‹, Р° РЅРµ РїСЂРѕСЃС‚Рѕ РєСЌС€ РёР· Naumen.
+// Ticket представляет собой заявку ServiceDesk.
+// Теперь это полноценная сущность системы, а не просто кэш из Naumen.
 type Ticket struct {
 	common.Base
 
-	// РРґРµРЅС‚РёС„РёРєР°С†РёСЏ Рё РћСЃРЅРѕРІРЅС‹Рµ РґР°РЅРЅС‹Рµ
-	Number      int    `json:"number" gorm:"uniqueIndex;autoIncrement"` // Р’РЅСѓС‚СЂРµРЅРЅРёР№ С‡РµР»РѕРІРµРєРѕ-С‡РёС‚Р°РµРјС‹Р№ РЅРѕРјРµСЂ
+	// Идентификация и Основные данные
+	Number      int    `json:"number" gorm:"uniqueIndex;autoIncrement"` // Внутренний человеко-читаемый номер
 	Subject     string `json:"subject" gorm:"type:text;not null"`
-	Description string `json:"description" gorm:"type:text"` // HTML/Markdown РѕРїРёСЃР°РЅРёРµ
+	Description string `json:"description" gorm:"type:text"` // HTML/Markdown описание
+	Result      string `json:"result" gorm:"type:text"`
 
-	// Workflow Рё SLA
+	// Workflow и SLA
 	Status     string     `json:"status" gorm:"type:varchar(50);default:'new';index"`
 	Priority   string     `json:"priority" gorm:"type:varchar(20);default:'medium'"`
 	Type       string     `json:"type" gorm:"type:varchar(50);default:'incident'"`
 	DeadlineAt *time.Time `json:"deadline_at" gorm:"index"`
 
-	// РЎРІСЏР·Рё СЃ РџРѕР»СЊР·РѕРІР°С‚РµР»СЏРјРё
+	// Связи с Пользователями
 	AssigneeID *uint      `json:"assignee_id" gorm:"index"`
 	Assignee   *user.User `json:"assignee" gorm:"foreignKey:AssigneeID"`
 
-	ReporterID *uint      `json:"reporter_id" gorm:"index"` // Р•СЃР»Рё Р·Р°СЏРІРєСѓ Р·Р°РІРµР» Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ
+	ReporterID *uint      `json:"reporter_id" gorm:"index"` // Если заявку завел зарегистрированный пользователь
 	Reporter   *user.User `json:"reporter" gorm:"foreignKey:ReporterID"`
-	// Р”Р»СЏ РІРЅРµС€РЅРёС… Р·Р°СЏРІРѕРє (email/С‚РµР»РµС„РѕРЅ), РµСЃР»Рё ReporterID nil
+	// Для внешних заявок (email/телефон), если ReporterID nil
 	ReporterName  string `json:"reporter_name" gorm:"type:varchar(255)"`
 	ReporterEmail string `json:"reporter_email" gorm:"type:varchar(255)"`
 
-	// РЎРІСЏР·Рё СЃ CMDB
+	// Связи с CMDB
 	CompanyID string `json:"company_id" gorm:"type:text;index"`
-	// Read-only РїРѕР»Рµ РґР»СЏ JOIN СЃ С‚Р°Р±Р»РёС†РµР№ РєРѕРјРїР°РЅРёР№.
-	// `->` РѕР·РЅР°С‡Р°РµС‚, С‡С‚Рѕ РїРѕР»Рµ С‚РѕР»СЊРєРѕ РґР»СЏ С‡С‚РµРЅРёСЏ (РЅРµ Р±СѓРґРµС‚ СЃРѕР·РґР°РЅР° РєРѕР»РѕРЅРєР° РІ С‚Р°Р±Р»РёС†Рµ tickets).
+	// Read-only поле для JOIN с таблицей компаний.
+	// `->` означает, что поле только для чтения (не будет создана колонка в таблице tickets).
 	CompanyName string  `json:"company_name,omitempty" gorm:"->"`
 	ContractID  *string `json:"contract_id,omitempty" gorm:"type:text"`
 	// Признак тикета по общему контракту (вычисляется, не хранится в БД).
 	IsCommonContract bool `json:"is_common_contract,omitempty" gorm:"-"`
 
-	// РџРѕР»РёРјРѕСЂС„РЅР°СЏ СЃРІСЏР·СЊ СЃ РѕР±РѕСЂСѓРґРѕРІР°РЅРёРµРј
+	// Полиморфная связь с оборудованием
 	AssetID   *string `json:"asset_id,omitempty" gorm:"type:text;index"`
 	AssetType *string `json:"asset_type,omitempty" gorm:"type:varchar(50)"`
 
-	// Р’РЅРµС€РЅРёРµ СЃРёСЃС‚РµРјС‹ (РґР»СЏ РѕР±СЂР°С‚РЅРѕР№ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё Рё РјРёРіСЂР°С†РёРё)
+	// Внешние системы (для обратной совместимости и миграции)
 	ServiceDeskUUID string `json:"service_desk_uuid" gorm:"index"`
 }
 
-// TicketDetails вЂ” СЃРѕСЃС‚Р°РІРЅР°СЏ СЃС‚СЂСѓРєС‚СѓСЂР° РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ РЅР° UI.
+// TicketDetails — составная структура для отображения на UI.
 type TicketDetails struct {
 	Metadata    Ticket          `json:"metadata"`
 	CompanyName string          `json:"company_name,omitempty"`
 	History     []TicketHistory `json:"history"`
 	Attachments []Attachment    `json:"attachments"`
-	Comments    []Comment       `json:"comments"` // РћСЃС‚Р°РІР»СЏРµРј РїРѕРєР° РґР»СЏ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё СЃ Р»РµРіР°СЃРё РєРѕРјРјРµРЅС‚Р°СЂРёСЏРјРё
+	Comments    []Comment       `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
 }
 
-// Comment РїСЂРµРґСЃС‚Р°РІР»СЏРµС‚ Р»РµРіР°СЃРё РєРѕРјРјРµРЅС‚Р°СЂРёР№ (РїР»Р°РЅРёСЂСѓРµС‚СЃСЏ Рє Р·Р°РјРµРЅРµ РЅР° History).
+// Comment представляет легаси комментарий (планируется к замене на History).
 type Comment struct {
 	UUID         string    `json:"uuid"`
 	Text         string    `json:"text"`
@@ -100,7 +101,7 @@ type Comment struct {
 	IsInternal   bool      `json:"is_internal"`
 }
 
-// TicketComment С…СЂР°РЅРёС‚ РєРѕРјРјРµРЅС‚Р°СЂРёРё РІ Р‘Р” (РѕС„Р»Р°Р№РЅ-СЂРµР¶РёРј/СЃРёРґРµСЂ).
+// TicketComment хранит комментарии в БД (офлайн-режим/сидер).
 type TicketComment struct {
 	ID              string    `json:"id" gorm:"primaryKey;type:text"`
 	TicketID        string    `json:"ticket_id" gorm:"type:text;index;not null"`

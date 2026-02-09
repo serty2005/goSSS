@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Dropdown, Grid, Input, Select, Space, Switch } from 'antd';
-import { FilterOutlined } from '@ant-design/icons';
+import { FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
@@ -54,6 +54,7 @@ const HeaderSearch: React.FC = () => {
   const appliedSearch = ticketParams.get('q') || '';
   const ticketStatus = ticketParams.get('status') || '';
   const ticketCompany = ticketParams.get('company') || undefined;
+  const ticketView = ticketParams.get('view') || 'list';
 
   useEffect(() => {
     setTicketTerm(ticketParams.get('q') || '');
@@ -95,6 +96,16 @@ const HeaderSearch: React.FC = () => {
   if (isTicketsPage) {
     const controls = (
       <Space size="small" wrap style={{ justifyContent: 'center' }}>
+        <Select
+          value={ticketView}
+          onChange={(value) => updateTicketParams({ view: value })}
+          style={{ width: 130 }}
+          options={[
+            { value: 'list', label: 'Список' },
+            { value: 'cards', label: 'Карточки' },
+            { value: 'table', label: 'Таблица' },
+          ]}
+        />
         <Input.Search
           placeholder="Поиск по заявкам..."
           allowClear
@@ -130,6 +141,13 @@ const HeaderSearch: React.FC = () => {
           loading={isFiltersLoading}
           style={{ width: 260 }}
         />
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => updateTicketParams({ create: '1' })}
+        >
+          Новая заявка
+        </Button>
       </Space>
     );
 

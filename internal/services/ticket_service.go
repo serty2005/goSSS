@@ -40,7 +40,10 @@ type TicketService interface {
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
+	AddComment(ctx context.Context, ticketID string, comment string, userID uint) error
+	RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
+	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
 }
@@ -134,7 +137,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	}
 
 	if ownerCompany == nil {
-		return nil, fmt.Errorf("company not found")
+		return nil, fmt.Errorf("компания не найдена")
 	}
 
 	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
@@ -158,7 +161,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	}
 
 	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &authorID, "status", "", tickets.StatusNew)
+	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, "", tickets.StatusNew)
 
 	return ticket, nil
 }
@@ -197,12 +200,21 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("ticket not found")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	oldStatus := ticket.Status
 	if oldStatus == status {
 		return ticket, nil // Статус не изменился
+	}
+
+	comment = strings.TrimSpace(comment)
+	if (status == tickets.StatusResolved || status == tickets.StatusClosed) && comment != "" {
+		oldResult := ticket.Result
+		ticket.Result = comment
+		if oldResult != ticket.Result {
+			s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, oldResult, ticket.Result)
+		}
 	}
 
 	ticket.Status = status
@@ -211,14 +223,14 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &userID, "status", oldStatus, status)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, oldStatus, status)
 
 	// Если есть комментарий, добавляем его как историю или отдельно
 	if comment != "" {
 		// Для простоты используем легаси структуру Comment, если фронт её ждет,
 		// но лучше писать в History с полем "comment"
 		// Реализуем через History как "comment_added"
-		s.recordHistory(ctx, ticket.ID, &userID, "comment", "", comment)
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", comment)
 	}
 
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
@@ -236,7 +248,7 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("ticket not found")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	var oldAssigneeName, newAssigneeName string
@@ -245,17 +257,17 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	if ticket.Assignee != nil {
 		oldAssigneeName = ticket.Assignee.FullName
 	} else {
-		oldAssigneeName = "Unassigned"
+		oldAssigneeName = "Не назначен"
 	}
 
 	if assigneeID != nil {
 		newAssignee, err := s.userRepo.GetByID(ctx, *assigneeID)
 		if err != nil || newAssignee == nil {
-			return nil, fmt.Errorf("assignee user not found")
+			return nil, fmt.Errorf("пользователь-исполнитель не найден")
 		}
 		newAssigneeName = newAssignee.FullName
 	} else {
-		newAssigneeName = "Unassigned"
+		newAssigneeName = "Не назначен"
 	}
 
 	ticket.AssigneeID = assigneeID
@@ -268,8 +280,66 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &actorID, "assignee", oldAssigneeName, newAssigneeName)
+	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAssignee, oldAssigneeName, newAssigneeName)
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, userID uint) error {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if ticket == nil {
+		return fmt.Errorf("заявка не найдена")
+	}
+
+	text := strings.TrimSpace(comment)
+	if text == "" {
+		return fmt.Errorf("комментарий пустой")
+	}
+
+	authorName := "Сотрудник"
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
+		authorName = strings.TrimSpace(u.FullName)
+	}
+
+	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{
+		{
+			TicketID:     ticket.ID,
+			Text:         text,
+			AuthorName:   authorName,
+			CreationDate: time.Now(),
+			IsInternal:   false,
+		},
+	}); err != nil {
+		return err
+	}
+
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", text)
+	return nil
+}
+
+func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if ticket == nil {
+		return fmt.Errorf("заявка не найдена")
+	}
+
+	line := strings.TrimSpace(label)
+	if line == "" {
+		line = "Подключение"
+	}
+	val := strings.TrimSpace(value)
+	if val == "" {
+		return fmt.Errorf("значение подключения пустое")
+	}
+
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, "", line+": "+val)
+	return nil
 }
 
 // GetDetails возвращает детали тикета, историю и вложения.
@@ -311,7 +381,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		}
 	}
 
-	// Попытка получить данные из SD для легаси тикетов
+	// Попытка получить описание из SD для легаси тикетов
 	if ticket.ServiceDeskUUID != "" && s.cfg.ServiceDeskKey != "" && len(localComments) == 0 {
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
@@ -320,16 +390,6 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 				if ticket.Description == "" {
 					details.Metadata.Description = s.processHtmlContent(ticket.ServiceDeskUUID, desc)
 				}
-			}
-		}
-
-		// Комментарии из SD
-		rawComments, _ := s.sdClient.FetchComments(ctx, ticket.ServiceDeskUUID)
-		for _, rawC := range rawComments {
-			comment, err := s.sdClient.Mapper().DataToComment(rawC)
-			if err == nil {
-				comment.Text = s.processHtmlContent(ticket.ServiceDeskUUID, comment.Text)
-				details.Comments = append(details.Comments, *comment)
 			}
 		}
 	}
@@ -344,7 +404,7 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("ticket not found")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	oldValue := ticket.Description
@@ -353,9 +413,82 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &userID, "description", oldValue, description)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, oldValue, description)
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return 0, err
+	}
+	if ticket == nil {
+		return 0, fmt.Errorf("заявка не найдена")
+	}
+	if strings.TrimSpace(ticket.ServiceDeskUUID) == "" {
+		return 0, nil
+	}
+
+	rawComments, err := s.sdClient.FetchComments(ctx, ticket.ServiceDeskUUID)
+	if err != nil {
+		return 0, err
+	}
+	if len(rawComments) == 0 {
+		return 0, nil
+	}
+
+	existingComments, err := s.ticketRepo.GetComments(ctx, ticketID)
+	if err != nil {
+		return 0, err
+	}
+	existingByUUID := make(map[string]struct{}, len(existingComments))
+	for _, item := range existingComments {
+		uuid := strings.TrimSpace(item.ServiceDeskUUID)
+		if uuid == "" {
+			continue
+		}
+		existingByUUID[uuid] = struct{}{}
+	}
+
+	toInsert := make([]tickets.TicketComment, 0, len(rawComments))
+	for _, rawComment := range rawComments {
+		comment, mapErr := s.sdClient.Mapper().DataToComment(rawComment)
+		if mapErr != nil || comment == nil {
+			continue
+		}
+		commentUUID := strings.TrimSpace(comment.UUID)
+		if commentUUID == "" {
+			continue
+		}
+		if _, exists := existingByUUID[commentUUID]; exists {
+			continue
+		}
+
+		text := s.processHtmlContent(ticket.ServiceDeskUUID, comment.Text)
+		createdAt := comment.CreationDate
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+		toInsert = append(toInsert, tickets.TicketComment{
+			TicketID:        ticket.ID,
+			ServiceDeskUUID: commentUUID,
+			Text:            text,
+			AuthorName:      comment.AuthorName,
+			CreationDate:    createdAt,
+			IsInternal:      comment.IsInternal,
+		})
+		existingByUUID[commentUUID] = struct{}{}
+	}
+
+	if len(toInsert) == 0 {
+		return 0, nil
+	}
+	if err := s.ticketRepo.AddComments(ctx, toInsert); err != nil {
+		return 0, err
+	}
+
+	return len(toInsert), nil
 }
 
 func (s *ticketServiceImpl) applyCommonContractFlag(items []tickets.Ticket) {
@@ -378,7 +511,7 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 		return fmt.Errorf("failed to get ticket: %w", err)
 	}
 	if ticket == nil {
-		return fmt.Errorf("ticket not found")
+		return fmt.Errorf("заявка не найдена")
 	}
 
 	// 2. Проверяем существование актива и совпадение владельца
@@ -388,26 +521,26 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 	case tickets.AssetTypeServer:
 		asset, err := s.serverRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("server not found")
+			return fmt.Errorf("сервер не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeFiscalRegister:
 		asset, err := s.frRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("fiscal register not found")
+			return fmt.Errorf("фискальный регистратор не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeWorkstation:
 		asset, err := s.workstationRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("workstation not found")
+			return fmt.Errorf("рабочая станция не найдена")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	default:
-		return fmt.Errorf("unsupported asset type: %s", assetType)
+		return fmt.Errorf("неподдерживаемый тип оборудования: %s", assetType)
 	}
 
 	// 3. Сравниваем владельцев
@@ -417,15 +550,26 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 		return fmt.Errorf("conflict: asset belongs to company %s, but ticket belongs to %s", assetOwnerID, ticket.CompanyID)
 	}
 
-	// 4. Сохраняем привязку
-	return s.ticketRepo.AssociateAsset(ctx, ticketID, assetID, assetType)
+	oldAsset := ""
+	if ticket.AssetType != nil && ticket.AssetID != nil && *ticket.AssetType != "" && *ticket.AssetID != "" {
+		oldAsset = *ticket.AssetType + ":" + *ticket.AssetID
+	}
+	newAsset := assetType + ":" + assetID
+
+	if err := s.ticketRepo.AssociateAsset(ctx, ticketID, assetID, assetType); err != nil {
+		return err
+	}
+
+	s.recordHistory(ctx, ticketID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAsset, oldAsset, newAsset)
+	return nil
 }
 
 // recordHistory - вспомогательный метод для записи аудита.
-func (s *ticketServiceImpl) recordHistory(ctx context.Context, ticketID string, userID *uint, field, oldVal, newVal string) {
+func (s *ticketServiceImpl) recordHistory(ctx context.Context, ticketID string, userID *uint, action, field, oldVal, newVal string) {
 	h := &tickets.TicketHistory{
 		TicketID:  ticketID,
 		UserID:    userID,
+		Action:    action,
 		Field:     field,
 		OldValue:  oldVal,
 		NewValue:  newVal,

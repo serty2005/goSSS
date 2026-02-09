@@ -1,0 +1,14 @@
+name: gosss-build
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    build:
+      context: ../front-ui
+      dockerfile: Dockerfile
