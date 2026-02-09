@@ -4,6 +4,7 @@ import { FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
+import { formatTicketFilterCompanyHierarchy } from '@/utils/companyHierarchy';
 
 const { useBreakpoint } = Grid;
 
@@ -76,7 +77,7 @@ const HeaderSearch: React.FC = () => {
     const list = filterRes?.data?.companies || [];
     return list.map((company) => ({
       value: company.id,
-      label: `${company.name} (${company.count})`,
+      label: `${formatTicketFilterCompanyHierarchy(company)} (${company.count})`,
     }));
   }, [filterRes]);
 

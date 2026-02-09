@@ -37,6 +37,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Patch("/{id}/status", h.ChangeStatus)
 	r.Patch("/{id}/description", h.UpdateDescription)
 	r.Patch("/{id}/assign", h.Assign)
+	r.Patch("/{id}/company", h.ChangeCompany)
 }
 
 // Create создает новый тикет (внутренний).
@@ -57,6 +58,10 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	ticket, err := h.service.CreateInternal(r.Context(), dto, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrReporterNotFound) {
+			response.RespondWithError(w, http.StatusUnauthorized, "Пользователь из сессии не найден, выполните вход заново")
+			return
+		}
 		log.Error("Failed to create ticket", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create ticket")
 		return
@@ -191,6 +196,38 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 	userID := getUserIDFromContext(r)
 	ticket, err := h.service.Assign(r.Context(), id, dto.AssigneeID, userID)
 	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var dto api.TicketChangeCompanyDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		return
+	}
+
+	companyID := strings.TrimSpace(dto.CompanyID)
+	if companyID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "company_id обязателен")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		return
+	}
+
+	ticket, err := h.service.ChangeCompany(r.Context(), id, companyID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
+			return
+		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

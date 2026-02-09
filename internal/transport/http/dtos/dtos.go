@@ -163,6 +163,11 @@ type TicketAssignDTO struct {
 	AssigneeID *uint `json:"assignee_id"` // null, чтобы снять исполнителя
 }
 
+// TicketChangeCompanyDTO - запрос на смену компании тикета.
+type TicketChangeCompanyDTO struct {
+	CompanyID string `json:"company_id" validate:"required"`
+}
+
 // TicketStatusChangeDTO - запрос на смену статуса.
 type TicketStatusChangeDTO struct {
 	Status  string `json:"status" validate:"required"`

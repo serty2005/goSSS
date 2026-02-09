@@ -45,6 +45,7 @@ type TicketService interface {
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
+	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
 }
 
@@ -60,6 +61,8 @@ type ticketServiceImpl struct {
 	workstationRepo workstation.Repository
 	frRepo          fiscal.Repository
 }
+
+var ErrReporterNotFound = errors.New("пользователь-автор не найден")
 
 func NewTicketService(
 	logger logger.LoggerInterface,
@@ -119,6 +122,14 @@ func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter ticket
 
 // CreateInternal создает внутренний тикет.
 func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error) {
+	author, err := s.userRepo.GetByID(ctx, authorID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить автора тикета: %w", err)
+	}
+	if author == nil {
+		return nil, ErrReporterNotFound
+	}
+
 	ownerCompany, err := s.companyRepo.GetByID(ctx, dto.CompanyID)
 	if err != nil {
 		return nil, err
@@ -281,6 +292,62 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	}
 
 	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAssignee, oldAssigneeName, newAssigneeName)
+	return ticket, nil
+}
+
+// ChangeCompany меняет компанию в тикете и пересчитывает договор.
+func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, fmt.Errorf("заявка не найдена")
+	}
+
+	targetCompany, err := s.companyRepo.GetByID(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if targetCompany == nil {
+		return nil, fmt.Errorf("компания не найдена")
+	}
+
+	if ticket.CompanyID == companyID {
+		ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+		return ticket, nil
+	}
+
+	oldCompanyName := ticket.CompanyName
+	if strings.TrimSpace(oldCompanyName) == "" {
+		oldCompanyName = ticket.CompanyID
+	}
+
+	newCompanyName := companyID
+	if targetCompany.Title != nil && strings.TrimSpace(*targetCompany.Title) != "" {
+		newCompanyName = strings.TrimSpace(*targetCompany.Title)
+	} else if targetCompany.AdditionalName != nil && strings.TrimSpace(*targetCompany.AdditionalName) != "" {
+		newCompanyName = strings.TrimSpace(*targetCompany.AdditionalName)
+	}
+
+	ticket.CompanyID = companyID
+	if targetCompany.ActiveContract != nil && *targetCompany.ActiveContract {
+		ticket.ContractID = nil
+	} else {
+		commonContract, err := s.getOrCreateCommonContract(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ticket.ContractID = &commonContract.ID
+	}
+
+	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+
+	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldCompany, oldCompanyName, newCompanyName)
+	ticket.CompanyName = newCompanyName
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
 }
 

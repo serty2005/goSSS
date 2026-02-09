@@ -39,6 +39,8 @@ export interface CompanyModel {
   active_contract?: boolean;
   ParentID?: string;
   parent_id?: string;
+  ParentTitle?: string;
+  parent_title?: string;
   LastModifiedDate?: string;
   last_modified_date?: string;
 }
@@ -260,6 +262,7 @@ export interface TicketListParams {
 export interface TicketCompanyFilterItem {
   id: string;
   name: string;
+  parent_name?: string;
   count: number;
 }
 

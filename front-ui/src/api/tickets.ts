@@ -49,6 +49,13 @@ export const ticketsApi = {
     return response.data;
   },
 
+  changeCompany: async (id: number | string, companyId: string) => {
+    const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/company`, {
+      company_id: companyId,
+    });
+    return response.data;
+  },
+
   addComment: async (id: number | string, comment: string) => {
     const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/comments`, {
       comment,

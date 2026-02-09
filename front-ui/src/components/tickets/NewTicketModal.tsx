@@ -3,7 +3,8 @@ import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Emp
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
-import type { InfrastructureItem } from '@/types/api';
+import type { CompanyModel, InfrastructureItem } from '@/types/api';
+import { formatCompanyHierarchy, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 
 const { Text, Paragraph } = Typography;
 
@@ -19,7 +20,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
   const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode }>>([]);
-  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; activeContract?: boolean }>>({});
+  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
 
@@ -33,16 +34,18 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!companiesData?.data) return;
 
-    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; activeContract?: boolean }> = {};
+    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }> = {};
     const nextOptions = companiesData.data
       .map((company) => {
-        const rawId = (company as { ID?: string; id?: string }).ID ?? (company as { id?: string }).id;
-        const rawTitle = (company as { Title?: string; title?: string }).Title ?? (company as { title?: string }).title;
+        const item = company as CompanyModel;
+        const rawId = resolveCompanyID(item);
+        const rawTitle = resolveCompanyTitle(item);
+        const rawParentTitle = resolveCompanyParentTitle(item);
         const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
         const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
         const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
         const id = rawId ? String(rawId) : '';
-        const title = rawTitle || rawAdditional || id;
+        const title = formatCompanyHierarchy(item) || rawAdditional || id;
         if (!id) {
           console.warn('[NewTicketModal] company without id', company);
           return null;
@@ -51,6 +54,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           address: rawAddress ?? undefined,
           additional: rawAdditional ?? undefined,
           title: rawTitle ?? undefined,
+          parentTitle: rawParentTitle ?? undefined,
           activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
         };
         return {
@@ -113,7 +117,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     const company = companyDetailData?.data;
     if (!company || !selectedCompanyId) return;
 
-    const rawTitle = (company as { Title?: string; title?: string }).Title ?? (company as { title?: string }).title;
+    const item = company as CompanyModel;
+    const rawTitle = resolveCompanyTitle(item);
+    const rawParentTitle = resolveCompanyParentTitle(item);
     const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
     const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
     const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
@@ -124,12 +130,13 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         address: rawAddress ?? undefined,
         additional: rawAdditional ?? undefined,
         title: rawTitle ?? undefined,
+        parentTitle: rawParentTitle ?? undefined,
         activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
       },
     }));
 
     if (rawTitle || rawAdditional) {
-      const label = rawTitle || rawAdditional || selectedCompanyId;
+      const label = formatCompanyHierarchy(item) || rawAdditional || selectedCompanyId;
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === selectedCompanyId);
         return exists ? prev : [{ value: selectedCompanyId, label }, ...prev];
@@ -306,6 +313,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 {selectedCompanyMeta.additional && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                     Доп. информация: {selectedCompanyMeta.additional}
+                  </Text>
+                )}
+                {selectedCompanyMeta.parentTitle && (
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                    Сеть компаний: {selectedCompanyMeta.parentTitle} / {selectedCompanyMeta.title || selectedCompanyId}
                   </Text>
                 )}
               </div>

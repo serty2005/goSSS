@@ -308,14 +308,20 @@ func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.Ticke
 	var rows []tickets.CompanyFilterItem
 
 	query := r.db.WithContext(ctx).Table("tickets").
-		Select("tickets.company_id as id, COALESCE(c.title, c.additional_name, tickets.company_id) as name, COUNT(*) as count").
-		Joins("LEFT JOIN companies c ON c.id = tickets.company_id")
+		Select(`
+			tickets.company_id as id,
+			COALESCE(c.title, c.additional_name, tickets.company_id) as name,
+			COALESCE(parent.title, '') as parent_name,
+			COUNT(*) as count
+		`).
+		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
+		Joins("LEFT JOIN companies parent ON parent.id = c.parent_id")
 
 	query = r.applyFilters(query, filter)
 
 	err := query.
-		Group("tickets.company_id, name").
-		Order("name").
+		Group("tickets.company_id, name, parent_name").
+		Order("parent_name, name").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err

@@ -15,6 +15,7 @@ const (
 	HistoryFieldAssignee    = "assignee"
 	HistoryFieldDescription = "description"
 	HistoryFieldResult      = "result"
+	HistoryFieldCompany     = "company"
 	HistoryFieldAsset       = "asset"
 	HistoryFieldComment     = "comment"
 	HistoryFieldConnection  = "connection"

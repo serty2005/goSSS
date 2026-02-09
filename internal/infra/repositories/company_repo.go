@@ -51,7 +51,11 @@ func (r *companyRepo) Delete(ctx context.Context, internalID string) (bool, erro
 
 func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.Company, error) {
 	var entity company.Company
-	err := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).First(&entity).Error
+	err := r.getDB(ctx).WithContext(ctx).
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
+		Select("companies.*, parent.title AS parent_title").
+		Where("companies.id = ?", internalID).
+		First(&entity).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, domain.ErrNotFound
@@ -122,9 +126,11 @@ func (r *companyRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*compan
 func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, error) {
 	var entities []company.Company
 	query := r.getDB(ctx).WithContext(ctx).
-		Where("title ILIKE ? OR address ILIKE ? OR additional_name ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%")
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
+		Select("companies.*, parent.title AS parent_title").
+		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%")
 	if !showInactive {
-		query = query.Where("active_contract = ?", true)
+		query = query.Where("companies.active_contract = ?", true)
 	}
 	err := query.Limit(limit).Offset(offset).Find(&entities).Error
 	return entities, err

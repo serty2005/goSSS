@@ -19,9 +19,10 @@ type TicketFilter struct {
 
 // CompanyFilterItem описывает агрегированные данные по компаниям для фильтра.
 type CompanyFilterItem struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ParentName string `json:"parent_name,omitempty"`
+	Count      int64  `json:"count"`
 }
 
 // TicketRepository определяет методы для работы с хранилищем заявок.

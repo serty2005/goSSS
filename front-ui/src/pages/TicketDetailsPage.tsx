@@ -5,7 +5,8 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
-import { InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { formatCompanyHierarchy, resolveCompanyID } from '@/utils/companyHierarchy';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -40,6 +41,7 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       if (entry.field === 'status') return 'Изменён статус';
       if (entry.field === 'description') return 'Изменено описание';
       if (entry.field === 'assignee') return 'Изменён исполнитель';
+      if (entry.field === 'company') return 'Изменена компания';
       if (entry.field === 'asset') return 'Изменено оборудование';
       return 'Изменение заявки';
   }
@@ -77,6 +79,7 @@ const TicketDetailsPage: React.FC = () => {
   const [commentDraft, setCommentDraft] = useState('');
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const [companySearch, setCompanySearch] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['ticket', id],
@@ -116,6 +119,35 @@ const TicketDetailsPage: React.FC = () => {
       ''
     );
   }, [companyResponse?.data, details?.company_name, metadata?.company_id, metadata?.company_name]);
+
+  const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
+    queryKey: ['ticket-companies', companySearch],
+    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    staleTime: 30_000,
+  });
+
+  const companySelectOptions = useMemo(() => {
+    const list = companiesData?.data || [];
+    const options = list
+      .map((company) => {
+        const item = company as CompanyModel;
+        const companyID = resolveCompanyID(item);
+        if (!companyID) return null;
+        return {
+          value: companyID,
+          label: formatCompanyHierarchy(item) || companyID,
+        };
+      })
+      .filter(Boolean) as Array<{ value: string; label: string }>;
+
+    if (metadata?.company_id && !options.some((item) => item.value === metadata.company_id)) {
+      options.unshift({
+        value: metadata.company_id,
+        label: companyTitle || metadata.company_id,
+      });
+    }
+    return options;
+  }, [companiesData?.data, metadata, companyTitle]);
 
   const connectionCards = useMemo(() => {
     return infrastructure
@@ -208,6 +240,21 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось обновить статус'),
   });
 
+  const changeCompanyMutation = useMutation({
+    mutationFn: async (nextCompanyID: string) => {
+      if (!id) return;
+      return ticketsApi.changeCompany(id, nextCompanyID);
+    },
+    onSuccess: () => {
+      message.success('Компания обновлена');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['company-infra'] });
+      queryClient.invalidateQueries({ queryKey: ['company-profile'] });
+    },
+    onError: () => message.error('Не удалось обновить компанию'),
+  });
+
   const copyConnectionMutation = useMutation({
     mutationFn: async (payload: { label: string; value: string }) => {
       if (!id) return;
@@ -257,11 +304,33 @@ const TicketDetailsPage: React.FC = () => {
 
         <Descriptions style={{ marginTop: 16 }} column={2} bordered size="small">
           <Descriptions.Item label="Компания">
-            {metadata.company_id ? (
-              <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
-            ) : (
-              companyTitle || '-'
-            )}
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {metadata.company_id ? (
+                <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
+              ) : (
+                companyTitle || '-'
+              )}
+              <Select
+                showSearch
+                value={metadata.company_id}
+                placeholder="Выберите компанию"
+                style={{ width: 320, maxWidth: '100%' }}
+                options={companySelectOptions}
+                filterOption={false}
+                loading={isCompaniesLoading || changeCompanyMutation.isPending}
+                onSearch={(value) => setCompanySearch(value)}
+                onChange={(nextCompanyID) => {
+                  if (!nextCompanyID || nextCompanyID === metadata.company_id) return;
+                  Modal.confirm({
+                    title: 'Сменить компанию в тикете?',
+                    content: 'После смены компании изменится карточка тикета и доступная инфраструктура.',
+                    okText: 'Сменить',
+                    cancelText: 'Отмена',
+                    onOk: () => changeCompanyMutation.mutate(String(nextCompanyID)),
+                  });
+                }}
+              />
+            </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Контракт">
             {metadata.is_common_contract ? 'Общий контракт' : metadata.contract_id || '-'}
