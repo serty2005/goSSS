@@ -382,7 +382,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 
 	// Попытка получить описание из SD для легаси тикетов
-	if ticket.ServiceDeskUUID != "" && s.cfg.ServiceDeskKey != "" && len(localComments) == 0 {
+	if s.isServiceDeskEnabledForReads() && ticket.ServiceDeskUUID != "" && len(localComments) == 0 {
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
 			if desc, ok := sdData["descriptionRTF"].(string); ok {
@@ -419,6 +419,10 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 }
 
 func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error) {
+	if !s.isServiceDeskEnabledForReads() {
+		return 0, nil
+	}
+
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return 0, err
@@ -489,6 +493,10 @@ func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, 
 	}
 
 	return len(toInsert), nil
+}
+
+func (s *ticketServiceImpl) isServiceDeskEnabledForReads() bool {
+	return s.cfg != nil && s.cfg.EnableSDeskGateway && strings.TrimSpace(s.cfg.ServiceDeskKey) != ""
 }
 
 func (s *ticketServiceImpl) applyCommonContractFlag(items []tickets.Ticket) {

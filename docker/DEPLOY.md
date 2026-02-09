@@ -21,6 +21,12 @@ cp .env.prod.example .env
 - `BASE_URL`
 - `SDKEY`
 
+Для сидинга обязательно задайте путь на хосте:
+
+- `SEEDER_MOCK_DATA_PATH=/absolute/path/to/mock_data`
+
+Папка должна содержать файлы мок-данных для сидера.
+
 ## 2. Сборка и публикация образов (CI/локально)
 
 ```bash
@@ -33,6 +39,8 @@ docker compose --env-file .env -f docker-compose.build.yml push
 
 - `myteam/gosss-backend:1.0.0`
 - `myteam/gosss-frontend:1.0.0`
+
+Важно: мок-данные в образ не включаются.
 
 ## 3. Запуск production из Docker Hub
 
@@ -48,6 +56,8 @@ docker compose --env-file .env -f docker-compose.prod.yml up -d
 cd docker
 docker compose --env-file .env -f docker-compose.prod.yml --profile seed run --rm init-seeder
 ```
+
+`init-seeder` получает мок-данные через bind-mount из `SEEDER_MOCK_DATA_PATH`.
 
 ## 5. Обновление до нового тега
 

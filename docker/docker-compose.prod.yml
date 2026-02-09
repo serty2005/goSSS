@@ -50,6 +50,11 @@ services:
     env_file:
       - .env
     command: ["--seed"]
+    volumes:
+      - type: bind
+        source: ${SEEDER_MOCK_DATA_PATH:-/opt/gosss/mock_data}
+        target: /app/tools/seeder/mock_data
+        read_only: true
     depends_on:
       db:
         condition: service_healthy

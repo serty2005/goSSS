@@ -17,9 +17,8 @@ RUN apk add --no-cache ca-certificates \
     && adduser -S -G app app
 
 COPY --from=builder /app/etalon-server ./etalon-server
-COPY --from=builder /app/tools/seeder/mock_data ./tools/seeder/mock_data
 
-RUN mkdir -p /app/ftp_cache /app/storage/tickets /app/logs \
+RUN mkdir -p /app/ftp_cache /app/storage/tickets /app/logs /app/tools/seeder/mock_data \
     && chown -R app:app /app
 
 USER app

@@ -5,3 +5,4 @@
 *.py
 storage/*
 docker/.env
+tools/seeder/*

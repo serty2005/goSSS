@@ -260,7 +260,13 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 		`)
 
 		// 7. Загрузка тикетов и комментариев (если файл присутствует)
-		if err := s.seedTicketsWithComments(tx, extToIntID); err != nil {
+		ticketSeedRes, err := s.seedTicketsWithComments(tx, extToIntID)
+		if err != nil {
+			return err
+		}
+
+		// 8. Загрузка файлов тикетов из мок-данных (если манифест присутствует)
+		if err := s.seedTicketFilesFromMock(tx, ticketSeedRes); err != nil {
 			return err
 		}
 
@@ -297,6 +303,7 @@ type ticketExport struct {
 	Agreement        exportRef       `json:"agreement"`
 	ClientOU         exportRef       `json:"clientOU"`
 	DescriptionRTF   string          `json:"descriptionRTF"`
+	ResultDescr      string          `json:"resultDescr"`
 	RequestDate      string          `json:"requestDate"`
 	LastModifiedDate string          `json:"lastModifiedDate"`
 	State            string          `json:"state"`
@@ -304,11 +311,12 @@ type ticketExport struct {
 }
 
 type commentExport struct {
-	UUID    string       `json:"UUID"`
-	Text    string       `json:"text"`
-	Author  exportAuthor `json:"author"`
-	Private bool         `json:"private"`
-	Files   []any        `json:"files"`
+	UUID         string       `json:"UUID"`
+	Text         string       `json:"text"`
+	CreationDate string       `json:"creationDate"`
+	Author       exportAuthor `json:"author"`
+	Private      bool         `json:"private"`
+	Files        []any        `json:"files"`
 }
 
 type exportRef struct {
@@ -319,18 +327,24 @@ type exportAuthor struct {
 	Title string `json:"title"`
 }
 
-func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]string) error {
+type ticketSeedResult struct {
+	ticketIDByExternal  map[string]string
+	commentIDByExternal map[string]string
+	commentTicketByExt  map[string]string
+}
+
+func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]string) (*ticketSeedResult, error) {
 	filePath := filepath.Join("tools", "seeder", "mock_data", "2_full_export_with_comments.json")
 	if _, err := os.Stat(filePath); err != nil {
 		s.logger.Warn("Файл тикетов не найден, пропускаем сидинг тикетов", "file", filePath)
-		return nil
+		return nil, nil
 	}
 
 	s.logger.Info("Загрузка тикетов и комментариев из файла...", "file", filePath)
 
 	f, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
@@ -339,10 +353,10 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 
 	tok, err := dec.Token()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
-		return fmt.Errorf("ожидался JSON-массив в файле %s", filePath)
+		return nil, fmt.Errorf("ожидался JSON-массив в файле %s", filePath)
 	}
 
 	var (
@@ -351,6 +365,11 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		linkBatch     []models.ExternalSystemLink
 		ticketsCount  int
 		commentsCount int
+		seedResult    = &ticketSeedResult{
+			ticketIDByExternal:  make(map[string]string),
+			commentIDByExternal: make(map[string]string),
+			commentTicketByExt:  make(map[string]string),
+		}
 	)
 
 	flushTickets := func() error {
@@ -391,7 +410,7 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 	for dec.More() {
 		var raw ticketExport
 		if err := dec.Decode(&raw); err != nil {
-			return err
+			return nil, err
 		}
 		if raw.UUID == "" {
 			continue
@@ -414,6 +433,7 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			Number:          number,
 			Subject:         utils.StripHTML(raw.DescriptionRTF),
 			Description:     raw.DescriptionRTF,
+			Result:          raw.ResultDescr,
 			Status:          raw.State,
 			Priority:        tickets.PriorityMedium,
 			Type:            tickets.TypeIncident,
@@ -448,6 +468,7 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		}
 
 		ticketBatch = append(ticketBatch, ticket)
+		seedResult.ticketIDByExternal[raw.UUID] = ticketID
 		linkBatch = append(linkBatch, models.ExternalSystemLink{
 			InternalID:      ticketID,
 			SystemName:      "naumen",
@@ -457,12 +478,12 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		})
 		if len(ticketBatch) >= batchSize {
 			if err := flushTickets(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if len(linkBatch) >= 500 {
 			if err := flushLinks(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -475,9 +496,21 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 				IsInternal:      c.Private,
 			}
 			comment.ID = uuid.New().String()
-			comment.CreationDate = ticket.CreatedAt
+			if c.CreationDate != "" {
+				if t := utils.ParseServiceDeskTime(c.CreationDate); t != nil {
+					comment.CreationDate = *t
+				}
+			}
+			if comment.CreationDate.IsZero() {
+				comment.CreationDate = ticket.CreatedAt
+			}
+			if comment.CreationDate.IsZero() {
+				comment.CreationDate = time.Now()
+			}
 			commentBatch = append(commentBatch, comment)
 			if c.UUID != "" {
+				seedResult.commentIDByExternal[c.UUID] = comment.ID
+				seedResult.commentTicketByExt[c.UUID] = ticketID
 				linkBatch = append(linkBatch, models.ExternalSystemLink{
 					InternalID:      comment.ID,
 					SystemName:      "naumen",
@@ -488,31 +521,31 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			}
 			if len(commentBatch) >= 500 {
 				if err := flushComments(); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			if len(linkBatch) >= 500 {
 				if err := flushLinks(); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 	}
 
 	if _, err := dec.Token(); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := flushTickets(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := flushComments(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := flushLinks(); err != nil {
-		return err
+		return nil, err
 	}
 
 	s.logger.Info("Сидинг тикетов завершен", "tickets", ticketsCount, "comments", commentsCount)
-	return nil
+	return seedResult, nil
 }
