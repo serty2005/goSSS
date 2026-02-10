@@ -28,3 +28,20 @@ export const formatCompanyHierarchy = (company: CompanyModel) =>
 
 export const formatTicketFilterCompanyHierarchy = (company: TicketCompanyFilterItem) =>
   formatHierarchyTitle(company.name || company.id, company.parent_name);
+
+export const getCompanyHierarchyParts = (title: string, parentTitle?: string) => {
+  const cleanTitle = normalize(title);
+  const cleanParent = normalize(parentTitle);
+  if (!cleanParent || cleanParent === cleanTitle) {
+    return {
+      parent: '',
+      child: cleanTitle,
+      hasParent: false,
+    };
+  }
+  return {
+    parent: cleanParent,
+    child: cleanTitle,
+    hasParent: true,
+  };
+};

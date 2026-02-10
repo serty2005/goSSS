@@ -13,7 +13,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
-	"fmt"
+	"etalon-server/internal/transport/http/validators"
 	"net/http"
 	"strconv"
 	"strings"
@@ -245,18 +245,10 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []serve
 				externalUUID = &link.ServiceDeskUUID
 			}
 
-			var partnersLink *string
-			clientIdStr := utils.SafeStringDereference(s.CabinetLink)
-			if clientIdStr != "" && clientIdStr != "N/A" {
-				var link string
-				ipStr := utils.SafeStringDereference(s.IP)
-				if strings.Contains(strings.ToLower(ipStr), "syrve") {
-					link = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientIdStr)
-				} else {
-					link = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientIdStr)
-				}
-				partnersLink = &link
-			}
+			partnersLink := validators.BuildPartnersPortalLink(
+				utils.SafeStringDereference(s.CabinetLink),
+				utils.SafeStringDereference(s.IP),
+			)
 
 			var statusDetails interface{}
 			_ = json.Unmarshal(s.StatusDetails, &statusDetails)

@@ -463,6 +463,15 @@ type AcceptedResponseDTO struct {
 	TaskID  uint   `json:"task_id"`
 }
 
+// ContractResponseDTO - DTO контракта для API без служебных полей модели.
+type ContractResponseDTO struct {
+	ID            string     `json:"id"`
+	State         *string    `json:"state,omitempty"`
+	StateStartTime *time.Time `json:"state_start_time,omitempty"`
+	Services      []string   `json:"services,omitempty"`
+	ServiceLevel  int        `json:"service_level"`
+}
+
 // === DTO для создания сущностей ===
 
 // ServerCreateDTO - DTO для создания сервера

@@ -1,12 +1,13 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
+import { CheckOutlined, CloseOutlined, EditOutlined } from '@ant-design/icons';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
 import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
-import { formatCompanyHierarchy, resolveCompanyID } from '@/utils/companyHierarchy';
+import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -80,6 +81,8 @@ const TicketDetailsPage: React.FC = () => {
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [companySearch, setCompanySearch] = useState('');
+  const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
+  const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
 
   const { data, isLoading } = useQuery({
     queryKey: ['ticket', id],
@@ -128,17 +131,31 @@ const TicketDetailsPage: React.FC = () => {
 
   const companySelectOptions = useMemo(() => {
     const list = companiesData?.data || [];
+    const renderOptionLabel = (title: string, parentTitle?: string) => {
+      const parts = getCompanyHierarchyParts(title, parentTitle);
+      if (!parts.hasParent) {
+        return parts.child;
+      }
+      return (
+        <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>{parts.parent}</Text>
+          <Text style={{ paddingLeft: 14 }}>{parts.child}</Text>
+        </Space>
+      );
+    };
     const options = list
       .map((company) => {
         const item = company as CompanyModel;
         const companyID = resolveCompanyID(item);
         if (!companyID) return null;
+        const title = resolveCompanyTitle(item) || companyID;
+        const parentTitle = resolveCompanyParentTitle(item);
         return {
           value: companyID,
-          label: formatCompanyHierarchy(item) || companyID,
+          label: renderOptionLabel(title, parentTitle),
         };
       })
-      .filter(Boolean) as Array<{ value: string; label: string }>;
+      .filter(Boolean) as Array<{ value: string; label: React.ReactNode }>;
 
     if (metadata?.company_id && !options.some((item) => item.value === metadata.company_id)) {
       options.unshift({
@@ -247,6 +264,8 @@ const TicketDetailsPage: React.FC = () => {
     },
     onSuccess: () => {
       message.success('Компания обновлена');
+      setIsCompanyEditMode(false);
+      setCompanySearch('');
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['company-infra'] });
@@ -304,33 +323,63 @@ const TicketDetailsPage: React.FC = () => {
 
         <Descriptions style={{ marginTop: 16 }} column={2} bordered size="small">
           <Descriptions.Item label="Компания">
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              {metadata.company_id ? (
-                <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
-              ) : (
-                companyTitle || '-'
-              )}
-              <Select
-                showSearch
-                value={metadata.company_id}
-                placeholder="Выберите компанию"
-                style={{ width: 320, maxWidth: '100%' }}
-                options={companySelectOptions}
-                filterOption={false}
-                loading={isCompaniesLoading || changeCompanyMutation.isPending}
-                onSearch={(value) => setCompanySearch(value)}
-                onChange={(nextCompanyID) => {
-                  if (!nextCompanyID || nextCompanyID === metadata.company_id) return;
-                  Modal.confirm({
-                    title: 'Сменить компанию в тикете?',
-                    content: 'После смены компании изменится карточка тикета и доступная инфраструктура.',
-                    okText: 'Сменить',
-                    cancelText: 'Отмена',
-                    onOk: () => changeCompanyMutation.mutate(String(nextCompanyID)),
-                  });
-                }}
-              />
-            </Space>
+            {!isCompanyEditMode ? (
+              <Space>
+                {metadata.company_id ? (
+                  <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
+                ) : (
+                  companyTitle || '-'
+                )}
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setDraftCompanyID(metadata.company_id);
+                    setCompanySearch('');
+                    setIsCompanyEditMode(true);
+                  }}
+                />
+              </Space>
+            ) : (
+              <Space>
+                <Select
+                  showSearch
+                  value={draftCompanyID || metadata.company_id}
+                  placeholder="Выберите компанию"
+                  style={{ width: 320, maxWidth: '100%' }}
+                  options={companySelectOptions}
+                  filterOption={false}
+                  loading={isCompaniesLoading || changeCompanyMutation.isPending}
+                  onSearch={(value) => setCompanySearch(value)}
+                  onChange={(nextCompanyID) => setDraftCompanyID(String(nextCompanyID))}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CheckOutlined />}
+                  loading={changeCompanyMutation.isPending}
+                  onClick={() => {
+                    const nextCompanyID = draftCompanyID || metadata.company_id;
+                    if (!nextCompanyID || nextCompanyID === metadata.company_id) {
+                      setIsCompanyEditMode(false);
+                      return;
+                    }
+                    changeCompanyMutation.mutate(nextCompanyID);
+                  }}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CloseOutlined />}
+                  onClick={() => {
+                    setDraftCompanyID(metadata.company_id);
+                    setCompanySearch('');
+                    setIsCompanyEditMode(false);
+                  }}
+                />
+              </Space>
+            )}
           </Descriptions.Item>
           <Descriptions.Item label="Контракт">
             {metadata.is_common_contract ? 'Общий контракт' : metadata.contract_id || '-'}
@@ -628,3 +677,4 @@ const TicketDetailsPage: React.FC = () => {
 };
 
 export default TicketDetailsPage;
+

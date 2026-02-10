@@ -213,6 +213,30 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 	delete(data, "deleted_at")
 
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+		existing, err := s.contractRepo.GetByID(txCtx, id)
+		if err != nil {
+			return err
+		}
+
+		if nextState, hasState := extractStateValue(data["state"]); hasState {
+			currentState := ""
+			if existing.State != nil {
+				currentState = *existing.State
+			}
+			if nextState != currentState {
+				data["state_start_time"] = time.Now().UTC()
+			}
+		}
+
+		normalizeContractJSONFields(data)
+
+		affectedCompanyIDs := make(map[string]struct{}, len(existing.Companies))
+		for _, comp := range existing.Companies {
+			if comp.ID != "" {
+				affectedCompanyIDs[comp.ID] = struct{}{}
+			}
+		}
+
 		updated, err := s.contractRepo.Update(txCtx, id, data)
 		if err != nil {
 			return err
@@ -220,8 +244,52 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 		if !updated {
 			return domain.ErrNotFound
 		}
+
+		tx := db.ExtractDB(txCtx, nil)
+		for companyID := range affectedCompanyIDs {
+			if err := s.recalculateCompanyStatus(txCtx, tx, companyID); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
+}
+
+func extractStateValue(raw interface{}) (string, bool) {
+	if raw == nil {
+		return "", true
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return v, true
+	case *string:
+		if v == nil {
+			return "", true
+		}
+		return *v, true
+	default:
+		return fmt.Sprint(v), true
+	}
+}
+
+func normalizeContractJSONFields(data map[string]interface{}) {
+	normalizeToJSON := func(field string) {
+		raw, exists := data[field]
+		if !exists {
+			return
+		}
+
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return
+		}
+		data[field] = datatypes.JSON(encoded)
+	}
+
+	normalizeToJSON("services")
+	normalizeToJSON("recipients")
 }
 
 func (s *serviceImpl) DeleteContract(ctx context.Context, id string) error {

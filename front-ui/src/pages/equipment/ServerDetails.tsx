@@ -1,22 +1,22 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Tag, Space, Typography, Spin, Badge, Modal, Form, Input, message } from 'antd';
-import { ArrowLeftOutlined, EditOutlined, SyncOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Card, Descriptions, Button, Tag, Space, Typography, Spin, Badge, message } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { formatDate } from '@/utils/formatters';
 import { UpdateServerPayload } from '@/types/api';
+import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 const ServerDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [form] = Form.useForm();
+  const [activeField, setActiveField] = useState<string | null>(null);
 
   const { data: serverRes, isLoading } = useQuery({
     queryKey: ['server', id],
@@ -29,16 +29,15 @@ const ServerDetails: React.FC = () => {
     onSuccess: () => {
       message.success('Данные сервера обновлены');
       queryClient.invalidateQueries({ queryKey: ['server', id] });
-      setIsEditModalOpen(false);
+      setActiveField(null);
     },
     onError: () => message.error('Ошибка обновления'),
   });
 
   const pollMutation = useMutation({
     mutationFn: () => equipmentApi.pollServer(id!),
-    onSuccess: () => {
-      message.success('Запрос на опрос отправлен');
-    }
+    onSuccess: () => message.success('Запрос на опрос отправлен'),
+    onError: () => message.error('Не удалось отправить запрос на опрос'),
   });
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
@@ -46,16 +45,9 @@ const ServerDetails: React.FC = () => {
 
   const server = serverRes.data;
 
-  const handleEdit = () => {
-    // Маппинг для формы (PascalCase -> snake_case payload)
-    form.setFieldsValue({
-      device_name: server.DeviceName,
-      ip: server.IP,
-      anydesk: server.Anydesk,
-      teamviewer: server.Teamviewer,
-      description: server.Description,
-    });
-    setIsEditModalOpen(true);
+  const saveField = (field: keyof UpdateServerPayload, value: string) => {
+    setActiveField(field);
+    updateMutation.mutate({ [field]: value } as UpdateServerPayload);
   };
 
   const handleBack = () => {
@@ -69,113 +61,147 @@ const ServerDetails: React.FC = () => {
 
   return (
     <div>
-      {/* Header */}
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Space align="center">
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <Space>
-             <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Server')}</div>
-             <div>
-               <Title level={4} style={{ margin: 0 }}>{server.DeviceName || server.ServerName || 'Server'}</Title>
-               <Text type="secondary">{server.ID}</Text>
-             </div>
+            <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Server')}</div>
+            <div>
+              <Title level={4} style={{ margin: 0 }}>{server.DeviceName || server.ServerName || 'Сервер'}</Title>
+              <Text type="secondary">{server.ID}</Text>
+            </div>
           </Space>
-          <Tag color={getStatusColor(server.Status) === 'success' ? 'green' : 'red'}>
-            {server.Status?.toUpperCase()}
-          </Tag>
+          <Tag color={getStatusColor(server.Status) === 'success' ? 'green' : 'red'}>{(server.Status || 'unknown').toUpperCase()}</Tag>
         </Space>
-        
+
         <Space>
-          <Button 
-            icon={<SyncOutlined spin={pollMutation.isPending} />} 
-            onClick={() => pollMutation.mutate()}
-          >
+          <Button icon={<SyncOutlined spin={pollMutation.isPending} />} onClick={() => pollMutation.mutate()}>
             Опросить
           </Button>
-          <Button type="primary" icon={<EditOutlined />} onClick={handleEdit}>Редактировать</Button>
           <Button danger icon={<DeleteOutlined />}>Удалить</Button>
         </Space>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 24 }}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          
-          {/* Main Info */}
           <Card title="Основная информация" className="glass-panel" size="small">
-            <Descriptions bordered column={2}>
-              <Descriptions.Item label="IP Адрес">
-                 <Paragraph copyable={{ text: server.IP }} style={{ margin: 0 }}>{server.IP || '-'}</Paragraph>
+            <Descriptions bordered column={2} className="compact-descriptions">
+              <Descriptions.Item label="Название устройства">
+                <InlineFieldEditor
+                  value={server.DeviceName}
+                  onSave={(value) => saveField('device_name', value)}
+                  saving={updateMutation.isPending && activeField === 'device_name'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Имя сервера">
+                <InlineFieldEditor
+                  value={server.ServerName}
+                  onSave={(value) => saveField('server_name', value)}
+                  saving={updateMutation.isPending && activeField === 'server_name'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="IP адрес">
+                <InlineFieldEditor
+                  value={server.IP}
+                  onSave={(value) => saveField('ip', value)}
+                  saving={updateMutation.isPending && activeField === 'ip'}
+                />
               </Descriptions.Item>
               <Descriptions.Item label="Health Status">
-                 <Badge status={getStatusColor(server.HealthStatus)} text={server.HealthStatus} />
+                <Badge status={getStatusColor(server.HealthStatus)} text={server.HealthStatus} />
               </Descriptions.Item>
-              <Descriptions.Item label="Unique ID">{server.UniqueID || '-'}</Descriptions.Item>
-              <Descriptions.Item label="CRM ID">{server.CRMid || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Описание" span={2}>{server.Description || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Unique ID">
+                <InlineFieldEditor
+                  value={server.UniqueID}
+                  onSave={(value) => saveField('unique_id', value)}
+                  saving={updateMutation.isPending && activeField === 'unique_id'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="CRM ID">
+                <InlineFieldEditor
+                  value={server.CRMid}
+                  onSave={(value) => saveField('crm_id', value)}
+                  saving={updateMutation.isPending && activeField === 'crm_id'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Описание" span={2}>
+                <InlineFieldEditor
+                  value={server.Description}
+                  multiline
+                  onSave={(value) => saveField('description', value)}
+                  saving={updateMutation.isPending && activeField === 'description'}
+                />
+              </Descriptions.Item>
             </Descriptions>
           </Card>
 
-          {/* Software Info */}
           <Card title="Программное обеспечение" className="glass-panel" size="small">
-             <Descriptions bordered column={2}>
-               <Descriptions.Item label="Версия сервера">{server.ServerVersion || '-'}</Descriptions.Item>
-               <Descriptions.Item label="Редакция">{server.ServerEdition || '-'}</Descriptions.Item>
-               <Descriptions.Item label="Посл. опрос">{formatDate(server.LastPolledAt)}</Descriptions.Item>
-             </Descriptions>
+            <Descriptions bordered column={2} className="compact-descriptions">
+              <Descriptions.Item label="Версия сервера">
+                <InlineFieldEditor
+                  value={server.ServerVersion}
+                  onSave={(value) => saveField('server_version', value)}
+                  saving={updateMutation.isPending && activeField === 'server_version'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Редакция">
+                <InlineFieldEditor
+                  value={server.ServerEdition}
+                  onSave={(value) => saveField('server_edition', value)}
+                  saving={updateMutation.isPending && activeField === 'server_edition'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Посл. опрос">{formatDate(server.LastPolledAt)}</Descriptions.Item>
+            </Descriptions>
           </Card>
         </Space>
 
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-           {/* Access Info */}
-           <Card title="Удаленный доступ" className="glass-panel" size="small">
-              <Descriptions column={1} layout="vertical">
-                 <Descriptions.Item label="AnyDesk">
-                    {server.Anydesk ? <Paragraph copyable>{server.Anydesk}</Paragraph> : <Text type="secondary">-</Text>}
-                 </Descriptions.Item>
-                 <Descriptions.Item label="TeamViewer">
-                    {server.Teamviewer ? <Paragraph copyable>{server.Teamviewer}</Paragraph> : <Text type="secondary">-</Text>}
-                 </Descriptions.Item>
-                 <Descriptions.Item label="RDP">
-                    {server.RDP ? <Paragraph copyable>{server.RDP}</Paragraph> : <Text type="secondary">-</Text>}
-                 </Descriptions.Item>
-                 {server.CabinetLink && (
-                   <Descriptions.Item label="Кабинет">
-                      <Button type="link" href={server.CabinetLink} target="_blank" style={{ padding: 0 }}>
-                        Перейти в кабинет дилера
-                      </Button>
-                   </Descriptions.Item>
-                 )}
-              </Descriptions>
-           </Card>
+          <Card title="Удаленный доступ" className="glass-panel" size="small">
+            <Descriptions column={1} layout="vertical" className="compact-descriptions">
+              <Descriptions.Item label="AnyDesk">
+                <InlineFieldEditor
+                  value={server.Anydesk}
+                  onSave={(value) => saveField('anydesk', value)}
+                  saving={updateMutation.isPending && activeField === 'anydesk'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="TeamViewer">
+                <InlineFieldEditor
+                  value={server.Teamviewer}
+                  onSave={(value) => saveField('teamviewer', value)}
+                  saving={updateMutation.isPending && activeField === 'teamviewer'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="RDP">
+                <InlineFieldEditor
+                  value={server.RDP}
+                  onSave={(value) => saveField('rdp', value)}
+                  saving={updateMutation.isPending && activeField === 'rdp'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="LiteManager">
+                <InlineFieldEditor
+                  value={server.Litemanager}
+                  onSave={(value) => saveField('litemanager', value)}
+                  saving={updateMutation.isPending && activeField === 'litemanager'}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Кабинет дилера">
+                {(server.PartnersLink || server.partners_link) ? (
+                  <a
+                    href={server.PartnersLink || server.partners_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Partners Portal
+                  </a>
+                ) : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
         </Space>
       </div>
-
-      {/* Edit Modal */}
-      <Modal
-        title="Редактирование сервера"
-        open={isEditModalOpen}
-        onCancel={() => setIsEditModalOpen(false)}
-        onOk={() => form.submit()}
-        confirmLoading={updateMutation.isPending}
-      >
-        <Form form={form} layout="vertical" onFinish={(values) => updateMutation.mutate(values)}>
-          <Form.Item name="device_name" label="Имя устройства">
-            <Input />
-          </Form.Item>
-          <Form.Item name="ip" label="IP адрес">
-            <Input />
-          </Form.Item>
-          <Form.Item name="anydesk" label="AnyDesk">
-            <Input />
-          </Form.Item>
-          <Form.Item name="teamviewer" label="TeamViewer">
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="Описание">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 };

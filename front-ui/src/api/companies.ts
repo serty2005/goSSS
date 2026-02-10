@@ -12,8 +12,12 @@ export const companiesApi = {
 
   // Получение профиля компании
   getCompany: async (id: string) => {
-    // В URL передаем ID компании
     const response = await apiClient.get<ApiResponse<CompanyModel>>(`/companies/${id}`);
+    return response.data;
+  },
+
+  updateCompany: async (id: string, data: Record<string, unknown>) => {
+    const response = await apiClient.put<ApiResponse<{ status: string }>>(`/companies/${id}`, data);
     return response.data;
   },
 

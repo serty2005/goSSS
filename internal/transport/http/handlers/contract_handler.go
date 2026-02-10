@@ -8,6 +8,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +20,6 @@ type ContractHandler struct {
 }
 
 // NewContractHandler создает новый экземпляр обработчика.
-// Обрати внимание: мы убрали *gorm.DB и Repository из зависимостей.
 func NewContractHandler(service contract.Service) *ContractHandler {
 	return &ContractHandler{service: service}
 }
@@ -38,7 +38,7 @@ func (h *ContractHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 
-	contract, err := h.service.GetContract(r.Context(), id)
+	contractModel, err := h.service.GetContract(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Error("не найдена запись", "error", err)
@@ -49,7 +49,58 @@ func (h *ContractHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, contract)
+
+	dto := api.ContractResponseDTO{
+		ID:             contractModel.ID,
+		State:          contractModel.State,
+		StateStartTime: contractModel.StateStartTime,
+		Services:       parseContractServices(contractModel.Services),
+		ServiceLevel:   contractModel.ServiceLevel,
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, dto)
+}
+
+func parseContractServices(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var stringSlice []string
+	if err := json.Unmarshal(raw, &stringSlice); err == nil {
+		return stringSlice
+	}
+
+	var interfaceSlice []interface{}
+	if err := json.Unmarshal(raw, &interfaceSlice); err == nil {
+		result := make([]string, 0, len(interfaceSlice))
+		for _, item := range interfaceSlice {
+			if item == nil {
+				continue
+			}
+			result = append(result, fmt.Sprint(item))
+		}
+		return result
+	}
+
+	var keyedServices map[string]interface{}
+	if err := json.Unmarshal(raw, &keyedServices); err == nil {
+		result := make([]string, 0, len(keyedServices))
+		for _, value := range keyedServices {
+			if value == nil {
+				continue
+			}
+			result = append(result, fmt.Sprint(value))
+		}
+		return result
+	}
+
+	var singleValue string
+	if err := json.Unmarshal(raw, &singleValue); err == nil && singleValue != "" {
+		return []string{singleValue}
+	}
+
+	return nil
 }
 
 func (h *ContractHandler) CreateContract(w http.ResponseWriter, r *http.Request) {
@@ -60,14 +111,13 @@ func (h *ContractHandler) CreateContract(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Делегируем всю логику сервису
-	contract, err := h.service.CreateContract(r.Context(), &dto)
+	contractModel, err := h.service.CreateContract(r.Context(), &dto)
 	if err != nil {
 		log.Error("Failed to create contract", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create contract")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusCreated, contract)
+	response.RespondWithJSON(w, http.StatusCreated, contractModel)
 }
 
 func (h *ContractHandler) UpdateContract(w http.ResponseWriter, r *http.Request) {

@@ -17,6 +17,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"etalon-server/internal/transport/http/validators"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -382,6 +383,15 @@ func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server server.Se
 		RDP:               server.RDP,
 		Litemanager:       server.Litemanager,
 		UniqueID:          server.UniqueID,
+		CRMid:             server.CRMid,
+		PartnersLink: validators.BuildPartnersPortalLink(
+			utils.SafeStringDereference(server.CabinetLink),
+			utils.SafeStringDereference(server.IP),
+		),
+		ServerName:    server.ServerName,
+		ServerVersion: server.ServerVersion,
+		ServerEdition: server.ServerEdition,
+		LastPolledAt:  server.LastPolledAt,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", server.ID)
 	if err == nil && link != nil {

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"etalon-server/internal/transport/http/validators"
 	"net/http"
 	"strconv"
 
@@ -83,7 +85,37 @@ func (h *ServerHandler) Get(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusNotFound, "Not Found")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, item)
+	partnersLink := validators.BuildPartnersPortalLink(
+		utils.SafeStringDereference(item.CabinetLink),
+		utils.SafeStringDereference(item.IP),
+	)
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"ID":               item.ID,
+		"CreatedAt":        item.CreatedAt,
+		"UpdatedAt":        item.UpdatedAt,
+		"DeletedAt":        item.DeletedAt,
+		"UniqueID":         item.UniqueID,
+		"IP":               item.IP,
+		"CabinetLink":      item.CabinetLink,
+		"DeviceName":       item.DeviceName,
+		"LastModifiedDate": item.LastModifiedDate,
+		"Litemanager":      item.Litemanager,
+		"ServerVersion":    item.ServerVersion,
+		"Description":      item.Description,
+		"OwnerID":          item.OwnerID,
+		"AdditionalOwners": item.AdditionalOwners,
+		"ServerName":       item.ServerName,
+		"ServerEdition":    item.ServerEdition,
+		"LastPolledAt":     item.LastPolledAt,
+		"Status":           item.Status,
+		"HealthStatus":     item.HealthStatus,
+		"StatusDetails":    item.StatusDetails,
+		"CRMid":            item.CRMid,
+		"RDP":              item.RDP,
+		"Teamviewer":       item.Teamviewer,
+		"Anydesk":          item.Anydesk,
+		"PartnersLink":     partnersLink,
+	})
 }
 
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {

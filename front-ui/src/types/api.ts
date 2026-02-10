@@ -41,6 +41,10 @@ export interface CompanyModel {
   parent_id?: string;
   ParentTitle?: string;
   parent_title?: string;
+  ContractID?: string;
+  contract_id?: string;
+  ContractType?: string;
+  contract_type?: string;
   LastModifiedDate?: string;
   last_modified_date?: string;
 }
@@ -353,6 +357,8 @@ export interface ServerDetailDTO {
   HealthStatus?: 'ok' | 'attention_required' | 'locked';
   
   CabinetLink?: string;
+  PartnersLink?: string;
+  partners_link?: string;
   CRMid?: string;
   
   RDP?: string;
@@ -381,10 +387,18 @@ export interface PaginationMeta {
 }
 
 export interface UpdateServerPayload {
+  unique_id?: string;
+  crm_id?: string;
   device_name?: string;
+  server_name?: string;
+  server_version?: string;
+  server_edition?: string;
   ip?: string;
   anydesk?: string;
   teamviewer?: string;
+  rdp?: string;
+  litemanager?: string;
+  cabinet_link?: string;
   description?: string;
 }
 
@@ -392,9 +406,36 @@ export interface UpdateWorkstationPayload {
   device_name?: string;
   anydesk?: string;
   teamviewer?: string;
+  litemanager?: string;
   description?: string;
 }
 
 export interface UpdateFiscalPayload {
+  model_kkt?: string;
+  rn_kkt?: string;
+  fr_serial_number?: string;
+  inn?: string;
+  legal_name?: string;
+  fn_number?: string;
+  kkt_reg_date?: string;
+  fn_expire_date?: string;
+  fr_firmware?: string;
+  fr_downloader?: string;
+  driver_version?: string;
+  address?: string;
+  ofd_name?: string;
   description?: string;
+}
+
+export interface ContractDetailDTO {
+  ID?: string;
+  id?: string;
+  State?: string;
+  state?: string;
+  Services?: string[] | Record<string, unknown>;
+  services?: string[] | Record<string, unknown>;
+  Recipients?: string[] | Record<string, unknown>;
+  recipients?: string[] | Record<string, unknown>;
+  service_level?: number;
+  state_start_time?: string;
 }

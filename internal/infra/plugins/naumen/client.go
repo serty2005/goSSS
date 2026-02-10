@@ -573,9 +573,8 @@ func (m *naumenMapper) DataToServer(ctx context.Context, mc *external.MapperCont
 		server.Litemanager = validators.ExtractLiteManagerID(data, fullDescription)
 	}
 
-	if cl, ok := data["CabinetLink"].(string); ok && server.IP != nil {
-		companyType := validators.DetermineCompanyTypeFromIP(*server.IP)
-		link := validators.ValidateCabinetLink(cl, companyType)
+	if cl, ok := data["CabinetLink"].(string); ok {
+		link := validators.ValidateCabinetLink(cl, "")
 		server.CabinetLink = &link
 	}
 	return server, nil

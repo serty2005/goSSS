@@ -53,7 +53,26 @@ func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.
 	var entity company.Company
 	err := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Select("companies.*, parent.title AS parent_title").
+		Select(`
+			companies.*,
+			parent.title AS parent_title,
+			(
+				SELECT c.id
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_id,
+			(
+				SELECT c.services->>0
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_type
+		`).
 		Where("companies.id = ?", internalID).
 		First(&entity).Error
 	if err != nil {
@@ -127,7 +146,26 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 	var entities []company.Company
 	query := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Select("companies.*, parent.title AS parent_title").
+		Select(`
+			companies.*,
+			parent.title AS parent_title,
+			(
+				SELECT c.id
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_id,
+			(
+				SELECT c.services->>0
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_type
+		`).
 		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%")
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)

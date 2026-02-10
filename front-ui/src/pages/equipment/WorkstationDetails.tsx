@@ -1,21 +1,21 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, Modal, Form, Input, message } from 'antd';
-import { ArrowLeftOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { UpdateWorkstationPayload } from '@/types/api';
+import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 const WorkstationDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [form] = Form.useForm();
+  const [activeField, setActiveField] = useState<string | null>(null);
 
   const { data: wsRes, isLoading } = useQuery({
     queryKey: ['workstation', id],
@@ -28,7 +28,7 @@ const WorkstationDetails: React.FC = () => {
     onSuccess: () => {
       message.success('Данные обновлены');
       queryClient.invalidateQueries({ queryKey: ['workstation', id] });
-      setIsEditModalOpen(false);
+      setActiveField(null);
     },
     onError: () => message.error('Ошибка обновления'),
   });
@@ -38,14 +38,9 @@ const WorkstationDetails: React.FC = () => {
 
   const ws = wsRes.data;
 
-  const handleEdit = () => {
-    form.setFieldsValue({
-      device_name: ws.DeviceName,
-      anydesk: ws.Anydesk,
-      teamviewer: ws.Teamviewer,
-      description: ws.Description,
-    });
-    setIsEditModalOpen(true);
+  const saveField = (field: keyof UpdateWorkstationPayload, value: string) => {
+    setActiveField(field);
+    updateMutation.mutate({ [field]: value } as UpdateWorkstationPayload);
   };
 
   const handleBack = () => {
@@ -63,60 +58,58 @@ const WorkstationDetails: React.FC = () => {
         <Space align="center">
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <Space>
-             <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Workstation')}</div>
-             <div>
-               <Title level={4} style={{ margin: 0 }}>{ws.DeviceName || 'Workstation'}</Title>
-               <Text type="secondary">{ws.ID}</Text>
-             </div>
+            <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Workstation')}</div>
+            <div>
+              <Title level={4} style={{ margin: 0 }}>{ws.DeviceName || 'Рабочая станция'}</Title>
+              <Text type="secondary">{ws.ID}</Text>
+            </div>
           </Space>
           <Badge status={getStatusColor(ws.HealthStatus)} text={ws.HealthStatus} />
         </Space>
-        
-        <Space>
-          <Button type="primary" icon={<EditOutlined />} onClick={handleEdit}>Редактировать</Button>
-          <Button danger icon={<DeleteOutlined />}>Удалить</Button>
-        </Space>
+
+        <Button danger icon={<DeleteOutlined />}>Удалить</Button>
       </div>
 
       <Card title="Детали рабочей станции" className="glass-panel" size="small">
-        <Descriptions bordered column={1}>
+        <Descriptions bordered column={1} className="compact-descriptions">
+          <Descriptions.Item label="Название устройства">
+            <InlineFieldEditor
+              value={ws.DeviceName}
+              onSave={(value) => saveField('device_name', value)}
+              saving={updateMutation.isPending && activeField === 'device_name'}
+            />
+          </Descriptions.Item>
           <Descriptions.Item label="Описание">
-             {ws.Description || '-'}
+            <InlineFieldEditor
+              value={ws.Description}
+              multiline
+              onSave={(value) => saveField('description', value)}
+              saving={updateMutation.isPending && activeField === 'description'}
+            />
           </Descriptions.Item>
           <Descriptions.Item label="AnyDesk">
-             {ws.Anydesk ? <Paragraph copyable>{ws.Anydesk}</Paragraph> : '-'}
+            <InlineFieldEditor
+              value={ws.Anydesk}
+              onSave={(value) => saveField('anydesk', value)}
+              saving={updateMutation.isPending && activeField === 'anydesk'}
+            />
           </Descriptions.Item>
           <Descriptions.Item label="TeamViewer">
-             {ws.Teamviewer ? <Paragraph copyable>{ws.Teamviewer}</Paragraph> : '-'}
+            <InlineFieldEditor
+              value={ws.Teamviewer}
+              onSave={(value) => saveField('teamviewer', value)}
+              saving={updateMutation.isPending && activeField === 'teamviewer'}
+            />
           </Descriptions.Item>
           <Descriptions.Item label="LiteManager">
-             {ws.Litemanager ? <Paragraph copyable>{ws.Litemanager}</Paragraph> : '-'}
+            <InlineFieldEditor
+              value={ws.Litemanager}
+              onSave={(value) => saveField('litemanager', value)}
+              saving={updateMutation.isPending && activeField === 'litemanager'}
+            />
           </Descriptions.Item>
         </Descriptions>
       </Card>
-
-      <Modal
-        title="Редактирование РС"
-        open={isEditModalOpen}
-        onCancel={() => setIsEditModalOpen(false)}
-        onOk={() => form.submit()}
-        confirmLoading={updateMutation.isPending}
-      >
-        <Form form={form} layout="vertical" onFinish={(values) => updateMutation.mutate(values)}>
-          <Form.Item name="device_name" label="Имя устройства">
-            <Input />
-          </Form.Item>
-          <Form.Item name="anydesk" label="AnyDesk">
-            <Input />
-          </Form.Item>
-          <Form.Item name="teamviewer" label="TeamViewer">
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="Описание">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 };

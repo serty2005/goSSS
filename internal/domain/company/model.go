@@ -15,6 +15,8 @@ type Company struct {
 	AdditionalName   *string    `gorm:"type:text"`
 	ParentID         *string    `gorm:"type:text"`
 	ParentTitle      *string    `json:"parent_title,omitempty" gorm:"->"`
+	ContractID       *string    `json:"contract_id,omitempty" gorm:"->"`
+	ContractType     *string    `json:"contract_type,omitempty" gorm:"->"`
 	Parent           *Company   `gorm:"foreignKey:ParentID"`
 
 	// Связи "один-ко-многим" и "многие-ко-многим" мы здесь НЕ объявляем явно,

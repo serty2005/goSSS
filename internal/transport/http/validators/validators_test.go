@@ -79,7 +79,7 @@ func TestExtractLiteManagerID(t *testing.T) {
 		expected *string
 	}{
 		{"ID в поле data", map[string]interface{}{"litemanagerID": "MH_12345"}, "", stringPtr("MH_12345")},
-		{"ID в fallback строке", map[string]interface{}{}, "Какой-то текст с MH_54321 внутри", stringPtr("MH_54321")},
+		{"ID во fallback строке", map[string]interface{}{}, "Какой-то текст с MH_54321 внутри", stringPtr("MH_54321")},
 		{"ID отсутствует", map[string]interface{}{}, "Просто текст", nil},
 		{"Некорректный ID в поле data", map[string]interface{}{"litemanagerID": "MH_123"}, "", nil},
 	}
@@ -104,10 +104,11 @@ func TestValidateCabinetLink(t *testing.T) {
 		input    string
 		expected string
 	}{
+		{"Только числовой ID", "893403", "893403"},
 		{"Стандартный случай с clientId", "https://cabinet?clientId=12345", "12345"},
 		{"Случай с параметром id в конце", "https://partners.iiko.ru/ru/cabinet/clients.html?mode=showOne&id=720846", "720846"},
-		{"Случай с некорректным ключом (должен вернуть N/A)", "https://cabinet?client=12345", "12345"}, // Оставим это поведение, оно соответствует логике "берем последнее"
-		{"URL без знака равно", "https://cabinet/clients", "N/A"},
+		{"Некорректный ключ параметра, но c ID", "https://cabinet?client=12345", "12345"},
+		{"URL без '=' но с цифрами в пути", "https://cabinet/clients/8747265", "8747265"},
 		{"Параметр не является числом", "https://cabinet?id=abc", "N/A"},
 		{"Параметр с якорем", "https://cabinet?id=54321#details", "54321"},
 		{"Пустая строка", "", "N/A"},
@@ -115,10 +116,24 @@ func TestValidateCabinetLink(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// В этой функции второй параметр companyType не используется, так что можно передать пустую строку
 			assert.Equal(t, tc.expected, ValidateCabinetLink(tc.input, ""))
 		})
 	}
+}
+
+func TestBuildPartnersPortalLink(t *testing.T) {
+	syrveLink := BuildPartnersPortalLink("893403", "https://code.syrve.online/resto/")
+	if assert.NotNil(t, syrveLink) {
+		assert.Equal(t, "https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=893403", *syrveLink)
+	}
+
+	iikoLink := BuildPartnersPortalLink("8747265", "10.10.10.10:8080")
+	if assert.NotNil(t, iikoLink) {
+		assert.Equal(t, "https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=8747265", *iikoLink)
+	}
+
+	assert.Nil(t, BuildPartnersPortalLink("N/A", "https://code.syrve.online/resto/"))
+	assert.Nil(t, BuildPartnersPortalLink("", "10.10.10.10:8080"))
 }
 
 // Вспомогательная функция для тестов, чтобы создавать указатели на строки.

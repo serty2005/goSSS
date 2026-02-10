@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Dropdown, Grid, Input, Select, Space, Switch } from 'antd';
+import { Button, Dropdown, Grid, Input, Select, Space, Switch, Typography } from 'antd';
 import { FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
-import { formatTicketFilterCompanyHierarchy } from '@/utils/companyHierarchy';
+import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 
 const { useBreakpoint } = Grid;
+const { Text } = Typography;
 
 const HeaderSearch: React.FC = () => {
   const navigate = useNavigate();
@@ -75,9 +76,27 @@ const HeaderSearch: React.FC = () => {
 
   const companyOptions = useMemo(() => {
     const list = filterRes?.data?.companies || [];
+    const renderLabel = (title: string, parentTitle?: string) => {
+      const parts = getCompanyHierarchyParts(title, parentTitle);
+      if (!parts.hasParent) {
+        return parts.child;
+      }
+      return (
+        <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>{parts.parent}</Text>
+          <Text style={{ paddingLeft: 14 }}>{parts.child}</Text>
+        </Space>
+      );
+    };
     return list.map((company) => ({
       value: company.id,
-      label: `${formatTicketFilterCompanyHierarchy(company)} (${company.count})`,
+      label: (
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          {renderLabel(company.name || company.id, company.parent_name)}
+          <Text type="secondary">({company.count})</Text>
+        </Space>
+      ),
+      searchText: `${company.parent_name || ''} ${company.name || company.id}`.trim().toLowerCase(),
     }));
   }, [filterRes]);
 
@@ -136,7 +155,8 @@ const HeaderSearch: React.FC = () => {
           value={ticketCompany}
           onChange={(value) => updateTicketParams({ company: value || undefined })}
           filterOption={(input, option) =>
-            (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+            String((option as { searchText?: string } | undefined)?.searchText || '')
+              .includes(input.toLowerCase())
           }
           options={companyOptions}
           loading={isFiltersLoading}

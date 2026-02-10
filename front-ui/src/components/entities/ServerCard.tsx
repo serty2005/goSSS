@@ -76,17 +76,31 @@ const ServerCard: React.FC<Props> = ({ data }) => {
              <Paragraph copyable={{ text: webUrl }} style={{ margin: 0, maxWidth: 140 }} ellipsis>
                 {webUrl}
              </Paragraph>
-             <Button
-               size="small"
-               type="primary"
-               ghost
-               href={fullUrl}
-               target="_blank"
-               onClick={e => e.stopPropagation()}
-               icon={<LinkOutlined />}
-             >
-               iikoWeb
-             </Button>
+             <Space size={4}>
+               <Button
+                 size="small"
+                 type="primary"
+                 ghost
+                 href={fullUrl}
+                 target="_blank"
+                 onClick={e => e.stopPropagation()}
+                 icon={<LinkOutlined />}
+               >
+                 iikoWeb
+               </Button>
+               {data.partners_link && (
+                 <Button
+                   size="small"
+                   type="link"
+                   href={data.partners_link}
+                   target="_blank"
+                   onClick={e => e.stopPropagation()}
+                   icon={<LinkOutlined />}
+                 >
+                   Partners Portal
+                 </Button>
+               )}
+             </Space>
           </div>
 
           {data.ip && (
@@ -211,7 +225,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
                  icon={<LinkOutlined />}
                  style={{ paddingRight: 0 }}
                >
-                 Кабинет дилера
+                 Partners Portal
                </Button>
             </div>
          )}

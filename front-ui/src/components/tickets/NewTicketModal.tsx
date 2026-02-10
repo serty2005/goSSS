@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
 import type { CompanyModel, InfrastructureItem } from '@/types/api';
-import { formatCompanyHierarchy, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 
 const { Text, Paragraph } = Typography;
 
@@ -23,6 +23,19 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
+
+  const renderCompanyOptionLabel = (title: string, parentTitle?: string) => {
+    const parts = getCompanyHierarchyParts(title, parentTitle);
+    if (!parts.hasParent) {
+      return parts.child;
+    }
+    return (
+      <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>{parts.parent}</Text>
+        <Text style={{ paddingLeft: 14 }}>{parts.child}</Text>
+      </Space>
+    );
+  };
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
     queryKey: ['companies', companySearch],
@@ -45,7 +58,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
         const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
         const id = rawId ? String(rawId) : '';
-        const title = formatCompanyHierarchy(item) || rawAdditional || id;
+        const title = rawTitle || rawAdditional || id;
+        const labelNode = renderCompanyOptionLabel(title, rawParentTitle);
         if (!id) {
           console.warn('[NewTicketModal] company without id', company);
           return null;
@@ -59,7 +73,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         };
         return {
           value: id,
-          label: title,
+          label: labelNode,
         };
       })
       .filter(Boolean) as Array<{ value: string; label: React.ReactNode }>;
@@ -136,7 +150,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     }));
 
     if (rawTitle || rawAdditional) {
-      const label = formatCompanyHierarchy(item) || rawAdditional || selectedCompanyId;
+      const label = renderCompanyOptionLabel(rawTitle || rawAdditional || selectedCompanyId, rawParentTitle);
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === selectedCompanyId);
         return exists ? prev : [{ value: selectedCompanyId, label }, ...prev];

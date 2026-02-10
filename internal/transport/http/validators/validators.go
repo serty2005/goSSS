@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -14,6 +13,7 @@ var (
 	LiteManagerIDRegex    = regexp.MustCompile(`MH_\d{5}`)
 	iikoCloudDomainRegex  = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
 	syrveCloudDomainRegex = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
+	cabinetLinkIDRegex    = regexp.MustCompile(`\d+`)
 )
 
 // ValidateUniqueID проверяет формат UniqueID.
@@ -56,30 +56,27 @@ func DetermineCompanyTypeFromIP(ip string) string {
 
 // ValidateCabinetLink извлекает clientId из ссылки на личный кабинет.
 func ValidateCabinetLink(raw string, companyType string) string {
-	lastIndex := strings.LastIndex(raw, "=")
-
-	// Если "=" не найден или это последний символ в строке
-	if lastIndex == -1 || lastIndex == len(raw)-1 {
-		return "N/A"
-	}
-
-	// Берем подстроку после последнего "="
-	idStr := raw[lastIndex+1:]
-
-	// Дополнительно очищаем от возможных якорей (#) или других параметров (&)
-	if anchorIndex := strings.Index(idStr, "#"); anchorIndex != -1 {
-		idStr = idStr[:anchorIndex]
-	}
-	if paramIndex := strings.Index(idStr, "&"); paramIndex != -1 {
-		idStr = idStr[:paramIndex]
-	}
-
-	// Проверяем, является ли полученная строка числом
-	if _, err := strconv.Atoi(idStr); err == nil {
+	_ = companyType
+	idStr := cabinetLinkIDRegex.FindString(raw)
+	if idStr != "" {
 		return idStr
 	}
-
 	return "N/A"
+}
+
+// BuildPartnersPortalLink формирует ссылку в партнёрский портал по clientId и ip.
+func BuildPartnersPortalLink(clientID string, ip string) *string {
+	if clientID == "" || clientID == "N/A" {
+		return nil
+	}
+
+	var link string
+	if DetermineCompanyTypeFromIP(ip) == "syrve" {
+		link = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientID)
+	} else {
+		link = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientID)
+	}
+	return &link
 }
 
 // ValidateIPAddress валидирует и нормализует IP-адрес или домен.

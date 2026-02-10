@@ -13,8 +13,8 @@ import (
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -151,19 +151,10 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 			var statusDetails interface{}
 			_ = json.Unmarshal(srv.StatusDetails, &statusDetails)
 
-			// Формируем ссылку на кабинет (для web_access логики фронта)
-			var partnersLink *string
-			clientIdStr := utils.SafeStringDereference(srv.CabinetLink)
-			if clientIdStr != "" && clientIdStr != "N/A" {
-				var linkUrl string
-				ipStr := utils.SafeStringDereference(srv.IP)
-				if strings.Contains(strings.ToLower(ipStr), "syrve") {
-					linkUrl = fmt.Sprintf("https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=%s", clientIdStr)
-				} else {
-					linkUrl = fmt.Sprintf("https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=%s", clientIdStr)
-				}
-				partnersLink = &linkUrl
-			}
+			partnersLink := validators.BuildPartnersPortalLink(
+				utils.SafeStringDereference(srv.CabinetLink),
+				utils.SafeStringDereference(srv.IP),
+			)
 
 			dto := api.FoundEntityDTO{
 				EntityType: "Server",

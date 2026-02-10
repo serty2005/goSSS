@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
 )
 
 type serviceImpl struct {
@@ -34,6 +35,7 @@ func (s *serviceImpl) Create(ctx context.Context, dto *api.ServerCreateDTO) (*se
 
 func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]interface{}) error {
 	cleanData(data)
+	normalizeServerUpdate(data)
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		updated, err := s.repo.Update(txCtx, nil, id, data)
 		if err != nil {
@@ -85,4 +87,18 @@ func cleanData(data map[string]interface{}) {
 	delete(data, "created_at")
 	delete(data, "updated_at")
 	delete(data, "deleted_at")
+}
+
+func normalizeServerUpdate(data map[string]interface{}) {
+	rawValue, exists := data["cabinet_link"]
+	if !exists {
+		return
+	}
+
+	strValue, ok := rawValue.(string)
+	if !ok {
+		return
+	}
+
+	data["cabinet_link"] = validators.ValidateCabinetLink(strValue, "")
 }
