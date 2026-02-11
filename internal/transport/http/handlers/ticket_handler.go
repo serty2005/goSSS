@@ -10,6 +10,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,9 +29,11 @@ func NewTicketHandler(service services.TicketService) *TicketHandler {
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Get("/filters", h.Filters)
-	r.Post("/", h.Create) // Создание внутреннего тикета
+	r.Get("/stats/dashboard", h.DashboardStats)
+	r.Post("/", h.Create) // РЎРѕР·РґР°РЅРёРµ РІРЅСѓС‚СЂРµРЅРЅРµРіРѕ С‚РёРєРµС‚Р°
 	r.Get("/{id}", h.GetDetails)
 	r.Post("/{id}/link", h.LinkAsset)
+	r.Post("/{id}/attachments", h.UploadAttachments)
 	r.Post("/{id}/comments", h.AddComment)
 	r.Post("/{id}/refresh-comments", h.RefreshCommentsFromServiceDesk)
 	r.Post("/{id}/connection-copy", h.RecordConnectionCopy)
@@ -39,27 +42,35 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Patch("/{id}/assign", h.Assign)
 	r.Patch("/{id}/company", h.ChangeCompany)
 }
+func (h *TicketHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.service.GetDashboardStats(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения статистики")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, stats)
+}
 
-// Create создает новый тикет (внутренний).
+// Create СЃРѕР·РґР°РµС‚ РЅРѕРІС‹Р№ С‚РёРєРµС‚ (РІРЅСѓС‚СЂРµРЅРЅРёР№).
 func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	var dto api.TicketCreateInternalDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
-	// Получаем ID текущего пользователя
+	// РџРѕР»СѓС‡Р°РµРј ID С‚РµРєСѓС‰РµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
 		return
 	}
 
 	ticket, err := h.service.CreateInternal(r.Context(), dto, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrReporterNotFound) {
-			response.RespondWithError(w, http.StatusUnauthorized, "Пользователь из сессии не найден, выполните вход заново")
+			response.RespondWithError(w, http.StatusUnauthorized, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РёР· СЃРµСЃСЃРёРё РЅРµ РЅР°Р№РґРµРЅ, РІС‹РїРѕР»РЅРёС‚Рµ РІС…РѕРґ Р·Р°РЅРѕРІРѕ")
 			return
 		}
 		log.Error("Failed to create ticket", "error", err)
@@ -73,7 +84,7 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketStatusChangeDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
@@ -92,17 +103,17 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
 		return
 	}
 	if strings.TrimSpace(dto.Comment) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Комментарий обязателен")
+		response.RespondWithError(w, http.StatusBadRequest, "РљРѕРјРјРµРЅС‚Р°СЂРёР№ РѕР±СЏР·Р°С‚РµР»РµРЅ")
 		return
 	}
 
@@ -111,6 +122,37 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "ID заявки обязателен")
+		return
+	}
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный multipart запрос")
+		return
+	}
+
+	var files []*multipart.FileHeader
+	if r.MultipartForm != nil {
+		files = append(files, r.MultipartForm.File["files"]...)
+		files = append(files, r.MultipartForm.File["file"]...)
+	}
+	if len(files) == 0 {
+		response.RespondWithError(w, http.StatusBadRequest, "Не выбраны файлы")
+		return
+	}
+
+	items, err := h.service.UploadAttachments(r.Context(), id, files)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusCreated, map[string]interface{}{"items": items})
 }
 
 func (h *TicketHandler) RefreshCommentsFromServiceDesk(w http.ResponseWriter, r *http.Request) {
@@ -135,17 +177,17 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
 		return
 	}
 	if strings.TrimSpace(dto.Value) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Значение обязательно")
+		response.RespondWithError(w, http.StatusBadRequest, "Р—РЅР°С‡РµРЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ")
 		return
 	}
 
@@ -156,27 +198,27 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
-// UpdateDescription обновляет описание тикета.
+// UpdateDescription РѕР±РЅРѕРІР»СЏРµС‚ РѕРїРёСЃР°РЅРёРµ С‚РёРєРµС‚Р°.
 func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto struct {
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
 		return
 	}
 
 	ticket, err := h.service.UpdateDescription(r.Context(), id, dto.Description, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
+			response.RespondWithError(w, http.StatusNotFound, "РќРµ РЅР°Р№РґРµРЅРѕ")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
@@ -189,7 +231,7 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAssignDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
@@ -206,26 +248,26 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketChangeCompanyDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 
 	companyID := strings.TrimSpace(dto.CompanyID)
 	if companyID == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "company_id обязателен")
+		response.RespondWithError(w, http.StatusBadRequest, "company_id РѕР±СЏР·Р°С‚РµР»РµРЅ")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
 		return
 	}
 
 	ticket, err := h.service.ChangeCompany(r.Context(), id, companyID, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
+			response.RespondWithError(w, http.StatusNotFound, "РќРµ РЅР°Р№РґРµРЅРѕ")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
@@ -234,11 +276,11 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
-// List возвращает список заявок с фильтрацией.
+// List РІРѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє Р·Р°СЏРІРѕРє СЃ С„РёР»СЊС‚СЂР°С†РёРµР№.
 func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 
-	// Получаем параметры пагинации.
+	// РџРѕР»СѓС‡Р°РµРј РїР°СЂР°РјРµС‚СЂС‹ РїР°РіРёРЅР°С†РёРё.
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 50
@@ -248,7 +290,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	// Собираем фильтры.
+	// РЎРѕР±РёСЂР°РµРј С„РёР»СЊС‚СЂС‹.
 	filter := tickets.TicketFilter{
 		Limit:       limit,
 		Offset:      offset,
@@ -257,7 +299,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		SortBy:      r.URL.Query().Get("sort_by"),
 	}
 
-	// Фильтр по статусам.
+	// Р¤РёР»СЊС‚СЂ РїРѕ СЃС‚Р°С‚СѓСЃР°Рј.
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
 	}
@@ -267,11 +309,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка заявок")
+		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° Р·Р°СЏРІРѕРє")
 		return
 	}
 
-	// Получаем комментарии (для вывода в списке).
+	// РџРѕР»СѓС‡Р°РµРј РєРѕРјРјРµРЅС‚Р°СЂРёРё (РґР»СЏ РІС‹РІРѕРґР° РІ СЃРїРёСЃРєРµ).
 	ticketIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		ticketIDs = append(ticketIDs, item.ID)
@@ -279,11 +321,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	lastComments, err := h.service.GetLastComments(r.Context(), ticketIDs)
 	if err != nil {
 		log.Error("Failed to get last comments", "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка заявок")
+		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° Р·Р°СЏРІРѕРє")
 		return
 	}
 
-	// Преобразуем в TicketListDTO.
+	// РџСЂРµРѕР±СЂР°Р·СѓРµРј РІ TicketListDTO.
 	dtos := make([]api.TicketListDTO, len(items))
 	for i, item := range items {
 		var assignee *struct {
@@ -331,9 +373,9 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetDetails возвращает полную информацию о заявке.
+// GetDetails РІРѕР·РІСЂР°С‰Р°РµС‚ РїРѕР»РЅСѓСЋ РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ Р·Р°СЏРІРєРµ.
 
-// Filters возвращает агрегированные значения для фильтров.
+// Filters РІРѕР·РІСЂР°С‰Р°РµС‚ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РґР»СЏ С„РёР»СЊС‚СЂРѕРІ.
 func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 	filter := tickets.TicketFilter{
 		SearchQuery: r.URL.Query().Get("search"),
@@ -344,7 +386,7 @@ func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.service.GetCompanyFilters(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения фильтров заявок")
+		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ С„РёР»СЊС‚СЂРѕРІ Р·Р°СЏРІРѕРє")
 		return
 	}
 
@@ -391,24 +433,24 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	details, err := h.service.GetDetails(r.Context(), id)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("Failed to get ticket details", "id", id, "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения деталей заявки")
+		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РґРµС‚Р°Р»РµР№ Р·Р°СЏРІРєРё")
 		return
 	}
 	if details == nil {
-		response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
+		response.RespondWithError(w, http.StatusNotFound, "Р—Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
 		return
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, details)
 }
 
-// LinkAssetRequest тело запроса для привязки.
+// LinkAssetRequest С‚РµР»Рѕ Р·Р°РїСЂРѕСЃР° РґР»СЏ РїСЂРёРІСЏР·РєРё.
 type LinkAssetRequest struct {
 	AssetID   string `json:"asset_id"`
 	AssetType string `json:"asset_type"` // Server, FiscalRegister, Workstation
 }
 
-// LinkAsset привязывает заявку к оборудованию.
+// LinkAsset РїСЂРёРІСЏР·С‹РІР°РµС‚ Р·Р°СЏРІРєСѓ Рє РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЋ.
 func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
@@ -416,7 +458,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 		AssetType string `json:"asset_type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
 		return
 	}
 	err := h.service.LinkToAsset(r.Context(), id, req.AssetID, req.AssetType)
@@ -428,7 +470,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserIDFromContext(r *http.Request) uint {
-	// Используем contextkeys
+	// РСЃРїРѕР»СЊР·СѓРµРј contextkeys
 	userIDStr, ok := r.Context().Value(contextkeys.UserIDContextKey).(string)
 	if !ok {
 		return 0

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -27,9 +27,10 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = antTheme.useToken();
-  
+
   const { themeMode, toggleTheme } = useUiStore();
   const { user, logout } = useAuthStore();
+  const isAdmin = Boolean(user?.roles?.includes('admin'));
 
   const handleMenuClick = (key: string) => {
     navigate(key);
@@ -46,6 +47,7 @@ const MainLayout: React.FC = () => {
         key: 'profile',
         label: 'Профиль',
         icon: <UserOutlined />,
+        onClick: () => navigate('/profile'),
       },
       {
         key: 'logout',
@@ -58,7 +60,6 @@ const MainLayout: React.FC = () => {
 
   const menuItems = [
     { key: '/', icon: <SearchOutlined />, label: 'Поиск' },
-    { key: '/tasks', icon: <CheckSquareOutlined />, label: 'Задачи' },
     { key: '/tickets', icon: <CustomerServiceOutlined />, label: 'Тикеты' },
     { key: '/companies', icon: <BankOutlined />, label: 'Компании' },
     {
@@ -71,8 +72,14 @@ const MainLayout: React.FC = () => {
         { key: '/fiscals', label: 'ФР' },
       ],
     },
-    { key: '/admin', icon: <SettingOutlined />, label: 'Администрирование' },
   ];
+  if (isAdmin) {
+    menuItems.splice(1, 0, { key: '/tasks', icon: <CheckSquareOutlined />, label: 'Задачи' });
+  }
+
+  if (isAdmin) {
+    menuItems.push({ key: '/admin', icon: <SettingOutlined />, label: 'Администрирование' });
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -88,19 +95,20 @@ const MainLayout: React.FC = () => {
         }}
       >
         <div style={{ height: 64, margin: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* Логотип заглушка */}
-          <div style={{ 
-            width: collapsed ? 32 : '100%', 
-            height: 32, 
-            background: token.colorPrimary, 
-            borderRadius: 6,
-            opacity: 0.8,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#fff',
-            fontWeight: 'bold'
-          }}>
+          <div
+            style={{
+              width: collapsed ? 32 : '100%',
+              height: 32,
+              background: token.colorPrimary,
+              borderRadius: 6,
+              opacity: 0.8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontWeight: 'bold'
+            }}
+          >
             {collapsed ? 'ES' : 'Etalon ServiceDesk'}
           </div>
         </div>
@@ -113,18 +121,20 @@ const MainLayout: React.FC = () => {
         />
       </Sider>
       <Layout>
-        <Header style={{ 
-          padding: '0 24px', 
-          background: token.colorBgContainer,
-          backdropFilter: 'blur(10px)',
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'space-between', // Важно: разносим элементы
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          position: 'sticky',
-          top: 0,
-          zIndex: 10
-        }}>
+        <Header
+          style={{
+            padding: '0 24px',
+            background: token.colorBgContainer,
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            position: 'sticky',
+            top: 0,
+            zIndex: 10
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <Button
               type="text"
@@ -133,24 +143,26 @@ const MainLayout: React.FC = () => {
               style={{ fontSize: '16px', width: 64, height: 64 }}
             />
           </div>
-          {/* ЦЕНТР: Глобальный поиск */}
+
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-             <HeaderSearch />
+            <HeaderSearch />
           </div>
 
           <Space size="middle">
-            <Button 
-              shape="circle" 
-              icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />} 
-              onClick={toggleTheme} 
+            <Button
+              shape="circle"
+              icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />}
+              onClick={toggleTheme}
             />
-            
+
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
               <Space style={{ cursor: 'pointer' }}>
+                {user && (
+                  <Text>{user.firstName} {user.lastName} • {user.scheduleType}</Text>
+                )}
                 <Avatar style={{ backgroundColor: token.colorPrimary }}>
                   {user?.fullName?.[0] || 'A'}
                 </Avatar>
-                <Text>{user?.fullName || 'User'}</Text>
               </Space>
             </Dropdown>
           </Space>
@@ -161,7 +173,6 @@ const MainLayout: React.FC = () => {
             padding: 24,
             minHeight: 280,
             overflow: 'initial',
-            // Контент будет рендериться здесь
           }}
         >
           <Outlet />
@@ -172,3 +183,4 @@ const MainLayout: React.FC = () => {
 };
 
 export default MainLayout;
+

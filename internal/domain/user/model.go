@@ -18,10 +18,17 @@ type Role struct {
 
 // User представляет пользователя системы (сотрудника или внешнего клиента).
 type User struct {
-	ID           uint   `gorm:"primarykey"`
-	Username     string `gorm:"type:varchar(100);uniqueIndex;not null"`
-	PasswordHash string `gorm:"type:text;not null"`
-	FullName     string `gorm:"type:text"`
+	ID           uint    `gorm:"primarykey"`
+	Username     string  `gorm:"type:varchar(100);uniqueIndex;not null"`
+	PasswordHash string  `gorm:"type:text;not null"`
+	FullName     string  `gorm:"type:text"`
+	FirstName    string  `gorm:"type:varchar(100);not null;default:''"`
+	LastName     string  `gorm:"type:varchar(100);not null;default:''"`
+	Position     string  `gorm:"type:varchar(50);not null;default:'intern'"`
+	ExternalID   *string `gorm:"type:varchar(128)"`
+	ExternalType *string `gorm:"type:varchar(50)"`
+	ScheduleType string  `gorm:"type:varchar(10);not null;default:'5/2'"`
+	HasLoggedIn  bool    `gorm:"not null;default:false"`
 
 	// Новые поля
 	Email      *string `gorm:"type:varchar(255);uniqueIndex"`

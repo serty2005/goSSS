@@ -7,6 +7,7 @@ type Props = {
   placeholder?: string;
   multiline?: boolean;
   saving?: boolean;
+  editable?: boolean;
   onSave: (nextValue: string) => void;
 };
 
@@ -17,6 +18,7 @@ const InlineFieldEditor: React.FC<Props> = ({
   placeholder = '-',
   multiline = false,
   saving = false,
+  editable = true,
   onSave,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -32,12 +34,14 @@ const InlineFieldEditor: React.FC<Props> = ({
     return (
       <Space size={4} align="start">
         <Text>{(value || '').trim() || placeholder}</Text>
-        <Button
-          type="text"
-          size="small"
-          icon={<EditOutlined />}
-          onClick={() => setIsEditing(true)}
-        />
+        {editable && (
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => setIsEditing(true)}
+          />
+        )}
       </Space>
     );
   }

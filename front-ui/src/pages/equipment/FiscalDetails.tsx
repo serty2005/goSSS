@@ -9,6 +9,8 @@ import { formatRnm } from '@/utils/formatters';
 import { UpdateFiscalPayload } from '@/types/api';
 import dayjs from 'dayjs';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
+import { useAuthStore } from '@/store/authStore';
+import { canEditEquipment } from '@/utils/permissions';
 
 const { Title, Text } = Typography;
 
@@ -18,6 +20,8 @@ const FiscalDetails: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [activeField, setActiveField] = useState<string | null>(null);
+  const user = useAuthStore((state) => state.user);
+  const canEdit = canEditEquipment(user?.roles);
 
   const { data: fiscalRes, isLoading } = useQuery({
     queryKey: ['fiscal', id],
@@ -41,6 +45,9 @@ const FiscalDetails: React.FC = () => {
   const fiscal = fiscalRes.data;
 
   const saveField = (field: keyof UpdateFiscalPayload, value: string) => {
+    if (!canEdit) {
+      return;
+    }
     setActiveField(field);
     updateMutation.mutate({ [field]: value } as UpdateFiscalPayload);
   };
@@ -87,41 +94,24 @@ const FiscalDetails: React.FC = () => {
           <Badge status={getStatusColor(fiscal.HealthStatus)} text={fiscal.HealthStatus} />
         </Space>
 
-        <Button danger icon={<DeleteOutlined />}>Удалить</Button>
+        {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}
       </div>
 
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Card title="Информация о ККТ" className="glass-panel" size="small">
           <Descriptions bordered column={2} className="compact-descriptions">
             <Descriptions.Item label="РНМ">
-              <InlineFieldEditor
-                value={fiscal.RNKKT}
-                onSave={(value) => saveField('rn_kkt', value)}
-                saving={updateMutation.isPending && activeField === 'rn_kkt'}
-              />
+              <InlineFieldEditor value={fiscal.RNKKT} editable={canEdit} onSave={(v) => saveField('rn_kkt', v)} saving={updateMutation.isPending && activeField === 'rn_kkt'} />
               <div><Text type="secondary">Формат: {formatRnm(fiscal.RNKKT)}</Text></div>
             </Descriptions.Item>
             <Descriptions.Item label="Заводской номер">
-              <InlineFieldEditor
-                value={fiscal.FRSerialNumber}
-                onSave={(value) => saveField('fr_serial_number', value)}
-                saving={updateMutation.isPending && activeField === 'fr_serial_number'}
-              />
+              <InlineFieldEditor value={fiscal.FRSerialNumber} editable={canEdit} onSave={(v) => saveField('fr_serial_number', v)} saving={updateMutation.isPending && activeField === 'fr_serial_number'} />
             </Descriptions.Item>
             <Descriptions.Item label="Модель">
-              <InlineFieldEditor
-                value={fiscal.ModelKKT}
-                onSave={(value) => saveField('model_kkt', value)}
-                saving={updateMutation.isPending && activeField === 'model_kkt'}
-              />
+              <InlineFieldEditor value={fiscal.ModelKKT} editable={canEdit} onSave={(v) => saveField('model_kkt', v)} saving={updateMutation.isPending && activeField === 'model_kkt'} />
             </Descriptions.Item>
             <Descriptions.Item label="Описание">
-              <InlineFieldEditor
-                value={fiscal.Description}
-                multiline
-                onSave={(value) => saveField('description', value)}
-                saving={updateMutation.isPending && activeField === 'description'}
-              />
+              <InlineFieldEditor value={fiscal.Description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
             </Descriptions.Item>
           </Descriptions>
         </Card>
@@ -129,28 +119,14 @@ const FiscalDetails: React.FC = () => {
         <Card title="Фискальный накопитель" className="glass-panel" size="small">
           <Descriptions bordered column={2} className="compact-descriptions">
             <Descriptions.Item label="Номер ФН">
-              <InlineFieldEditor
-                value={fiscal.FNNumber}
-                onSave={(value) => saveField('fn_number', value)}
-                saving={updateMutation.isPending && activeField === 'fn_number'}
-              />
+              <InlineFieldEditor value={fiscal.FNNumber} editable={canEdit} onSave={(v) => saveField('fn_number', v)} saving={updateMutation.isPending && activeField === 'fn_number'} />
             </Descriptions.Item>
             <Descriptions.Item label="Дата регистрации">
-              <InlineFieldEditor
-                value={fiscal.kkt_reg_date ? dayjs(fiscal.kkt_reg_date).format('YYYY-MM-DD') : ''}
-                placeholder="YYYY-MM-DD"
-                onSave={(value) => saveField('kkt_reg_date', value)}
-                saving={updateMutation.isPending && activeField === 'kkt_reg_date'}
-              />
+              <InlineFieldEditor value={fiscal.kkt_reg_date ? dayjs(fiscal.kkt_reg_date).format('YYYY-MM-DD') : ''} editable={canEdit} placeholder="YYYY-MM-DD" onSave={(v) => saveField('kkt_reg_date', v)} saving={updateMutation.isPending && activeField === 'kkt_reg_date'} />
             </Descriptions.Item>
             <Descriptions.Item label="Дата окончания">
               <Space direction="vertical" size={4}>
-                <InlineFieldEditor
-                  value={fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date).format('YYYY-MM-DD') : ''}
-                  placeholder="YYYY-MM-DD"
-                  onSave={(value) => saveField('fn_expire_date', value)}
-                  saving={updateMutation.isPending && activeField === 'fn_expire_date'}
-                />
+                <InlineFieldEditor value={fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date).format('YYYY-MM-DD') : ''} editable={canEdit} placeholder="YYYY-MM-DD" onSave={(v) => saveField('fn_expire_date', v)} saving={updateMutation.isPending && activeField === 'fn_expire_date'} />
                 <Text strong style={{ color: getFnDateColor(fiscal.fn_expire_date) }}>
                   {fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date).format('DD.MM.YYYY') : '-'}
                 </Text>
@@ -162,25 +138,13 @@ const FiscalDetails: React.FC = () => {
         <Card title="Прошивки и ПО" className="glass-panel" size="small">
           <Descriptions bordered column={3} className="compact-descriptions">
             <Descriptions.Item label="Прошивка ФР">
-              <InlineFieldEditor
-                value={fiscal.FRFirmware}
-                onSave={(value) => saveField('fr_firmware', value)}
-                saving={updateMutation.isPending && activeField === 'fr_firmware'}
-              />
+              <InlineFieldEditor value={fiscal.FRFirmware} editable={canEdit} onSave={(v) => saveField('fr_firmware', v)} saving={updateMutation.isPending && activeField === 'fr_firmware'} />
             </Descriptions.Item>
             <Descriptions.Item label="Загрузчик">
-              <InlineFieldEditor
-                value={fiscal.FRDownloader}
-                onSave={(value) => saveField('fr_downloader', value)}
-                saving={updateMutation.isPending && activeField === 'fr_downloader'}
-              />
+              <InlineFieldEditor value={fiscal.FRDownloader} editable={canEdit} onSave={(v) => saveField('fr_downloader', v)} saving={updateMutation.isPending && activeField === 'fr_downloader'} />
             </Descriptions.Item>
             <Descriptions.Item label="Драйвер">
-              <InlineFieldEditor
-                value={fiscal.DriverVersion}
-                onSave={(value) => saveField('driver_version', value)}
-                saving={updateMutation.isPending && activeField === 'driver_version'}
-              />
+              <InlineFieldEditor value={fiscal.DriverVersion} editable={canEdit} onSave={(v) => saveField('driver_version', v)} saving={updateMutation.isPending && activeField === 'driver_version'} />
             </Descriptions.Item>
           </Descriptions>
         </Card>
@@ -188,25 +152,13 @@ const FiscalDetails: React.FC = () => {
         <Card title="Юридическое лицо" className="glass-panel" size="small">
           <Descriptions bordered column={1} className="compact-descriptions">
             <Descriptions.Item label="Организация">
-              <InlineFieldEditor
-                value={fiscal.LegalName}
-                onSave={(value) => saveField('legal_name', value)}
-                saving={updateMutation.isPending && activeField === 'legal_name'}
-              />
+              <InlineFieldEditor value={fiscal.LegalName} editable={canEdit} onSave={(v) => saveField('legal_name', v)} saving={updateMutation.isPending && activeField === 'legal_name'} />
             </Descriptions.Item>
             <Descriptions.Item label="ИНН">
-              <InlineFieldEditor
-                value={fiscal.INN}
-                onSave={(value) => saveField('inn', value)}
-                saving={updateMutation.isPending && activeField === 'inn'}
-              />
+              <InlineFieldEditor value={fiscal.INN} editable={canEdit} onSave={(v) => saveField('inn', v)} saving={updateMutation.isPending && activeField === 'inn'} />
             </Descriptions.Item>
             <Descriptions.Item label="Адрес установки">
-              <InlineFieldEditor
-                value={fiscal.address}
-                onSave={(value) => saveField('address', value)}
-                saving={updateMutation.isPending && activeField === 'address'}
-              />
+              <InlineFieldEditor value={fiscal.address} editable={canEdit} onSave={(v) => saveField('address', v)} saving={updateMutation.isPending && activeField === 'address'} />
             </Descriptions.Item>
           </Descriptions>
         </Card>

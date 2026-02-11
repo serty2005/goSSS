@@ -322,7 +322,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
-	app.UserHandler = handlers.NewUserHandler(srvs.AuthService, repos.UserRepo)
+	app.UserHandler = handlers.NewUserHandler(repos.UserRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
@@ -358,18 +358,59 @@ func (a *Application) setupRouter() *chi.Mux {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.JwtAuthMiddleware(a.Config))
-		a.CompanyHandler.RegisterRoutes(r)
-		a.ServerHandler.RegisterRoutes(r)
-		a.WorkstationHandler.RegisterRoutes(r)
-		a.FiscalHandler.RegisterRoutes(r)
+
+		r.Route("/companies", func(r chi.Router) {
+			r.Get("/", a.CompanyHandler.Search)
+			r.Get("/{id}", a.CompanyHandler.Get)
+			r.Get("/{id}/infrastructure", a.CompanyHandler.GetInfrastructure)
+
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.CompanyHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.CompanyHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.CompanyHandler.Delete)
+		})
+
+		r.Route("/servers", func(r chi.Router) {
+			r.Get("/", a.ServerHandler.List)
+			r.Get("/{id}", a.ServerHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.ServerHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.ServerHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.ServerHandler.Delete)
+		})
+
+		r.Route("/workstations", func(r chi.Router) {
+			r.Get("/", a.WorkstationHandler.List)
+			r.Get("/{id}", a.WorkstationHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.WorkstationHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.WorkstationHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.WorkstationHandler.Delete)
+		})
+
+		r.Route("/fiscals", func(r chi.Router) {
+			r.Get("/", a.FiscalHandler.List)
+			r.Get("/{id}", a.FiscalHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.FiscalHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.FiscalHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.FiscalHandler.Delete)
+		})
+
+		r.Route("/contracts", func(r chi.Router) {
+			r.Get("/{id}", a.ContractHandler.GetContract)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.ContractHandler.CreateContract)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.ContractHandler.UpdateContract)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.ContractHandler.DeleteContract)
+		})
+
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)
 		a.ServerActionsHandler.RegisterRoutes(r)
-		a.ContractHandler.RegisterRoutes(r)
 		a.SSEHandler.RegisterRoutes(r)
 
 		r.Route("/tickets", func(r chi.Router) {
 			a.TicketHandler.RegisterRoutes(r)
+		})
+
+		r.Route("/profile", func(r chi.Router) {
+			r.Patch("/credentials", a.UserHandler.UpdateMyCredentials)
 		})
 
 		r.Route("/users", func(r chi.Router) {

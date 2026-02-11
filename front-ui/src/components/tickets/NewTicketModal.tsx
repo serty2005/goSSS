@@ -19,9 +19,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
-  const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode }>>([]);
+  const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; selectedLabel: string }>>([]);
   const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }>>({});
-  const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode } | null>(null);
+  const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; selectedLabel: string } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
 
   const renderCompanyOptionLabel = (title: string, parentTitle?: string) => {
@@ -74,13 +74,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         return {
           value: id,
           label: labelNode,
+          selectedLabel: title,
         };
       })
-      .filter(Boolean) as Array<{ value: string; label: React.ReactNode }>;
+      .filter(Boolean) as Array<{ value: string; label: React.ReactNode; selectedLabel: string }>;
 
     if (selectedCompanyId && !nextOptions.some((opt) => opt.value === selectedCompanyId)) {
-      const fallbackLabel = selectedCompanyOption?.label ?? selectedCompanyId;
-      nextOptions.unshift({ value: selectedCompanyId, label: fallbackLabel });
+      const fallbackLabel = selectedCompanyOption?.selectedLabel ?? selectedCompanyId;
+      nextOptions.unshift({ value: selectedCompanyId, label: fallbackLabel, selectedLabel: fallbackLabel });
     }
 
     setCompanyOptions(nextOptions);
@@ -91,7 +92,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!selectedCompanyId) return;
     const match = companyOptions.find((opt) => opt.value === selectedCompanyId);
-    if (match && match.label !== selectedCompanyOption?.label) {
+    if (match && match.selectedLabel !== selectedCompanyOption?.selectedLabel) {
       setSelectedCompanyOption(match);
     }
 
@@ -101,7 +102,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     if (!open) return;
     if (presetCompany?.id) {
       const label = presetCompany.title || presetCompany.id;
-      const option = { value: presetCompany.id, label } as { value: string; label: React.ReactNode };
+      const option = { value: presetCompany.id, label, selectedLabel: label } as { value: string; label: React.ReactNode; selectedLabel: string };
       setSelectedCompanyOption(option);
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === presetCompany.id);
@@ -150,10 +151,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     }));
 
     if (rawTitle || rawAdditional) {
-      const label = renderCompanyOptionLabel(rawTitle || rawAdditional || selectedCompanyId, rawParentTitle);
+      const selectedLabel = rawTitle || rawAdditional || selectedCompanyId;
+      const label = renderCompanyOptionLabel(selectedLabel, rawParentTitle);
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === selectedCompanyId);
-        return exists ? prev : [{ value: selectedCompanyId, label }, ...prev];
+        return exists ? prev : [{ value: selectedCompanyId, label, selectedLabel }, ...prev];
       });
     }
   }, [companyDetailData, selectedCompanyId]);
@@ -297,6 +299,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 filterOption={false}
                 autoClearSearchValue
                 options={companyOptions}
+                optionLabelProp="selectedLabel"
                 value={selectedCompanyId}
                 onChange={(value, option) => {
                   const valueStr = String(value);
@@ -304,12 +307,13 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     console.warn('[NewTicketModal] onChange invalid value', { value, option });
                     return;
                   }
-                  const label = (option as { label?: React.ReactNode })?.label ?? valueStr;
+                  const selectedLabel = (option as { selectedLabel?: string } | undefined)?.selectedLabel ?? valueStr;
+                  const label = (option as { label?: React.ReactNode } | undefined)?.label ?? selectedLabel;
                   form.setFieldValue('company_id', valueStr);
-                  setSelectedCompanyOption({ value: valueStr, label });
+                  setSelectedCompanyOption({ value: valueStr, label, selectedLabel });
                   setCompanyOptions((prev) => {
                     const exists = prev.some((opt) => opt.value === valueStr);
-                    return exists ? prev : [{ value: valueStr, label }, ...prev];
+                    return exists ? prev : [{ value: valueStr, label, selectedLabel }, ...prev];
                   });
                 }}
               />

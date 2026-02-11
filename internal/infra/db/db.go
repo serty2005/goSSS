@@ -16,6 +16,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+	"strings"
 )
 
 // NewConnection создает и возвращает новое подключение к базе данных.
@@ -62,6 +63,10 @@ func Migrate(db *gorm.DB) error {
 
 // SeedAdminUser создает пользователя-администратора, если он не существует.
 func SeedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterface) error {
+	if err := ensureSystemRoles(db); err != nil {
+		return err
+	}
+
 	var count int64
 	db.Model(&user.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
 
@@ -73,15 +78,21 @@ func SeedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterfac
 	logger.Info("Создание пользователя-администратора по умолчанию...")
 
 	// 1. Создаем роль admin, если её нет
-	adminRole := user.Role{Name: "admin", Description: "Super Administrator"}
-	db.FirstOrCreate(&adminRole, user.Role{Name: "admin"})
+	adminRole := user.Role{Name: user.RoleAdmin, Description: "Администратор системы"}
+	db.FirstOrCreate(&adminRole, user.Role{Name: user.RoleAdmin})
+
+	firstName, lastName := splitFullName(cfg.AdminFullName)
 
 	// 2. Создаем пользователя
 	admin := &user.User{
-		Username: cfg.AdminUsername,
-		FullName: cfg.AdminFullName,
-		IsActive: true,
-		Roles:    []user.Role{adminRole},
+		Username:     cfg.AdminUsername,
+		FullName:     strings.TrimSpace(cfg.AdminFullName),
+		FirstName:    firstName,
+		LastName:     lastName,
+		Position:     user.RoleAdmin,
+		ScheduleType: user.ScheduleFiveTwo,
+		IsActive:     true,
+		Roles:        []user.Role{adminRole},
 	}
 	if err := admin.HashPassword(cfg.AdminPassword); err != nil {
 		return err
@@ -93,4 +104,32 @@ func SeedAdminUser(cfg *config.Config, db *gorm.DB, logger logger.LoggerInterfac
 
 	logger.Info("Пользователь-администратор успешно создан.", "username", cfg.AdminUsername)
 	return nil
+}
+
+func ensureSystemRoles(db *gorm.DB) error {
+	roles := []user.Role{
+		{Name: user.RoleAdmin, Description: "Администратор системы"},
+		{Name: user.RoleSupportSpecialist, Description: "Специалист техподдержки"},
+		{Name: user.RoleIntern, Description: "Стажёр"},
+	}
+
+	for _, role := range roles {
+		if err := db.FirstOrCreate(&role, user.Role{Name: role.Name}).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func splitFullName(fullName string) (string, string) {
+	parts := strings.Fields(strings.TrimSpace(fullName))
+	if len(parts) == 0 {
+		return "Системный", "администратор"
+	}
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+
+	return parts[0], strings.Join(parts[1:], " ")
 }

@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/user"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -94,6 +97,17 @@ func (h *CompanyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if hasRole(r.Context(), user.RoleSupportSpecialist) {
+		if _, exists := data["active_contract"]; exists {
+			response.RespondWithError(w, http.StatusForbidden, "Специалист не может менять статус контракта компании")
+			return
+		}
+		if _, exists := data["contract_type"]; exists {
+			response.RespondWithError(w, http.StatusForbidden, "Специалист не может менять тип контракта компании")
+			return
+		}
+	}
+
 	err := h.service.UpdateCompany(r.Context(), id, data)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -106,6 +120,21 @@ func (h *CompanyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func hasRole(ctx context.Context, roleName string) bool {
+	roles, ok := ctx.Value(contextkeys.UserRolesContextKey).([]string)
+	if !ok {
+		return false
+	}
+
+	for _, role := range roles {
+		if role == roleName {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (h *CompanyHandler) Delete(w http.ResponseWriter, r *http.Request) {

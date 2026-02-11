@@ -329,3 +329,40 @@ func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.Ticke
 
 	return rows, nil
 }
+
+func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error) {
+	stats := &tickets.DashboardStats{
+		ResolvedByAssignee: make([]tickets.ResolvedByAssigneeStat, 0),
+	}
+
+	if err := r.db.WithContext(ctx).Model(&tickets.Ticket{}).Count(&stats.TotalTickets).Error; err != nil {
+		return nil, err
+	}
+
+	if err := r.db.WithContext(ctx).Raw(
+		`SELECT COUNT(*)
+		 FROM servers
+		 WHERE last_polled_at IS NOT NULL
+		   AND last_polled_at >= NOW() - INTERVAL '24 hours'`,
+	).Scan(&stats.PolledServers24h).Error; err != nil {
+		return nil, err
+	}
+
+	rows := make([]tickets.ResolvedByAssigneeStat, 0)
+	if err := r.db.WithContext(ctx).Raw(
+		`SELECT
+			u.id AS user_id,
+			COALESCE(NULLIF(TRIM(u.full_name), ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) AS user_name,
+			COUNT(*) AS count
+		FROM tickets t
+		JOIN users u ON u.id = t.assignee_id
+		WHERE t.status IN ('resolved', 'closed')
+		GROUP BY u.id, u.full_name, u.first_name, u.last_name, u.username
+		ORDER BY count DESC, user_name ASC`,
+	).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	stats.ResolvedByAssignee = rows
+
+	return stats, nil
+}

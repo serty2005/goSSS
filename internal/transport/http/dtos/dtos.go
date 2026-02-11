@@ -321,10 +321,18 @@ type LoginRequestDTO struct {
 
 // UserDTO - DTO для отображения информации о пользователе.
 type UserDTO struct {
-	ID       uint     `json:"id"`
-	Username string   `json:"username"`
-	FullName string   `json:"fullName"`
-	Roles    []string `json:"roles"`
+	ID               uint     `json:"id"`
+	Username         string   `json:"username"`
+	FullName         string   `json:"fullName"`
+	FirstName        string   `json:"firstName"`
+	LastName         string   `json:"lastName"`
+	Position         string   `json:"position"`
+	Roles            []string `json:"roles"`
+	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
+	ExternalType     *string  `json:"externalType,omitempty"`
+	ScheduleType     string   `json:"scheduleType"`
+	IsActive         bool     `json:"isActive"`
+	HasLoggedIn      bool     `json:"hasLoggedIn"`
 }
 
 // LoginResponseDTO - тело ответа при успешном входе.
@@ -335,17 +343,37 @@ type LoginResponseDTO struct {
 
 // UserCreateDTO - DTO для создания нового пользователя.
 type UserCreateDTO struct {
-	Username string   `json:"username" validate:"required"`
-	Password string   `json:"password" validate:"required,min=6"`
-	FullName string   `json:"fullName" validate:"required"`
-	Roles    []string `json:"roles" validate:"required"`
+	Username         string   `json:"username" validate:"required"`
+	Password         string   `json:"password" validate:"required,min=6"`
+	FirstName        string   `json:"firstName" validate:"required"`
+	LastName         string   `json:"lastName" validate:"required"`
+	Position         string   `json:"position" validate:"required"`
+	Roles            []string `json:"roles,omitempty"`
+	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
+	ExternalType     *string  `json:"externalType,omitempty"`
+	ScheduleType     string   `json:"scheduleType" validate:"required"`
 }
 
 // UserUpdateDTO - DTO для обновления пользователя.
 type UserUpdateDTO struct {
-	Password *string  `json:"password,omitempty" validate:"omitempty,min=6"`
-	FullName *string  `json:"fullName,omitempty"`
-	Roles    []string `json:"roles,omitempty"`
+	Username         *string  `json:"username,omitempty"`
+	Password         *string  `json:"password,omitempty" validate:"omitempty,min=6"`
+	FirstName        *string  `json:"firstName,omitempty"`
+	LastName         *string  `json:"lastName,omitempty"`
+	Position         *string  `json:"position,omitempty"`
+	Roles            []string `json:"roles,omitempty"`
+	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
+	ExternalType     *string  `json:"externalType,omitempty"`
+	ScheduleType     *string  `json:"scheduleType,omitempty"`
+}
+
+type UserStatusUpdateDTO struct {
+	IsActive bool `json:"isActive"`
+}
+
+type ProfileCredentialsUpdateDTO struct {
+	Username *string `json:"username,omitempty"`
+	Password *string `json:"password,omitempty"`
 }
 
 // --- DTO для UI-ориентированного поиска ---
@@ -465,11 +493,11 @@ type AcceptedResponseDTO struct {
 
 // ContractResponseDTO - DTO контракта для API без служебных полей модели.
 type ContractResponseDTO struct {
-	ID            string     `json:"id"`
-	State         *string    `json:"state,omitempty"`
+	ID             string     `json:"id"`
+	State          *string    `json:"state,omitempty"`
 	StateStartTime *time.Time `json:"state_start_time,omitempty"`
-	Services      []string   `json:"services,omitempty"`
-	ServiceLevel  int        `json:"service_level"`
+	Services       []string   `json:"services,omitempty"`
+	ServiceLevel   int        `json:"service_level"`
 }
 
 // === DTO для создания сущностей ===

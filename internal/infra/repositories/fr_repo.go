@@ -96,8 +96,8 @@ func (r *frRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*fiscal.Fisc
 func (r *frRepo) Search(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, error) {
 	var frs []fiscal.FiscalRegister
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
+		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&frs).Error
 	return frs, err
 }

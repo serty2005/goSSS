@@ -46,6 +46,7 @@ func (h *ServerHandler) RegisterRoutes(r chi.Router) {
 func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	term := r.URL.Query().Get("term")
 	if limit <= 0 {
 		limit = 50
 	}
@@ -53,7 +54,15 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	items, _, err := h.service.List(r.Context(), limit, offset)
+	var (
+		items []server.Server
+		err   error
+	)
+	if term != "" {
+		items, err = h.service.Search(r.Context(), term, limit, offset)
+	} else {
+		items, _, err = h.service.List(r.Context(), limit, offset)
+	}
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)

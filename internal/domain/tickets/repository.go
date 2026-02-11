@@ -4,6 +4,18 @@ import (
 	"context"
 )
 
+type ResolvedByAssigneeStat struct {
+	UserID   uint   `json:"user_id"`
+	UserName string `json:"user_name"`
+	Count    int64  `json:"count"`
+}
+
+type DashboardStats struct {
+	ResolvedByAssignee []ResolvedByAssigneeStat `json:"resolved_by_assignee"`
+	TotalTickets       int64                    `json:"total_tickets"`
+	PolledServers24h   int64                    `json:"polled_servers_24h"`
+}
+
 // TicketFilter содержит параметры для поиска заявок.
 type TicketFilter struct {
 	CompanyID   string
@@ -51,6 +63,7 @@ type TicketRepository interface {
 	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
+	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

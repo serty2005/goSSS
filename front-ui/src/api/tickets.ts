@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+import { ApiResponse, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
 
 export const ticketsApi = {
   getTickets: async (params: TicketListParams = {}) => {
@@ -49,6 +49,11 @@ export const ticketsApi = {
     return response.data;
   },
 
+  getDashboardStats: async () => {
+    const response = await apiClient.get<ApiResponse<DashboardStatsDTO>>('/tickets/stats/dashboard');
+    return response.data;
+  },
+
   changeCompany: async (id: number | string, companyId: string) => {
     const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/company`, {
       company_id: companyId,
@@ -73,6 +78,21 @@ export const ticketsApi = {
       label,
       value,
     });
+    return response.data;
+  },
+
+  uploadAttachments: async (id: number | string, files: File[]) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+    const response = await apiClient.post<ApiResponse<{ items: TicketAttachmentDTO[] }>>(
+      `/tickets/${id}/attachments`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      },
+    );
     return response.data;
   },
 };

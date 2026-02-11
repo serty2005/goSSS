@@ -255,6 +255,26 @@ export interface TicketDetailsDTO {
   attachments?: unknown[];
 }
 
+export interface TicketAttachmentDTO {
+  id: string;
+  file_name: string;
+  file_path: string;
+  mime_type: string;
+  size?: number;
+}
+
+export interface DashboardResolvedByAssigneeDTO {
+  user_id: number;
+  user_name: string;
+  count: number;
+}
+
+export interface DashboardStatsDTO {
+  resolved_by_assignee: DashboardResolvedByAssigneeDTO[];
+  total_tickets: number;
+  polled_servers_24h: number;
+}
+
 export interface TicketListParams {
   company_id?: string;
   limit?: number;
@@ -272,6 +292,46 @@ export interface TicketCompanyFilterItem {
 
 export interface TicketFiltersResponse {
   companies: TicketCompanyFilterItem[];
+}
+
+export type UserPosition = 'admin' | 'support_specialist' | 'intern';
+export type UserSchedule = '2/2' | '3/3' | '5/2';
+
+export interface UserAdminDTO {
+  id: number;
+  username: string;
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  position: UserPosition;
+  roles: string[];
+  externalSystemId?: string;
+  externalType?: string;
+  scheduleType: UserSchedule;
+  isActive: boolean;
+  hasLoggedIn: boolean;
+}
+
+export interface UserCreatePayload {
+  username: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  position: UserPosition;
+  externalSystemId?: string;
+  externalType?: string;
+  scheduleType: UserSchedule;
+}
+
+export interface UserUpdatePayload {
+  username?: string;
+  password?: string;
+  firstName?: string;
+  lastName?: string;
+  position?: UserPosition;
+  externalSystemId?: string;
+  externalType?: string;
+  scheduleType?: UserSchedule;
 }
 
 // DTO для обновления оборудования

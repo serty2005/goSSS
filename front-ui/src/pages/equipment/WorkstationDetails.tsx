@@ -7,6 +7,8 @@ import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { UpdateWorkstationPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
+import { useAuthStore } from '@/store/authStore';
+import { canEditEquipment } from '@/utils/permissions';
 
 const { Title, Text } = Typography;
 
@@ -16,6 +18,8 @@ const WorkstationDetails: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [activeField, setActiveField] = useState<string | null>(null);
+  const user = useAuthStore((state) => state.user);
+  const canEdit = canEditEquipment(user?.roles);
 
   const { data: wsRes, isLoading } = useQuery({
     queryKey: ['workstation', id],
@@ -39,6 +43,9 @@ const WorkstationDetails: React.FC = () => {
   const ws = wsRes.data;
 
   const saveField = (field: keyof UpdateWorkstationPayload, value: string) => {
+    if (!canEdit) {
+      return;
+    }
     setActiveField(field);
     updateMutation.mutate({ [field]: value } as UpdateWorkstationPayload);
   };
@@ -67,46 +74,25 @@ const WorkstationDetails: React.FC = () => {
           <Badge status={getStatusColor(ws.HealthStatus)} text={ws.HealthStatus} />
         </Space>
 
-        <Button danger icon={<DeleteOutlined />}>Удалить</Button>
+        {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}
       </div>
 
       <Card title="Детали рабочей станции" className="glass-panel" size="small">
         <Descriptions bordered column={1} className="compact-descriptions">
           <Descriptions.Item label="Название устройства">
-            <InlineFieldEditor
-              value={ws.DeviceName}
-              onSave={(value) => saveField('device_name', value)}
-              saving={updateMutation.isPending && activeField === 'device_name'}
-            />
+            <InlineFieldEditor value={ws.DeviceName} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
           </Descriptions.Item>
           <Descriptions.Item label="Описание">
-            <InlineFieldEditor
-              value={ws.Description}
-              multiline
-              onSave={(value) => saveField('description', value)}
-              saving={updateMutation.isPending && activeField === 'description'}
-            />
+            <InlineFieldEditor value={ws.Description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
           </Descriptions.Item>
           <Descriptions.Item label="AnyDesk">
-            <InlineFieldEditor
-              value={ws.Anydesk}
-              onSave={(value) => saveField('anydesk', value)}
-              saving={updateMutation.isPending && activeField === 'anydesk'}
-            />
+            <InlineFieldEditor value={ws.Anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
           </Descriptions.Item>
           <Descriptions.Item label="TeamViewer">
-            <InlineFieldEditor
-              value={ws.Teamviewer}
-              onSave={(value) => saveField('teamviewer', value)}
-              saving={updateMutation.isPending && activeField === 'teamviewer'}
-            />
+            <InlineFieldEditor value={ws.Teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
           </Descriptions.Item>
           <Descriptions.Item label="LiteManager">
-            <InlineFieldEditor
-              value={ws.Litemanager}
-              onSave={(value) => saveField('litemanager', value)}
-              saving={updateMutation.isPending && activeField === 'litemanager'}
-            />
+            <InlineFieldEditor value={ws.Litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
           </Descriptions.Item>
         </Descriptions>
       </Card>

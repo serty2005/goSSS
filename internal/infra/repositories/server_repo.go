@@ -98,8 +98,8 @@ func (r *serverRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*server.
 func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int) ([]server.Server, error) {
 	var servers []server.Server
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&servers).Error
 	return servers, err
 }

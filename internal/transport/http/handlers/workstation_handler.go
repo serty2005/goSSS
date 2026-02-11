@@ -33,6 +33,7 @@ func (h *WSHandler) RegisterRoutes(r chi.Router) {
 func (h *WSHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	term := r.URL.Query().Get("term")
 	if limit <= 0 {
 		limit = 50
 	}
@@ -40,7 +41,15 @@ func (h *WSHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	items, _, err := h.service.List(r.Context(), limit, offset)
+	var (
+		items []workstation.Workstation
+		err   error
+	)
+	if term != "" {
+		items, err = h.service.Search(r.Context(), term, limit, offset)
+	} else {
+		items, _, err = h.service.List(r.Context(), limit, offset)
+	}
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("list failed", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")

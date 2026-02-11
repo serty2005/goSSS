@@ -1,7 +1,8 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
-import { CheckOutlined, CloseOutlined, EditOutlined } from '@ant-design/icons';
+import { Button, Card, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
+import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
+import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
@@ -10,6 +11,7 @@ import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, T
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 
 const { Title, Text, Paragraph } = Typography;
+type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
 const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
   { value: 'new', label: 'Новая', color: 'blue' },
@@ -153,14 +155,16 @@ const TicketDetailsPage: React.FC = () => {
         return {
           value: companyID,
           label: renderOptionLabel(title, parentTitle),
+          selectedLabel: title,
         };
       })
-      .filter(Boolean) as Array<{ value: string; label: React.ReactNode }>;
+      .filter(Boolean) as Array<{ value: string; label: React.ReactNode; selectedLabel: string }>;
 
     if (metadata?.company_id && !options.some((item) => item.value === metadata.company_id)) {
       options.unshift({
         value: metadata.company_id,
         label: companyTitle || metadata.company_id,
+        selectedLabel: companyTitle || metadata.company_id,
       });
     }
     return options;
@@ -230,6 +234,22 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось добавить комментарий'),
   });
 
+  const uploadAttachmentsMutation = useMutation({
+    mutationFn: async (files: File[]) => {
+      if (!id) {
+        throw new Error('Отсутствует ID заявки');
+      }
+      return ticketsApi.uploadAttachments(id, files);
+    },
+    onSuccess: (response) => {
+      const count = response.data?.items?.length || 0;
+      message.success(count > 0 ? `Файлы загружены: ${count}` : 'Файлы загружены');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось загрузить файлы'),
+  });
+
   const refreshCommentsMutation = useMutation({
     mutationFn: async () => {
       if (!id) return;
@@ -286,6 +306,36 @@ const TicketDetailsPage: React.FC = () => {
   }
 
   const statusMeta = STATUS_OPTIONS.find((item) => item.value === metadata.status) || STATUS_OPTIONS[0];
+
+  const uploadAttachmentsRequest = async (options: UploadRequestOption) => {
+    const source = options.file as File;
+    try {
+      const response = await uploadAttachmentsMutation.mutateAsync([source]);
+      const uploaded = response.data?.items?.[0];
+      if (uploaded) {
+        options.onSuccess?.(uploaded);
+      } else {
+        options.onSuccess?.({});
+      }
+    } catch (error) {
+      options.onError?.(error as Error);
+    }
+  };
+
+  const insertImageRequest = async (options: UploadRequestOption) => {
+    const source = options.file as File;
+    try {
+      const response = await uploadAttachmentsMutation.mutateAsync([source]);
+      const uploaded = response.data?.items?.[0];
+      if (uploaded?.file_path) {
+        const imageTag = `<p><img src="${uploaded.file_path}" alt="${uploaded.file_name}" /></p>`;
+        setCommentDraft((prev) => `${prev.trim()}\n${imageTag}`.trim());
+      }
+      options.onSuccess?.(uploaded || {});
+    } catch (error) {
+      options.onError?.(error as Error);
+    }
+  };
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -349,6 +399,7 @@ const TicketDetailsPage: React.FC = () => {
                   placeholder="Выберите компанию"
                   style={{ width: 320, maxWidth: '100%' }}
                   options={companySelectOptions}
+                  optionLabelProp="selectedLabel"
                   filterOption={false}
                   loading={isCompaniesLoading || changeCompanyMutation.isPending}
                   onSearch={(value) => setCompanySearch(value)}
@@ -446,14 +497,26 @@ const TicketDetailsPage: React.FC = () => {
                       onChange={(event) => setCommentDraft(event.target.value)}
                       placeholder="Добавьте комментарий"
                     />
-                    <Button
-                      type="primary"
-                      loading={addCommentMutation.isPending}
-                      disabled={!commentDraft.trim()}
-                      onClick={() => addCommentMutation.mutate()}
-                    >
-                      Отправить
-                    </Button>
+                    <Space>
+                      <Upload
+                        showUploadList={false}
+                        customRequest={insertImageRequest}
+                        accept="image/*"
+                        multiple
+                      >
+                        <Button icon={<PaperClipOutlined />}>
+                          Вставить изображение
+                        </Button>
+                      </Upload>
+                      <Button
+                        type="primary"
+                        loading={addCommentMutation.isPending}
+                        disabled={!commentDraft.trim()}
+                        onClick={() => addCommentMutation.mutate()}
+                      >
+                        Отправить
+                      </Button>
+                    </Space>
                   </Space>
                 </Card>
               </Space>
@@ -492,7 +555,31 @@ const TicketDetailsPage: React.FC = () => {
             key: 'attachments',
             label: 'Вложения',
             children: (
-              <Card size="small" title={`Вложения (${attachments.length})`}>
+              <Card
+                size="small"
+                title={`Вложения (${attachments.length})`}
+                extra={(
+                  <Upload
+                    showUploadList={false}
+                    customRequest={uploadAttachmentsRequest}
+                    multiple
+                  >
+                    <Button icon={<PaperClipOutlined />} loading={uploadAttachmentsMutation.isPending}>
+                      Прикрепить
+                    </Button>
+                  </Upload>
+                )}
+              >
+                <Upload.Dragger
+                  name="files"
+                  multiple
+                  showUploadList={false}
+                  customRequest={uploadAttachmentsRequest}
+                  style={{ marginBottom: 12 }}
+                >
+                  <p style={{ marginBottom: 4 }}>Перетащите файлы сюда или нажмите для выбора</p>
+                  <Text type="secondary">Поддерживается множественная загрузка</Text>
+                </Upload.Dragger>
                 {attachments.length === 0 ? (
                   <Empty description="Вложений нет" />
                 ) : (

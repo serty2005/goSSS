@@ -11,6 +11,13 @@ import {
 
 export const equipmentApi = {
   // --- Servers ---
+  listServers: async (term = '', limit = 50, offset = 0) => {
+    const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/servers', {
+      params: { term, limit, offset },
+    });
+    return response.data;
+  },
+
   getServer: async (uuid: string) => {
     const response = await apiClient.get<ApiResponse<ServerDetailDTO>>(`/servers/${uuid}`);
     return response.data;
@@ -27,6 +34,13 @@ export const equipmentApi = {
   },
 
   // --- Workstations ---
+  listWorkstations: async (term = '', limit = 50, offset = 0) => {
+    const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/workstations', {
+      params: { term, limit, offset },
+    });
+    return response.data;
+  },
+
   getWorkstation: async (uuid: string) => {
     const response = await apiClient.get<ApiResponse<WorkstationDetailDTO>>(`/workstations/${uuid}`);
     return response.data;
@@ -38,6 +52,13 @@ export const equipmentApi = {
   },
 
   // --- Fiscals ---
+  listFiscals: async (term = '', limit = 50, offset = 0) => {
+    const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/fiscals', {
+      params: { term, limit, offset },
+    });
+    return response.data;
+  },
+
   getFiscal: async (uuid: string) => {
     const response = await apiClient.get<ApiResponse<FiscalDetailDTO>>(`/fiscals/${uuid}`);
     return response.data;

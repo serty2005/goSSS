@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"errors"
-	"etalon-server/internal/domain/user" // <-- Новый импорт
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
@@ -45,7 +45,6 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 		return nil, ErrInvalidCredentials
 	}
 
-	// Проверка пароля
 	if !u.CheckPassword(password) {
 		s.logger.Info("Неверный пароль", "username", username)
 		return nil, ErrInvalidCredentials
@@ -56,12 +55,18 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 		return nil, errors.New("пользователь заблокирован")
 	}
 
+	if !u.HasLoggedIn {
+		u.HasLoggedIn = true
+		if err := s.userRepo.Update(ctx, u); err != nil {
+			s.logger.Error("Не удалось сохранить факт первого входа пользователя", "user_id", u.ID, "error", err)
+			return nil, fmt.Errorf("ошибка фиксации входа пользователя: %w", err)
+		}
+	}
+
 	s.logger.Info("Успешная аутентификация", "username", username, "user_id", u.ID)
 
-	// Генерация токена
 	expirationTime := time.Now().Add(time.Duration(s.cfg.JWTExpirationMin) * time.Minute)
 
-	// Преобразуем []user.Role в []string для токена
 	var rolesStr []string
 	for _, r := range u.Roles {
 		rolesStr = append(rolesStr, r.Name)
@@ -77,7 +82,7 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 		"sub":   claims.Subject,
 		"exp":   claims.ExpiresAt.Unix(),
 		"iat":   claims.IssuedAt.Unix(),
-		"roles": rolesStr, // Массив строк
+		"roles": rolesStr,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, tokenClaims)
@@ -90,10 +95,18 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 	response := &api.LoginResponseDTO{
 		AccessToken: tokenString,
 		User: api.UserDTO{
-			ID:       u.ID,
-			Username: u.Username,
-			FullName: u.FullName,
-			Roles:    rolesStr,
+			ID:               u.ID,
+			Username:         u.Username,
+			FullName:         u.FullName,
+			FirstName:        u.FirstName,
+			LastName:         u.LastName,
+			Position:         u.Position,
+			Roles:            rolesStr,
+			ExternalSystemID: u.ExternalID,
+			ExternalType:     u.ExternalType,
+			ScheduleType:     u.ScheduleType,
+			IsActive:         u.IsActive,
+			HasLoggedIn:      u.HasLoggedIn,
 		},
 	}
 

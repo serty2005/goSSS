@@ -1,6 +1,7 @@
 ﻿import React from 'react';
 import { Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { ticketsApi } from '@/api/tickets';
 import dayjs from 'dayjs';
 import { TicketListItemDTO, TicketStatus } from '@/types/api';
@@ -14,8 +15,9 @@ interface Props {
 const { Text } = Typography;
 
 const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = true }) => {
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({
-    queryKey: ['tickets', companyId],
+    queryKey: ['tickets', 'company-table', companyId, limit],
     queryFn: () => ticketsApi.getTickets({ company_id: companyId, limit }),
   });
 
@@ -110,10 +112,9 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       loading={isLoading}
       pagination={showPagination ? { pageSize: limit } : false}
       size="small"
-      onRow={() => ({
+      onRow={(record) => ({
         onClick: () => {
-          // Заглушка перехода, пока нет страницы тикета
-          console.log('Go to ticket details');
+          navigate(`/tickets/${record.id}`);
         },
         style: { cursor: 'pointer' },
       })}
@@ -122,3 +123,4 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
 };
 
 export default TicketTable;
+

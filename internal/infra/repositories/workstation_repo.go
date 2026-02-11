@@ -96,7 +96,8 @@ func (r *workstationRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*wo
 func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset int) ([]workstation.Workstation, error) {
 	var workstations []workstation.Workstation
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("device_name ILIKE ? OR description ILIKE ?", "%"+term+"%", "%"+term+"%").
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&workstations).Error
 	return workstations, err
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Dropdown, Grid, Input, Select, Space, Switch, Typography } from 'antd';
 import { FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -21,7 +21,7 @@ const HeaderSearch: React.FC = () => {
     setSearchTerm(currentTerm);
   }, [currentTerm]);
 
-  const onSearch = (value: string) => {
+  const onGlobalSearch = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed) return;
     const params = new URLSearchParams();
@@ -48,6 +48,11 @@ const HeaderSearch: React.FC = () => {
   };
 
   const isTicketsPage = location.pathname.startsWith('/tickets');
+  const isCompaniesPage = location.pathname.startsWith('/companies');
+  const isServersPage = location.pathname === '/servers';
+  const isWorkstationsPage = location.pathname === '/workstations';
+  const isFiscalsPage = location.pathname === '/fiscals';
+  const isSectionSearchPage = isCompaniesPage || isServersPage || isWorkstationsPage || isFiscalsPage;
   const screens = useBreakpoint();
   const isCompact = !screens.xl;
 
@@ -90,6 +95,7 @@ const HeaderSearch: React.FC = () => {
     };
     return list.map((company) => ({
       value: company.id,
+      selectedLabel: company.name || company.id,
       label: (
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           {renderLabel(company.name || company.id, company.parent_name)}
@@ -111,6 +117,36 @@ const HeaderSearch: React.FC = () => {
     });
     params.set('page', '1');
     setTicketParams(params);
+  };
+
+  const [sectionParams] = useSearchParams();
+  const sectionTerm = sectionParams.get('q') || '';
+  const [sectionSearchTerm, setSectionSearchTerm] = useState(sectionTerm);
+
+  useEffect(() => {
+    if (!isSectionSearchPage) return;
+    setSectionSearchTerm(sectionTerm);
+  }, [isSectionSearchPage, sectionTerm]);
+
+  const sectionPlaceholder = (() => {
+    if (isCompaniesPage) return 'Поиск компаний: название, адрес, юр. название';
+    if (isServersPage) return 'Поиск серверов: id, ip, название';
+    if (isWorkstationsPage) return 'Поиск РС: id, название';
+    if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
+    return 'Поиск...';
+  })();
+
+  const onSectionSearch = (value: string) => {
+    const trimmed = value.trim();
+    const params = new URLSearchParams(sectionParams);
+    if (!trimmed) {
+      params.delete('q');
+    } else {
+      params.set('q', trimmed);
+    }
+    params.delete('page');
+    const query = params.toString();
+    navigate(query ? `${location.pathname}?${query}` : location.pathname);
   };
 
   if (isTicketsPage) {
@@ -155,12 +191,12 @@ const HeaderSearch: React.FC = () => {
           value={ticketCompany}
           onChange={(value) => updateTicketParams({ company: value || undefined })}
           filterOption={(input, option) =>
-            String((option as { searchText?: string } | undefined)?.searchText || '')
-              .includes(input.toLowerCase())
+            String((option as { searchText?: string } | undefined)?.searchText || '').includes(input.toLowerCase())
           }
           options={companyOptions}
           loading={isFiltersLoading}
           style={{ width: 260 }}
+          optionLabelProp="selectedLabel"
         />
         <Button
           type="primary"
@@ -193,6 +229,19 @@ const HeaderSearch: React.FC = () => {
     return controls;
   }
 
+  if (isSectionSearchPage) {
+    return (
+      <Input.Search
+        placeholder={sectionPlaceholder}
+        allowClear
+        value={sectionSearchTerm}
+        onChange={(event) => setSectionSearchTerm(event.target.value)}
+        onSearch={onSectionSearch}
+        style={{ width: 440, maxWidth: '100%' }}
+      />
+    );
+  }
+
   return (
     <Space size="small">
       <Input.Search
@@ -200,7 +249,7 @@ const HeaderSearch: React.FC = () => {
         allowClear
         value={searchTerm}
         onChange={(event) => setSearchTerm(event.target.value)}
-        onSearch={onSearch}
+        onSearch={onGlobalSearch}
         style={{ width: 360 }}
         className="header-search-input"
       />

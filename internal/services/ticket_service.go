@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/common"
@@ -19,12 +21,15 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Regex для поиска UUID файлов в ссылках Naumen (./download?uuid=file$123...)
@@ -35,6 +40,7 @@ type TicketService interface {
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
+	GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
 
 	// Действия
@@ -44,6 +50,7 @@ type TicketService interface {
 	RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
+	UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
@@ -118,6 +125,14 @@ func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter ticket
 		return nil, fmt.Errorf("service: get company filters: %w", err)
 	}
 	return items, nil
+}
+
+func (s *ticketServiceImpl) GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error) {
+	stats, err := s.ticketRepo.GetDashboardStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("service: get dashboard stats: %w", err)
+	}
+	return stats, nil
 }
 
 // CreateInternal создает внутренний тикет.
@@ -560,6 +575,88 @@ func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, 
 	}
 
 	return len(toInsert), nil
+}
+
+func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if len(files) == 0 {
+		return []tickets.Attachment{}, nil
+	}
+
+	result := make([]tickets.Attachment, 0, len(files))
+	for _, fileHeader := range files {
+		if fileHeader == nil || strings.TrimSpace(fileHeader.Filename) == "" {
+			continue
+		}
+
+		src, openErr := fileHeader.Open()
+		if openErr != nil {
+			return nil, openErr
+		}
+
+		content, readErr := io.ReadAll(src)
+		closeErr := src.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+
+		fileID := uuid.New().String()
+		ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+		storageKey := filepath.ToSlash(filepath.Join(ticketID, fileID+ext))
+		absPath := filepath.Join(s.cfg.TicketStoragePath, filepath.FromSlash(storageKey))
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(absPath, content, 0644); err != nil {
+			return nil, err
+		}
+
+		mimeType := strings.TrimSpace(fileHeader.Header.Get("Content-Type"))
+		if mimeType == "" {
+			mimeType = http.DetectContentType(content)
+		}
+
+		hash := sha256.Sum256(content)
+		asset, err := s.ticketRepo.UpsertFileAsset(ctx, &tickets.FileAsset{
+			ID:           fileID,
+			StorageKey:   storageKey,
+			OriginalName: fileHeader.Filename,
+			MimeType:     mimeType,
+			Size:         int64(len(content)),
+			Checksum:     hex.EncodeToString(hash[:]),
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if err := s.ticketRepo.UpsertTicketFileLink(ctx, &tickets.TicketFileLink{
+			TicketID:     ticketID,
+			FileID:       asset.ID,
+			RelationType: tickets.RelationTypeDirectTicketAttachment,
+		}); err != nil {
+			return nil, err
+		}
+
+		result = append(result, tickets.Attachment{
+			ID:       asset.ID,
+			EntityID: ticketID,
+			FileName: asset.OriginalName,
+			FilePath: "/api/static/tickets/" + storageKey,
+			MimeType: asset.MimeType,
+			Size:     asset.Size,
+		})
+	}
+
+	return result, nil
 }
 
 func (s *ticketServiceImpl) isServiceDeskEnabledForReads() bool {

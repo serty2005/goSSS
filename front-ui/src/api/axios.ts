@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import { useAuthStore } from '@/store/authStore';
 
 const apiClient = axios.create({
@@ -8,7 +8,6 @@ const apiClient = axios.create({
   },
 });
 
-// Request Interceptor: Добавляем JWT токен
 apiClient.interceptors.request.use(
   (config) => {
     const token = useAuthStore.getState().token;
@@ -20,14 +19,11 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor: Обработка 401 (истек токен)
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-      // Опционально: можно добавить логику refresh token здесь
+    if (error.response && error.response.status === 401) {
       useAuthStore.getState().logout();
-      // Редирект на логин произойдет реактивно через App Router
     }
     return Promise.reject(error);
   }

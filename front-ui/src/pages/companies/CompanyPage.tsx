@@ -10,6 +10,9 @@ import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
 import TicketTable from '@/components/tickets/TicketTable';
+import { useAuthStore } from '@/store/authStore';
+import { canEditCompanyBase, canEditCompanyContract } from '@/utils/permissions';
+import { resolveCompanyID } from '@/utils/companyHierarchy';
 
 const { Title, Text } = Typography;
 
@@ -36,6 +39,9 @@ const CompanyPage: React.FC = () => {
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
   const [companyForm] = Form.useForm<{ title: string; address: string }>();
   const [contractForm] = Form.useForm<{ contract_type: string; contract_state: 'active' | 'inactive' }>();
+  const user = useAuthStore((state) => state.user);
+  const canEditBase = canEditCompanyBase(user?.roles);
+  const canEditContract = canEditCompanyContract(user?.roles);
 
   const { data: companyRes, isLoading: loadingCompany } = useQuery({
     queryKey: ['company', id],
@@ -140,6 +146,7 @@ const CompanyPage: React.FC = () => {
   }
 
   if (!company) return <Empty description="Компания не найдена" />;
+  const companyID = resolveCompanyID(company) || company.ID || company.id || '';
 
   const parentTitle = company.ParentTitle || company.parent_title;
 
@@ -237,7 +244,7 @@ const CompanyPage: React.FC = () => {
               Создать тикет
             </Button>
           </div>
-          <TicketTable companyId={company.ID} limit={10} />
+          <TicketTable companyId={companyID} limit={10} />
         </div>
       ),
     },
@@ -255,7 +262,9 @@ const CompanyPage: React.FC = () => {
           <Link to="/companies" style={{ display: 'inline-flex', alignItems: 'center', color: '#8c8c8c' }}>
             <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад к списку
           </Link>
-          <Button icon={<EditOutlined />} size="small" onClick={openCompanyEdit}>Редактировать</Button>
+          {canEditBase && (
+            <Button icon={<EditOutlined />} size="small" onClick={openCompanyEdit}>Редактировать</Button>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
@@ -300,9 +309,13 @@ const CompanyPage: React.FC = () => {
           <Descriptions.Item label="Контракт" span={2}>
             {contractID ? (
               <Space size={8}>
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
-                  {contractType || 'Не указан'}
-                </Button>
+                {canEditContract ? (
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
+                    {contractType || 'Не указан'}
+                  </Button>
+                ) : (
+                  <Text>{contractType || 'Не указан'}</Text>
+                )}
               </Space>
             ) : '-'}
           </Descriptions.Item>

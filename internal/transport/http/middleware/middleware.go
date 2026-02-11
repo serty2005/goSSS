@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/transport/http/response"
@@ -14,7 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// LoggerInjector — это middleware, которое внедряет логгер с request-id в контекст запроса.
+// LoggerInjector внедряет логгер с request-id в контекст запроса.
 func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,43 +27,37 @@ func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.H
 	}
 }
 
-// GetLogger извлекает логгер из контекста. Если логгер не найден, возвращает no-op логгер.
+// GetLogger извлекает логгер из контекста.
 func GetLogger(ctx context.Context) logger.LoggerInterface {
 	if l, ok := ctx.Value(contextkeys.LoggerContextKey).(logger.LoggerInterface); ok && l != nil {
 		return l
 	}
-	// Возвращаем "пустой" логгер, чтобы избежать паники, если что-то пошло не так
 	return logger.NewSlogLogger("", "fallback", "error", true)
 }
 
-// JwtAuthMiddleware проверяет JWT токен и добавляет информацию о пользователе в контекст.
+// JwtAuthMiddleware проверяет JWT токен и сохраняет данные пользователя в контексте.
 func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenString string
 
-			// 1. Сначала пробуем извлечь токен из заголовка Authorization
 			authHeader := r.Header.Get("Authorization")
 			if authHeader != "" {
-				// Проверяем формат "Bearer <token>"
 				parts := strings.Split(authHeader, " ")
 				if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
 					tokenString = parts[1]
 				}
 			}
 
-			// 2. Если в заголовке токена нет, ищем в Query параметрах (для SSE)
 			if tokenString == "" {
 				tokenString = r.URL.Query().Get("token")
 			}
 
-			// 3. Если токен все еще не найден — ошибка
 			if tokenString == "" {
 				response.RespondWithError(w, http.StatusUnauthorized, "Отсутствует токен авторизации")
 				return
 			}
 
-			// 4. Парсинг и валидация токена
 			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("неожиданный метод подписи: %v", token.Header["alg"])
@@ -75,7 +70,6 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			// 5. Извлечение claims и сохранение в контекст
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
 				ctx := r.Context()
 				if sub, ok := claims["sub"].(string); ok {
@@ -104,33 +98,39 @@ func JwtAuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// AdminRequiredMiddleware проверяет, есть ли у пользователя роль "admin".
+// AdminRequiredMiddleware оставлен для совместимости.
 func AdminRequiredMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		roles, ok := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
-		if !ok {
-			response.RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
-			return
-		}
-
-		isAdmin := false
-		for _, role := range roles {
-			if role == "admin" {
-				isAdmin = true
-				break
-			}
-		}
-
-		if !isAdmin {
-			response.RespondWithError(w, http.StatusForbidden, "Доступ запрещен: требуется роль администратора")
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	return RequireAnyRole(user.RoleAdmin)(next)
 }
 
-// AgentAuthMiddleware проверяет наличие и правильность Bearer токена для агентов.
+// RequireAnyRole проверяет наличие хотя бы одной разрешённой роли.
+func RequireAnyRole(allowedRoles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roles, ok := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
+			if !ok {
+				response.RespondWithError(w, http.StatusForbidden, "Не удалось определить роли пользователя")
+				return
+			}
+
+			allowed := make(map[string]struct{}, len(allowedRoles))
+			for _, role := range allowedRoles {
+				allowed[role] = struct{}{}
+			}
+
+			for _, role := range roles {
+				if _, exists := allowed[role]; exists {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			response.RespondWithError(w, http.StatusForbidden, "Доступ запрещён для вашей должности")
+		})
+	}
+}
+
+// AgentAuthMiddleware проверяет Bearer токен для агентов.
 func AgentAuthMiddleware(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
