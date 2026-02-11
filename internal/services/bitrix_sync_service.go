@@ -221,9 +221,9 @@ func (s *bitrixSyncService) PullFromBitrix(ctx context.Context) (int, int, error
 	}
 	closed, err := s.closeResolvedTickets(ctx, 14*24*time.Hour)
 	if err != nil {
-		s.log.Error("Bitrix24: РѕС€РёР±РєР° Р°РІС‚РѕР·Р°РєСЂС‹С‚РёСЏ Р·Р°СЏРІРѕРє", "error", err)
+		s.log.Error("Bitrix24: ошибка автозакрытия заявок", "error", err)
 	} else if closed > 0 {
-		s.log.Info("Bitrix24: Р°РІС‚РѕР·Р°РєСЂС‹С‚РёРµ РІС‹РїРѕР»РЅРµРЅРѕ", "tickets_closed", closed)
+		s.log.Info("Bitrix24: автозакрытие выполнено", "tickets_closed", closed)
 	}
 	return dealsUpdated, commentsImported, nil
 }
@@ -810,7 +810,7 @@ func (s *bitrixSyncService) closeResolvedTickets(ctx context.Context, threshold 
 		}
 		ticket.Status = tickets.StatusClosed
 		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
-			s.log.Error("Bitrix24: РЅРµ СѓРґР°Р»РѕСЃСЊ Р°РІС‚РѕР·Р°РєСЂС‹С‚СЊ Р·Р°СЏРІРєСѓ", "ticket_id", ticket.ID, "error", err)
+			s.log.Error("Bitrix24: не удалось автозакрыть заявку", "ticket_id", ticket.ID, "error", err)
 			continue
 		}
 		_ = s.ticketRepo.AddHistory(ctx, &tickets.TicketHistory{

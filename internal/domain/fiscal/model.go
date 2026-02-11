@@ -17,6 +17,7 @@ type FiscalRegister struct {
 	LegalName              *string        `gorm:"type:text"`
 	INN                    *string        `gorm:"column:inn;type:text;index"`
 	FRSerialNumber         *string        `gorm:"type:text;index"`
+	FRSerialNormalized     *string        `gorm:"column:fr_serial_normalized;type:text;uniqueIndex"`
 	FNNumber               *string        `gorm:"type:text"`
 	KKTRegDate             *time.Time     `json:"kkt_reg_date"`
 	FNExpireDate           *time.Time     `json:"fn_expire_date"`
@@ -33,6 +34,7 @@ type FiscalRegister struct {
 	AttributeExcise        *bool          `json:"attribute_excise"`
 	AttributeMarked        *bool          `json:"attribute_marked"`
 	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
+	WorkstationID          *string        `gorm:"column:workstation_id;type:text;index"`
 }
 
 func (fr *FiscalRegister) BeforeCreate(tx *gorm.DB) (err error) {

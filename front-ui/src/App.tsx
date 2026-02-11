@@ -1,4 +1,4 @@
-﻿import React, { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ import TicketsPage from '@/pages/TicketsPage';
 import TicketDetailsPage from '@/pages/TicketDetailsPage';
 import CompanyPage from '@/pages/companies/CompanyPage';
 import CompaniesListPage from '@/pages/companies/CompaniesListPage';
+import AcceptancePage from '@/pages/candidates/AcceptancePage';
 import ProfilePage from '@/pages/ProfilePage';
 
 import ServerDetails from '@/pages/equipment/ServerDetails';
@@ -48,6 +49,15 @@ const AdminRoute = ({ children }: { children: React.ReactNode }) => {
   const user = useAuthStore((state) => state.user);
   const isAdmin = Boolean(user?.roles?.includes('admin'));
   if (!isAdmin) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+};
+
+const SupportOrAdminRoute = ({ children }: { children: React.ReactNode }) => {
+  const user = useAuthStore((state) => state.user);
+  const canAccess = Boolean(user?.roles?.includes('admin') || user?.roles?.includes('support_specialist'));
+  if (!canAccess) {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;
@@ -92,6 +102,14 @@ const App: React.FC = () => {
 
               <Route path="companies" element={<CompaniesListPage />} />
               <Route path="companies/:id" element={<CompanyPage />} />
+              <Route
+                path="acceptance"
+                element={(
+                  <SupportOrAdminRoute>
+                    <AcceptancePage />
+                  </SupportOrAdminRoute>
+                )}
+              />
 
               <Route path="servers" element={<ServersPage />} />
               <Route path="servers/:id" element={<ServerDetails />} />

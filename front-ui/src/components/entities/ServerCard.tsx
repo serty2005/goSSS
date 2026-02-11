@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Card, Badge, Button, Space, Typography, Tooltip, message, Tag } from 'antd';
 import { CopyOutlined, LinkOutlined, SyncOutlined, GlobalOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';

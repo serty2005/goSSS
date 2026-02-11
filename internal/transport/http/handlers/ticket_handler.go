@@ -32,7 +32,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Get("/filters", h.Filters)
 	r.Get("/stats/dashboard", h.DashboardStats)
-	r.Post("/", h.Create) // Р РЋР С•Р В·Р Т‘Р В°Р Р…Р С‘Р Вµ Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р ВµР Р…Р Р…Р ВµР С–Р С• РЎвЂљР С‘Р С”Р ВµРЎвЂљР В°
+	r.Post("/", h.Create) // Создание внутреннего тикета
 	r.Get("/{id}", h.GetDetails)
 	r.Post("/{id}/link", h.LinkAsset)
 	r.Post("/{id}/attachments", h.UploadAttachments)
@@ -48,32 +48,32 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 func (h *TicketHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.service.GetDashboardStats(r.Context())
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃС‚Р°С‚РёСЃС‚РёРєРё")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения статистики")
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, stats)
 }
 
-// Create РЎРѓР С•Р В·Р Т‘Р В°Р ВµРЎвЂљ Р Р…Р С•Р Р†РЎвЂ№Р в„– РЎвЂљР С‘Р С”Р ВµРЎвЂљ (Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р ВµР Р…Р Р…Р С‘Р в„–).
+// Create создает новый тикет (внутренний).
 func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	var dto api.TicketCreateInternalDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
-	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С ID РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР С–Р С• Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ
+	// Получаем ID текущего пользователя
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 
 	ticket, err := h.service.CreateInternal(r.Context(), dto, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrReporterNotFound) {
-			response.RespondWithError(w, http.StatusUnauthorized, "Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ Р С‘Р В· РЎРѓР ВµРЎРѓРЎРѓР С‘Р С‘ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…, Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р С‘РЎвЂљР Вµ Р Р†РЎвЂ¦Р С•Р Т‘ Р В·Р В°Р Р…Р С•Р Р†Р С•")
+			response.RespondWithError(w, http.StatusUnauthorized, "Пользователь из сессии не найден, выполните вход заново")
 			return
 		}
 		log.Error("Failed to create ticket", "error", err)
@@ -82,7 +82,7 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ С‚РёРєРµС‚ СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать тикет с Bitrix24", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusCreated, ticket)
@@ -93,7 +93,7 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketStatusChangeDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
@@ -105,7 +105,7 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ СЃС‚Р°С‚СѓСЃ С‚РёРєРµС‚Р° СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать статус тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
@@ -116,17 +116,17 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAddCommentDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 	if strings.TrimSpace(dto.Comment) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Р С™Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р в„– Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»Р ВµР Р…")
+		response.RespondWithError(w, http.StatusBadRequest, "Комментарий обязателен")
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncComment(r.Context(), id, comment, userID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№ СЃ Bitrix24", "ticket_id", id, "comment_id", comment.ID, "error", err)
+			log.Error("Не удалось синхронизировать комментарий с Bitrix24", "ticket_id", id, "comment_id", comment.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
@@ -146,12 +146,12 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "ID Р·Р°СЏРІРєРё РѕР±СЏР·Р°С‚РµР»РµРЅ")
+		response.RespondWithError(w, http.StatusBadRequest, "ID заявки обязателен")
 		return
 	}
 
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ multipart Р·Р°РїСЂРѕСЃ")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный multipart запрос")
 		return
 	}
 
@@ -161,7 +161,7 @@ func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request
 		files = append(files, r.MultipartForm.File["file"]...)
 	}
 	if len(files) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµ РІС‹Р±СЂР°РЅС‹ С„Р°Р№Р»С‹")
+		response.RespondWithError(w, http.StatusBadRequest, "Не выбраны файлы")
 		return
 	}
 
@@ -196,17 +196,17 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 	if strings.TrimSpace(dto.Value) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Р вЂ”Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»РЎРЉР Р…Р С•")
+		response.RespondWithError(w, http.StatusBadRequest, "Значение обязательно")
 		return
 	}
 
@@ -217,7 +217,7 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
-// UpdateDescription Р С•Р В±Р Р…Р С•Р Р†Р В»РЎРЏР ВµРЎвЂљ Р С•Р С—Р С‘РЎРѓР В°Р Р…Р С‘Р Вµ РЎвЂљР С‘Р С”Р ВµРЎвЂљР В°.
+// UpdateDescription обновляет описание тикета.
 func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
@@ -225,20 +225,20 @@ func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 
 	ticket, err := h.service.UpdateDescription(r.Context(), id, dto.Description, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
+			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
@@ -246,7 +246,7 @@ func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РѕРїРёСЃР°РЅРёРµ С‚РёРєРµС‚Р° СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать описание тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
@@ -257,7 +257,7 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAssignDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
@@ -269,7 +269,7 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РЅР°Р·РЅР°С‡РµРЅРёРµ РёСЃРїРѕР»РЅРёС‚РµР»СЏ РІ Bitrix24", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать назначение исполнителя в Bitrix24", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
@@ -280,26 +280,26 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketChangeCompanyDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
 	companyID := strings.TrimSpace(dto.CompanyID)
 	if companyID == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "company_id Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»Р ВµР Р…")
+		response.RespondWithError(w, http.StatusBadRequest, "company_id обязателен")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 
 	ticket, err := h.service.ChangeCompany(r.Context(), id, companyID, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
+			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
@@ -307,7 +307,7 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ С‚РёРєРµС‚ СЃ Bitrix24 РїРѕСЃР»Рµ СЃРјРµРЅС‹ РєРѕРјРїР°РЅРёРё", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать тикет с Bitrix24 после смены компании", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
@@ -318,20 +318,20 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "id")
 	var dto api.TicketBitrixFieldsUpdateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
 		return
 	}
 
 	ticket, err := h.service.UpdateBitrixFields(r.Context(), id, dto.BitrixServicePointID, dto.BitrixDealTitle, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
+			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
 			return
 		}
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())
@@ -339,18 +339,18 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 	}
 	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
 		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р С‘РЎР‚Р С•Р Р†Р В°РЎвЂљРЎРЉ B24-Р С—Р С•Р В»РЎРЏ РЎвЂљР С‘Р С”Р ВµРЎвЂљР В° РЎРѓ Bitrix24", "ticket_id", ticket.ID, "error", err)
+			log.Error("Не удалось синхронизировать B24-поля тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
 		}
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
-// List Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ РЎРѓР С—Р С‘РЎРѓР С•Р С” Р В·Р В°РЎРЏР Р†Р С•Р С” РЎРѓ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р В°РЎвЂ Р С‘Р ВµР в„–.
+// List возвращает список заявок с фильтрацией.
 func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 
-	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С—Р В°РЎР‚Р В°Р СР ВµРЎвЂљРЎР‚РЎвЂ№ Р С—Р В°Р С–Р С‘Р Р…Р В°РЎвЂ Р С‘Р С‘.
+	// Получаем параметры пагинации.
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 50
@@ -360,7 +360,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	// Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚РЎвЂ№.
+	// Собираем фильтры.
 	filter := tickets.TicketFilter{
 		Limit:       limit,
 		Offset:      offset,
@@ -369,7 +369,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		SortBy:      r.URL.Query().Get("sort_by"),
 	}
 
-	// Р В¤Р С‘Р В»РЎРЉРЎвЂљРЎР‚ Р С—Р С• РЎРѓРЎвЂљР В°РЎвЂљРЎС“РЎРѓР В°Р С.
+	// Фильтр по статусам.
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
 	}
@@ -379,11 +379,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р В·Р В°РЎРЏР Р†Р С•Р С”")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка заявок")
 		return
 	}
 
-	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р С‘ (Р Т‘Р В»РЎРЏ Р Р†РЎвЂ№Р Р†Р С•Р Т‘Р В° Р Р† РЎРѓР С—Р С‘РЎРѓР С”Р Вµ).
+	// Получаем комментарии (для вывода в списке).
 	ticketIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		ticketIDs = append(ticketIDs, item.ID)
@@ -391,11 +391,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	lastComments, err := h.service.GetLastComments(r.Context(), ticketIDs)
 	if err != nil {
 		log.Error("Failed to get last comments", "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р В·Р В°РЎРЏР Р†Р С•Р С”")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка заявок")
 		return
 	}
 
-	// Р СџРЎР‚Р ВµР С•Р В±РЎР‚Р В°Р В·РЎС“Р ВµР С Р Р† TicketListDTO.
+	// Преобразуем в TicketListDTO.
 	dtos := make([]api.TicketListDTO, len(items))
 	for i, item := range items {
 		var assignee *struct {
@@ -447,9 +447,9 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetDetails Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р С—Р С•Р В»Р Р…РЎС“РЎР‹ Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• Р В·Р В°РЎРЏР Р†Р С”Р Вµ.
+// GetDetails возвращает полную информацию о заявке.
 
-// Filters Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р В°Р С–РЎР‚Р ВµР С–Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р В»РЎРЏ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р С•Р Р†.
+// Filters возвращает агрегированные значения для фильтров.
 func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 	filter := tickets.TicketFilter{
 		SearchQuery: r.URL.Query().Get("search"),
@@ -460,7 +460,7 @@ func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.service.GetCompanyFilters(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р С•Р Р† Р В·Р В°РЎРЏР Р†Р С•Р С”")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения фильтров заявок")
 		return
 	}
 
@@ -614,13 +614,13 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// LinkAssetRequest РЎвЂљР ВµР В»Р С• Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р С”Р С‘.
+// LinkAssetRequest тело запроса для привязки.
 type LinkAssetRequest struct {
 	AssetID   string `json:"asset_id"`
 	AssetType string `json:"asset_type"` // Server, FiscalRegister, Workstation
 }
 
-// LinkAsset Р С—РЎР‚Р С‘Р Р†РЎРЏР В·РЎвЂ№Р Р†Р В°Р ВµРЎвЂљ Р В·Р В°РЎРЏР Р†Р С”РЎС“ Р С” Р С•Р В±Р С•РЎР‚РЎС“Р Т‘Р С•Р Р†Р В°Р Р…Р С‘РЎР‹.
+// LinkAsset привязывает заявку к оборудованию.
 func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
@@ -628,7 +628,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 		AssetType string `json:"asset_type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
 		return
 	}
 	err := h.service.LinkToAsset(r.Context(), id, req.AssetID, req.AssetType)
@@ -640,7 +640,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserIDFromContext(r *http.Request) uint {
-	// Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С contextkeys
+	// Используем contextkeys
 	userIDStr, ok := r.Context().Value(contextkeys.UserIDContextKey).(string)
 	if !ok {
 		return 0

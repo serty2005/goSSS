@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';

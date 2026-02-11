@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
@@ -13,7 +12,6 @@ import (
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
-	"etalon-server/pkg/eventbus"
 	"fmt"
 	"os"
 	"path"
@@ -36,11 +34,11 @@ type agentFTPGatewayImpl struct {
 	logger    logger.LoggerInterface
 	db        *gorm.DB
 	ftpClient services.FTPClient
-	bus       eventbus.EventBus
+	obsSvc    services.AgentObservationService
 }
 
-func NewAgentFTPGateway(cfg *config.Config, logger logger.LoggerInterface, db *gorm.DB, ftpClient services.FTPClient, bus eventbus.EventBus) AgentFTPGateway {
-	return &agentFTPGatewayImpl{cfg, logger, db, ftpClient, bus}
+func NewAgentFTPGateway(cfg *config.Config, logger logger.LoggerInterface, db *gorm.DB, ftpClient services.FTPClient, obsSvc services.AgentObservationService) AgentFTPGateway {
+	return &agentFTPGatewayImpl{cfg, logger, db, ftpClient, obsSvc}
 }
 
 func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
@@ -433,22 +431,17 @@ func (g *agentFTPGatewayImpl) processFile(ctx context.Context, fileName string) 
 	}
 
 	if hierarchyHasChanged {
-		log.Info("Обнаружен новый файл или изменение в иерархии объектов. Публикация события...")
-
-		// ИЗМЕНЕНИЕ: Формируем новую полезную нагрузку
-		payload := events.AgentDataPayload{
-			Source: fileName,
-			Data:   data,
+		log.Info("Обнаружено изменение в данных. Применяем наблюдение...")
+		if g.obsSvc == nil {
+			log.Error("Сервис применения наблюдений не инициализирован")
+			return false
 		}
-
-		g.bus.Publish(eventbus.Event{
-			Type:    events.AgentDataReceived,
-			Payload: payload,
-		})
+		if _, err := g.obsSvc.ApplyObservation(ctx, fileName, &data); err != nil {
+			log.Error("Ошибка применения наблюдения", "error", err)
+			return false
+		}
 		processingTime := time.Since(startTime)
-		log.Info("Событие AgentDataReceived опубликовано",
-			"event_type", string(events.AgentDataReceived),
-			"processing_time", processingTime)
+		log.Info("Наблюдение успешно применено", "processing_time", processingTime)
 		return true
 	}
 

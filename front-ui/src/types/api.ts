@@ -538,3 +538,75 @@ export interface ContractDetailDTO {
   service_level?: number;
   state_start_time?: string;
 }
+
+// --- Candidate Acceptance DTO ---
+export type CandidateStatus = 'NEW' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface CandidateWorkstationStagingDTO {
+  id: number;
+  candidate_id: number;
+  observation_id: number;
+  observed_at: string;
+  hostname?: string;
+  agent_uuid?: string;
+  workstation_uuid?: string;
+  teamviewer_id?: string;
+  litemanager_id?: string;
+  anydesk_id?: string;
+  url_rms?: string;
+}
+
+export interface CandidateFiscalStagingDTO {
+  id: number;
+  candidate_id: number;
+  observation_id: number;
+  observed_at: string;
+  serial_number?: string;
+  serial_normalized?: string;
+  rn_kkt?: string;
+  model_name?: string;
+  inn?: string;
+  fn_number?: string;
+  fn_expire_date?: string;
+  organization_name?: string;
+  address?: string;
+}
+
+export interface CandidateDTO {
+  id: number;
+  server_key?: string;
+  server_crm_id?: string;
+  server_url?: string;
+  status: CandidateStatus;
+  ticket_id?: number;
+  approved_company_id?: string;
+  approved_server_id?: string;
+  created_at: string;
+  updated_at: string;
+  staged_workstations?: CandidateWorkstationStagingDTO[];
+  staged_fiscals?: CandidateFiscalStagingDTO[];
+}
+
+export interface CandidateApprovePayload {
+  company_id?: string;
+  company?: {
+    title: string;
+    address?: string;
+    additional_name?: string;
+    parent_id?: string;
+  };
+  server?: {
+    mode: 'existing' | 'new';
+    server_id?: string;
+    crm_id?: string;
+    url_rms?: string;
+    device_name?: string;
+    description?: string;
+  };
+  workstations?: Array<{
+    staging_id?: number;
+    name: string;
+    workstation_uuid?: string;
+  }>;
+  comment?: string;
+}

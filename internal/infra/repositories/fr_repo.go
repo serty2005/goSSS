@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	domain "etalon-server/internal/domain"
-	"etalon-server/internal/domain/fiscal" // <-- Новый импорт
+	"etalon-server/internal/domain/fiscal"
 	infraDB "etalon-server/internal/infra/db"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -27,7 +28,6 @@ func (r *frRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
 }
 
 func (r *frRepo) Create(ctx context.Context, tx *gorm.DB, fr *fiscal.FiscalRegister) error {
-	// MetaClass удален
 	return r.dbOrTx(ctx, tx).WithContext(ctx).Create(fr).Error
 }
 
@@ -106,8 +106,13 @@ func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*fiscal.Fis
 	if sn == "" {
 		return nil, nil
 	}
+	norm := strings.ToUpper(strings.TrimSpace(sn))
+	norm = strings.ReplaceAll(norm, " ", "")
+
 	var fr fiscal.FiscalRegister
-	err := r.dbOrTx(ctx, nil).WithContext(ctx).Where("fr_serial_number = ?", sn).Order("updated_at DESC").First(&fr).Error
+	err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Where("fr_serial_normalized = ? OR fr_serial_number = ?", norm, strings.TrimSpace(sn)).
+		Order("updated_at DESC").First(&fr).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, domain.ErrNotFound

@@ -1,1 +1,1 @@
-﻿declare module 'react-resizable';
+declare module 'react-resizable';

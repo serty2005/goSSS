@@ -187,7 +187,7 @@ func (c *Client) ListsGetIblockTypeID(ctx context.Context, iblockID int) (string
 	case float64:
 		return strconv.FormatInt(int64(v), 10), nil
 	default:
-		return "", errors.New("РїСѓСЃС‚РѕР№ IBLOCK_TYPE_ID РІ РѕС‚РІРµС‚Рµ Bitrix24")
+		return "", errors.New("пустой IBLOCK_TYPE_ID в ответе Bitrix24")
 	}
 }
 

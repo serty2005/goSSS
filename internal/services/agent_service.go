@@ -24,7 +24,6 @@ var (
 	ErrOwnerNotDetermined = errors.New("не удалось определить владельца для агента")
 )
 
-// AgentService определяет интерфейс для бизнес-логики управления агентами.
 type AgentService interface {
 	RegisterAgent(ctx context.Context, req *api.RegistrationRequestDTO) (*models.Agent, error)
 	ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) (*api.AgentHeartbeatResponseDTO, error)
@@ -37,20 +36,20 @@ type agentServiceImpl struct {
 	companyRepo company.Repository
 	db          *gorm.DB
 	bus         eventbus.EventBus
+	obsService  AgentObservationService
 }
 
-// NewAgentService создает новый экземпляр сервиса агентов.
-func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus) AgentService {
+func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus, obsService AgentObservationService) AgentService {
 	return &agentServiceImpl{
 		logger:      logger,
 		agentRepo:   agentRepo,
 		companyRepo: companyRepo,
 		db:          db,
 		bus:         bus,
+		obsService:  obsService,
 	}
 }
 
-// RegisterAgent обрабатывает запрос на регистрацию нового агента.
 func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.RegistrationRequestDTO) (*models.Agent, error) {
 	existingAgent, err := s.agentRepo.GetByUUID(ctx, req.AgentUUID)
 	if err != nil {
@@ -60,7 +59,6 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		return nil, ErrAgentAlreadyExists
 	}
 
-	// Создаем "пустого" агента в статусе ожидания.
 	agent := &models.Agent{
 		UUID:          req.AgentUUID,
 		Hostname:      req.Hostname,
@@ -69,28 +67,15 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		Type:          "workstation",
 		Status:        models.StatusPendingOwner,
 	}
-
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		return nil, fmt.Errorf("не удалось создать агента в БД: %w", err)
 	}
 
-	payload := events.AgentDataPayload{
-		Source: req.AgentUUID,
-		Data:   req.InitialData,
-	}
-
-	// Публикуем событие для Оркестратора, чтобы он запустил логику сверки и определения владельца.
-	s.bus.Publish(eventbus.Event{
-		Type:    events.AgentDataReceived,
-		Payload: payload,
-	})
-	s.logger.Info("Новый агент зарегистрирован, событие на обработку данных отправлено", "uuid", req.AgentUUID)
-
+	payload := events.AgentDataPayload{Source: req.AgentUUID, Data: req.InitialData}
+	s.bus.Publish(eventbus.Event{Type: events.AgentDataReceived, Payload: payload})
+	s.logger.Info("Новый агент зарегистрирован", "uuid", req.AgentUUID)
 	return agent, nil
 }
-
-// ProcessData обрабатывает данные от уже зарегистрированного агента.
-// В файле internal/services/agent_service.go
 
 func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) (*api.AgentHeartbeatResponseDTO, error) {
 	targetUUID := agentUUID
@@ -98,91 +83,58 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		targetUUID = data.AgentUUID
 	}
 
-	// Определяем тип (handler уже должен был проставить 'getad', но на всякий случай)
 	agentType := data.AgentType
 	if agentType == "" {
 		agentType = "workstation"
 	}
 
-	// 1. Поиск или Создание агента (Auto-Registration)
 	agent, err := s.agentRepo.GetByUUID(ctx, targetUUID)
 	if err != nil {
-		// Ошибка БД
 		return nil, fmt.Errorf("ошибка поиска агента: %w", err)
 	}
-
 	if agent == nil {
-		// АГЕНТ НЕ НАЙДЕН -> СОЗДАЕМ НОВОГО
-		s.logger.Info("Обнаружен новый агент (авто-регистрация)", "uuid", targetUUID, "type", agentType)
-
-		newAgent := &models.Agent{
+		agent = &models.Agent{
 			UUID:          targetUUID,
 			Type:          agentType,
-			Status:        models.StatusActive, // Считаем активным, раз шлет данные
+			Status:        models.StatusActive,
 			LastHeartbeat: time.Now(),
 			Hostname:      data.Hostname,
 			Version:       data.AgentVersion,
 			CreatedAt:     time.Now(),
 			UpdatedAt:     time.Now(),
 		}
-
-		if err := s.agentRepo.Create(ctx, newAgent); err != nil {
+		if err := s.agentRepo.Create(ctx, agent); err != nil {
 			return nil, fmt.Errorf("не удалось создать агента при авто-регистрации: %w", err)
 		}
 	} else {
-		// АГЕНТ НАЙДЕН -> ОБНОВЛЯЕМ
 		agent.LastHeartbeat = time.Now()
 		if data.AgentVersion != "" {
 			agent.Version = data.AgentVersion
 		}
-		// Если тип сменился (например, был workstation, стал getad или наоборот)
 		if data.AgentType != "" && agent.Type != data.AgentType {
 			agent.Type = data.AgentType
 		}
-		// Обновляем hostname, если пришел
 		if data.Hostname != "" {
 			agent.Hostname = data.Hostname
 		}
-
 		if err := s.agentRepo.Update(ctx, agent); err != nil {
 			s.logger.Error("Не удалось обновить heartbeat агента", "uuid", targetUUID, "error", err)
 		}
 	}
 
-	// 2. Публикация данных в шину (Orchestrator разберет сущности)
-	// Для getad всегда считаем, что данные есть
-	hasData := true
-
-	if hasData {
-		payload := events.AgentDataPayload{
-			Source: targetUUID,
-			Data:   *data,
+	if s.obsService != nil {
+		if _, err := s.obsService.ApplyObservation(ctx, targetUUID, data); err != nil {
+			s.logger.Error("Не удалось применить наблюдение агента", "uuid", targetUUID, "error", err)
 		}
-		s.bus.Publish(eventbus.Event{
-			Type:    events.AgentDataReceived,
-			Payload: payload,
-		})
-		s.logger.Info("Данные от агента отправлены в шину", "uuid", targetUUID)
 	}
 
-	// 3. Формирование ответа
-	response := &api.AgentHeartbeatResponseDTO{
-		Status: "ok",
-		Tasks:  make([]api.AgentTaskDTO, 0),
-	}
-
-	// Для getad задачи не возвращаем, для sssruner - возвращаем
+	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
 	if agentType == "sssruner" {
 		commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
 		if err == nil && len(commands) > 0 {
 			var commandIDs []uint
 			for _, cmd := range commands {
-				response.Tasks = append(response.Tasks, api.AgentTaskDTO{
-					ID:        cmd.ID,
-					Type:      cmd.Type,
-					Payload:   json.RawMessage(cmd.Payload),
-					CreatedAt: cmd.CreatedAt,
-				})
+				response.Tasks = append(response.Tasks, api.AgentTaskDTO{ID: cmd.ID, Type: cmd.Type, Payload: json.RawMessage(cmd.Payload), CreatedAt: cmd.CreatedAt})
 				commandIDs = append(commandIDs, cmd.ID)
 			}
 			_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
@@ -192,99 +144,22 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 	return response, nil
 }
 
-// GetAgentConfig возвращает конфигурацию для агента, если он активен.
 func (s *agentServiceImpl) GetAgentConfig(ctx context.Context, uuid string) (*api.AgentConfigDTO, error) {
 	agent, err := s.agentRepo.GetByUUID(ctx, uuid)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка получения агента: %w", err)
 	}
 	if agent == nil || agent.Status != models.StatusActive {
-		// Если агент не найден или его регистрация не завершена, возвращаем ошибку
 		return nil, ErrAgentNotFound
 	}
 
-	// Распарсим JSON из БД в DTO
 	var configDTO api.AgentConfigDTO
 	if agent.Config != nil {
 		if err := json.Unmarshal(agent.Config, &configDTO); err != nil {
 			return nil, fmt.Errorf("не удалось распарсить конфигурацию агента из БД: %w", err)
 		}
 	} else {
-		// Этого быть не должно, если статус active, но на всякий случай
 		return nil, errors.New("у активного агента отсутствует конфигурация")
 	}
-
 	return &configDTO, nil
 }
-
-// // createTaskForUndefinedOwner создает задачу для администратора.
-// func (s *agentServiceImpl) createTaskForUndefinedOwner(ctx context.Context, req *api.RegistrationRequestDTO) error {
-// 	details, _ := json.Marshal(req)
-// 	task := models.ReconciliationTask{
-// 		TaskType:   "agent_owner_required",
-// 		EntityType: "Agent",
-// 		EntityUUID: req.AgentUUID,
-// 		Details:    datatypes.JSON(details),
-// 		Status:     "new",
-// 		Comment:    fmt.Sprintf("Требуется вручную определить и привязать владельца для нового агента с хостом %s.", req.Hostname),
-// 	}
-// 	return s.db.WithContext(ctx).Create(&task).Error
-// }
-
-// // generateZabbixHostname создает имя хоста по формату {$COMPANY_NAME_ENG_SHORT}-{$DeviceNameFromSD}-{$INNER_COMPANY_ID}
-// func (s *agentServiceImpl) generateZabbixHostname(ctx context.Context, ownerUUID, agentHostname string) (string, error) {
-// 	company, err := s.companyRepo.GetByUUID(ctx, ownerUUID)
-// 	if err != nil || company == nil {
-// 		return "", fmt.Errorf("не удалось найти компанию-владельца по UUID %s", ownerUUID)
-// 	}
-
-// 	// 1. $COMPANY_NAME_ENG_SHORT
-// 	companyShortName := s.transliterate(*company.Title)
-
-// 	// 2. $DeviceNameFromSD
-// 	// На этапе регистрации у нас еще нет точной привязки к Workstation, используем hostname агента
-// 	deviceName := agentHostname
-// 	if govalidator.IsDNSName(deviceName) {
-// 		deviceName = strings.Split(deviceName, ".")[0]
-// 	}
-// 	deviceName = strings.ToUpper(deviceName)
-
-// 	// 3. $INNER_COMPANY_ID
-// 	count, err := s.agentRepo.CountByOwnerUUID(ctx, ownerUUID)
-// 	if err != nil {
-// 		return "", fmt.Errorf("не удалось посчитать агентов для компании %s: %w", ownerUUID, err)
-// 	}
-// 	innerID := fmt.Sprintf("%02d", count+1) // +1, так как текущий агент еще не сохранен
-
-// 	return fmt.Sprintf("%s-%s-%s", companyShortName, deviceName, innerID), nil
-// }
-
-// // transliterate преобразует кириллический текст в латиницу.
-// func (s *agentServiceImpl) transliterate(text string) string {
-// 	// Простая транслитерация
-// 	t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
-// 	result, _, _ := transform.String(t, text)
-// 	result = strings.ToLower(result)
-
-// 	// Заменяем специфичные русские буквы и символы
-// 	var replacements = map[string]string{
-// 		" ": "-", "ъ": "", "ь": "", "ы": "y", "і": "i", "ї": "i", "є": "e",
-// 		"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-// 		"ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-// 		"н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-// 		"ф": "f", "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sch",
-// 		"ю": "yu", "я": "ya",
-// 	}
-
-// 	for rus, lat := range replacements {
-// 		result = strings.ReplaceAll(result, rus, lat)
-// 	}
-
-// 	// Удаляем все неалфавитно-цифровые символы, кроме дефиса
-// 	reg, err := regexp.Compile("[^a-z0-9-]+")
-// 	if err != nil {
-// 		s.logger.Error("Ошибка компиляции regex для транслитерации", zap.Error(err))
-// 		return "unknown"
-// 	}
-// 	return reg.ReplaceAllString(result, "")
-// }

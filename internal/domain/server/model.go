@@ -13,6 +13,7 @@ type Server struct {
 	common.Base
 	UniqueID         *string    `gorm:"type:text"`
 	CRMid            *string    `gorm:"column:crm_id;type:text;index"`
+	ServerKey        *string    `gorm:"column:server_key;type:text;index"`
 	Teamviewer       *string    `gorm:"type:text"`
 	RDP              *string    `gorm:"type:text"`
 	Anydesk          *string    `gorm:"type:text"`

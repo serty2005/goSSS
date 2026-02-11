@@ -11,10 +11,12 @@ import (
 // Workstation представляет сущность рабочей станции.
 type Workstation struct {
 	common.Base
+	IdentityHash           *string        `gorm:"column:identity_hash;type:text;index"`
 	Teamviewer             *string        `gorm:"type:text"`
 	Anydesk                *string        `gorm:"type:text"`
 	Litemanager            *string        `gorm:"type:text"`
 	DeviceName             *string        `gorm:"type:text"`
+	ServerID               *string        `gorm:"column:server_id;type:text;index"`
 	LastModifiedDate       *time.Time     `json:"last_modified_date"`
 	Description            *string        `gorm:"type:text"`
 	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"`

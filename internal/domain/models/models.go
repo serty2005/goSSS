@@ -48,9 +48,11 @@ type EquipmentStatusLog struct {
 
 // Agent представляет экземпляр агента, установленного на машине клиента.
 type Agent struct {
-	UUID           string         `gorm:"primaryKey;type:text"`
-	Type           string         `gorm:"type:varchar(50);not null"`
-	OwnerID        string         `gorm:"type:text;index"`
+	UUID           string  `gorm:"primaryKey;type:text"`
+	Type           string  `gorm:"type:varchar(50);not null"`
+	OwnerID        string  `gorm:"type:text;index"`
+	WorkstationID  *string `gorm:"type:text;index"`
+	LastObservedAt *time.Time
 	Config         datatypes.JSON `gorm:"type:jsonb"`
 	LastHeartbeat  time.Time
 	Version        string `gorm:"type:varchar(50)"`

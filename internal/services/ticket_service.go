@@ -412,16 +412,16 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	nextTitle := strings.TrimSpace(bitrixDealTitle)
 	if ticket.SyncWithBitrix {
 		if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
-			return nil, fmt.Errorf("РЅРµ РІС‹Р±СЂР°РЅР° С‚РѕС‡РєР° РѕР±СЃР»СѓР¶РёРІР°РЅРёСЏ Bitrix24")
+			return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 		}
 		if nextTitle == "" {
-			return nil, fmt.Errorf("РЅРµ Р·Р°РїРѕР»РЅРµРЅ Р·Р°РіРѕР»РѕРІРѕРє СЃРґРµР»РєРё Bitrix24")
+			return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
 		}
 	}
 
@@ -508,7 +508,7 @@ func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, thresh
 		}
 		ticket.Status = tickets.StatusClosed
 		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
-			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°РєСЂС‹С‚СЊ Р·Р°СЏРІРєСѓ", "ticket_id", ticket.ID, "error", err)
+			s.logger.Error("Не удалось автоматически закрыть заявку", "ticket_id", ticket.ID, "error", err)
 			continue
 		}
 		s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.StatusResolved, tickets.StatusClosed)

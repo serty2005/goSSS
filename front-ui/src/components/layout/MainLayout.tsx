@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -7,6 +7,7 @@ import {
   CustomerServiceOutlined,
   BankOutlined,
   DesktopOutlined,
+  AuditOutlined,
   SettingOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -31,6 +32,7 @@ const MainLayout: React.FC = () => {
   const { themeMode, toggleTheme } = useUiStore();
   const { user, logout } = useAuthStore();
   const isAdmin = Boolean(user?.roles?.includes('admin'));
+  const canAccessAcceptance = Boolean(user?.roles?.includes('admin') || user?.roles?.includes('support_specialist'));
 
   const handleMenuClick = (key: string) => {
     navigate(key);
@@ -73,6 +75,9 @@ const MainLayout: React.FC = () => {
       ],
     },
   ];
+  if (canAccessAcceptance) {
+    menuItems.splice(3, 0, { key: '/acceptance', icon: <AuditOutlined />, label: 'Принятие на АО' });
+  }
   if (isAdmin) {
     menuItems.splice(1, 0, { key: '/tasks', icon: <CheckSquareOutlined />, label: 'Задачи' });
   }

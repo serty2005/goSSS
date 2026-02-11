@@ -91,6 +91,7 @@ type Application struct {
 	WorkstationHandler   *handlers.WSHandler
 	FiscalHandler        *handlers.FiscalHandler
 	BitrixHandler        *handlers.BitrixHandler
+	CandidateHandler     *handlers.CandidateHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -160,7 +161,7 @@ func (a *Application) Run() {
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		a.Logger.Error("Принудительная остановка сервера:", "error", err)
+		a.Logger.Error("Принудительная остановка сервера", "error", err)
 	}
 
 	wg.Wait()
@@ -190,6 +191,9 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 	}
 	log.Info("Миграции базы данных успешно завершены.")
 
+	if err := services.EnsureFiscalSerialUniqueness(context.Background(), database); err != nil {
+		log.Fatal("Не удалось выполнить нормализацию и дедупликацию ФР", "error", err)
+	}
 	if err := db.SeedAdminUser(cfg, database, log); err != nil {
 		log.Fatal("Не удалось создать пользователя-администратора", "error", err)
 	}
@@ -246,6 +250,7 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 type Services struct {
 	AuthService           services.AuthService
 	AgentService          services.AgentService
+	AgentObservation      services.AgentObservationService
 	TaskResolutionService services.TaskResolutionService
 	TaskService           task.Service
 	ServerActionsService  services.ServerActionsService
@@ -261,10 +266,12 @@ type Services struct {
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
 	transactor := db.NewGormTransactor(app.DB)
+	obsService := services.NewAgentObservationService(app.Logger.With("component", "agent_observation_service"), app.DB)
 
 	return Services{
 		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
-		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
+		AgentObservation:      obsService,
+		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus, obsService),
 		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), transactor, app.DB),
 		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
@@ -309,7 +316,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 
 	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
 	app.PollingGateway = gateways.NewServerPollingGateway(app.Config, app.Logger.With("component", "iiko_polling_gateway"), repos.ServerRepo, clients.IikoClient, app.EventBus)
-	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, app.EventBus)
+	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, srvs.AgentObservation)
 	// ИЗМЕНЕНИЕ: В FRUpdateFounder передаем Manager
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, app.IntegrationManager)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, app.IntegrationManager, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
@@ -338,6 +345,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, srvs.BitrixSyncService)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
+	app.CandidateHandler = handlers.NewCandidateHandler(app.DB, srvs.AgentObservation)
 }
 
 func (a *Application) setupRouter() *chi.Mux {
@@ -410,6 +418,12 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.ContractHandler.CreateContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.ContractHandler.UpdateContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.ContractHandler.DeleteContract)
+		})
+
+		r.Route("/candidates", func(r chi.Router) {
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/", a.CandidateHandler.List)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.CandidateHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.CandidateHandler.Approve)
 		})
 
 		a.SearchHandler.RegisterRoutes(r)

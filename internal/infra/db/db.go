@@ -13,11 +13,11 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
+	"strings"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
-	"strings"
 )
 
 // NewConnection создает и возвращает новое подключение к базе данных.
@@ -45,6 +45,11 @@ func Migrate(db *gorm.DB) error {
 		&models.AgentFile{},
 		&models.ReconciliationTask{},
 		&models.Agent{},
+		&models.AgentObservation{},
+		&models.Candidate{},
+		&models.CandidateStatusHistory{},
+		&models.CandidateWorkstationStaging{},
+		&models.CandidateFiscalStaging{},
 		&models.CompanyContract{},
 		&models.ExternalSystemLink{},
 		&models.EquipmentStatusLog{},
