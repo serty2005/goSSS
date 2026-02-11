@@ -37,7 +37,12 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
   { value: 'new', label: 'Новая', color: 'blue' },
   { value: 'in_progress', label: 'В работе', color: 'processing' },
   { value: 'pending', label: 'Ожидание', color: 'orange' },
+  { value: 'deferred', label: 'Отложено', color: 'orange' },
+  { value: 'onsite', label: 'На выезд', color: 'cyan' },
+  { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
   { value: 'resolved', label: 'Решена', color: 'green' },
+  { value: 'spam', label: 'Спам', color: 'red' },
+  { value: 'execution', label: 'Реализация', color: 'magenta' },
   { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
@@ -82,7 +87,7 @@ const sanitizeRichHtml = (value?: string) => {
 };
 
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
-const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed';
+const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
 
 const estimateHeaderMinWidth = (title: string) => {
   // Базовая оценка: ширина текста заголовка + отступы + иконка drag-handle.
@@ -176,6 +181,7 @@ const TicketsPage: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
+  const [commentIsPrivate, setCommentIsPrivate] = useState(false);
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [isResizingColumn, setIsResizingColumn] = useState(false);
@@ -274,6 +280,7 @@ const TicketsPage: React.FC = () => {
         author: item.author_name || 'Сотрудник',
         date: dayjs(item.creation_date).format('DD.MM.YYYY HH:mm'),
         text: item.text,
+        isPrivate: item.is_private ?? false,
       })),
     [details?.comments],
   );
@@ -292,25 +299,16 @@ const TicketsPage: React.FC = () => {
   });
 
   const addCommentMutation = useMutation({
-    mutationFn: async (payload: { id: string; comment: string }) => ticketsApi.addComment(payload.id, payload.comment),
+    mutationFn: async (payload: { id: string; comment: string; isPrivate: boolean }) =>
+      ticketsApi.addComment(payload.id, payload.comment, payload.isPrivate),
     onSuccess: () => {
       message.success('Комментарий добавлен');
       setCommentDraft('');
+      setCommentIsPrivate(false);
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
     },
     onError: () => message.error('Не удалось добавить комментарий'),
-  });
-
-  const refreshCommentsMutation = useMutation({
-    mutationFn: async (id: string) => ticketsApi.refreshCommentsFromServiceDesk(id),
-    onSuccess: (response) => {
-      const added = response.data?.added ?? 0;
-      message.success(added > 0 ? `Комментарии обновлены: +${added}` : 'Новых комментариев нет');
-      queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
-      queryClient.invalidateQueries({ queryKey: ['tickets'] });
-    },
-    onError: () => message.error('Не удалось обновить комментарии из Naumen-SD'),
   });
 
   const copyConnectionMutation = useMutation({
@@ -321,6 +319,7 @@ const TicketsPage: React.FC = () => {
   const closeQuickModal = () => {
     setSelectedTicketId(null);
     setCommentDraft('');
+    setCommentIsPrivate(false);
     setPendingStatus(null);
     setStatusComment('');
   };
@@ -644,29 +643,19 @@ const TicketsPage: React.FC = () => {
             <Space wrap>
               <Select
                 value={metadata.status}
-                options={STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
                 style={{ width: 220 }}
                 onChange={(nextStatus: TicketStatus) => {
                   if (!selectedTicketId || nextStatus === metadata.status) {
                     return;
                   }
-                  if (nextStatus === 'resolved' || nextStatus === 'closed') {
+                  if (nextStatus === 'resolved') {
                     setPendingStatus(nextStatus);
                     return;
                   }
                   changeStatusMutation.mutate({ id: selectedTicketId, status: nextStatus });
                 }}
               />
-              {metadata.status !== 'resolved' && (
-                <Button
-                  onClick={() => {
-                    if (!selectedTicketId) return;
-                    setPendingStatus('closed');
-                  }}
-                >
-                  Закрыть заявку
-                </Button>
-              )}
               <Button
                 onClick={() => {
                   if (!selectedTicketId) return;
@@ -679,12 +668,12 @@ const TicketsPage: React.FC = () => {
             </Space>
 
             <Card size="small" title="Описание">
-              <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
+              <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
             </Card>
 
             {isClosedLikeStatus(metadata.status) && (
               <Card size="small" title="Результат">
-                <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
               </Card>
             )}
 
@@ -731,19 +720,6 @@ const TicketsPage: React.FC = () => {
             <Card
               size="small"
               title="Комментарии"
-              extra={
-                <Button
-                  size="small"
-                  loading={refreshCommentsMutation.isPending}
-                  disabled={!selectedTicketId}
-                  onClick={() => {
-                    if (!selectedTicketId) return;
-                    refreshCommentsMutation.mutate(selectedTicketId);
-                  }}
-                >
-                  Обновить из SD
-                </Button>
-              }
             >
               {comments.length > 0 && (
                 <List
@@ -751,10 +727,13 @@ const TicketsPage: React.FC = () => {
                   renderItem={(item) => (
                     <List.Item key={item.id}>
                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                        <Text type="secondary">
-                          {item.author} • {item.date}
-                        </Text>
-                        <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }} />
+                        <Space size={8}>
+                          <Text type="secondary">
+                            {item.author} • {item.date}
+                          </Text>
+                          {item.isPrivate && <Tag color="orange">Приватный</Tag>}
+                        </Space>
+                        <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }} />
                       </Space>
                     </List.Item>
                   )}
@@ -768,13 +747,21 @@ const TicketsPage: React.FC = () => {
                   value={commentDraft}
                   onChange={(event) => setCommentDraft(event.target.value)}
                 />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#595959' }}>
+                  <input
+                    type="checkbox"
+                    checked={commentIsPrivate}
+                    onChange={(event) => setCommentIsPrivate(event.target.checked)}
+                  />
+                  Приватный комментарий (не синхронизировать во внешние системы)
+                </label>
                 <Button
                   type="primary"
                   loading={addCommentMutation.isPending}
                   disabled={!commentDraft.trim() || !selectedTicketId}
                   onClick={() => {
                     if (!selectedTicketId) return;
-                    addCommentMutation.mutate({ id: selectedTicketId, comment: commentDraft.trim() });
+                    addCommentMutation.mutate({ id: selectedTicketId, comment: commentDraft.trim(), isPrivate: commentIsPrivate });
                   }}
                 >
                   Отправить
@@ -792,7 +779,7 @@ const TicketsPage: React.FC = () => {
           setStatusComment('');
         }}
         width={420}
-        title="Закрытие заявки"
+        title="Завершение заявки"
         placement="right"
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -811,7 +798,7 @@ const TicketsPage: React.FC = () => {
               changeStatusMutation.mutate({ id: selectedTicketId, status: pendingStatus, comment: statusComment.trim() });
             }}
           >
-            Закрыть заявку
+            Завершить заявку
           </Button>
         </Space>
       </Drawer>

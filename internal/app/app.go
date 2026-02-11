@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/core/integrations"
 	"etalon-server/internal/core/processing"
 	"etalon-server/internal/core/workers"
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -20,6 +21,7 @@ import (
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/infra/logger"
+	bitrixplugin "etalon-server/internal/infra/plugins/bitrix"
 	"etalon-server/internal/infra/plugins/naumen"
 	infraRepos "etalon-server/internal/infra/repositories"
 	"etalon-server/internal/pkg/seeder"
@@ -70,6 +72,7 @@ type Application struct {
 	StatusActualityWorker workers.StatusActualityWorker
 	TicketGateway         gateways.TicketGateway
 	ContractGateway       gateways.ContractGateway
+	BitrixGateway         gateways.BitrixGateway
 
 	// Handlers
 	CompanyHandler       *handlers.CompanyHandler
@@ -87,6 +90,7 @@ type Application struct {
 	ServerHandler        *handlers.ServerHandler
 	WorkstationHandler   *handlers.WSHandler
 	FiscalHandler        *handlers.FiscalHandler
+	BitrixHandler        *handlers.BitrixHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -204,6 +208,7 @@ type Repositories struct {
 	TaskRepo        repositories.TaskRepo
 	UserRepo        user.Repository
 	LinkRepo        repositories.LinkRepo
+	BitrixRepo      bitrix.Repository
 }
 
 func setupRepositories(db *gorm.DB) Repositories {
@@ -218,20 +223,23 @@ func setupRepositories(db *gorm.DB) Repositories {
 		TaskRepo:        repositories.NewTaskRepo(db),
 		UserRepo:        infraRepos.NewUserRepo(db),
 		LinkRepo:        repositories.NewLinkRepo(db),
+		BitrixRepo:      infraRepos.NewBitrixRepo(db),
 	}
 }
 
 type ExternalClients struct {
-	SDClient   external.ExternalSystemClient
-	FTPClient  services.FTPClient
-	IikoClient iiko.IikoClient
+	SDClient     external.ExternalSystemClient
+	FTPClient    services.FTPClient
+	IikoClient   iiko.IikoClient
+	BitrixClient *bitrixplugin.Client
 }
 
 func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) ExternalClients {
 	return ExternalClients{
-		SDClient:   naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
-		FTPClient:  services.NewFTPClient(cfg, log.With("component", "ftp_client")),
-		IikoClient: iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+		SDClient:     naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
+		FTPClient:    services.NewFTPClient(cfg, log.With("component", "ftp_client")),
+		IikoClient:   iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+		BitrixClient: bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
 	}
 }
 
@@ -248,6 +256,7 @@ type Services struct {
 	ServerService         server.Service
 	WorkstationService    workstation.Service
 	FiscalService         fiscal.Service
+	BitrixSyncService     services.BitrixSyncService
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -267,6 +276,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerService:      serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
 		WorkstationService: workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
 		FiscalService:      fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
+		BitrixSyncService:  services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
 	}
 }
 
@@ -308,6 +318,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
 	// ИЗМЕНЕНИЕ: В ContractGateway передаем Manager
 	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
+	app.BitrixGateway = gateways.NewBitrixGateway(app.Config, app.Logger.With("component", "bitrix_gateway"), srvs.BitrixSyncService)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
@@ -322,10 +333,11 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
-	app.UserHandler = handlers.NewUserHandler(repos.UserRepo)
+	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
-	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService)
+	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, srvs.BitrixSyncService)
+	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
 }
 
 func (a *Application) setupRouter() *chi.Mux {
@@ -409,8 +421,16 @@ func (a *Application) setupRouter() *chi.Mux {
 			a.TicketHandler.RegisterRoutes(r)
 		})
 
+		r.Route("/bitrix", func(r chi.Router) {
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", a.BitrixHandler.ListServicePoints)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/refresh", a.BitrixHandler.RefreshServicePoints)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/sync/pull", a.BitrixHandler.PullSync)
+		})
+
 		r.Route("/profile", func(r chi.Router) {
+			r.Get("/assignees", a.UserHandler.ListAssignees)
 			r.Patch("/credentials", a.UserHandler.UpdateMyCredentials)
+			r.Patch("/integrations", a.UserHandler.UpdateMyIntegrations)
 		})
 
 		r.Route("/users", func(r chi.Router) {
@@ -492,6 +512,10 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		go func() { defer wg.Done(); a.StatusActualityWorker.Start(ctx) }()
 	} else {
 		a.Logger.Info("Проверка актуальности статусов отключена.")
+	}
+	if a.Config.EnableBitrixGateway && a.BitrixGateway != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.BitrixGateway.Start(ctx) }()
 	}
 }
 

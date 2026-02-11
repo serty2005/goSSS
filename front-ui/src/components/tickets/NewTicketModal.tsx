@@ -1,10 +1,13 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag } from 'antd';
+import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
+import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import { useAuthStore } from '@/store/authStore';
+import { isAdmin } from '@/utils/permissions';
 
 const { Text, Paragraph } = Typography;
 
@@ -20,9 +23,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
   const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; selectedLabel: string }>>([]);
-  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }>>({});
+  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; parentID?: string; activeContract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; selectedLabel: string } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
+  const syncWithBitrix = Form.useWatch('sync_with_bitrix', form) as boolean | undefined;
+  const user = useAuthStore((state) => state.user);
+  const canDisableBitrixSync = isAdmin(user?.roles);
 
   const renderCompanyOptionLabel = (title: string, parentTitle?: string) => {
     const parts = getCompanyHierarchyParts(title, parentTitle);
@@ -30,7 +36,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       return parts.child;
     }
     return (
-      <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+      <Space orientation="vertical" size={0} style={{ lineHeight: 1.2 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>{parts.parent}</Text>
         <Text style={{ paddingLeft: 14 }}>{parts.child}</Text>
       </Space>
@@ -47,13 +53,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!companiesData?.data) return;
 
-    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; activeContract?: boolean }> = {};
+    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; parentTitle?: string; parentID?: string; activeContract?: boolean }> = {};
     const nextOptions = companiesData.data
       .map((company) => {
         const item = company as CompanyModel;
         const rawId = resolveCompanyID(item);
         const rawTitle = resolveCompanyTitle(item);
         const rawParentTitle = resolveCompanyParentTitle(item);
+        const rawParentID = (company as { ParentID?: string; parent_id?: string }).ParentID ?? (company as { parent_id?: string }).parent_id;
         const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
         const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
         const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
@@ -69,6 +76,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           additional: rawAdditional ?? undefined,
           title: rawTitle ?? undefined,
           parentTitle: rawParentTitle ?? undefined,
+          parentID: rawParentID ?? undefined,
           activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
         };
         return {
@@ -100,6 +108,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
   useEffect(() => {
     if (!open) return;
+    form.setFieldsValue({
+      sync_with_bitrix: true,
+      assignee_id: user?.id,
+    });
     if (presetCompany?.id) {
       const label = presetCompany.title || presetCompany.id;
       const option = { value: presetCompany.id, label, selectedLabel: label } as { value: string; label: React.ReactNode; selectedLabel: string };
@@ -111,7 +123,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       form.setFieldsValue({ company_id: presetCompany.id });
     }
 
-  }, [open, presetCompany, form]);
+  }, [open, presetCompany, form, user?.id]);
+
+  useEffect(() => {
+    if (syncWithBitrix === false) {
+      form.setFieldValue('bitrix_service_point_id', undefined);
+      form.setFieldValue('bitrix_deal_title', undefined);
+    }
+  }, [syncWithBitrix, form]);
 
   const { data: infrastructureData, isLoading: isInfrastructureLoading } = useQuery({
     queryKey: ['company-infrastructure', selectedCompanyId],
@@ -119,6 +138,28 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     enabled: open && Boolean(selectedCompanyId),
     staleTime: 30_000,
   });
+
+  const parentCompanyID = selectedCompanyId ? companyMeta[selectedCompanyId]?.parentID : undefined;
+  const { data: parentInfrastructureData, isLoading: isParentInfrastructureLoading } = useQuery({
+    queryKey: ['company-parent-infrastructure', parentCompanyID],
+    queryFn: () => companiesApi.getInfrastructure(parentCompanyID ?? ''),
+    enabled: open && Boolean(parentCompanyID) && parentCompanyID !== selectedCompanyId,
+    staleTime: 30_000,
+  });
+
+  const { data: bitrixServicePoints = [], isLoading: isBitrixPointsLoading } = useQuery({
+    queryKey: ['bitrix-service-points'],
+    queryFn: () => ticketsApi.getBitrixServicePoints(),
+    enabled: open,
+    staleTime: 5 * 60_000,
+  });
+  const bitrixPointsOptions = useMemo(() => {
+    if (!Array.isArray(bitrixServicePoints)) return [];
+    return bitrixServicePoints.map((point) => ({
+      value: point.b24_element_id,
+      label: point.name,
+    }));
+  }, [bitrixServicePoints]);
 
   const shouldFetchCompanyDetail = open && Boolean(selectedCompanyId) && !companyMeta[selectedCompanyId ?? ''];
   const { data: companyDetailData } = useQuery({
@@ -135,6 +176,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     const item = company as CompanyModel;
     const rawTitle = resolveCompanyTitle(item);
     const rawParentTitle = resolveCompanyParentTitle(item);
+    const rawParentID = (company as { ParentID?: string; parent_id?: string }).ParentID ?? (company as { parent_id?: string }).parent_id;
     const rawAdditional = (company as { AdditionalName?: string; additional_name?: string }).AdditionalName ?? (company as { additional_name?: string }).additional_name;
     const rawAddress = (company as { Address?: string; address?: string }).Address ?? (company as { address?: string }).address;
     const rawActiveContract = (company as { ActiveContract?: boolean; active_contract?: boolean }).ActiveContract ?? (company as { active_contract?: boolean }).active_contract;
@@ -146,6 +188,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         additional: rawAdditional ?? undefined,
         title: rawTitle ?? undefined,
         parentTitle: rawParentTitle ?? undefined,
+        parentID: rawParentID ?? undefined,
         activeContract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
       },
     }));
@@ -161,6 +204,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   }, [companyDetailData, selectedCompanyId]);
 
   const infrastructure = infrastructureData?.data || [];
+  const parentInfrastructure = parentInfrastructureData?.data || [];
 
   const selectedCompanyMeta = useMemo(() => {
     if (!selectedCompanyId) return null;
@@ -199,7 +243,24 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   };
 
   const connectionsGroups = useMemo(() => {
-    return infrastructure
+    const parentServerGroups = parentInfrastructure
+      .filter((item) => item.entity_type === 'Server')
+      .map((item) => {
+        const connections = resolveConnectionItems(item);
+        if (!connections || connections.length === 0) return null;
+        return {
+          key: `parent-${(item.data as { uuid?: string })?.uuid || resolveEquipmentTitle(item)}`,
+          title: `${resolveEquipmentTitle(item)} (родительская компания)`,
+          connections,
+        };
+      })
+      .filter(Boolean) as Array<{
+      key?: string;
+      title: string;
+      connections: Array<{ label: string; value?: string }>;
+    }>;
+
+    const ownGroups = infrastructure
       .map((item) => {
         const connections = resolveConnectionItems(item);
         if (!connections || connections.length === 0) return null;
@@ -214,16 +275,37 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       title: string;
       connections: Array<{ label: string; value?: string }>;
     }>;
-  }, [infrastructure]);
+    return [...parentServerGroups, ...ownGroups];
+  }, [infrastructure, parentInfrastructure]);
+
+  const { data: assigneesResponse, isLoading: isAssigneesLoading } = useQuery({
+    queryKey: ['users-assignees'],
+    queryFn: () => usersApi.getAssignees(),
+    enabled: open,
+    staleTime: 60_000,
+  });
+
+  const assigneeOptions = useMemo(
+    () =>
+      (assigneesResponse?.data || [])
+        .filter((item) => item.isActive)
+        .map((item) => ({ value: item.id, label: item.fullName || item.username })),
+    [assigneesResponse?.data],
+  );
 
   const createMutation = useMutation({
-    mutationFn: async (values: { company_id: string; type: string; description: string }) => {
+    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; bitrix_deal_title?: string }) => {
       const description = values.description.trim();
+      const effectiveSyncWithBitrix = canDisableBitrixSync ? values.sync_with_bitrix !== false : true;
       return ticketsApi.createTicket({
         company_id: values.company_id,
         type: values.type,
         description,
         subject: description,
+        assignee_id: values.assignee_id,
+        sync_with_bitrix: effectiveSyncWithBitrix,
+        bitrix_service_point_id: effectiveSyncWithBitrix ? values.bitrix_service_point_id : undefined,
+        bitrix_deal_title: effectiveSyncWithBitrix ? values.bitrix_deal_title?.trim() : undefined,
       });
     },
     onSuccess: () => {
@@ -267,6 +349,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       <Form
         form={form}
         layout="vertical"
+        initialValues={{ sync_with_bitrix: true }}
         onFinish={(values) => {
           const isActive = selectedCompanyMeta?.activeContract === true;
           if (!isActive) {
@@ -349,9 +432,79 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
               <Select
                 options={[
                   { value: 'incident', label: 'Инцидент' },
-                  { value: 'service_request', label: 'Запрос на обслуживание' },
+                  { value: 'consultation', label: 'Консультация' },
+                  { value: 'cto', label: 'ЦТО' },
+                  { value: 'acceptance_ao', label: 'Принятие на АО' },
+                  { value: 'paid_works', label: 'Платные работы' },
                 ]}
               />
+            </Form.Item>
+
+            <Form.Item
+              name="assignee_id"
+              label="Исполнитель"
+              rules={[{ required: true, message: 'Выберите исполнителя' }]}
+            >
+              <Select
+                showSearch
+                placeholder="Выберите исполнителя"
+                loading={isAssigneesLoading}
+                optionFilterProp="label"
+                options={assigneeOptions}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="sync_with_bitrix"
+              valuePropName="checked"
+              tooltip={canDisableBitrixSync ? undefined : 'Только администратор может отключить синхронизацию'}
+            >
+              <Checkbox disabled={!canDisableBitrixSync}>
+                Синхронизировать с B24
+              </Checkbox>
+            </Form.Item>
+
+            <Form.Item
+              name="bitrix_service_point_id"
+              label="Точка обслуживания (Bitrix24)"
+              rules={[
+                {
+                  validator: (_, value) => {
+                    if (syncWithBitrix === false) return Promise.resolve();
+                    if (value === undefined || value === null || value === '') {
+                      return Promise.reject(new Error('Выберите точку обслуживания Bitrix24'));
+                    }
+                    return Promise.resolve();
+                  },
+                },
+              ]}
+            >
+              <Select
+                showSearch
+                placeholder="Выберите точку обслуживания"
+                loading={isBitrixPointsLoading}
+                optionFilterProp="label"
+                options={bitrixPointsOptions}
+                disabled={syncWithBitrix === false}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="bitrix_deal_title"
+              label="Заголовок сделки (Bitrix24)"
+              rules={[
+                {
+                  validator: (_, value) => {
+                    if (syncWithBitrix === false) return Promise.resolve();
+                    if (!String(value || '').trim()) {
+                      return Promise.reject(new Error('Заполните заголовок сделки Bitrix24'));
+                    }
+                    return Promise.resolve();
+                  },
+                },
+              ]}
+            >
+              <Input placeholder="Введите заголовок сделки для Bitrix24" disabled={syncWithBitrix === false} />
             </Form.Item>
 
             <Form.Item
@@ -367,7 +520,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           {selectedCompanyId && (
             <Col xs={24} md={12}>
               <Card size="small" title="Подключения">
-                {isInfrastructureLoading ? (
+                {isInfrastructureLoading || isParentInfrastructureLoading ? (
                   <div style={{ textAlign: 'center', padding: 16 }}>
                     <Spin />
                   </div>

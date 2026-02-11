@@ -44,10 +44,45 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
             {isCommonContract && <Tag color="gold">Платный</Tag>}
           </Space>
         );
+      case 'deferred':
+        return (
+          <Space size={4}>
+            <Tag color="orange">Отложено</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'onsite':
+        return (
+          <Space size={4}>
+            <Tag color="cyan">На выезд</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'to_manager':
+        return (
+          <Space size={4}>
+            <Tag color="purple">Передать менеджеру</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
       case 'resolved':
         return (
           <Space size={4}>
             <Tag color="green">Решена</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'spam':
+        return (
+          <Space size={4}>
+            <Tag color="red">Спам</Tag>
+            {isCommonContract && <Tag color="gold">Платный</Tag>}
+          </Space>
+        );
+      case 'execution':
+        return (
+          <Space size={4}>
+            <Tag color="magenta">Реализация</Tag>
             {isCommonContract && <Tag color="gold">Платный</Tag>}
           </Space>
         );

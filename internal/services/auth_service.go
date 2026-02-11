@@ -107,8 +107,24 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 			ScheduleType:     u.ScheduleType,
 			IsActive:         u.IsActive,
 			HasLoggedIn:      u.HasLoggedIn,
+			Integrations:     mapUserIntegrationsToDTO(u.Integrations),
 		},
 	}
 
 	return response, nil
+}
+
+func mapUserIntegrationsToDTO(items []user.Integration) []api.UserIntegrationDTO {
+	result := make([]api.UserIntegrationDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.UserIntegrationDTO{
+			ID:              item.ID,
+			IntegrationType: item.IntegrationType,
+			ExternalID:      item.ExternalID,
+			IsVerified:      item.IsVerified,
+			IsLocked:        item.IsLocked,
+			VerifiedName:    item.VerifiedName,
+		})
+	}
+	return result
 }

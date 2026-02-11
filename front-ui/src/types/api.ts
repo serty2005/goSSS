@@ -176,7 +176,17 @@ export interface TaskResolutionPayload {
 }
 
 // --- Tickets DTO ---
-export type TicketStatus = 'new' | 'in_progress' | 'pending' | 'resolved' | 'closed';
+export type TicketStatus =
+  | 'new'
+  | 'in_progress'
+  | 'pending'
+  | 'deferred'
+  | 'onsite'
+  | 'to_manager'
+  | 'resolved'
+  | 'spam'
+  | 'execution'
+  | 'closed';
 
 export interface TicketListItemDTO {
   id: string;
@@ -188,11 +198,15 @@ export interface TicketListItemDTO {
   status: TicketStatus;
   last_comment?: string;
   last_comment_author?: string;
+  last_comment_is_private?: boolean;
   last_activity: string;
   created_at?: string;
   company_id: string;
   contract_id?: string;
   is_common_contract?: boolean;
+  sync_with_bitrix?: boolean;
+  bitrix_service_point_id?: number;
+  bitrix_deal_title?: string;
   assignee?: {
     id: number;
     fullName: string;
@@ -218,6 +232,9 @@ export interface TicketDTO {
   company_id: string;
   contract_id?: string;
   is_common_contract?: boolean;
+  sync_with_bitrix?: boolean;
+  bitrix_service_point_id?: number;
+  bitrix_deal_title?: string;
 }
 
 export interface TicketCreatePayload {
@@ -225,7 +242,18 @@ export interface TicketCreatePayload {
   description: string;
   type: string;
   company_id: string;
+  assignee_id: number;
   priority?: string;
+  sync_with_bitrix?: boolean;
+  bitrix_service_point_id?: number;
+  bitrix_deal_title?: string;
+}
+
+export interface BitrixServicePointDTO {
+  b24_element_id: number;
+  name: string;
+  address?: string;
+  raw_json?: string;
 }
 
 export interface TicketHistoryDTO {
@@ -245,6 +273,7 @@ export interface TicketCommentDTO {
   author_name: string;
   creation_date: string;
   is_internal: boolean;
+  is_private?: boolean;
 }
 
 export interface TicketDetailsDTO {
@@ -310,6 +339,16 @@ export interface UserAdminDTO {
   scheduleType: UserSchedule;
   isActive: boolean;
   hasLoggedIn: boolean;
+  integrations?: UserIntegrationDTO[];
+}
+
+export interface UserIntegrationDTO {
+  id: number;
+  integrationType: string;
+  externalId: string;
+  isVerified: boolean;
+  isLocked?: boolean;
+  verifiedName?: string;
 }
 
 export interface UserCreatePayload {

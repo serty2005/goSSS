@@ -16,14 +16,13 @@ func NewUserRepo(db *gorm.DB) user.Repository {
 
 func (r *userRepo) GetAll(ctx context.Context) ([]user.User, error) {
 	var users []user.User
-	// Загружаем связи Roles
-	err := r.db.WithContext(ctx).Preload("Roles").Find(&users).Error
+	err := r.db.WithContext(ctx).Preload("Roles").Preload("Integrations").Find(&users).Error
 	return users, err
 }
 
 func (r *userRepo) GetByID(ctx context.Context, id uint) (*user.User, error) {
 	var u user.User
-	err := r.db.WithContext(ctx).Preload("Roles").First(&u, id).Error
+	err := r.db.WithContext(ctx).Preload("Roles").Preload("Integrations").First(&u, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -32,7 +31,7 @@ func (r *userRepo) GetByID(ctx context.Context, id uint) (*user.User, error) {
 
 func (r *userRepo) GetByUsername(ctx context.Context, username string) (*user.User, error) {
 	var u user.User
-	err := r.db.WithContext(ctx).Preload("Roles").Where("username = ?", username).First(&u).Error
+	err := r.db.WithContext(ctx).Preload("Roles").Preload("Integrations").Where("username = ?", username).First(&u).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -44,10 +43,22 @@ func (r *userRepo) Create(ctx context.Context, u *user.User) error {
 }
 
 func (r *userRepo) Update(ctx context.Context, u *user.User) error {
-	// Используем Save для обновления всех полей, включая связи, если они были изменены через Association
-	// Но для GORM many2many лучше обновлять через Association отдельно, если меняются роли.
-	// Здесь простой Save обновит скалярные поля.
 	return r.db.WithContext(ctx).Save(u).Error
+}
+
+func (r *userRepo) ReplaceIntegrations(ctx context.Context, userID uint, items []user.Integration) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", userID).Delete(&user.Integration{}).Error; err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		for i := range items {
+			items[i].UserID = userID
+		}
+		return tx.Create(&items).Error
+	})
 }
 
 func (r *userRepo) Delete(ctx context.Context, id uint) error {
@@ -69,7 +80,6 @@ func (r *userRepo) EnsureRoleExists(ctx context.Context, name, description strin
 	if err == nil {
 		return &role, nil
 	}
-	// Создаем
 	role = user.Role{Name: name, Description: description}
 	if err := r.db.WithContext(ctx).Create(&role).Error; err != nil {
 		return nil, err

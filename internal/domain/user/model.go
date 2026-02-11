@@ -37,7 +37,8 @@ type User struct {
 	IsActive   bool    `gorm:"default:true;index"`
 
 	// RBAC: Связь многие-ко-многим
-	Roles []Role `gorm:"many2many:user_roles;"`
+	Roles        []Role        `gorm:"many2many:user_roles;"`
+	Integrations []Integration `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE;"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -58,4 +59,20 @@ func (u *User) HashPassword(password string) error {
 func (u *User) CheckPassword(password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password))
 	return err == nil
+}
+
+type Integration struct {
+	ID              uint   `gorm:"primarykey"`
+	UserID          uint   `gorm:"index;not null"`
+	IntegrationType string `gorm:"type:varchar(50);not null;index"`
+	ExternalID      string `gorm:"type:varchar(255);not null"`
+	IsVerified      bool   `gorm:"not null;default:false;index"`
+	IsLocked        bool   `gorm:"not null;default:false;index"`
+	VerifiedName    string `gorm:"type:varchar(255)"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (Integration) TableName() string {
+	return "user_integrations"
 }

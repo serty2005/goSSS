@@ -14,23 +14,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
 
 type TicketHandler struct {
-	service services.TicketService
+	service       services.TicketService
+	bitrixService services.BitrixSyncService
 }
 
-func NewTicketHandler(service services.TicketService) *TicketHandler {
-	return &TicketHandler{service: service}
+func NewTicketHandler(service services.TicketService, bitrixService services.BitrixSyncService) *TicketHandler {
+	return &TicketHandler{service: service, bitrixService: bitrixService}
 }
 
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Get("/filters", h.Filters)
 	r.Get("/stats/dashboard", h.DashboardStats)
-	r.Post("/", h.Create) // РЎРѕР·РґР°РЅРёРµ РІРЅСѓС‚СЂРµРЅРЅРµРіРѕ С‚РёРєРµС‚Р°
+	r.Post("/", h.Create) // Р РЋР С•Р В·Р Т‘Р В°Р Р…Р С‘Р Вµ Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р ВµР Р…Р Р…Р ВµР С–Р С• РЎвЂљР С‘Р С”Р ВµРЎвЂљР В°
 	r.Get("/{id}", h.GetDetails)
 	r.Post("/{id}/link", h.LinkAsset)
 	r.Post("/{id}/attachments", h.UploadAttachments)
@@ -41,50 +43,57 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Patch("/{id}/description", h.UpdateDescription)
 	r.Patch("/{id}/assign", h.Assign)
 	r.Patch("/{id}/company", h.ChangeCompany)
+	r.Patch("/{id}/bitrix", h.UpdateBitrixFields)
 }
 func (h *TicketHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.service.GetDashboardStats(r.Context())
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения статистики")
+		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃС‚Р°С‚РёСЃС‚РёРєРё")
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, stats)
 }
 
-// Create СЃРѕР·РґР°РµС‚ РЅРѕРІС‹Р№ С‚РёРєРµС‚ (РІРЅСѓС‚СЂРµРЅРЅРёР№).
+// Create РЎРѓР С•Р В·Р Т‘Р В°Р ВµРЎвЂљ Р Р…Р С•Р Р†РЎвЂ№Р в„– РЎвЂљР С‘Р С”Р ВµРЎвЂљ (Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р ВµР Р…Р Р…Р С‘Р в„–).
 func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	var dto api.TicketCreateInternalDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
-	// РџРѕР»СѓС‡Р°РµРј ID С‚РµРєСѓС‰РµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
+	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С ID РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР С–Р С• Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
 		return
 	}
 
 	ticket, err := h.service.CreateInternal(r.Context(), dto, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrReporterNotFound) {
-			response.RespondWithError(w, http.StatusUnauthorized, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РёР· СЃРµСЃСЃРёРё РЅРµ РЅР°Р№РґРµРЅ, РІС‹РїРѕР»РЅРёС‚Рµ РІС…РѕРґ Р·Р°РЅРѕРІРѕ")
+			response.RespondWithError(w, http.StatusUnauthorized, "Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ Р С‘Р В· РЎРѓР ВµРЎРѓРЎРѓР С‘Р С‘ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…, Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р С‘РЎвЂљР Вµ Р Р†РЎвЂ¦Р С•Р Т‘ Р В·Р В°Р Р…Р С•Р Р†Р С•")
 			return
 		}
 		log.Error("Failed to create ticket", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create ticket")
 		return
 	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ С‚РёРєРµС‚ СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+		}
+	}
 	response.RespondWithJSON(w, http.StatusCreated, ticket)
 }
 
 func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketStatusChangeDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
@@ -94,32 +103,42 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ СЃС‚Р°С‚СѓСЃ С‚РёРєРµС‚Р° СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+		}
+	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
-	var dto struct {
-		Comment string `json:"comment"`
-	}
+	var dto api.TicketAddCommentDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
 		return
 	}
 	if strings.TrimSpace(dto.Comment) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "РљРѕРјРјРµРЅС‚Р°СЂРёР№ РѕР±СЏР·Р°С‚РµР»РµРЅ")
+		response.RespondWithError(w, http.StatusBadRequest, "Р С™Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р в„– Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»Р ВµР Р…")
 		return
 	}
 
-	if err := h.service.AddComment(r.Context(), id, dto.Comment, userID); err != nil {
+	comment, err := h.service.AddComment(r.Context(), id, dto.Comment, dto.IsPrivate, userID)
+	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncComment(r.Context(), id, comment, userID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№ СЃ Bitrix24", "ticket_id", id, "comment_id", comment.ID, "error", err)
+		}
 	}
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
@@ -127,12 +146,12 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "ID заявки обязателен")
+		response.RespondWithError(w, http.StatusBadRequest, "ID Р·Р°СЏРІРєРё РѕР±СЏР·Р°С‚РµР»РµРЅ")
 		return
 	}
 
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "Некорректный multipart запрос")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ multipart Р·Р°РїСЂРѕСЃ")
 		return
 	}
 
@@ -142,7 +161,7 @@ func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request
 		files = append(files, r.MultipartForm.File["file"]...)
 	}
 	if len(files) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "Не выбраны файлы")
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµ РІС‹Р±СЂР°РЅС‹ С„Р°Р№Р»С‹")
 		return
 	}
 
@@ -177,17 +196,17 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
 		return
 	}
 	if strings.TrimSpace(dto.Value) == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Р—РЅР°С‡РµРЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ")
+		response.RespondWithError(w, http.StatusBadRequest, "Р вЂ”Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»РЎРЉР Р…Р С•")
 		return
 	}
 
@@ -198,40 +217,47 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
-// UpdateDescription РѕР±РЅРѕРІР»СЏРµС‚ РѕРїРёСЃР°РЅРёРµ С‚РёРєРµС‚Р°.
+// UpdateDescription Р С•Р В±Р Р…Р С•Р Р†Р В»РЎРЏР ВµРЎвЂљ Р С•Р С—Р С‘РЎРѓР В°Р Р…Р С‘Р Вµ РЎвЂљР С‘Р С”Р ВµРЎвЂљР В°.
 func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto struct {
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
 		return
 	}
 
 	ticket, err := h.service.UpdateDescription(r.Context(), id, dto.Description, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "РќРµ РЅР°Р№РґРµРЅРѕ")
+			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РѕРїРёСЃР°РЅРёРµ С‚РёРєРµС‚Р° СЃ Bitrix24", "ticket_id", ticket.ID, "error", err)
+		}
+	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAssignDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
@@ -241,46 +267,90 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РЅР°Р·РЅР°С‡РµРЅРёРµ РёСЃРїРѕР»РЅРёС‚РµР»СЏ РІ Bitrix24", "ticket_id", ticket.ID, "error", err)
+		}
+	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketChangeCompanyDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 
 	companyID := strings.TrimSpace(dto.CompanyID)
 	if companyID == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "company_id РѕР±СЏР·Р°С‚РµР»РµРЅ")
+		response.RespondWithError(w, http.StatusBadRequest, "company_id Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»Р ВµР Р…")
 		return
 	}
 
 	userID := getUserIDFromContext(r)
 	if userID == 0 {
-		response.RespondWithError(w, http.StatusUnauthorized, "ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ РІ РєРѕРЅС‚РµРєСЃС‚Рµ")
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
 		return
 	}
 
 	ticket, err := h.service.ChangeCompany(r.Context(), id, companyID, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			response.RespondWithError(w, http.StatusNotFound, "РќРµ РЅР°Р№РґРµРЅРѕ")
+			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ С‚РёРєРµС‚ СЃ Bitrix24 РїРѕСЃР»Рµ СЃРјРµРЅС‹ РєРѕРјРїР°РЅРёРё", "ticket_id", ticket.ID, "error", err)
+		}
+	}
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
-// List РІРѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє Р·Р°СЏРІРѕРє СЃ С„РёР»СЊС‚СЂР°С†РёРµР№.
+func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+	id := chi.URLParam(r, "id")
+	var dto api.TicketBitrixFieldsUpdateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Р† Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљР Вµ")
+		return
+	}
+
+	ticket, err := h.service.UpdateBitrixFields(r.Context(), id, dto.BitrixServicePointID, dto.BitrixDealTitle, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
+		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
+			log.Error("Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р С‘РЎР‚Р С•Р Р†Р В°РЎвЂљРЎРЉ B24-Р С—Р С•Р В»РЎРЏ РЎвЂљР С‘Р С”Р ВµРЎвЂљР В° РЎРѓ Bitrix24", "ticket_id", ticket.ID, "error", err)
+		}
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+// List Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ РЎРѓР С—Р С‘РЎРѓР С•Р С” Р В·Р В°РЎРЏР Р†Р С•Р С” РЎРѓ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р В°РЎвЂ Р С‘Р ВµР в„–.
 func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 
-	// РџРѕР»СѓС‡Р°РµРј РїР°СЂР°РјРµС‚СЂС‹ РїР°РіРёРЅР°С†РёРё.
+	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С—Р В°РЎР‚Р В°Р СР ВµРЎвЂљРЎР‚РЎвЂ№ Р С—Р В°Р С–Р С‘Р Р…Р В°РЎвЂ Р С‘Р С‘.
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 50
@@ -290,7 +360,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	// РЎРѕР±РёСЂР°РµРј С„РёР»СЊС‚СЂС‹.
+	// Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚РЎвЂ№.
 	filter := tickets.TicketFilter{
 		Limit:       limit,
 		Offset:      offset,
@@ -299,7 +369,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		SortBy:      r.URL.Query().Get("sort_by"),
 	}
 
-	// Р¤РёР»СЊС‚СЂ РїРѕ СЃС‚Р°С‚СѓСЃР°Рј.
+	// Р В¤Р С‘Р В»РЎРЉРЎвЂљРЎР‚ Р С—Р С• РЎРѓРЎвЂљР В°РЎвЂљРЎС“РЎРѓР В°Р С.
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
 	}
@@ -309,11 +379,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° Р·Р°СЏРІРѕРє")
+		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р В·Р В°РЎРЏР Р†Р С•Р С”")
 		return
 	}
 
-	// РџРѕР»СѓС‡Р°РµРј РєРѕРјРјРµРЅС‚Р°СЂРёРё (РґР»СЏ РІС‹РІРѕРґР° РІ СЃРїРёСЃРєРµ).
+	// Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р С•Р СР СР ВµР Р…РЎвЂљР В°РЎР‚Р С‘Р С‘ (Р Т‘Р В»РЎРЏ Р Р†РЎвЂ№Р Р†Р С•Р Т‘Р В° Р Р† РЎРѓР С—Р С‘РЎРѓР С”Р Вµ).
 	ticketIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		ticketIDs = append(ticketIDs, item.ID)
@@ -321,11 +391,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	lastComments, err := h.service.GetLastComments(r.Context(), ticketIDs)
 	if err != nil {
 		log.Error("Failed to get last comments", "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° Р·Р°СЏРІРѕРє")
+		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р В·Р В°РЎРЏР Р†Р С•Р С”")
 		return
 	}
 
-	// РџСЂРµРѕР±СЂР°Р·СѓРµРј РІ TicketListDTO.
+	// Р СџРЎР‚Р ВµР С•Р В±РЎР‚Р В°Р В·РЎС“Р ВµР С Р Р† TicketListDTO.
 	dtos := make([]api.TicketListDTO, len(items))
 	for i, item := range items {
 		var assignee *struct {
@@ -342,19 +412,23 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		dtos[i] = api.TicketListDTO{
-			ID:                item.ID,
-			Number:            item.Number,
-			ServiceDeskUUID:   item.ServiceDeskUUID,
-			Status:            item.Status,
-			Subject:           item.Subject,
-			Description:       item.Description,
-			LastComment:       lastComments[item.ID].Text,
-			LastCommentAuthor: lastComments[item.ID].AuthorName,
-			CompanyID:         item.CompanyID,
-			CompanyName:       item.CompanyName,
-			ContractID:        item.ContractID,
-			IsCommonContract:  item.IsCommonContract,
-			Assignee:          assignee,
+			ID:                   item.ID,
+			Number:               item.Number,
+			ServiceDeskUUID:      item.ServiceDeskUUID,
+			Status:               item.Status,
+			Subject:              item.Subject,
+			Description:          item.Description,
+			LastComment:          lastComments[item.ID].Text,
+			LastCommentAuthor:    lastComments[item.ID].AuthorName,
+			LastCommentIsPrivate: lastComments[item.ID].IsPrivate,
+			CompanyID:            item.CompanyID,
+			CompanyName:          item.CompanyName,
+			ContractID:           item.ContractID,
+			IsCommonContract:     item.IsCommonContract,
+			SyncWithBitrix:       item.SyncWithBitrix,
+			BitrixPointID:        item.BitrixServicePointID,
+			BitrixDealTitle:      item.BitrixDealTitle,
+			Assignee:             assignee,
 			// LastActivityDate is basically UpdatedAt or CreatedAt
 			LastActivityDate: item.UpdatedAt,
 			CreatedAt:        item.CreatedAt,
@@ -373,9 +447,9 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetDetails РІРѕР·РІСЂР°С‰Р°РµС‚ РїРѕР»РЅСѓСЋ РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ Р·Р°СЏРІРєРµ.
+// GetDetails Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р С—Р С•Р В»Р Р…РЎС“РЎР‹ Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• Р В·Р В°РЎРЏР Р†Р С”Р Вµ.
 
-// Filters РІРѕР·РІСЂР°С‰Р°РµС‚ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РґР»СЏ С„РёР»СЊС‚СЂРѕРІ.
+// Filters Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р В°Р С–РЎР‚Р ВµР С–Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р В»РЎРЏ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р С•Р Р†.
 func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 	filter := tickets.TicketFilter{
 		SearchQuery: r.URL.Query().Get("search"),
@@ -386,7 +460,7 @@ func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.service.GetCompanyFilters(r.Context(), filter)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ С„РёР»СЊС‚СЂРѕРІ Р·Р°СЏРІРѕРє")
+		response.RespondWithError(w, http.StatusInternalServerError, "Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р С•Р Р† Р В·Р В°РЎРЏР Р†Р С•Р С”")
 		return
 	}
 
@@ -433,24 +507,120 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	details, err := h.service.GetDetails(r.Context(), id)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("Failed to get ticket details", "id", id, "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РґРµС‚Р°Р»РµР№ Р·Р°СЏРІРєРё")
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения деталей заявки")
 		return
 	}
 	if details == nil {
-		response.RespondWithError(w, http.StatusNotFound, "Р—Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, details)
+	var assignee *struct {
+		ID       uint   `json:"id"`
+		FullName string `json:"fullName"`
+	}
+	if details.Metadata.Assignee != nil {
+		assignee = &struct {
+			ID       uint   `json:"id"`
+			FullName string `json:"fullName"`
+		}{
+			ID:       details.Metadata.Assignee.ID,
+			FullName: details.Metadata.Assignee.FullName,
+		}
+	}
+
+	type safeMetadataDTO struct {
+		ID          string     `json:"id"`
+		CreatedAt   time.Time  `json:"created_at"`
+		UpdatedAt   time.Time  `json:"updated_at"`
+		Number      int        `json:"number"`
+		Subject     string     `json:"subject"`
+		Description string     `json:"description"`
+		Result      string     `json:"result"`
+		Status      string     `json:"status"`
+		Priority    string     `json:"priority"`
+		Type        string     `json:"type"`
+		DeadlineAt  *time.Time `json:"deadline_at"`
+		AssigneeID  *uint      `json:"assignee_id"`
+		Assignee    *struct {
+			ID       uint   `json:"id"`
+			FullName string `json:"fullName"`
+		} `json:"assignee,omitempty"`
+		ReporterID           *uint   `json:"reporter_id"`
+		ReporterName         string  `json:"reporter_name"`
+		ReporterEmail        string  `json:"reporter_email"`
+		CompanyID            string  `json:"company_id"`
+		CompanyName          string  `json:"company_name,omitempty"`
+		ContractID           *string `json:"contract_id,omitempty"`
+		IsCommonContract     bool    `json:"is_common_contract,omitempty"`
+		ServiceDeskUUID      string  `json:"service_desk_uuid"`
+		SyncWithBitrix       bool    `json:"sync_with_bitrix"`
+		BitrixServicePointID *int64  `json:"bitrix_service_point_id,omitempty"`
+		BitrixDealTitle      string  `json:"bitrix_deal_title"`
+	}
+
+	type safeCommentDTO struct {
+		UUID         string    `json:"uuid"`
+		Text         string    `json:"text"`
+		AuthorName   string    `json:"author_name"`
+		CreationDate time.Time `json:"creation_date"`
+		IsInternal   bool      `json:"is_internal"`
+		IsPrivate    bool      `json:"is_private"`
+	}
+
+	comments := make([]safeCommentDTO, 0, len(details.Comments))
+	for _, item := range details.Comments {
+		comments = append(comments, safeCommentDTO{
+			UUID:         item.UUID,
+			Text:         item.Text,
+			AuthorName:   item.AuthorName,
+			CreationDate: item.CreationDate,
+			IsInternal:   item.IsInternal,
+			IsPrivate:    item.IsPrivate,
+		})
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"metadata": safeMetadataDTO{
+			ID:                   details.Metadata.ID,
+			CreatedAt:            details.Metadata.CreatedAt,
+			UpdatedAt:            details.Metadata.UpdatedAt,
+			Number:               details.Metadata.Number,
+			Subject:              details.Metadata.Subject,
+			Description:          details.Metadata.Description,
+			Result:               details.Metadata.Result,
+			Status:               details.Metadata.Status,
+			Priority:             details.Metadata.Priority,
+			Type:                 details.Metadata.Type,
+			DeadlineAt:           details.Metadata.DeadlineAt,
+			AssigneeID:           details.Metadata.AssigneeID,
+			Assignee:             assignee,
+			ReporterID:           details.Metadata.ReporterID,
+			ReporterName:         details.Metadata.ReporterName,
+			ReporterEmail:        details.Metadata.ReporterEmail,
+			CompanyID:            details.Metadata.CompanyID,
+			CompanyName:          details.Metadata.CompanyName,
+			ContractID:           details.Metadata.ContractID,
+			IsCommonContract:     details.Metadata.IsCommonContract,
+			ServiceDeskUUID:      details.Metadata.ServiceDeskUUID,
+			SyncWithBitrix:       details.Metadata.SyncWithBitrix,
+			BitrixServicePointID: details.Metadata.BitrixServicePointID,
+			BitrixDealTitle:      details.Metadata.BitrixDealTitle,
+		},
+		"company_name": details.CompanyName,
+		"history":      details.History,
+		"attachments":  details.Attachments,
+		"comments":     comments,
+	})
 }
 
-// LinkAssetRequest С‚РµР»Рѕ Р·Р°РїСЂРѕСЃР° РґР»СЏ РїСЂРёРІСЏР·РєРё.
+// LinkAssetRequest РЎвЂљР ВµР В»Р С• Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р С”Р С‘.
 type LinkAssetRequest struct {
 	AssetID   string `json:"asset_id"`
 	AssetType string `json:"asset_type"` // Server, FiscalRegister, Workstation
 }
 
-// LinkAsset РїСЂРёРІСЏР·С‹РІР°РµС‚ Р·Р°СЏРІРєСѓ Рє РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЋ.
+// LinkAsset Р С—РЎР‚Р С‘Р Р†РЎРЏР В·РЎвЂ№Р Р†Р В°Р ВµРЎвЂљ Р В·Р В°РЎРЏР Р†Р С”РЎС“ Р С” Р С•Р В±Р С•РЎР‚РЎС“Р Т‘Р С•Р Р†Р В°Р Р…Р С‘РЎР‹.
 func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
@@ -458,7 +628,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 		AssetType string `json:"asset_type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON")
+		response.RespondWithError(w, http.StatusBadRequest, "Р СњР ВµР С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р в„– JSON")
 		return
 	}
 	err := h.service.LinkToAsset(r.Context(), id, req.AssetID, req.AssetType)
@@ -470,7 +640,7 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserIDFromContext(r *http.Request) uint {
-	// РСЃРїРѕР»СЊР·СѓРµРј contextkeys
+	// Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С contextkeys
 	userIDStr, ok := r.Context().Value(contextkeys.UserIDContextKey).(string)
 	if !ok {
 		return 0

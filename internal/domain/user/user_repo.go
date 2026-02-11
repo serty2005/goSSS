@@ -16,4 +16,5 @@ type Repository interface {
 	// Методы для ролей
 	GetRoleByName(ctx context.Context, name string) (*Role, error)
 	EnsureRoleExists(ctx context.Context, name, description string) (*Role, error)
+	ReplaceIntegrations(ctx context.Context, userID uint, items []Integration) error
 }

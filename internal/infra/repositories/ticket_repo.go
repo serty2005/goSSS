@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
@@ -278,11 +279,12 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 		TicketID   string `gorm:"column:ticket_id"`
 		Text       string `gorm:"column:text"`
 		AuthorName string `gorm:"column:author_name"`
+		IsPrivate  bool   `gorm:"column:is_private"`
 	}
 
 	var rows []row
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT tc.ticket_id, tc.text, tc.author_name
+		`SELECT tc.ticket_id, tc.text, tc.author_name, tc.is_private
 		 FROM ticket_comments tc
 		 WHERE tc.ticket_id IN ?
 		 ORDER BY tc.ticket_id, tc.creation_date DESC`,
@@ -297,6 +299,7 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 			result[r.TicketID] = tickets.LastCommentInfo{
 				Text:       r.Text,
 				AuthorName: r.AuthorName,
+				IsPrivate:  r.IsPrivate,
 			}
 		}
 	}
@@ -365,4 +368,26 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 	stats.ResolvedByAssignee = rows
 
 	return stats, nil
+}
+
+func (r *ticketRepo) ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]tickets.Ticket, error) {
+	if threshold <= 0 {
+		threshold = 14 * 24 * time.Hour
+	}
+
+	var items []tickets.Ticket
+	err := r.db.WithContext(ctx).
+		Where("status = ?", tickets.StatusResolved).
+		Where(`COALESCE((
+			SELECT MAX(th.created_at)
+			FROM ticket_histories th
+			WHERE th.ticket_id = tickets.id
+				AND th.field = ?
+				AND th.new_value = ?
+		), tickets.updated_at) <= ?`, tickets.HistoryFieldStatus, tickets.StatusResolved, time.Now().Add(-threshold)).
+		Find(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
 }

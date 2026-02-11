@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"context"
+	"time"
 )
 
 type ResolvedByAssigneeStat struct {
@@ -64,6 +65,7 @@ type TicketRepository interface {
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
+	ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]Ticket, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

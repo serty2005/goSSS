@@ -71,6 +71,15 @@ type Config struct {
 
 	EnableStatusWorker   bool
 	StatusWorkerInterval time.Duration
+
+	EnableBitrixGateway         bool
+	BitrixBaseURL               string
+	BitrixOriginatorID          string
+	BitrixCategoryID            int
+	BitrixSyncInterval          time.Duration
+	BitrixDictionarySyncEvery   time.Duration
+	BitrixServicePointsIBlockID int
+	EtalonTicketBaseURL         string
 }
 
 func New() *Config {
@@ -137,6 +146,15 @@ func New() *Config {
 
 		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", true),
 		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
+
+		EnableBitrixGateway:         getEnvAsBool("ENABLE_BITRIX_GATEWAY", false),
+		BitrixBaseURL:               strings.TrimSpace(getEnv("BITRIX_BASE_URL", "")),
+		BitrixOriginatorID:          getEnv("BITRIX_ORIGINATOR_ID", "ETALON_SD"),
+		BitrixCategoryID:            getEnvAsInt("BITRIX_CATEGORY_ID", 17),
+		BitrixSyncInterval:          time.Duration(getEnvAsInt("BITRIX_SYNC_INTERVAL_MIN", 5)) * time.Minute,
+		BitrixDictionarySyncEvery:   time.Duration(getEnvAsInt("BITRIX_DICTIONARY_SYNC_INTERVAL_HOURS", 24)) * time.Hour,
+		BitrixServicePointsIBlockID: getEnvAsInt("BITRIX_SERVICE_POINT_IBLOCK_ID", 101),
+		EtalonTicketBaseURL:         strings.TrimSpace(getEnv("ETALON_TICKET_BASE_URL", "")),
 	}
 }
 

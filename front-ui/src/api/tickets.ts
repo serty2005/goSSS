@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+import { ApiResponse, BitrixServicePointDTO, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
 
 export const ticketsApi = {
   getTickets: async (params: TicketListParams = {}) => {
@@ -61,11 +61,40 @@ export const ticketsApi = {
     return response.data;
   },
 
-  addComment: async (id: number | string, comment: string) => {
-    const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/comments`, {
-      comment,
+  assign: async (id: number | string, assigneeId?: number) => {
+    const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/assign`, {
+      assignee_id: assigneeId ?? null,
     });
     return response.data;
+  },
+
+  updateBitrixFields: async (id: number | string, payload: { bitrix_service_point_id?: number; bitrix_deal_title: string }) => {
+    const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/bitrix`, {
+      bitrix_service_point_id: payload.bitrix_service_point_id,
+      bitrix_deal_title: payload.bitrix_deal_title,
+    });
+    return response.data;
+  },
+
+  addComment: async (id: number | string, comment: string, isPrivate = false) => {
+    const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/comments`, {
+      comment,
+      is_private: isPrivate,
+    });
+    return response.data;
+  },
+
+  getBitrixServicePoints: async () => {
+    const response = await apiClient.get<BitrixServicePointDTO[] | ApiResponse<BitrixServicePointDTO[]>>('/bitrix/service-points');
+    const payload = response.data as unknown;
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+    if (payload && typeof payload === 'object' && 'data' in (payload as Record<string, unknown>)) {
+      const data = (payload as { data?: unknown }).data;
+      return Array.isArray(data) ? (data as BitrixServicePointDTO[]) : [];
+    }
+    return [];
   },
 
   refreshCommentsFromServiceDesk: async (id: number | string) => {

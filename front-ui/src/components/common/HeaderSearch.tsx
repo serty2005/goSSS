@@ -48,6 +48,7 @@ const HeaderSearch: React.FC = () => {
   };
 
   const isTicketsPage = location.pathname.startsWith('/tickets');
+  const isTicketsListPage = location.pathname === '/tickets';
   const isCompaniesPage = location.pathname.startsWith('/companies');
   const isServersPage = location.pathname === '/servers';
   const isWorkstationsPage = location.pathname === '/workstations';
@@ -180,8 +181,12 @@ const HeaderSearch: React.FC = () => {
             { value: 'new', label: 'Новая' },
             { value: 'in_progress', label: 'В работе' },
             { value: 'pending', label: 'Ожидание' },
+            { value: 'deferred', label: 'Отложено' },
+            { value: 'onsite', label: 'На выезд' },
+            { value: 'to_manager', label: 'Передать менеджеру' },
             { value: 'resolved', label: 'Решена' },
-            { value: 'closed', label: 'Закрыта' },
+            { value: 'spam', label: 'Спам' },
+            { value: 'execution', label: 'Реализация' },
           ]}
         />
         <Select
@@ -201,7 +206,13 @@ const HeaderSearch: React.FC = () => {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => updateTicketParams({ create: '1' })}
+          onClick={() => {
+            if (isTicketsListPage) {
+              updateTicketParams({ create: '1' });
+              return;
+            }
+            navigate('/tickets?create=1');
+          }}
         >
           Новая заявка
         </Button>

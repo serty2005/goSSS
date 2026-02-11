@@ -7,6 +7,11 @@ export const usersApi = {
     return response.data;
   },
 
+  getAssignees: async () => {
+    const response = await apiClient.get<ApiResponse<Array<{ id: number; fullName: string; username: string; isActive: boolean }>>>('/profile/assignees');
+    return response.data;
+  },
+
   createUser: async (payload: UserCreatePayload) => {
     const response = await apiClient.post<ApiResponse<UserAdminDTO>>('/users', payload);
     return response.data;

@@ -136,21 +136,25 @@ type AgentHeartbeatResponseDTO struct {
 
 // TicketListDTO - DTO для списка заявок (для таблицы на UI).
 type TicketListDTO struct {
-	ID                string    `json:"id"`                // Внутренний ID
-	Number            int       `json:"number"`            // Номер заявки
-	ServiceDeskUUID   string    `json:"service_desk_uuid"` // Внешний UUID
-	Status            string    `json:"status"`            // Статус
-	Subject           string    `json:"subject"`           // Описание/Тема
-	Description       string    `json:"description"`       // ?Описание (HTML/Markdown)
-	LastComment       string    `json:"last_comment"`      // Последний комментарий
-	LastCommentAuthor string    `json:"last_comment_author,omitempty"`
-	LastActivityDate  time.Time `json:"last_activity"` // Дата последнего изменения
-	CreatedAt         time.Time `json:"created_at"`    // Дата создания
-	CompanyID         string    `json:"company_id"`
-	CompanyName       string    `json:"company_name"`
-	ContractID        *string   `json:"contract_id,omitempty"`
-	IsCommonContract  bool      `json:"is_common_contract,omitempty"`
-	Assignee          *struct {
+	ID                   string    `json:"id"`                // Внутренний ID
+	Number               int       `json:"number"`            // Номер заявки
+	ServiceDeskUUID      string    `json:"service_desk_uuid"` // Внешний UUID
+	Status               string    `json:"status"`            // Статус
+	Subject              string    `json:"subject"`           // Описание/Тема
+	Description          string    `json:"description"`       // ?Описание (HTML/Markdown)
+	LastComment          string    `json:"last_comment"`      // Последний комментарий
+	LastCommentAuthor    string    `json:"last_comment_author,omitempty"`
+	LastCommentIsPrivate bool      `json:"last_comment_is_private"`
+	LastActivityDate     time.Time `json:"last_activity"` // Дата последнего изменения
+	CreatedAt            time.Time `json:"created_at"`    // Дата создания
+	CompanyID            string    `json:"company_id"`
+	CompanyName          string    `json:"company_name"`
+	ContractID           *string   `json:"contract_id,omitempty"`
+	IsCommonContract     bool      `json:"is_common_contract,omitempty"`
+	SyncWithBitrix       bool      `json:"sync_with_bitrix"`
+	BitrixPointID        *int64    `json:"bitrix_service_point_id,omitempty"`
+	BitrixDealTitle      string    `json:"bitrix_deal_title"`
+	Assignee             *struct {
 		ID       uint   `json:"id"`
 		FullName string `json:"fullName"`
 	} `json:"assignee,omitempty"`
@@ -176,13 +180,27 @@ type TicketStatusChangeDTO struct {
 
 // TicketCreateInternalDTO - создание тикета вручную (через API).
 type TicketCreateInternalDTO struct {
-	Subject     string  `json:"subject" validate:"required"`
-	Description string  `json:"description"`
-	Priority    string  `json:"priority"` // low, medium, high, critical
-	Type        string  `json:"type"`     // incident, service_request
-	CompanyID   string  `json:"company_id" validate:"required"`
-	AssetID     *string `json:"asset_id"`
-	AssetType   *string `json:"asset_type"`
+	Subject              string  `json:"subject" validate:"required"`
+	Description          string  `json:"description"`
+	Priority             string  `json:"priority"` // low, medium, high, critical
+	Type                 string  `json:"type"`     // incident, consultation, cto, acceptance_ao, paid_works
+	CompanyID            string  `json:"company_id" validate:"required"`
+	AssigneeID           *uint   `json:"assignee_id" validate:"required"`
+	AssetID              *string `json:"asset_id"`
+	AssetType            *string `json:"asset_type"`
+	SyncWithBitrix       *bool   `json:"sync_with_bitrix"`
+	BitrixServicePointID *int64  `json:"bitrix_service_point_id"`
+	BitrixDealTitle      string  `json:"bitrix_deal_title"`
+}
+
+type TicketBitrixFieldsUpdateDTO struct {
+	BitrixServicePointID *int64 `json:"bitrix_service_point_id"`
+	BitrixDealTitle      string `json:"bitrix_deal_title"`
+}
+
+type TicketAddCommentDTO struct {
+	Comment   string `json:"comment"`
+	IsPrivate bool   `json:"is_private"`
 }
 
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
@@ -321,18 +339,28 @@ type LoginRequestDTO struct {
 
 // UserDTO - DTO для отображения информации о пользователе.
 type UserDTO struct {
-	ID               uint     `json:"id"`
-	Username         string   `json:"username"`
-	FullName         string   `json:"fullName"`
-	FirstName        string   `json:"firstName"`
-	LastName         string   `json:"lastName"`
-	Position         string   `json:"position"`
-	Roles            []string `json:"roles"`
-	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
-	ExternalType     *string  `json:"externalType,omitempty"`
-	ScheduleType     string   `json:"scheduleType"`
-	IsActive         bool     `json:"isActive"`
-	HasLoggedIn      bool     `json:"hasLoggedIn"`
+	ID               uint                 `json:"id"`
+	Username         string               `json:"username"`
+	FullName         string               `json:"fullName"`
+	FirstName        string               `json:"firstName"`
+	LastName         string               `json:"lastName"`
+	Position         string               `json:"position"`
+	Roles            []string             `json:"roles"`
+	ExternalSystemID *string              `json:"externalSystemId,omitempty"`
+	ExternalType     *string              `json:"externalType,omitempty"`
+	ScheduleType     string               `json:"scheduleType"`
+	IsActive         bool                 `json:"isActive"`
+	HasLoggedIn      bool                 `json:"hasLoggedIn"`
+	Integrations     []UserIntegrationDTO `json:"integrations,omitempty"`
+}
+
+type UserIntegrationDTO struct {
+	ID              uint   `json:"id"`
+	IntegrationType string `json:"integrationType"`
+	ExternalID      string `json:"externalId"`
+	IsVerified      bool   `json:"isVerified"`
+	IsLocked        bool   `json:"isLocked"`
+	VerifiedName    string `json:"verifiedName,omitempty"`
 }
 
 // LoginResponseDTO - тело ответа при успешном входе.
@@ -374,6 +402,15 @@ type UserStatusUpdateDTO struct {
 type ProfileCredentialsUpdateDTO struct {
 	Username *string `json:"username,omitempty"`
 	Password *string `json:"password,omitempty"`
+}
+
+type ProfileIntegrationUpdateItemDTO struct {
+	IntegrationType string `json:"integrationType"`
+	ExternalID      string `json:"externalId"`
+}
+
+type ProfileIntegrationsUpdateDTO struct {
+	Integrations []ProfileIntegrationUpdateItemDTO `json:"integrations"`
 }
 
 // --- DTO для UI-ориентированного поиска ---

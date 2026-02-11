@@ -16,6 +16,12 @@ const (
 	StatusPending    = "pending"
 	StatusResolved   = "resolved"
 	StatusClosed     = "closed"
+	StatusDeferred   = "deferred"
+	StatusOnsite     = "onsite"
+	StatusToManager  = "to_manager"
+	StatusDone       = "done"
+	StatusSpam       = "spam"
+	StatusExecution  = "execution"
 )
 
 // Приоритеты.
@@ -30,6 +36,10 @@ const (
 const (
 	TypeIncident       = "incident"
 	TypeServiceRequest = "service_request"
+	TypeConsultation   = "consultation"
+	TypeCTO            = "cto"
+	TypeAO             = "acceptance_ao"
+	TypePaidWorks      = "paid_works"
 )
 
 // Типы активов для полиморфной связи.
@@ -81,6 +91,11 @@ type Ticket struct {
 
 	// Внешние системы (для обратной совместимости и миграции)
 	ServiceDeskUUID string `json:"service_desk_uuid" gorm:"index"`
+	SyncWithBitrix  bool   `json:"sync_with_bitrix" gorm:"not null;default:true;index"`
+
+	// Точка обслуживания в Bitrix24 (ID элемента списка IBLOCK_ID=101).
+	BitrixServicePointID *int64 `json:"bitrix_service_point_id,omitempty" gorm:"index"`
+	BitrixDealTitle      string `json:"bitrix_deal_title" gorm:"type:text"`
 }
 
 // TicketDetails — составная структура для отображения на UI.
@@ -99,6 +114,7 @@ type Comment struct {
 	AuthorName   string    `json:"author_name"`
 	CreationDate time.Time `json:"creation_date"`
 	IsInternal   bool      `json:"is_internal"`
+	IsPrivate    bool      `json:"is_private"`
 }
 
 // TicketComment хранит комментарии в БД (офлайн-режим/сидер).
@@ -110,12 +126,14 @@ type TicketComment struct {
 	AuthorName      string    `json:"author_name" gorm:"type:varchar(255)"`
 	CreationDate    time.Time `json:"creation_date" gorm:"index"`
 	IsInternal      bool      `json:"is_internal"`
+	IsPrivate       bool      `json:"is_private" gorm:"not null;default:false;index"`
 }
 
 // LastCommentInfo содержит данные о последнем комментарии.
 type LastCommentInfo struct {
 	Text       string `json:"text"`
 	AuthorName string `json:"author_name"`
+	IsPrivate  bool   `json:"is_private"`
 }
 
 func (c *TicketComment) BeforeCreate(tx *gorm.DB) (err error) {

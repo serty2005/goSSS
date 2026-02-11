@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { UserIntegrationDTO } from '@/types/api';
 
 // Типы согласно API Reference
 export interface User {
@@ -12,6 +13,7 @@ export interface User {
   roles: string[];
   externalSystemId?: string;
   externalType?: string;
+  integrations?: UserIntegrationDTO[];
   scheduleType: string;
   isActive: boolean;
   hasLoggedIn: boolean;

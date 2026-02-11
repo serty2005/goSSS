@@ -46,13 +46,15 @@ type TicketService interface {
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
-	AddComment(ctx context.Context, ticketID string, comment string, userID uint) error
+	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
 	RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
 	UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
+	UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error)
+	AutoCloseResolvedTickets(ctx context.Context, threshold time.Duration) (int, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
 }
 
@@ -144,22 +146,50 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if author == nil {
 		return nil, ErrReporterNotFound
 	}
+	if dto.AssigneeID == nil || *dto.AssigneeID == 0 {
+		return nil, fmt.Errorf("не выбран исполнитель")
+	}
+	assignee, err := s.userRepo.GetByID(ctx, *dto.AssigneeID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить исполнителя: %w", err)
+	}
+	if assignee == nil {
+		return nil, fmt.Errorf("исполнитель не найден")
+	}
 
 	ownerCompany, err := s.companyRepo.GetByID(ctx, dto.CompanyID)
 	if err != nil {
 		return nil, err
 	}
 
+	syncWithBitrix := true
+	if dto.SyncWithBitrix != nil {
+		syncWithBitrix = *dto.SyncWithBitrix
+	}
+	if !isAdminUser(author) {
+		syncWithBitrix = true
+	}
+	if syncWithBitrix && dto.BitrixServicePointID == nil {
+		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
+	}
+	if syncWithBitrix && strings.TrimSpace(dto.BitrixDealTitle) == "" {
+		return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
+	}
+
 	ticket := &tickets.Ticket{
-		Subject:     dto.Subject,
-		Description: dto.Description,
-		Priority:    dto.Priority,
-		Type:        dto.Type,
-		Status:      tickets.StatusNew,
-		CompanyID:   dto.CompanyID,
-		ReporterID:  &authorID,
-		AssetID:     dto.AssetID,
-		AssetType:   dto.AssetType,
+		Subject:              dto.Subject,
+		Description:          dto.Description,
+		Priority:             dto.Priority,
+		Type:                 dto.Type,
+		Status:               tickets.StatusNew,
+		CompanyID:            dto.CompanyID,
+		AssigneeID:           dto.AssigneeID,
+		ReporterID:           &authorID,
+		AssetID:              dto.AssetID,
+		AssetType:            dto.AssetType,
+		SyncWithBitrix:       syncWithBitrix,
+		BitrixServicePointID: dto.BitrixServicePointID,
+		BitrixDealTitle:      strings.TrimSpace(dto.BitrixDealTitle),
 	}
 
 	if ownerCompany == nil {
@@ -172,6 +202,12 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 			return nil, err
 		}
 		ticket.ContractID = &commonContract.ID
+	} else {
+		contractID, err := s.resolveCompanyContractID(ctx, dto.CompanyID)
+		if err != nil {
+			return nil, err
+		}
+		ticket.ContractID = contractID
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	// Валидация полей
@@ -347,7 +383,11 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 
 	ticket.CompanyID = companyID
 	if targetCompany.ActiveContract != nil && *targetCompany.ActiveContract {
-		ticket.ContractID = nil
+		contractID, err := s.resolveCompanyContractID(ctx, companyID)
+		if err != nil {
+			return nil, err
+		}
+		ticket.ContractID = contractID
 	} else {
 		commonContract, err := s.getOrCreateCommonContract(ctx)
 		if err != nil {
@@ -366,18 +406,63 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 	return ticket, nil
 }
 
-func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, userID uint) error {
+func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ticket == nil {
-		return fmt.Errorf("заявка не найдена")
+		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+	}
+
+	nextTitle := strings.TrimSpace(bitrixDealTitle)
+	if ticket.SyncWithBitrix {
+		if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
+			return nil, fmt.Errorf("РЅРµ РІС‹Р±СЂР°РЅР° С‚РѕС‡РєР° РѕР±СЃР»СѓР¶РёРІР°РЅРёСЏ Bitrix24")
+		}
+		if nextTitle == "" {
+			return nil, fmt.Errorf("РЅРµ Р·Р°РїРѕР»РЅРµРЅ Р·Р°РіРѕР»РѕРІРѕРє СЃРґРµР»РєРё Bitrix24")
+		}
+	}
+
+	oldPoint := ""
+	if ticket.BitrixServicePointID != nil {
+		oldPoint = fmt.Sprintf("%d", *ticket.BitrixServicePointID)
+	}
+	nextPoint := ""
+	if bitrixServicePointID != nil {
+		nextPoint = fmt.Sprintf("%d", *bitrixServicePointID)
+	}
+	oldTitle := strings.TrimSpace(ticket.BitrixDealTitle)
+
+	ticket.BitrixServicePointID = bitrixServicePointID
+	ticket.BitrixDealTitle = nextTitle
+	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+
+	if oldPoint != nextPoint {
+		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_service_point_id", oldPoint, nextPoint)
+	}
+	if oldTitle != nextTitle {
+		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_deal_title", oldTitle, nextTitle)
+	}
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+	return ticket, nil
+}
+
+func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	text := strings.TrimSpace(comment)
 	if text == "" {
-		return fmt.Errorf("комментарий пустой")
+		return nil, fmt.Errorf("комментарий пустой")
 	}
 
 	authorName := "Сотрудник"
@@ -386,20 +471,50 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		authorName = strings.TrimSpace(u.FullName)
 	}
 
-	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{
-		{
-			TicketID:     ticket.ID,
-			Text:         text,
-			AuthorName:   authorName,
-			CreationDate: time.Now(),
-			IsInternal:   false,
-		},
-	}); err != nil {
-		return err
+	newComment := &tickets.TicketComment{
+		ID:           uuid.New().String(),
+		TicketID:     ticket.ID,
+		Text:         text,
+		AuthorName:   authorName,
+		CreationDate: time.Now(),
+		IsInternal:   false,
+		IsPrivate:    isPrivate,
+	}
+	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
+		return nil, err
 	}
 
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", text)
-	return nil
+	return newComment, nil
+}
+
+func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, threshold time.Duration) (int, error) {
+	if threshold <= 0 {
+		threshold = 14 * 24 * time.Hour
+	}
+	candidates, err := s.ticketRepo.ListResolvedForAutoClose(ctx, threshold)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	closed := 0
+	for i := range candidates {
+		ticket := candidates[i]
+		if strings.TrimSpace(ticket.Status) != tickets.StatusResolved {
+			continue
+		}
+		ticket.Status = tickets.StatusClosed
+		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
+			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°РєСЂС‹С‚СЊ Р·Р°СЏРІРєСѓ", "ticket_id", ticket.ID, "error", err)
+			continue
+		}
+		s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.StatusResolved, tickets.StatusClosed)
+		closed++
+	}
+	return closed, nil
 }
 
 func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error {
@@ -459,6 +574,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 				AuthorName:   c.AuthorName,
 				CreationDate: c.CreationDate,
 				IsInternal:   c.IsInternal,
+				IsPrivate:    c.IsPrivate,
 			})
 		}
 	}
@@ -895,4 +1011,31 @@ func isPathReferencedInTexts(path string, texts []string) bool {
 		}
 	}
 	return false
+}
+
+func isAdminUser(u *user.User) bool {
+	if u == nil {
+		return false
+	}
+	for _, role := range u.Roles {
+		if strings.TrimSpace(role.Name) == user.RoleAdmin {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, companyID string) (*string, error) {
+	ids, err := s.contractRepo.GetActiveContractIDsForCompany(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	contractID := strings.TrimSpace(ids[0])
+	if contractID == "" {
+		return nil, nil
+	}
+	return &contractID, nil
 }

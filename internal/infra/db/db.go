@@ -2,6 +2,7 @@
 package db
 
 import (
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -33,7 +34,7 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 // Migrate выполняет автомиграцию схемы базы данных.
 func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
-		&user.User{}, &user.Role{},
+		&user.User{}, &user.Role{}, &user.Integration{},
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
 		&tickets.FileAsset{}, &tickets.TicketFileLink{},
 		&company.Company{},
@@ -47,6 +48,11 @@ func Migrate(db *gorm.DB) error {
 		&models.CompanyContract{},
 		&models.ExternalSystemLink{},
 		&models.EquipmentStatusLog{},
+		&bitrix.DealLink{},
+		&bitrix.CommentLink{},
+		&bitrix.UserMap{},
+		&bitrix.ServicePoint{},
+		&bitrix.UserCache{},
 	); err != nil {
 		return err
 	}

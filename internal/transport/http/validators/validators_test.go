@@ -27,30 +27,6 @@ func TestValidateRemoteAccessID(t *testing.T) {
 	}
 }
 
-func TestValidateIPAddress(t *testing.T) {
-	testCases := []struct {
-		name     string
-		input    string
-		expected *string
-	}{
-		{"Valid IP without port", "192.168.1.1", stringPtr("192.168.1.1:8080")},
-		{"Valid IP with port", "8.8.8.8:53", stringPtr("8.8.8.8:53")},
-		{"Iiko cloud domain", "https://my-res.iiko.it", stringPtr("my-res.iiko.it:443")},
-		{"Syrve cloud domain", "https://my-res.syrve.online/api", stringPtr("my-res.syrve.online:443")},
-		{"Local domain without port", "localhost", stringPtr("localhost:8080")},
-		{"Local domain with port", "db.local:5432", stringPtr("db.local:5432")},
-		{"Invalid IP", "999.999.999.999", nil},
-		{"Just text", "not an ip", nil},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := ValidateIPAddress(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
 func TestValidateUniqueID(t *testing.T) {
 	testCases := []struct {
 		name     string

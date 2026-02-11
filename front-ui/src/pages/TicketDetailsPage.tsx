@@ -1,14 +1,17 @@
-﻿import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
+import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
+import { contractsApi } from '@/api/contracts';
+import { usersApi } from '@/api/users';
 import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import NewTicketModal from '@/components/tickets/NewTicketModal';
 
 const { Title, Text, Paragraph } = Typography;
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -17,7 +20,12 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
   { value: 'new', label: 'Новая', color: 'blue' },
   { value: 'in_progress', label: 'В работе', color: 'processing' },
   { value: 'pending', label: 'Ожидание', color: 'orange' },
+  { value: 'deferred', label: 'Отложено', color: 'orange' },
+  { value: 'onsite', label: 'На выезд', color: 'cyan' },
+  { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
   { value: 'resolved', label: 'Решена', color: 'green' },
+  { value: 'spam', label: 'Спам', color: 'red' },
+  { value: 'execution', label: 'Реализация', color: 'magenta' },
   { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
@@ -31,7 +39,7 @@ const sanitizeRichHtml = (value?: string) => {
     .replace(/(src|href)=["']\/static\//gi, '$1="/api/static/')
     .replace(/(src|href)=["']static\//gi, '$1="/api/static/');
 };
-const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed';
+const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
 
 const historyLabel = (entry: TicketHistoryDTO) => {
   switch (entry.action) {
@@ -77,14 +85,27 @@ const TicketDetailsPage: React.FC = () => {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   const [commentDraft, setCommentDraft] = useState('');
+  const [commentIsPrivate, setCommentIsPrivate] = useState(false);
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [companySearch, setCompanySearch] = useState('');
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
+  const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
+  const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
+  const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const createParam = searchParams.get('create') || '';
+
+  useEffect(() => {
+    if (createParam === '1') {
+      setIsCreateOpen(true);
+    }
+  }, [createParam]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['ticket', id],
@@ -124,6 +145,59 @@ const TicketDetailsPage: React.FC = () => {
       ''
     );
   }, [companyResponse?.data, details?.company_name, metadata?.company_id, metadata?.company_name]);
+
+  const contractID = metadata?.contract_id
+    || (companyResponse?.data as { ContractID?: string; contract_id?: string } | undefined)?.ContractID
+    || (companyResponse?.data as { ContractID?: string; contract_id?: string } | undefined)?.contract_id;
+  const { data: contractResponse } = useQuery({
+    queryKey: ['contract', contractID],
+    queryFn: () => contractsApi.getContract(contractID || ''),
+    enabled: Boolean(contractID),
+    staleTime: 60_000,
+  });
+  const contractType = useMemo(() => {
+    const companyContractType = (companyResponse?.data as { ContractType?: string; contract_type?: string } | undefined)?.ContractType
+      || (companyResponse?.data as { ContractType?: string; contract_type?: string } | undefined)?.contract_type;
+    const rawServices = contractResponse?.data?.services ?? contractResponse?.data?.Services;
+    if (Array.isArray(rawServices) && rawServices.length > 0 && String(rawServices[0]).trim() !== '') {
+      return String(rawServices[0]).trim();
+    }
+    return companyContractType || '-';
+  }, [companyResponse?.data, contractResponse?.data?.services, contractResponse?.data?.Services]);
+
+  const { data: usersResponse } = useQuery({
+    queryKey: ['users-assignees'],
+    queryFn: () => usersApi.getAssignees(),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const assigneeOptions = useMemo(
+    () =>
+      (usersResponse?.data || [])
+        .filter((item) => item.isActive)
+        .map((item) => ({ value: item.id, label: item.fullName || item.username })),
+    [usersResponse?.data],
+  );
+
+  const { data: bitrixServicePoints = [] } = useQuery({
+    queryKey: ['bitrix-service-points'],
+    queryFn: () => ticketsApi.getBitrixServicePoints(),
+    staleTime: 5 * 60_000,
+  });
+
+  const bitrixPointName = useMemo(() => {
+    if (!metadata?.bitrix_service_point_id) return '-';
+    const point = bitrixServicePoints.find((item) => item.b24_element_id === metadata.bitrix_service_point_id);
+    return point?.name || String(metadata.bitrix_service_point_id);
+  }, [bitrixServicePoints, metadata?.bitrix_service_point_id]);
+
+  useEffect(() => {
+    if (!metadata || isBitrixEditMode) {
+      return;
+    }
+    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+  }, [isBitrixEditMode, metadata]);
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
     queryKey: ['ticket-companies', companySearch],
@@ -223,11 +297,12 @@ const TicketDetailsPage: React.FC = () => {
   const addCommentMutation = useMutation({
     mutationFn: async () => {
       if (!id || !commentDraft.trim()) return;
-      return ticketsApi.addComment(id, commentDraft.trim());
+      return ticketsApi.addComment(id, commentDraft.trim(), commentIsPrivate);
     },
     onSuccess: () => {
       message.success('Комментарий добавлен');
       setCommentDraft('');
+      setCommentIsPrivate(false);
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
@@ -248,20 +323,6 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
     onError: () => message.error('Не удалось загрузить файлы'),
-  });
-
-  const refreshCommentsMutation = useMutation({
-    mutationFn: async () => {
-      if (!id) return;
-      return ticketsApi.refreshCommentsFromServiceDesk(id);
-    },
-    onSuccess: (response) => {
-      const added = response?.data?.added ?? 0;
-      message.success(added > 0 ? `Комментарии обновлены: +${added}` : 'Новых комментариев нет');
-      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
-      queryClient.invalidateQueries({ queryKey: ['tickets'] });
-    },
-    onError: () => message.error('Не удалось обновить комментарии из Naumen-SD'),
   });
 
   const changeStatusMutation = useMutation({
@@ -294,6 +355,36 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось обновить компанию'),
   });
 
+  const assignMutation = useMutation({
+    mutationFn: async (nextAssigneeID?: number) => {
+      if (!id) return;
+      return ticketsApi.assign(id, nextAssigneeID);
+    },
+    onSuccess: () => {
+      message.success('Исполнитель обновлён');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось обновить исполнителя'),
+  });
+
+  const updateBitrixMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) return;
+      return ticketsApi.updateBitrixFields(id, {
+        bitrix_service_point_id: draftBitrixPointID,
+        bitrix_deal_title: draftBitrixDealTitle.trim(),
+      });
+    },
+    onSuccess: () => {
+      message.success('Поля Bitrix24 обновлены');
+      setIsBitrixEditMode(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось обновить поля Bitrix24'),
+  });
+
   const copyConnectionMutation = useMutation({
     mutationFn: async (payload: { label: string; value: string }) => {
       if (!id) return;
@@ -304,8 +395,6 @@ const TicketDetailsPage: React.FC = () => {
   if (isLoading || !details || !metadata) {
     return <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>;
   }
-
-  const statusMeta = STATUS_OPTIONS.find((item) => item.value === metadata.status) || STATUS_OPTIONS[0];
 
   const uploadAttachmentsRequest = async (options: UploadRequestOption) => {
     const source = options.file as File;
@@ -347,26 +436,20 @@ const TicketDetailsPage: React.FC = () => {
           </Space>
 
           <Space>
-            <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
             {metadata.is_common_contract && <Tag color="gold">Платный</Tag>}
             <Select
               value={metadata.status}
-              options={STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+              options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
               style={{ width: 180 }}
               onChange={(nextStatus: TicketStatus) => {
                 if (!id || nextStatus === metadata.status) return;
-                if (nextStatus === 'resolved' || nextStatus === 'closed') {
+                if (nextStatus === 'resolved') {
                   setPendingStatus(nextStatus);
                   return;
                 }
                 changeStatusMutation.mutate({ id, status: nextStatus });
               }}
             />
-            {metadata.status !== 'resolved' && (
-              <Button onClick={() => setPendingStatus('resolved')}>
-                Закрыть заявку
-              </Button>
-            )}
             <Button onClick={() => navigate('/tickets')}>К списку</Button>
           </Space>
         </Space>
@@ -433,13 +516,85 @@ const TicketDetailsPage: React.FC = () => {
             )}
           </Descriptions.Item>
           <Descriptions.Item label="Контракт">
-            {metadata.is_common_contract ? 'Общий контракт' : metadata.contract_id || '-'}
+            <Space direction="vertical" size={0}>
+              <Text>{metadata.is_common_contract ? 'Общий контракт' : (metadata.contract_id || '-')}</Text>
+              <Text type="secondary">Тип: {contractType}</Text>
+            </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Исполнитель">
-            {metadata.assignee?.fullName || '-'}
+            <Select
+              allowClear
+              placeholder="Не назначен"
+              style={{ width: 260, maxWidth: '100%' }}
+              options={assigneeOptions}
+              value={metadata.assignee?.id}
+              loading={assignMutation.isPending}
+              onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
+            />
           </Descriptions.Item>
           <Descriptions.Item label="Обновлена">
             {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
+          </Descriptions.Item>
+          <Descriptions.Item label="Заголовок сделки B24">
+            {!isBitrixEditMode ? (
+              <Space>
+                <Text>{metadata.bitrix_deal_title || '-'}</Text>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+                    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+                    setIsBitrixEditMode(true);
+                  }}
+                />
+              </Space>
+            ) : (
+              <Input
+                value={draftBitrixDealTitle}
+                placeholder="Заголовок сделки в Bitrix24"
+                onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
+              />
+            )}
+          </Descriptions.Item>
+          <Descriptions.Item label="Точка обслуживания B24">
+            {!isBitrixEditMode ? (
+              bitrixPointName
+            ) : (
+              <Space>
+                <Select
+                  showSearch
+                  value={draftBitrixPointID}
+                  placeholder="Выберите точку обслуживания"
+                  style={{ width: 320, maxWidth: '100%' }}
+                  options={bitrixServicePoints.map((item) => ({
+                    value: item.b24_element_id,
+                    label: item.name,
+                  }))}
+                  optionFilterProp="label"
+                  onChange={(value) => setDraftBitrixPointID(value)}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CheckOutlined />}
+                  loading={updateBitrixMutation.isPending}
+                  disabled={!draftBitrixPointID || !draftBitrixDealTitle.trim()}
+                  onClick={() => updateBitrixMutation.mutate()}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CloseOutlined />}
+                  onClick={() => {
+                    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+                    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+                    setIsBitrixEditMode(false);
+                  }}
+                />
+              </Space>
+            )}
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -452,27 +607,18 @@ const TicketDetailsPage: React.FC = () => {
             children: (
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                 <Card size="small" title="Описание">
-                  <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
+                  <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
                 </Card>
 
                 {isClosedLikeStatus(metadata.status) && (
                   <Card size="small" title="Результат">
-                    <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                    <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
                   </Card>
                 )}
 
                 <Card
                   size="small"
                   title="Комментарии"
-                  extra={(
-                    <Button
-                      size="small"
-                      loading={refreshCommentsMutation.isPending}
-                      onClick={() => refreshCommentsMutation.mutate()}
-                    >
-                      Обновить из SD
-                    </Button>
-                  )}
                 >
                   {details.comments?.length ? (
                     <List
@@ -480,8 +626,11 @@ const TicketDetailsPage: React.FC = () => {
                       renderItem={(item) => (
                         <List.Item key={item.uuid}>
                           <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                            <Text type="secondary">{item.author_name || 'Сотрудник'} • {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
-                            <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }} />
+                            <Space size={8}>
+                              <Text type="secondary">{item.author_name || 'Сотрудник'} • {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
+                              {item.is_private && <Tag color="orange">Приватный</Tag>}
+                            </Space>
+                            <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }} />
                           </Space>
                         </List.Item>
                       )}
@@ -497,6 +646,9 @@ const TicketDetailsPage: React.FC = () => {
                       onChange={(event) => setCommentDraft(event.target.value)}
                       placeholder="Добавьте комментарий"
                     />
+                    <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
+                      Приватный комментарий (не синхронизировать во внешние системы)
+                    </Checkbox>
                     <Space>
                       <Upload
                         showUploadList={false}
@@ -759,9 +911,24 @@ const TicketDetailsPage: React.FC = () => {
           placeholder="Опишите итог выполнения заявки"
         />
       </Modal>
+
+      <NewTicketModal
+        open={isCreateOpen}
+        onClose={() => {
+          setIsCreateOpen(false);
+          const next = new URLSearchParams(searchParams);
+          next.delete('create');
+          setSearchParams(next);
+        }}
+        onCreated={() => {
+          const next = new URLSearchParams(searchParams);
+          next.delete('create');
+          setSearchParams(next);
+          queryClient.invalidateQueries({ queryKey: ['tickets'] });
+        }}
+      />
     </Space>
   );
 };
 
 export default TicketDetailsPage;
-
