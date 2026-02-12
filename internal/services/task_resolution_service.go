@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/interfaces"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
@@ -16,8 +17,6 @@ import (
 	"fmt"
 
 	"etalon-server/pkg/eventbus"
-
-	"gorm.io/gorm"
 )
 
 var (
@@ -28,10 +27,6 @@ var (
 	ErrInternalExecution = errors.New("внутренняя ошибка при выполнении действия по задаче")
 )
 
-type contextKey string
-
-const transactionKey contextKey = "tx"
-
 // TaskResolutionService определяет интерфейс для сервиса выполнения задач.
 type TaskResolutionService interface {
 	Resolve(ctx context.Context, taskID uint, dto *api.ResolveTaskRequestDTO) (*models.ReconciliationTask, error)
@@ -40,7 +35,7 @@ type TaskResolutionService interface {
 
 type taskResolutionServiceImpl struct {
 	logger          logger.LoggerInterface
-	db              *gorm.DB
+	tm              interfaces.Transactor
 	bus             eventbus.EventBus
 	taskRepo        repositories.TaskRepo
 	serverRepo      server.Repository
@@ -49,10 +44,10 @@ type taskResolutionServiceImpl struct {
 }
 
 // NewTaskResolutionService создает новый экземпляр сервиса.
-func NewTaskResolutionService(logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) TaskResolutionService {
+func NewTaskResolutionService(logger logger.LoggerInterface, tm interfaces.Transactor, bus eventbus.EventBus, taskRepo repositories.TaskRepo, serverRepo server.Repository, workstationRepo workstation.Repository, frRepo fiscal.Repository) TaskResolutionService {
 	return &taskResolutionServiceImpl{
 		logger:          logger,
-		db:              db,
+		tm:              tm,
 		bus:             bus,
 		taskRepo:        taskRepo,
 		serverRepo:      serverRepo,
@@ -64,9 +59,7 @@ func NewTaskResolutionService(logger logger.LoggerInterface, db *gorm.DB, bus ev
 // Resolve выполняет задачу на основе resolution_payload.
 func (s *taskResolutionServiceImpl) Resolve(ctx context.Context, taskID uint, dto *api.ResolveTaskRequestDTO) (*models.ReconciliationTask, error) {
 	var updatedTask *models.ReconciliationTask
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := context.WithValue(ctx, transactionKey, tx)
-
+	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		task, err := s.taskRepo.GetByID(txCtx, taskID)
 		if err != nil {
 			return err
@@ -95,14 +88,20 @@ func (s *taskResolutionServiceImpl) Resolve(ctx context.Context, taskID uint, dt
 			}
 		}
 
-		task.Status = dto.Status
+		comment := task.Comment
 		if dto.Comment != "" {
-			task.Comment = fmt.Sprintf("%s\n[РЕШЕНИЕ] %s", task.Comment, dto.Comment)
+			comment = fmt.Sprintf("%s\n[РЕШЕНИЕ] %s", task.Comment, dto.Comment)
 		}
-		if err := tx.Save(task).Error; err != nil {
+		ok, err := s.taskRepo.Update(txCtx, task.ID, map[string]interface{}{"status": dto.Status, "comment": comment})
+		if err != nil {
 			return err
 		}
+		if !ok {
+			return ErrTaskNotFound
+		}
 
+		task.Status = dto.Status
+		task.Comment = comment
 		updatedTask = task
 		return nil
 	})
@@ -113,8 +112,8 @@ func (s *taskResolutionServiceImpl) Resolve(ctx context.Context, taskID uint, dt
 // RequestSDEntityCreation инициирует асинхронное создание сущности в ServiceDesk.
 func (s *taskResolutionServiceImpl) RequestSDEntityCreation(ctx context.Context, taskID uint, entityType string) (*models.ReconciliationTask, error) {
 	var updatedTask *models.ReconciliationTask
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		task, err := s.taskRepo.GetByID(ctx, taskID)
+	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+		task, err := s.taskRepo.GetByID(txCtx, taskID)
 		if err != nil {
 			return err
 		}
@@ -131,10 +130,13 @@ func (s *taskResolutionServiceImpl) RequestSDEntityCreation(ctx context.Context,
 			return fmt.Errorf("несоответствие типа сущности: в задаче %s, в запросе %s", task.EntityType, entityType)
 		}
 
-		task.Status = "pending_sd_action"
-		task.Comment = fmt.Sprintf("%s\n[ДЕЙСТВИЕ] Отправлен запрос на создание сущности в ServiceDesk.", task.Comment)
-		if err := tx.Save(task).Error; err != nil {
+		comment := fmt.Sprintf("%s\n[ДЕЙСТВИЕ] Отправлен запрос на создание сущности в ServiceDesk.", task.Comment)
+		ok, err := s.taskRepo.Update(txCtx, task.ID, map[string]interface{}{"status": "pending_sd_action", "comment": comment})
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return ErrTaskNotFound
 		}
 
 		userID, _ := ctx.Value(contextkeys.UserIDContextKey).(string)
@@ -147,12 +149,11 @@ func (s *taskResolutionServiceImpl) RequestSDEntityCreation(ctx context.Context,
 			EntityType:        task.EntityType,
 			TriggeredByUserID: userID,
 		}
-		s.bus.Publish(eventbus.Event{
-			Type:    events.ServiceDeskCreateRequested,
-			Payload: payload,
-		})
+		s.bus.Publish(eventbus.Event{Type: events.ServiceDeskCreateRequested, Payload: payload})
 		s.logger.Info("Опубликовано событие на создание сущности в ServiceDesk", "taskID", task.ID)
 
+		task.Status = "pending_sd_action"
+		task.Comment = comment
 		updatedTask = task
 		return nil
 	})
@@ -169,13 +170,10 @@ func (s *taskResolutionServiceImpl) handleUpdateInSD(ctx context.Context, task *
 	payload := events.ServiceDeskModificationPayload{
 		TaskID:            task.ID,
 		EntityType:        task.EntityType,
-		EntityUUID:        task.EntityUUID, // Здесь EntityUUID это внутренний ID
+		EntityUUID:        task.EntityUUID,
 		TriggeredByUserID: userID,
 	}
-	s.bus.Publish(eventbus.Event{
-		Type:    events.ServiceDeskUpdateRequested,
-		Payload: payload,
-	})
+	s.bus.Publish(eventbus.Event{Type: events.ServiceDeskUpdateRequested, Payload: payload})
 	s.logger.Info("Опубликовано событие на обновление сущности в ServiceDesk", "taskID", task.ID, "entityUUID", task.EntityUUID)
 	return nil
 }
@@ -187,7 +185,6 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 		return ErrInvalidPayload
 	}
 
-	tx := ctx.Value(transactionKey).(*gorm.DB)
 	for _, uuidInterface := range rawUUIDs {
 		uuid, ok := uuidInterface.(string)
 		if !ok {
@@ -196,9 +193,9 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 		var err error
 		switch task.EntityType {
 		case "Server":
-			_, err = s.serverRepo.Delete(ctx, tx, uuid)
+			_, err = s.serverRepo.Delete(ctx, nil, uuid)
 		case "Workstation":
-			_, err = s.workstationRepo.Delete(ctx, tx, uuid)
+			_, err = s.workstationRepo.Delete(ctx, nil, uuid)
 		}
 		if err != nil {
 			s.logger.Error("Ошибка 'мягкого удаления' дубликата", "uuid", uuid, "error", err)
@@ -209,21 +206,20 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 
 // handleOwnerMismatch обрабатывает задачу о смене владельца.
 func (s *taskResolutionServiceImpl) handleOwnerMismatch(ctx context.Context, task *models.ReconciliationTask, payload map[string]interface{}) error {
-	newOwnerID, ok := payload["new_owner_id"].(string) // Ожидаем внутренний ID
+	newOwnerID, ok := payload["new_owner_id"].(string)
 	if !ok {
 		return ErrInvalidPayload
 	}
 
-	tx := ctx.Value(transactionKey).(*gorm.DB)
 	updates := map[string]interface{}{"owner_id": newOwnerID}
 	var err error
 	switch task.EntityType {
 	case "Server":
-		_, err = s.serverRepo.Update(ctx, tx, task.EntityUUID, updates)
+		_, err = s.serverRepo.Update(ctx, nil, task.EntityUUID, updates)
 	case "Workstation":
-		_, err = s.workstationRepo.Update(ctx, tx, task.EntityUUID, updates)
+		_, err = s.workstationRepo.Update(ctx, nil, task.EntityUUID, updates)
 	case "FiscalRegister":
-		_, err = s.frRepo.Update(ctx, tx, task.EntityUUID, updates)
+		_, err = s.frRepo.Update(ctx, nil, task.EntityUUID, updates)
 	}
 	if err != nil {
 		return ErrInternalExecution
@@ -233,16 +229,16 @@ func (s *taskResolutionServiceImpl) handleOwnerMismatch(ctx context.Context, tas
 
 // handleAddEquipment обрабатывает задачу о добавлении нового оборудования.
 func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task *models.ReconciliationTask, payload map[string]interface{}) error {
+	_ = payload
 	var details struct {
 		AgentData       api.AgentDataDTO `json:"agent_data"`
-		EtalonOwnerUUID string           `json:"etalon_owner_id"` // Это должен быть внутренний ID
+		EtalonOwnerUUID string           `json:"etalon_owner_id"`
 	}
 	if err := json.Unmarshal(task.Details, &details); err != nil || details.EtalonOwnerUUID == "" {
 		s.logger.Error("Не удалось извлечь agent_data или etalon_owner_id из деталей задачи", "task_id", task.ID)
 		return ErrInternalExecution
 	}
 
-	tx := ctx.Value(transactionKey).(*gorm.DB)
 	var err error
 	switch task.EntityType {
 	case "Workstation":
@@ -254,7 +250,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 			Anydesk:      &details.AgentData.AnydeskID,
 			HealthStatus: "",
 		}
-		err = s.workstationRepo.Create(ctx, tx, ws)
+		err = s.workstationRepo.Create(ctx, nil, ws)
 	case "FiscalRegister":
 		fr := &fiscal.FiscalRegister{
 			OwnerID:        &details.EtalonOwnerUUID,
@@ -263,7 +259,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 			INN:            &details.AgentData.INN,
 			RNKKT:          &details.AgentData.RNM,
 		}
-		err = s.frRepo.Create(ctx, tx, fr)
+		err = s.frRepo.Create(ctx, nil, fr)
 	}
 	if err != nil {
 		return ErrInternalExecution

@@ -209,6 +209,7 @@ type Repositories struct {
 	WorkstationRepo workstation.Repository
 	FRRepo          fiscal.Repository
 	AgentRepo       repositories.AgentRepo
+	CandidateRepo   repositories.CandidateRepo
 	TaskRepo        repositories.TaskRepo
 	UserRepo        user.Repository
 	LinkRepo        repositories.LinkRepo
@@ -224,6 +225,7 @@ func setupRepositories(db *gorm.DB) Repositories {
 		WorkstationRepo: infraRepos.NewWorkstationRepo(db),
 		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
 		AgentRepo:       infraRepos.NewAgentRepo(db),
+		CandidateRepo:   infraRepos.NewCandidateRepo(db),
 		TaskRepo:        infraRepos.NewTaskRepo(db),
 		UserRepo:        infraRepos.NewUserRepo(db),
 		LinkRepo:        infraRepos.NewLinkRepo(db),
@@ -271,19 +273,18 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 	return Services{
 		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentObservation:      obsService,
-		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
-		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), transactor, app.DB),
-		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
+		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
+		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
+		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
 		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
-		// ИЗМЕНЕНИЕ: Убран clients.SDClient из конструктора ContractService
-		ContractService:    contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		ServerService:      serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
-		WorkstationService: workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
-		FiscalService:      fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
-		BitrixSyncService:  services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
+		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		ServerService:         serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
+		WorkstationService:    workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
+		FiscalService:         fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
+		BitrixSyncService:     services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
 	}
 }
 
@@ -317,13 +318,10 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
 	app.PollingGateway = gateways.NewServerPollingGateway(app.Config, app.Logger.With("component", "iiko_polling_gateway"), repos.ServerRepo, clients.IikoClient, app.EventBus)
 	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, srvs.AgentObservation)
-	// ИЗМЕНЕНИЕ: В FRUpdateFounder передаем Manager
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, app.IntegrationManager)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, app.IntegrationManager, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
-	// ИЗМЕНЕНИЕ: В TicketGateway передаем Manager
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
-	// ИЗМЕНЕНИЕ: В ContractGateway передаем Manager
 	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
 	app.BitrixGateway = gateways.NewBitrixGateway(app.Config, app.Logger.With("component", "bitrix_gateway"), srvs.BitrixSyncService)
 }
@@ -345,7 +343,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, srvs.BitrixSyncService)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
-	app.CandidateHandler = handlers.NewCandidateHandler(app.DB, srvs.AgentObservation)
+	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation)
 }
 
 func (a *Application) setupRouter() *chi.Mux {

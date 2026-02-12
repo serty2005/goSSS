@@ -1,4 +1,3 @@
-// Файл: internal/services/server_actions_service.go
 package services
 
 import (
@@ -41,20 +40,18 @@ type serverActionsServiceImpl struct {
 	bus           eventbus.EventBus
 	serverRepo    server.Repository
 	companyRepo   company.Repository
-	db            *gorm.DB
 	iikoClient    iiko.IikoClient
 	rateLimiter   *sync.Mutex
 	requestStamps map[string][]time.Time
 }
 
-func NewServerActionsService(cfg *config.Config, logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo server.Repository, companyRepo company.Repository, db *gorm.DB, iikoClient iiko.IikoClient) ServerActionsService {
+func NewServerActionsService(cfg *config.Config, logger logger.LoggerInterface, bus eventbus.EventBus, serverRepo server.Repository, companyRepo company.Repository, iikoClient iiko.IikoClient) ServerActionsService {
 	return &serverActionsServiceImpl{
 		cfg:           cfg,
 		logger:        logger,
 		bus:           bus,
 		serverRepo:    serverRepo,
 		companyRepo:   companyRepo,
-		db:            db,
 		iikoClient:    iikoClient,
 		rateLimiter:   &sync.Mutex{},
 		requestStamps: make(map[string][]time.Time),
@@ -152,16 +149,15 @@ func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serve
 		return gorm.ErrRecordNotFound
 	}
 
-	company, err := s.companyRepo.GetByID(ctx, companyID)
+	companyEntity, err := s.companyRepo.GetByID(ctx, companyID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения компании: %w", err)
 	}
-	if company == nil {
+	if companyEntity == nil {
 		return fmt.Errorf("компания с ID %s не найдена: %w", companyID, gorm.ErrRecordNotFound)
 	}
 
-	err = s.db.Model(server).Association("AdditionalOwners").Append(company)
-	if err != nil {
+	if err := s.serverRepo.AddAdditionalOwner(ctx, serverID, companyID); err != nil {
 		s.logger.Error("Не удалось добавить дополнительного владельца", "error", err)
 		return fmt.Errorf("ошибка добавления связи в БД: %w", err)
 	}
@@ -179,16 +175,15 @@ func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, se
 		return gorm.ErrRecordNotFound
 	}
 
-	company, err := s.companyRepo.GetByID(ctx, companyID)
+	companyEntity, err := s.companyRepo.GetByID(ctx, companyID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения компании: %w", err)
 	}
-	if company == nil {
+	if companyEntity == nil {
 		return fmt.Errorf("компания с ID %s не найдена: %w", companyID, gorm.ErrRecordNotFound)
 	}
 
-	err = s.db.Model(server).Association("AdditionalOwners").Delete(company)
-	if err != nil {
+	if err := s.serverRepo.RemoveAdditionalOwner(ctx, serverID, companyID); err != nil {
 		s.logger.Error("Не удалось удалить дополнительного владельца", "error", err)
 		return fmt.Errorf("ошибка удаления связи из БД: %w", err)
 	}

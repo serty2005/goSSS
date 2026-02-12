@@ -4,6 +4,9 @@ import (
 	"context"
 	"etalon-server/internal/domain/models"
 	domainRepos "etalon-server/internal/domain/repositories"
+	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/workstation"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -72,6 +75,24 @@ func (r *taskRepo) GetByID(ctx context.Context, id uint) (*models.Reconciliation
 	return &task, err
 }
 
+func (r *taskRepo) List(ctx context.Context, status string, limit, offset int) ([]models.ReconciliationTask, error) {
+	var tasks []models.ReconciliationTask
+	query := r.db.WithContext(ctx).Model(&models.ReconciliationTask{})
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	err := query.Limit(limit).Offset(offset).Order("created_at desc").Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *taskRepo) Update(ctx context.Context, id uint, updates map[string]interface{}) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&models.ReconciliationTask{}).Where("id = ?", id).Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (r *taskRepo) FindRecentlyResolvedTask(ctx context.Context, taskType, entityUUID string, window time.Duration) (*models.ReconciliationTask, error) {
 	if taskType == "" || entityUUID == "" {
 		return nil, nil
@@ -90,4 +111,37 @@ func (r *taskRepo) FindRecentlyResolvedTask(ctx context.Context, taskType, entit
 		return nil, err
 	}
 	return &task, nil
+}
+
+func (r *taskRepo) FindDuplicateValues(ctx context.Context, entityType, field string) ([]domainRepos.DuplicateValueCount, error) {
+	var model interface{}
+	switch entityType {
+	case "Workstation":
+		model = &workstation.Workstation{}
+	case "Server":
+		model = &server.Server{}
+	default:
+		return nil, fmt.Errorf("неизвестный тип сущности: %s", entityType)
+	}
+
+	var results []domainRepos.DuplicateValueCount
+	err := r.db.WithContext(ctx).Model(model).
+		Select(fmt.Sprintf("%s as value, count(*) as count", field)).
+		Where(fmt.Sprintf("%s IS NOT NULL AND %s != ''", field, field)).
+		Group(field).
+		Having("count(*) > 1").
+		Find(&results).Error
+	return results, err
+}
+
+func (r *taskRepo) FindWorkstationsByFieldValue(ctx context.Context, field, value string) ([]workstation.Workstation, error) {
+	var items []workstation.Workstation
+	err := r.db.WithContext(ctx).Where(fmt.Sprintf("%s = ?", field), value).Find(&items).Error
+	return items, err
+}
+
+func (r *taskRepo) FindServersByFieldValue(ctx context.Context, field, value string) ([]server.Server, error) {
+	var items []server.Server
+	err := r.db.WithContext(ctx).Where(fmt.Sprintf("%s = ?", field), value).Find(&items).Error
+	return items, err
 }

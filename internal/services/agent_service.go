@@ -14,8 +14,6 @@ import (
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"time"
-
-	"gorm.io/gorm"
 )
 
 var (
@@ -34,16 +32,14 @@ type agentServiceImpl struct {
 	logger      logger.LoggerInterface
 	agentRepo   repositories.AgentRepo
 	companyRepo company.Repository
-	db          *gorm.DB
 	bus         eventbus.EventBus
 }
 
-func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus) AgentService {
+func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, bus eventbus.EventBus) AgentService {
 	return &agentServiceImpl{
 		logger:      logger,
 		agentRepo:   agentRepo,
 		companyRepo: companyRepo,
-		db:          db,
 		bus:         bus,
 	}
 }

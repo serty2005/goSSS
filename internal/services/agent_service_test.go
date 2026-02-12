@@ -110,7 +110,7 @@ func TestProcessData_ПубликуетСобытиеНаблюденияАге�
 		},
 	}
 	bus := &fakeEventBus{}
-	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, nil, bus)
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
 
 	_, err := svc.ProcessData(context.Background(), "agent-1", &api.AgentDataDTO{
 		AgentUUID: "agent-1",

@@ -113,7 +113,7 @@ func TestAgentDataFlow_ЧерезOrchestratorЭквивалентенПрямо�
 	dbEvent, obsEventSvc := setupObsService(t)
 	agentRepo := infraRepos.NewAgentRepo(dbEvent)
 	bus := eventbus.NewInMemoryEventBus(64)
-	agentSvc := services.NewAgentService(log, agentRepo, nil, dbEvent, bus)
+	agentSvc := services.NewAgentService(log, agentRepo, nil, bus)
 	orchestrator := processing.NewOrchestrator(log, dbEvent, bus, nil, nil, nil, nil, nil, nil, nil, &noopProcessingEngine{}, obsEventSvc)
 	orchestrator.Start(context.Background())
 

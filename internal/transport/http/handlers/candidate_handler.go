@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"etalon-server/internal/domain/models"
+	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -17,13 +17,13 @@ import (
 
 // CandidateHandler обслуживает API раздела "Принятие на АО".
 type CandidateHandler struct {
-	db     *gorm.DB
-	obsSrv services.AgentObservationService
+	candidateRepo domainrepos.CandidateRepo
+	obsSrv        services.AgentObservationService
 }
 
 // NewCandidateHandler создает обработчик для операций с кандидатами.
-func NewCandidateHandler(db *gorm.DB, obsSrv services.AgentObservationService) *CandidateHandler {
-	return &CandidateHandler{db: db, obsSrv: obsSrv}
+func NewCandidateHandler(candidateRepo domainrepos.CandidateRepo, obsSrv services.AgentObservationService) *CandidateHandler {
+	return &CandidateHandler{candidateRepo: candidateRepo, obsSrv: obsSrv}
 }
 
 // List возвращает список кандидатов с фильтром по статусу.
@@ -41,18 +41,8 @@ func (h *CandidateHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	tx := h.db.WithContext(r.Context()).Model(&models.Candidate{})
-	switch status {
-	case "ACTIVE":
-		tx = tx.Where("status IN ?", []string{models.CandidateStatusNew, models.CandidateStatusInReview})
-	case "ALL":
-		// Без дополнительного фильтра.
-	default:
-		tx = tx.Where("status = ?", status)
-	}
-
-	var items []models.Candidate
-	if err := tx.Order("updated_at desc").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+	items, err := h.candidateRepo.List(r.Context(), status, limit, offset)
+	if err != nil {
 		middleware.GetLogger(r.Context()).Error("не удалось получить список кандидатов", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		return
@@ -69,8 +59,8 @@ func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var candidate models.Candidate
-	if err := h.db.WithContext(r.Context()).Where("id = ?", id).First(&candidate).Error; err != nil {
+	candidate, err := h.candidateRepo.GetByID(r.Context(), id)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Кандидат не найден")
 			return
@@ -80,15 +70,15 @@ func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var ws []models.CandidateWorkstationStaging
-	if err := h.db.WithContext(r.Context()).Where("candidate_id = ?", id).Order("observed_at desc, id desc").Find(&ws).Error; err != nil {
+	ws, err := h.candidateRepo.ListWorkstationStaging(r.Context(), id)
+	if err != nil {
 		middleware.GetLogger(r.Context()).Error("не удалось получить staged-станции кандидата", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		return
 	}
 
-	var fr []models.CandidateFiscalStaging
-	if err := h.db.WithContext(r.Context()).Where("candidate_id = ?", id).Order("observed_at desc, id desc").Find(&fr).Error; err != nil {
+	fr, err := h.candidateRepo.ListFiscalStaging(r.Context(), id)
+	if err != nil {
 		middleware.GetLogger(r.Context()).Error("не удалось получить staged-ФР кандидата", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
 		return

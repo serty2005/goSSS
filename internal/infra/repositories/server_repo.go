@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	domain "etalon-server/internal/domain"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/server"
 	infraDB "etalon-server/internal/infra/db"
 	"time"
@@ -175,4 +176,30 @@ func (r *serverRepo) UnlockByOwner(ctx context.Context, tx *gorm.DB, ownerID str
 			"status":             gorm.Expr("status_before_lock"),
 			"status_before_lock": gorm.Expr("NULL"),
 		}).Error
+}
+
+func (r *serverRepo) AddAdditionalOwner(ctx context.Context, serverID, companyID string) error {
+	conn := r.dbOrTx(ctx, nil).WithContext(ctx)
+	var srv server.Server
+	if err := conn.Where("id = ?", serverID).First(&srv).Error; err != nil {
+		return err
+	}
+	var comp company.Company
+	if err := conn.Where("id = ?", companyID).First(&comp).Error; err != nil {
+		return err
+	}
+	return conn.Model(&srv).Association("AdditionalOwners").Append(&comp)
+}
+
+func (r *serverRepo) RemoveAdditionalOwner(ctx context.Context, serverID, companyID string) error {
+	conn := r.dbOrTx(ctx, nil).WithContext(ctx)
+	var srv server.Server
+	if err := conn.Where("id = ?", serverID).First(&srv).Error; err != nil {
+		return err
+	}
+	var comp company.Company
+	if err := conn.Where("id = ?", companyID).First(&comp).Error; err != nil {
+		return err
+	}
+	return conn.Model(&srv).Association("AdditionalOwners").Delete(&comp)
 }
