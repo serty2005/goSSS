@@ -178,6 +178,16 @@ func (r *workstationRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string)
 	return workstations, err
 }
 
+func (r *workstationRepo) SetOwnerWithBinding(ctx context.Context, tx *gorm.DB, internalID string, ownerID string, bindingMode string) (bool, error) {
+	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&workstation.Workstation{}).
+		Where("id = ?", internalID).
+		Updates(map[string]interface{}{"owner_id": ownerID, "owner_binding_mode": bindingMode})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (r *workstationRepo) LockByOwner(ctx context.Context, tx *gorm.DB, ownerID string) error {
 	// У Workstation нет поля status (операционного), используем HealthStatus
 	return r.dbOrTx(ctx, tx).WithContext(ctx).Model(&workstation.Workstation{}).

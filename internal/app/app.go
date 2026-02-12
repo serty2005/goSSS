@@ -75,23 +75,24 @@ type Application struct {
 	BitrixGateway         gateways.BitrixGateway
 
 	// Handlers
-	CompanyHandler       *handlers.CompanyHandler
-	SearchHandler        *handlers.SearchHandler
-	SyncHandler          *handlers.SyncHandler
-	TaskHandler          *handlers.TaskHandler
-	AgentHandler         *handlers.AgentHandler
-	ServerActionsHandler *handlers.ServerActionsHandler
-	AuthHandler          *handlers.AuthHandler
-	ContractHandler      *handlers.ContractHandler
-	UserHandler          *handlers.UserHandler
-	DebugHandler         *handlers.DebugHandler
-	SSEHandler           *handlers.SSEHandler
-	TicketHandler        *handlers.TicketHandler
-	ServerHandler        *handlers.ServerHandler
-	WorkstationHandler   *handlers.WSHandler
-	FiscalHandler        *handlers.FiscalHandler
-	BitrixHandler        *handlers.BitrixHandler
-	CandidateHandler     *handlers.CandidateHandler
+	CompanyHandler          *handlers.CompanyHandler
+	SearchHandler           *handlers.SearchHandler
+	SyncHandler             *handlers.SyncHandler
+	TaskHandler             *handlers.TaskHandler
+	AgentHandler            *handlers.AgentHandler
+	ServerActionsHandler    *handlers.ServerActionsHandler
+	AuthHandler             *handlers.AuthHandler
+	ContractHandler         *handlers.ContractHandler
+	UserHandler             *handlers.UserHandler
+	DebugHandler            *handlers.DebugHandler
+	SSEHandler              *handlers.SSEHandler
+	TicketHandler           *handlers.TicketHandler
+	ServerHandler           *handlers.ServerHandler
+	WorkstationHandler      *handlers.WSHandler
+	FiscalHandler           *handlers.FiscalHandler
+	BitrixHandler           *handlers.BitrixHandler
+	CandidateHandler        *handlers.CandidateHandler
+	NetworkCandidateHandler *handlers.NetworkCandidateHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -202,34 +203,38 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 }
 
 type Repositories struct {
-	CompanyRepo     company.Repository
-	ContractRepo    contract.Repository
-	TicketRepo      tickets.TicketRepository
-	ServerRepo      server.Repository
-	WorkstationRepo workstation.Repository
-	FRRepo          fiscal.Repository
-	AgentRepo       repositories.AgentRepo
-	CandidateRepo   repositories.CandidateRepo
-	TaskRepo        repositories.TaskRepo
-	UserRepo        user.Repository
-	LinkRepo        repositories.LinkRepo
-	BitrixRepo      bitrix.Repository
+	CompanyRepo          company.Repository
+	ContractRepo         contract.Repository
+	TicketRepo           tickets.TicketRepository
+	ServerRepo           server.Repository
+	WorkstationRepo      workstation.Repository
+	FRRepo               fiscal.Repository
+	AgentRepo            repositories.AgentRepo
+	CandidateRepo        repositories.CandidateRepo
+	TaskRepo             repositories.TaskRepo
+	UserRepo             user.Repository
+	LinkRepo             repositories.LinkRepo
+	BitrixRepo           bitrix.Repository
+	NetworkCandidateRepo repositories.NetworkCandidateRepo
+	OwnerHistoryRepo     repositories.OwnerHistoryRepo
 }
 
 func setupRepositories(db *gorm.DB) Repositories {
 	return Repositories{
-		TicketRepo:      infraRepos.NewTicketRepo(db),
-		CompanyRepo:     infraRepos.NewCompanyRepo(db),
-		ContractRepo:    infraRepos.NewContractRepo(db),
-		ServerRepo:      infraRepos.NewServerRepo(db),
-		WorkstationRepo: infraRepos.NewWorkstationRepo(db),
-		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
-		AgentRepo:       infraRepos.NewAgentRepo(db),
-		CandidateRepo:   infraRepos.NewCandidateRepo(db),
-		TaskRepo:        infraRepos.NewTaskRepo(db),
-		UserRepo:        infraRepos.NewUserRepo(db),
-		LinkRepo:        infraRepos.NewLinkRepo(db),
-		BitrixRepo:      infraRepos.NewBitrixRepo(db),
+		TicketRepo:           infraRepos.NewTicketRepo(db),
+		CompanyRepo:          infraRepos.NewCompanyRepo(db),
+		ContractRepo:         infraRepos.NewContractRepo(db),
+		ServerRepo:           infraRepos.NewServerRepo(db),
+		WorkstationRepo:      infraRepos.NewWorkstationRepo(db),
+		FRRepo:               infraRepos.NewFiscalRegisterRepo(db),
+		AgentRepo:            infraRepos.NewAgentRepo(db),
+		CandidateRepo:        infraRepos.NewCandidateRepo(db),
+		TaskRepo:             infraRepos.NewTaskRepo(db),
+		UserRepo:             infraRepos.NewUserRepo(db),
+		LinkRepo:             infraRepos.NewLinkRepo(db),
+		BitrixRepo:           infraRepos.NewBitrixRepo(db),
+		NetworkCandidateRepo: infraRepos.NewNetworkCandidateRepo(db),
+		OwnerHistoryRepo:     infraRepos.NewOwnerHistoryRepo(db),
 	}
 }
 
@@ -250,20 +255,21 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 }
 
 type Services struct {
-	AuthService           services.AuthService
-	AgentService          services.AgentService
-	AgentObservation      services.AgentObservationService
-	TaskResolutionService services.TaskResolutionService
-	TaskService           task.Service
-	ServerActionsService  services.ServerActionsService
-	EntityMatcherService  services.EntityMatcherService
-	TicketService         services.TicketService
-	CompanyService        company.Service
-	ContractService       contract.Service
-	ServerService         server.Service
-	WorkstationService    workstation.Service
-	FiscalService         fiscal.Service
-	BitrixSyncService     services.BitrixSyncService
+	AuthService             services.AuthService
+	AgentService            services.AgentService
+	AgentObservation        services.AgentObservationService
+	TaskResolutionService   services.TaskResolutionService
+	TaskService             task.Service
+	ServerActionsService    services.ServerActionsService
+	EntityMatcherService    services.EntityMatcherService
+	TicketService           services.TicketService
+	CompanyService          company.Service
+	ContractService         contract.Service
+	ServerService           server.Service
+	WorkstationService      workstation.Service
+	FiscalService           fiscal.Service
+	BitrixSyncService       services.BitrixSyncService
+	NetworkCandidateService services.NetworkCandidateService
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -271,20 +277,21 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 	obsService := services.NewAgentObservationService(app.Logger.With("component", "agent_observation_service"), app.DB)
 
 	return Services{
-		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
-		AgentObservation:      obsService,
-		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
-		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
-		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
-		EntityMatcherService:  services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TicketService:         services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		CompanyService:        companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
-		ContractService:       contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		ServerService:         serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
-		WorkstationService:    workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
-		FiscalService:         fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
-		BitrixSyncService:     services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
+		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
+		AgentObservation:        obsService,
+		AgentService:            services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
+		TaskResolutionService:   services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
+		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
+		EntityMatcherService:    services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
+		ContractService:         contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
+		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
+		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
+		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
+		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 	}
 }
 
@@ -344,6 +351,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, srvs.BitrixSyncService)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation)
+	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 }
 
 func (a *Application) setupRouter() *chi.Mux {
@@ -422,6 +430,13 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/", a.CandidateHandler.List)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.CandidateHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.CandidateHandler.Approve)
+		})
+
+		r.Route("/network-candidates", func(r chi.Router) {
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/", a.NetworkCandidateHandler.List)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.NetworkCandidateHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.NetworkCandidateHandler.Approve)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/groups/{groupID}/remove", a.NetworkCandidateHandler.RemoveGroup)
 		})
 
 		a.SearchHandler.RegisterRoutes(r)

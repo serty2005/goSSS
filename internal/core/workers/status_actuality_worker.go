@@ -143,8 +143,6 @@ func (w *statusActualityWorkerImpl) checkProblem(ctx context.Context, entity int
 	switch problemType {
 	case "duplicate_found":
 		return w.checkForDuplicates(ctx, entity, details)
-	case "owner_mismatch":
-		return w.checkOwnerMismatch(ctx, entity, details)
 	}
 
 	return false, nil

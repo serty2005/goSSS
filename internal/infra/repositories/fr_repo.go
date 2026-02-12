@@ -131,6 +131,16 @@ func (r *frRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]fisca
 	return frs, err
 }
 
+func (r *frRepo) SetOwnerWithBinding(ctx context.Context, tx *gorm.DB, internalID string, ownerID string, bindingMode string) (bool, error) {
+	res := r.dbOrTx(ctx, tx).WithContext(ctx).Model(&fiscal.FiscalRegister{}).
+		Where("id = ?", internalID).
+		Updates(map[string]interface{}{"owner_id": ownerID, "owner_binding_mode": bindingMode})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (r *frRepo) LockByOwner(ctx context.Context, tx *gorm.DB, ownerID string) error {
 	return r.dbOrTx(ctx, tx).WithContext(ctx).Model(&fiscal.FiscalRegister{}).
 		Where("owner_id = ? AND health_status != ?", ownerID, "locked").

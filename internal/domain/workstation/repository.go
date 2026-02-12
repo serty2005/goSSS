@@ -22,6 +22,7 @@ type Repository interface {
 	// FindAllByRemoteIDs ищет ВСЕ рабочие станции, совпадающие по идентификаторам (для поиска дублей).
 	FindAllByRemoteIDs(ctx context.Context, tv, lm string) ([]Workstation, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]Workstation, error)
+	SetOwnerWithBinding(ctx context.Context, tx *gorm.DB, internalID string, ownerID string, bindingMode string) (bool, error)
 
 	// Методы массовой блокировки
 	LockByOwner(ctx context.Context, tx *gorm.DB, ownerID string) error

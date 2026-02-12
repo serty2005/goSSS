@@ -49,7 +49,7 @@ type CandidateApproveInput struct {
 	Workstations []CandidateWorkstationInput
 }
 
-// CandidateWorkstationInput РѕРїРёСЃС‹РІР°РµС‚ РёРјСЏ СЃС‚Р°РЅС†РёРё, Р·Р°РґР°РЅРЅРѕРµ РѕРїРµСЂР°С‚РѕСЂРѕРј РїСЂРё РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРё РєР°РЅРґРёРґР°С‚Р°.
+// CandidateWorkstationInput Р С•Р С—Р С‘РЎРѓРЎвЂ№Р Р†Р В°Р ВµРЎвЂљ Р С‘Р СРЎРЏ РЎРѓРЎвЂљР В°Р Р…РЎвЂ Р С‘Р С‘, Р В·Р В°Р Т‘Р В°Р Р…Р Р…Р С•Р Вµ Р С•Р С—Р ВµРЎР‚Р В°РЎвЂљР С•РЎР‚Р С•Р С Р С—РЎР‚Р С‘ Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р С‘ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°.
 type CandidateWorkstationInput struct {
 	StagingID       *uint
 	WorkstationUUID *string
@@ -72,9 +72,9 @@ func NewAgentObservationRepo(logger logger.LoggerInterface, db *gorm.DB) *agentO
 
 func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error) {
 	if data == nil {
-		return nil, errors.New("РїСѓСЃС‚РѕР№ payload")
+		return nil, errors.New("Р С—РЎС“РЎРѓРЎвЂљР С•Р в„– payload")
 	}
-	s.logger.Info("РќР°С‡Р°С‚Рѕ РїСЂРёРјРµРЅРµРЅРёРµ РґР°РЅРЅС‹С… Р°РіРµРЅС‚Р°",
+	s.logger.Info("Р СњР В°РЎвЂЎР В°РЎвЂљР С• Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ Р Т‘Р В°Р Р…Р Р…РЎвЂ№РЎвЂ¦ Р В°Р С–Р ВµР Р…РЎвЂљР В°",
 		"source", source,
 		"agent_uuid", strings.TrimSpace(data.AgentUUID),
 		"hostname", strings.TrimSpace(data.Hostname),
@@ -106,14 +106,14 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		if err := tx.Where("payload_hash = ?", hash).First(obs).Error; err != nil {
 			return err
 		}
-		s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРѕ",
+		s.logger.Info("Р СњР В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р В·Р В°РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С•",
 			"observation_id", obs.ID,
 			"current_status", obs.Status,
 			"server_key", ptrValue(obs.ServerKey),
 			"server_crm_id", ptrValue(obs.ServerCRMID),
 		)
 		if obs.Status == models.AgentObservationStatusApplied || obs.Status == models.AgentObservationStatusStaged || obs.Status == models.AgentObservationStatusIgnored || obs.Status == models.AgentObservationStatusIgnoredStale {
-			s.logger.Info("РџРѕРІС‚РѕСЂРЅРѕРµ РЅР°Р±Р»СЋРґРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ",
+			s.logger.Info("Р СџР С•Р Р†РЎвЂљР С•РЎР‚Р Р…Р С•Р Вµ Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С—РЎР‚Р С•Р С—РЎС“РЎвЂ°Р ВµР Р…Р С•",
 				"observation_id", obs.ID,
 				"status", obs.Status,
 			)
@@ -121,10 +121,10 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		}
 
 		if isLocalRMS(normalizedRMS) {
-			msg := "Р»РѕРєР°Р»СЊРЅС‹Р№ Р°РґСЂРµСЃ РёСЃРєР»СЋС‡РµРЅ"
+			msg := "Р В»Р С•Р С”Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р В°Р Т‘РЎР‚Р ВµРЎРѓ Р С‘РЎРѓР С”Р В»РЎР‹РЎвЂЎР ВµР Р…"
 			obs.Status = models.AgentObservationStatusIgnored
 			obs.ErrorText = &msg
-			s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ РѕС‚РєР»РѕРЅРµРЅРѕ РёР·-Р·Р° Р»РѕРєР°Р»СЊРЅРѕРіРѕ Р°РґСЂРµСЃР°",
+			s.logger.Info("Р СњР В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С•РЎвЂљР С”Р В»Р С•Р Р…Р ВµР Р…Р С• Р С‘Р В·-Р В·Р В° Р В»Р С•Р С”Р В°Р В»РЎРЉР Р…Р С•Р С–Р С• Р В°Р Т‘РЎР‚Р ВµРЎРѓР В°",
 				"observation_id", obs.ID,
 				"normalized_rms", normalizedRMS,
 			)
@@ -136,13 +136,13 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			return err
 		}
 		if srv != nil {
-			s.logger.Info("РЎРµСЂРІРµСЂ РЅР°Р№РґРµРЅ РґР»СЏ РЅР°Р±Р»СЋРґРµРЅРёСЏ",
+			s.logger.Info("Р РЋР ВµРЎР‚Р Р†Р ВµРЎР‚ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Т‘Р В»РЎРЏ Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘РЎРЏ",
 				"observation_id", obs.ID,
 				"server_id", srv.ID,
 				"server_owner_id", ptrValue(srv.OwnerID),
 			)
 		} else {
-			s.logger.Info("РЎРµСЂРІРµСЂ РЅРµ РЅР°Р№РґРµРЅ РґР»СЏ РЅР°Р±Р»СЋРґРµРЅРёСЏ",
+			s.logger.Info("Р РЋР ВµРЎР‚Р Р†Р ВµРЎР‚ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… Р Т‘Р В»РЎРЏ Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘РЎРЏ",
 				"observation_id", obs.ID,
 				"server_key", serverKey,
 				"crm_id", strings.TrimSpace(data.CRMID),
@@ -153,10 +153,10 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			return err
 		}
 		if staleByAgent {
-			msg := fmt.Sprintf("СѓСЃС‚Р°СЂРµРІС€РёРµ РґР°РЅРЅС‹Рµ Р°РіРµРЅС‚Р°: observed_at=%s, last_observed_at=%s", observedAt.UTC().Format(time.RFC3339), agentLastObservedAt.UTC().Format(time.RFC3339))
+			msg := fmt.Sprintf("РЎС“РЎРѓРЎвЂљР В°РЎР‚Р ВµР Р†РЎв‚¬Р С‘Р Вµ Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р В°Р С–Р ВµР Р…РЎвЂљР В°: observed_at=%s, last_observed_at=%s", observedAt.UTC().Format(time.RFC3339), agentLastObservedAt.UTC().Format(time.RFC3339))
 			obs.Status = models.AgentObservationStatusIgnoredStale
 			obs.ErrorText = &msg
-			s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ РѕС‚РєР»РѕРЅРµРЅРѕ РєР°Рє СѓСЃС‚Р°СЂРµРІС€РµРµ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ РїРѕС‚РѕРєР° Р°РіРµРЅС‚Р°",
+			s.logger.Info("Р СњР В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С•РЎвЂљР С”Р В»Р С•Р Р…Р ВµР Р…Р С• Р С”Р В°Р С” РЎС“РЎРѓРЎвЂљР В°РЎР‚Р ВµР Р†РЎв‚¬Р ВµР Вµ Р С•РЎвЂљР Р…Р С•РЎРѓР С‘РЎвЂљР ВµР В»РЎРЉР Р…Р С• Р С—Р С•РЎвЂљР С•Р С”Р В° Р В°Р С–Р ВµР Р…РЎвЂљР В°",
 				"observation_id", obs.ID,
 				"source", source,
 				"observed_at", observedAt,
@@ -165,6 +165,67 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			)
 			return tx.Save(obs).Error
 		}
+		if srv != nil {
+			isHub, err := s.isNetworkHubServer(tx, srv)
+			if err != nil {
+				return err
+			}
+			if isHub {
+				ownerID, confident, err := s.resolveNetworkOwner(tx, strings.TrimSpace(ptrValue(srv.OwnerID)), data)
+				if err != nil {
+					return err
+				}
+				if confident && strings.TrimSpace(ownerID) != "" {
+					ownerRef := strPtr(ownerID)
+					ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto)
+					if err != nil {
+						return err
+					}
+					obs.WorkstationID = &ws.ID
+
+					if err := s.upsertAgent(tx, source, data, ws.ID, observedAt); err != nil {
+						return err
+					}
+
+					frApplied := false
+					frStale := false
+					if strings.TrimSpace(data.SerialNumber) != "" {
+						fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto)
+						if err != nil {
+							return err
+						}
+						if fr != nil {
+							obs.FRID = &fr.ID
+							frApplied = true
+							frStale = staleFR
+						}
+					}
+
+					if staleWS && (!frApplied || frStale) {
+						obs.Status = models.AgentObservationStatusIgnoredStale
+					} else {
+						obs.Status = models.AgentObservationStatusApplied
+					}
+					if err := tx.Save(obs).Error; err != nil {
+						return err
+					}
+					return s.resolveConflicts(tx, obs)
+				}
+
+				nc, err := s.stageNetworkCandidate(tx, obs, data, observedAt, normalizedRMS, serverKey, srv)
+				if err != nil {
+					return err
+				}
+				obs.NetworkCandidateID = &nc.ID
+				obs.Status = models.AgentObservationStatusStaged
+				s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ РІ network-candidate",
+					"observation_id", obs.ID,
+					"network_candidate_id", nc.ID,
+				)
+				return tx.Save(obs).Error
+			}
+		}
+
 		if srv == nil || !hasRemoteID(data) {
 			c, err := s.stage(tx, obs, data, observedAt, normalizedRMS, serverKey, srv)
 			if err != nil {
@@ -172,7 +233,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			}
 			obs.CandidateID = &c.ID
 			obs.Status = models.AgentObservationStatusStaged
-			s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ РІ staging",
+			s.logger.Info("Р СњР В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† staging",
 				"observation_id", obs.ID,
 				"candidate_id", c.ID,
 				"has_remote_id", hasRemoteID(data),
@@ -180,7 +241,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			return tx.Save(obs).Error
 		}
 
-		ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false)
+		ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, nil, "")
 		if err != nil {
 			return err
 		}
@@ -194,7 +255,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		frApplied := false
 		frStale := false
 		if strings.TrimSpace(data.SerialNumber) != "" {
-			fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false)
+			fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, nil, "")
 			if err != nil {
 				return err
 			}
@@ -213,7 +274,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		if err := tx.Save(obs).Error; err != nil {
 			return err
 		}
-		s.logger.Info("РќР°Р±Р»СЋРґРµРЅРёРµ РїСЂРёРјРµРЅРµРЅРѕ",
+		s.logger.Info("Р СњР В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р С•",
 			"observation_id", obs.ID,
 			"status", obs.Status,
 			"workstation_id", ptrValue(obs.WorkstationID),
@@ -224,7 +285,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		return s.resolveConflicts(tx, obs)
 	})
 	if err != nil {
-		s.logger.Error("РѕС€РёР±РєР° РїСЂРёРјРµРЅРµРЅРёСЏ РЅР°Р±Р»СЋРґРµРЅРёСЏ", "error", err, "source", source, "payload_hash", hash)
+		s.logger.Error("Р С•РЎв‚¬Р С‘Р В±Р С”Р В° Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р С‘РЎРЏ Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘РЎРЏ", "error", err, "source", source, "payload_hash", hash)
 		if obs.ID != 0 {
 			_ = s.db.WithContext(ctx).Model(&models.AgentObservation{}).Where("id = ?", obs.ID).Updates(map[string]interface{}{"status": models.AgentObservationStatusError, "error_text": err.Error()}).Error
 		}
@@ -235,9 +296,9 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 
 func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error) {
 	if in.CandidateID == 0 {
-		return nil, errors.New("candidate_id РѕР±СЏР·Р°С‚РµР»РµРЅ")
+		return nil, errors.New("candidate_id Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»Р ВµР Р…")
 	}
-	s.logger.Info("РќР°С‡Р°С‚Рѕ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°",
+	s.logger.Info("Р СњР В°РЎвЂЎР В°РЎвЂљР С• Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°",
 		"candidate_id", in.CandidateID,
 		"company_id", strings.TrimSpace(in.CompanyID),
 		"server_id", ptrValue(in.ServerID),
@@ -253,7 +314,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			return err
 		}
 		in.CompanyID = companyID
-		s.logger.Info("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°: РєРѕРјРїР°РЅРёСЏ РѕРїСЂРµРґРµР»РµРЅР°",
+		s.logger.Info("Р СџР С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°: Р С”Р С•Р СР С—Р В°Р Р…Р С‘РЎРЏ Р С•Р С—РЎР‚Р ВµР Т‘Р ВµР В»Р ВµР Р…Р В°",
 			"candidate_id", in.CandidateID,
 			"company_id", companyID,
 		)
@@ -287,7 +348,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		if err := tx.Model(&server.Server{}).Where("id = ?", srv.ID).Updates(serverUpdates).Error; err != nil {
 			return err
 		}
-		s.logger.Info("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°: СЃРµСЂРІРµСЂ РїРѕРґРіРѕС‚РѕРІР»РµРЅ",
+		s.logger.Info("Р СџР С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°: РЎРѓР ВµРЎР‚Р Р†Р ВµРЎР‚ Р С—Р С•Р Т‘Р С–Р С•РЎвЂљР С•Р Р†Р В»Р ВµР Р…",
 			"candidate_id", in.CandidateID,
 			"server_id", srv.ID,
 			"server_crm_id", ptrValue(in.ServerCRMID),
@@ -298,7 +359,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		if err := tx.Where("candidate_id = ?", out.ID).Order("observed_at asc").Find(&staged).Error; err != nil {
 			return err
 		}
-		s.logger.Info("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°: РЅР°Р№РґРµРЅРѕ staged-РЅР°Р±Р»СЋРґРµРЅРёР№",
+		s.logger.Info("Р СџР С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°: Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С• staged-Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р в„–",
 			"candidate_id", in.CandidateID,
 			"staged_count", len(staged),
 		)
@@ -313,12 +374,12 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			if obsAt.IsZero() {
 				obsAt = parseObservedAt(payload.CurrentTime)
 			}
-			ws, _, err := s.applyWorkstation(tx, srv, &payload, obsAt, true)
+			ws, _, err := s.applyWorkstation(tx, srv, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove)
 			if err != nil {
 				return err
 			}
 			if ws != nil && strings.TrimSpace(payload.SerialNumber) != "" {
-				if _, _, err := s.applyFiscal(tx, srv, ws, &payload, obsAt, true); err != nil {
+				if _, _, err := s.applyFiscal(tx, srv, ws, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove); err != nil {
 					return err
 				}
 			}
@@ -334,7 +395,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			if err := tx.Model(&models.AgentObservation{}).Where("id = ?", so.ID).Updates(map[string]interface{}{"status": models.AgentObservationStatusApplied, "candidate_id": nil}).Error; err != nil {
 				return err
 			}
-			s.logger.Info("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°: staged-РЅР°Р±Р»СЋРґРµРЅРёРµ РїСЂРёРјРµРЅРµРЅРѕ",
+			s.logger.Info("Р СџР С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°: staged-Р Р…Р В°Р В±Р В»РЎР‹Р Т‘Р ВµР Р…Р С‘Р Вµ Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р С•",
 				"candidate_id", in.CandidateID,
 				"observation_id", so.ID,
 			)
@@ -351,7 +412,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		}).Error; err != nil {
 			return err
 		}
-		reason := "РїРѕРґС‚РІРµСЂР¶РґРµРЅРѕ РѕРїРµСЂР°С‚РѕСЂРѕРј"
+		reason := "Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С• Р С•Р С—Р ВµРЎР‚Р В°РЎвЂљР С•РЎР‚Р С•Р С"
 		if msg := strings.TrimSpace(ptrValue(in.Comment)); msg != "" {
 			reason = fmt.Sprintf("%s: %s", reason, msg)
 		}
@@ -360,7 +421,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		}
 		return tx.Model(&models.ReconciliationTask{}).
 			Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", out.ID), []string{"new", "pending_sd_action", "sd_error"}).
-			Updates(map[string]interface{}{"status": "resolved", "comment": "РљР°РЅРґРёРґР°С‚ РїРѕРґС‚РІРµСЂР¶РґРµРЅ"}).Error
+			Updates(map[string]interface{}{"status": "resolved", "comment": "Р С™Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљ Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…"}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -368,7 +429,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 	if err := s.db.WithContext(ctx).Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
 		return nil, err
 	}
-	s.logger.Info("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р° Р·Р°РІРµСЂС€РµРЅРѕ",
+	s.logger.Info("Р СџР С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В° Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р ВµР Р…Р С•",
 		"candidate_id", out.ID,
 		"status", out.Status,
 		"approved_company_id", ptrValue(out.ApprovedCompanyID),
@@ -377,7 +438,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 	return &out, nil
 }
 
-// ensureCompany РіР°СЂР°РЅС‚РёСЂСѓРµС‚ РЅР°Р»РёС‡РёРµ РєРѕРјРїР°РЅРёРё РґР»СЏ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ РєР°РЅРґРёРґР°С‚Р°.
+// ensureCompany Р С–Р В°РЎР‚Р В°Р Р…РЎвЂљР С‘РЎР‚РЎС“Р ВµРЎвЂљ Р Р…Р В°Р В»Р С‘РЎвЂЎР С‘Р Вµ Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘ Р Т‘Р В»РЎРЏ Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘РЎРЏ Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљР В°.
 func (s *agentObservationRepo) ensureCompany(tx *gorm.DB, in CandidateApproveInput) (string, error) {
 	if strings.TrimSpace(in.CompanyID) != "" {
 		var existing company.Company
@@ -387,7 +448,7 @@ func (s *agentObservationRepo) ensureCompany(tx *gorm.DB, in CandidateApproveInp
 		return existing.ID, nil
 	}
 	if strings.TrimSpace(ptrValue(in.CompanyTitle)) == "" {
-		return "", errors.New("РЅРµРѕР±С…РѕРґРёРјРѕ СѓРєР°Р·Р°С‚СЊ company_id РёР»Рё company.title")
+		return "", errors.New("Р Р…Р ВµР С•Р В±РЎвЂ¦Р С•Р Т‘Р С‘Р СР С• РЎС“Р С”Р В°Р В·Р В°РЎвЂљРЎРЉ company_id Р С‘Р В»Р С‘ company.title")
 	}
 	newCompany := company.Company{
 		Title:          strPtr(ptrValue(in.CompanyTitle)),
@@ -404,18 +465,18 @@ func (s *agentObservationRepo) ensureCompany(tx *gorm.DB, in CandidateApproveInp
 	return newCompany.ID, nil
 }
 
-// applyContractForNewCompany РїСЂРёРјРµРЅСЏРµС‚ РІС‹Р±СЂР°РЅРЅС‹Р№ СЃС†РµРЅР°СЂРёР№ РєРѕРЅС‚СЂР°РєС‚Р° РґР»СЏ РЅРѕРІРѕР№ РєРѕРјРїР°РЅРёРё.
+// applyContractForNewCompany Р С—РЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµРЎвЂљ Р Р†РЎвЂ№Р В±РЎР‚Р В°Р Р…Р Р…РЎвЂ№Р в„– РЎРѓРЎвЂ Р ВµР Р…Р В°РЎР‚Р С‘Р в„– Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В° Р Т‘Р В»РЎРЏ Р Р…Р С•Р Р†Р С•Р в„– Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘.
 func (s *agentObservationRepo) applyContractForNewCompany(tx *gorm.DB, companyID string, parentID *string, in CandidateApproveInput) error {
 	mode := strings.ToLower(strings.TrimSpace(ptrValue(in.ContractMode)))
 	if mode == "" {
-		return errors.New("РґР»СЏ РЅРѕРІРѕР№ РєРѕРјРїР°РЅРёРё РЅСѓР¶РЅРѕ РІС‹Р±СЂР°С‚СЊ СЃС†РµРЅР°СЂРёР№ РєРѕРЅС‚СЂР°РєС‚Р°")
+		return errors.New("Р Т‘Р В»РЎРЏ Р Р…Р С•Р Р†Р С•Р в„– Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘ Р Р…РЎС“Р В¶Р Р…Р С• Р Р†РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ РЎРѓРЎвЂ Р ВµР Р…Р В°РЎР‚Р С‘Р в„– Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В°")
 	}
 
 	switch mode {
 	case "inherit_parent":
 		parentCompanyID := strings.TrimSpace(ptrValue(parentID))
 		if parentCompanyID == "" {
-			return errors.New("РґР»СЏ РЅР°СЃР»РµРґРѕРІР°РЅРёСЏ РєРѕРЅС‚СЂР°РєС‚Р° РЅРµРѕР±С…РѕРґРёРјРѕ РІС‹Р±СЂР°С‚СЊ СЂРѕРґРёС‚РµР»СЊСЃРєСѓСЋ РєРѕРјРїР°РЅРёСЋ")
+			return errors.New("Р Т‘Р В»РЎРЏ Р Р…Р В°РЎРѓР В»Р ВµР Т‘Р С•Р Р†Р В°Р Р…Р С‘РЎРЏ Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В° Р Р…Р ВµР С•Р В±РЎвЂ¦Р С•Р Т‘Р С‘Р СР С• Р Р†РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ РЎР‚Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЉРЎРѓР С”РЎС“РЎР‹ Р С”Р С•Р СР С—Р В°Р Р…Р С‘РЎР‹")
 		}
 		contractID, err := s.findActiveContractIDByCompany(tx, parentCompanyID)
 		if err != nil {
@@ -427,7 +488,7 @@ func (s *agentObservationRepo) applyContractForNewCompany(tx *gorm.DB, companyID
 	case "new":
 		contractType := strings.TrimSpace(ptrValue(in.ContractType))
 		if contractType == "" {
-			return errors.New("РґР»СЏ РЅРѕРІРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р° РЅСѓР¶РЅРѕ РІС‹Р±СЂР°С‚СЊ С‚РёРї РѕР±СЃР»СѓР¶РёРІР°РЅРёСЏ")
+			return errors.New("Р Т‘Р В»РЎРЏ Р Р…Р С•Р Р†Р С•Р С–Р С• Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В° Р Р…РЎС“Р В¶Р Р…Р С• Р Р†РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ РЎвЂљР С‘Р С— Р С•Р В±РЎРѓР В»РЎС“Р В¶Р С‘Р Р†Р В°Р Р…Р С‘РЎРЏ")
 		}
 		state := "active"
 		services, _ := json.Marshal([]string{contractType})
@@ -443,14 +504,14 @@ func (s *agentObservationRepo) applyContractForNewCompany(tx *gorm.DB, companyID
 			return err
 		}
 	default:
-		return errors.New("РЅРµРёР·РІРµСЃС‚РЅС‹Р№ СЃС†РµРЅР°СЂРёР№ РєРѕРЅС‚СЂР°РєС‚Р°")
+		return errors.New("Р Р…Р ВµР С‘Р В·Р Р†Р ВµРЎРѓРЎвЂљР Р…РЎвЂ№Р в„– РЎРѓРЎвЂ Р ВµР Р…Р В°РЎР‚Р С‘Р в„– Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В°")
 	}
 
 	active := true
 	return tx.Model(&company.Company{}).Where("id = ?", companyID).Update("active_contract", active).Error
 }
 
-// findActiveContractIDByCompany РІРѕР·РІСЂР°С‰Р°РµС‚ ID РїРѕСЃР»РµРґРЅРµРіРѕ Р°РєС‚РёРІРЅРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р° РєРѕРјРїР°РЅРёРё.
+// findActiveContractIDByCompany Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ ID Р С—Р С•РЎРѓР В»Р ВµР Т‘Р Р…Р ВµР С–Р С• Р В°Р С”РЎвЂљР С‘Р Р†Р Р…Р С•Р С–Р С• Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В° Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘.
 func (s *agentObservationRepo) findActiveContractIDByCompany(tx *gorm.DB, companyID string) (string, error) {
 	var contractID string
 	err := tx.Table("contracts").
@@ -464,12 +525,12 @@ func (s *agentObservationRepo) findActiveContractIDByCompany(tx *gorm.DB, compan
 		return "", err
 	}
 	if strings.TrimSpace(contractID) == "" {
-		return "", errors.New("Сѓ СЂРѕРґРёС‚РµР»СЊСЃРєРѕР№ РєРѕРјРїР°РЅРёРё РЅРµС‚ Р°РєС‚РёРІРЅРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р°")
+		return "", errors.New("РЎС“ РЎР‚Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЉРЎРѓР С”Р С•Р в„– Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘ Р Р…Р ВµРЎвЂљ Р В°Р С”РЎвЂљР С‘Р Р†Р Р…Р С•Р С–Р С• Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В°")
 	}
 	return contractID, nil
 }
 
-// linkContractToCompany СЃРѕР·РґР°С‘С‚ СЃРІСЏР·СЊ РєРѕРЅС‚СЂР°РєС‚Р° Рё РєРѕРјРїР°РЅРёРё РІ С‚Р°Р±Р»РёС†Рµ company_contracts.
+// linkContractToCompany РЎРѓР С•Р В·Р Т‘Р В°РЎвЂРЎвЂљ РЎРѓР Р†РЎРЏР В·РЎРЉ Р С”Р С•Р Р…РЎвЂљРЎР‚Р В°Р С”РЎвЂљР В° Р С‘ Р С”Р С•Р СР С—Р В°Р Р…Р С‘Р С‘ Р Р† РЎвЂљР В°Р В±Р В»Р С‘РЎвЂ Р Вµ company_contracts.
 func (s *agentObservationRepo) linkContractToCompany(tx *gorm.DB, contractID, companyID string) error {
 	return tx.Exec(
 		"INSERT INTO company_contracts (contract_id, company_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -478,7 +539,7 @@ func (s *agentObservationRepo) linkContractToCompany(tx *gorm.DB, contractID, co
 	).Error
 }
 
-// renameApprovedWorkstations РѕР±РЅРѕРІР»СЏРµС‚ РёРјРµРЅР° СЃС‚Р°РЅС†РёР№, Р·Р°РґР°РЅРЅС‹Рµ РѕРїРµСЂР°С‚РѕСЂРѕРј РЅР° С„РѕСЂРјРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ.
+// renameApprovedWorkstations Р С•Р В±Р Р…Р С•Р Р†Р В»РЎРЏР ВµРЎвЂљ Р С‘Р СР ВµР Р…Р В° РЎРѓРЎвЂљР В°Р Р…РЎвЂ Р С‘Р в„–, Р В·Р В°Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р С•Р С—Р ВµРЎР‚Р В°РЎвЂљР С•РЎР‚Р С•Р С Р Р…Р В° РЎвЂћР С•РЎР‚Р СР Вµ Р С—Р С•Р Т‘РЎвЂљР Р†Р ВµРЎР‚Р В¶Р Т‘Р ВµР Р…Р С‘РЎРЏ.
 func (s *agentObservationRepo) renameApprovedWorkstations(tx *gorm.DB, candidateID uint, rows []CandidateWorkstationInput, stagingToWS map[uint]string) error {
 	for _, row := range rows {
 		name := strings.TrimSpace(row.Name)
@@ -574,7 +635,7 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 	}
 	normalizedRMS = strings.TrimSpace(strings.ToLower(normalizedRMS))
 	if normalizedRMS != "" {
-		// РЎРЅР°С‡Р°Р»Р° РїСЂРѕРІРµСЂСЏРµРј С‚РѕС‡РЅРѕРµ СЃРѕРІРїР°РґРµРЅРёРµ РїРѕ СЃРѕС…СЂР°РЅРµРЅРЅРѕРјСѓ IP/URL.
+		// Р РЋР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С РЎвЂљР С•РЎвЂЎР Р…Р С•Р Вµ РЎРѓР С•Р Р†Р С—Р В°Р Т‘Р ВµР Р…Р С‘Р Вµ Р С—Р С• РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р Р…Р С•Р СРЎС“ IP/URL.
 		err := tx.Where("ip IS NOT NULL AND lower(trim(ip)) = ?", normalizedRMS).First(&srv).Error
 		if err == nil {
 			return &srv, nil
@@ -583,7 +644,7 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 			return nil, err
 		}
 
-		// Р—Р°С‚РµРј РёС‰РµРј РїРѕ С…РѕСЃС‚Сѓ Рё СЃСЂР°РІРЅРёРІР°РµРј РїРѕСЃР»Рµ РЅРѕСЂРјР°Р»РёР·Р°С†РёРё.
+		// Р вЂ”Р В°РЎвЂљР ВµР С Р С‘РЎвЂ°Р ВµР С Р С—Р С• РЎвЂ¦Р С•РЎРѓРЎвЂљРЎС“ Р С‘ РЎРѓРЎР‚Р В°Р Р†Р Р…Р С‘Р Р†Р В°Р ВµР С Р С—Р С•РЎРѓР В»Р Вµ Р Р…Р С•РЎР‚Р СР В°Р В»Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.
 		host := normalizedRMS
 		if strings.Contains(host, ":") {
 			host = strings.Split(host, ":")[0]
@@ -603,28 +664,27 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 	return nil, nil
 }
 
-func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool) (*workstation.Workstation, bool, error) {
+func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string) (*workstation.Workstation, bool, error) {
 	identity := identityHash(data.TeamviewerID, data.LitemanagerID)
 	ws, err := s.findWorkstation(tx, data, identity)
 	if err != nil {
 		return nil, false, err
 	}
-
 	if ws == nil {
 		ws = &workstation.Workstation{}
 	}
 	stale := ws.LastModifiedDate != nil && observedAt.Before(*ws.LastModifiedDate)
 	if stale {
-		s.logger.Info("Р Р°Р±РѕС‡Р°СЏ СЃС‚Р°РЅС†РёСЏ РЅРµ РѕР±РЅРѕРІР»РµРЅР°: РїРѕР»СѓС‡РµРЅС‹ СѓСЃС‚Р°СЂРµРІС€РёРµ РґР°РЅРЅС‹Рµ",
-			"workstation_id", ws.ID,
-			"incoming_observed_at", observedAt,
-			"current_last_modified_at", ws.LastModifiedDate,
-		)
 		return ws, true, nil
 	}
 
+	targetOwner := ptrValue(srv.OwnerID)
+	if ownerOverride != nil && strings.TrimSpace(ptrValue(ownerOverride)) != "" {
+		targetOwner = strings.TrimSpace(ptrValue(ownerOverride))
+	}
+
 	if ws.ID == "" {
-		ws.OwnerID = srv.OwnerID
+		ws.OwnerID = strPtr(targetOwner)
 		ws.ServerID = &srv.ID
 		ws.DeviceName = strPtr(strings.TrimSpace(data.Hostname))
 		ws.Teamviewer = normRIDPtr(data.TeamviewerID)
@@ -632,59 +692,45 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 		ws.Anydesk = normRIDPtr(data.AnydeskID)
 		ws.IdentityHash = strPtr(identity)
 		ws.LastModifiedDate = &observedAt
-		// РќРѕРІР°СЏ СЃС‚Р°РЅС†РёСЏ РёР· РїРѕС‚РѕРєР° РЅР°Р±Р»СЋРґРµРЅРёР№ РїРѕРјРµС‡Р°РµС‚СЃСЏ РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµРіРѕ РёРјРµРЅРѕРІР°РЅРёСЏ РѕРїРµСЂР°С‚РѕСЂРѕРј.
 		ws.IsNew = !forceOwner
+		if forceOwner {
+			ws.OwnerBindingMode = models.OwnerBindingModeManual
+		}
 		if err := tx.Create(ws).Error; err != nil {
 			return nil, false, err
 		}
-		s.logger.Info("РЎРѕР·РґР°РЅР° РЅРѕРІР°СЏ СЂР°Р±РѕС‡Р°СЏ СЃС‚Р°РЅС†РёСЏ",
-			"workstation_id", ws.ID,
-			"server_id", srv.ID,
-			"owner_id", ptrValue(ws.OwnerID),
-			"hostname", ptrValue(ws.DeviceName),
-			"is_new", ws.IsNew,
-		)
-	} else {
-		incomingName := strings.TrimSpace(data.Hostname)
-		updates := map[string]interface{}{
-			"server_id":          srv.ID,
-			"last_modified_date": observedAt,
-			"identity_hash":      valOrNil(strPtr(identity)),
+		return ws, false, nil
+	}
+
+	prevOwner := ptrValue(ws.OwnerID)
+	updates := map[string]interface{}{
+		"server_id":          srv.ID,
+		"last_modified_date": observedAt,
+		"identity_hash":      valOrNil(strPtr(identity)),
+	}
+	if ws.IsNew || strings.TrimSpace(ptrValue(ws.DeviceName)) == "" {
+		updates["device_name"] = valOrNil(strPtr(strings.TrimSpace(data.Hostname)))
+	}
+	if forceOwner {
+		if targetOwner != "" {
+			updates["owner_id"] = targetOwner
+			updates["owner_binding_mode"] = models.OwnerBindingModeManual
 		}
-		// РџРѕСЃР»Рµ СЂСѓС‡РЅРѕРіРѕ РёРјРµРЅРѕРІР°РЅРёСЏ (is_new=false) РЅРµ РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј РЅР°Р·РІР°РЅРёРµ СЃС‚Р°РЅС†РёРё РёР· hostname.
-		if ws.IsNew || strings.TrimSpace(ptrValue(ws.DeviceName)) == "" {
-			updates["device_name"] = valOrNil(strPtr(incomingName))
+	} else if targetOwner != "" {
+		if prevOwner == "" {
+			updates["owner_id"] = targetOwner
+		} else if strings.TrimSpace(ws.OwnerBindingMode) != models.OwnerBindingModeManual && prevOwner != targetOwner {
+			updates["owner_id"] = targetOwner
 		}
-		if forceOwner {
-			updates["owner_id"] = valOrNil(srv.OwnerID)
-		} else if ws.OwnerID == nil && srv.OwnerID != nil {
-			updates["owner_id"] = *srv.OwnerID
-		} else if ws.OwnerID != nil && srv.OwnerID != nil && *ws.OwnerID != *srv.OwnerID {
-			prevOwner := *ws.OwnerID
-			updates["owner_id"] = *srv.OwnerID
-			s.logger.Info("Р’С‹РїРѕР»РЅРµРЅР° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєР°СЏ СЃРјРµРЅР° РІР»Р°РґРµР»СЊС†Р° СЂР°Р±РѕС‡РµР№ СЃС‚Р°РЅС†РёРё РїРѕ РґР°РЅРЅС‹Рј Р°РіРµРЅС‚Р°",
-				"action", "agent_auto_transfer_workstation_owner",
-				"workstation_id", ws.ID,
-				"server_id", srv.ID,
-				"previous_owner_id", prevOwner,
-				"new_owner_id", *srv.OwnerID,
-				"observed_at", observedAt,
-			)
-		}
-		if tv := normRIDPtr(data.TeamviewerID); tv != nil {
-			updates["teamviewer"] = *tv
-		}
-		if lm := normRIDPtr(data.LitemanagerID); lm != nil {
-			updates["litemanager"] = *lm
-		}
-		if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Updates(updates).Error; err != nil {
-			return nil, false, err
-		}
-		s.logger.Info("РћР±РЅРѕРІР»РµРЅР° СЂР°Р±РѕС‡Р°СЏ СЃС‚Р°РЅС†РёСЏ",
-			"workstation_id", ws.ID,
-			"server_id", srv.ID,
-			"force_owner", forceOwner,
-		)
+	}
+	if tv := normRIDPtr(data.TeamviewerID); tv != nil {
+		updates["teamviewer"] = *tv
+	}
+	if lm := normRIDPtr(data.LitemanagerID); lm != nil {
+		updates["litemanager"] = *lm
+	}
+	if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Updates(updates).Error; err != nil {
+		return nil, false, err
 	}
 
 	if ad := normRIDPtr(data.AnydeskID); ad != nil {
@@ -695,19 +741,19 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 		if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Update("anydesk", *ad).Error; err != nil {
 			return nil, false, err
 		}
-		s.logger.Info("РћР±РЅРѕРІР»РµРЅ AnyDesk-Р°Р»РёР°СЃ СЂР°Р±РѕС‡РµР№ СЃС‚Р°РЅС†РёРё",
-			"workstation_id", ws.ID,
-			"anydesk_id", *ad,
-			"detached_workstations", res.RowsAffected,
-		)
 	}
 	if err := tx.Where("id = ?", ws.ID).First(ws).Error; err != nil {
 		return nil, false, err
 	}
+	if prevOwner != "" && targetOwner != "" && prevOwner != targetOwner && ownerChangeSource != "" {
+		if err := s.writeOwnerChange(tx, "Workstation", ws.ID, prevOwner, targetOwner, ownerChangeSource, "Смена владельца рабочей станции"); err != nil {
+			return nil, false, err
+		}
+	}
 	return ws, false, nil
 }
 
-func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool) (*fiscal.FiscalRegister, bool, error) {
+func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string) (*fiscal.FiscalRegister, bool, error) {
 	sn := normalizeSerial(data.SerialNumber)
 	if sn == "" {
 		return nil, false, nil
@@ -717,9 +763,13 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, err
 	}
+	targetOwner := ptrValue(srv.OwnerID)
+	if ownerOverride != nil && strings.TrimSpace(ptrValue(ownerOverride)) != "" {
+		targetOwner = strings.TrimSpace(ptrValue(ownerOverride))
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		fr = fiscal.FiscalRegister{
-			OwnerID:            srv.OwnerID,
+			OwnerID:            strPtr(targetOwner),
 			WorkstationID:      &ws.ID,
 			FRSerialNumber:     strPtr(strings.TrimSpace(data.SerialNumber)),
 			FRSerialNormalized: &sn,
@@ -734,6 +784,9 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 			FRFirmware:         strPtr(strings.TrimSpace(data.BootVersion)),
 			LastModifiedDate:   &observedAt,
 		}
+		if forceOwner {
+			fr.OwnerBindingMode = models.OwnerBindingModeManual
+		}
 		if t := parseDate(data.DateTimeEnd); t != nil {
 			fr.FNExpireDate = t
 		}
@@ -743,21 +796,10 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 		if err := tx.Create(&fr).Error; err != nil {
 			return nil, false, err
 		}
-		s.logger.Info("РЎРѕР·РґР°РЅ РЅРѕРІС‹Р№ С„РёСЃРєР°Р»СЊРЅС‹Р№ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂ",
-			"fr_id", fr.ID,
-			"serial_normalized", sn,
-			"workstation_id", ws.ID,
-			"owner_id", ptrValue(fr.OwnerID),
-		)
 		return &fr, false, nil
 	}
 	stale := fr.LastModifiedDate != nil && observedAt.Before(*fr.LastModifiedDate)
 	if stale {
-		s.logger.Info("Р¤РёСЃРєР°Р»СЊРЅС‹Р№ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂ РЅРµ РѕР±РЅРѕРІР»РµРЅ: РїРѕР»СѓС‡РµРЅС‹ СѓСЃС‚Р°СЂРµРІС€РёРµ РґР°РЅРЅС‹Рµ",
-			"fr_id", fr.ID,
-			"incoming_observed_at", observedAt,
-			"current_last_modified_at", fr.LastModifiedDate,
-		)
 		return &fr, true, nil
 	}
 	updates := map[string]interface{}{
@@ -781,34 +823,29 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 	if t := parseDate(data.DateTimeReg); t != nil {
 		updates["kkt_reg_date"] = *t
 	}
+	prevOwner := ptrValue(fr.OwnerID)
 	if forceOwner {
-		updates["owner_id"] = valOrNil(srv.OwnerID)
-	} else if fr.OwnerID == nil && srv.OwnerID != nil {
-		updates["owner_id"] = *srv.OwnerID
-	} else if fr.OwnerID != nil && srv.OwnerID != nil && *fr.OwnerID != *srv.OwnerID {
-		prevOwner := *fr.OwnerID
-		updates["owner_id"] = *srv.OwnerID
-		s.logger.Info("Р’С‹РїРѕР»РЅРµРЅР° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєР°СЏ СЃРјРµРЅР° РІР»Р°РґРµР»СЊС†Р° С„РёСЃРєР°Р»СЊРЅРѕРіРѕ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂР° РїРѕ РґР°РЅРЅС‹Рј Р°РіРµРЅС‚Р°",
-			"action", "agent_auto_transfer_fiscal_owner",
-			"fr_id", fr.ID,
-			"workstation_id", ws.ID,
-			"server_id", srv.ID,
-			"previous_owner_id", prevOwner,
-			"new_owner_id", *srv.OwnerID,
-			"observed_at", observedAt,
-		)
+		if targetOwner != "" {
+			updates["owner_id"] = targetOwner
+			updates["owner_binding_mode"] = models.OwnerBindingModeManual
+		}
+	} else if targetOwner != "" {
+		if prevOwner == "" {
+			updates["owner_id"] = targetOwner
+		} else if strings.TrimSpace(fr.OwnerBindingMode) != models.OwnerBindingModeManual && prevOwner != targetOwner {
+			updates["owner_id"] = targetOwner
+		}
 	}
 	if err := tx.Model(&fiscal.FiscalRegister{}).Where("id = ?", fr.ID).Updates(updates).Error; err != nil {
 		return nil, false, err
 	}
-	s.logger.Info("РћР±РЅРѕРІР»РµРЅ С„РёСЃРєР°Р»СЊРЅС‹Р№ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂ",
-		"fr_id", fr.ID,
-		"serial_normalized", sn,
-		"workstation_id", ws.ID,
-		"force_owner", forceOwner,
-	)
 	if err := tx.Where("id = ?", fr.ID).First(&fr).Error; err != nil {
 		return nil, false, err
+	}
+	if prevOwner != "" && targetOwner != "" && prevOwner != targetOwner && ownerChangeSource != "" {
+		if err := s.writeOwnerChange(tx, "FiscalRegister", fr.ID, prevOwner, targetOwner, ownerChangeSource, "Смена владельца фискального регистратора"); err != nil {
+			return nil, false, err
+		}
 	}
 	return &fr, false, nil
 }
@@ -856,8 +893,8 @@ func (s *agentObservationRepo) stage(tx *gorm.DB, obs *models.AgentObservation, 
 			return nil, err
 		}
 	}
-	_ = s.createOrRefreshTask(tx, "candidate_connection", fmt.Sprintf("candidate:%d", c.ID), "РљР°РЅРґРёРґР°С‚ РЅР° РїРѕРґРєР»СЋС‡РµРЅРёРµ РўРџ", map[string]interface{}{"candidate_id": c.ID, "server_key": c.ServerKey, "server_crm_id": c.ServerCRMID})
-	s.logger.Info("РЎРѕР·РґР°РЅ/РѕР±РЅРѕРІР»РµРЅ staging РїРѕ РєР°РЅРґРёРґР°С‚Сѓ",
+	_ = s.createOrRefreshTask(tx, "candidate_connection", fmt.Sprintf("candidate:%d", c.ID), "Р С™Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљ Р Р…Р В° Р С—Р С•Р Т‘Р С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р С‘Р Вµ Р СћР Сџ", map[string]interface{}{"candidate_id": c.ID, "server_key": c.ServerKey, "server_crm_id": c.ServerCRMID})
+	s.logger.Info("Р РЋР С•Р В·Р Т‘Р В°Р Р…/Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р… staging Р С—Р С• Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљРЎС“",
 		"candidate_id", c.ID,
 		"observation_id", obs.ID,
 		"server_key", serverKey,
@@ -875,7 +912,7 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
 				c.ExistingServerID = existingServerID
 			}
-			s.logger.Info("РќР°Р№РґРµРЅ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєР°РЅРґРёРґР°С‚ РїРѕ CRM ID",
+			s.logger.Info("Р СњР В°Р в„–Р Т‘Р ВµР Р… РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“РЎР‹РЎвЂ°Р С‘Р в„– Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљ Р С—Р С• CRM ID",
 				"candidate_id", c.ID,
 				"server_crm_id", crmID,
 			)
@@ -888,7 +925,7 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
 				c.ExistingServerID = existingServerID
 			}
-			s.logger.Info("РќР°Р№РґРµРЅ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєР°РЅРґРёРґР°С‚ РїРѕ server_key",
+			s.logger.Info("Р СњР В°Р в„–Р Т‘Р ВµР Р… РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“РЎР‹РЎвЂ°Р С‘Р в„– Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљ Р С—Р С• server_key",
 				"candidate_id", c.ID,
 				"server_key", serverKey,
 			)
@@ -907,9 +944,9 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 	if err := tx.Create(&c).Error; err != nil {
 		return nil, err
 	}
-	reason := "СЃРѕР·РґР°РЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕ РґР°РЅРЅС‹Рј Р°РіРµРЅС‚Р°"
+	reason := "РЎРѓР С•Р В·Р Т‘Р В°Р Р… Р В°Р Р†РЎвЂљР С•Р СР В°РЎвЂљР С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ Р С—Р С• Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р С Р В°Р С–Р ВµР Р…РЎвЂљР В°"
 	_ = tx.Create(&models.CandidateStatusHistory{CandidateID: c.ID, ToStatus: models.CandidateStatusNew, Reason: &reason}).Error
-	s.logger.Info("РЎРѕР·РґР°РЅ РЅРѕРІС‹Р№ РєР°РЅРґРёРґР°С‚",
+	s.logger.Info("Р РЋР С•Р В·Р Т‘Р В°Р Р… Р Р…Р С•Р Р†РЎвЂ№Р в„– Р С”Р В°Р Р…Р Т‘Р С‘Р Т‘Р В°РЎвЂљ",
 		"candidate_id", c.ID,
 		"server_key", serverKey,
 		"server_crm_id", crmID,
@@ -924,7 +961,7 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 		agentUUID = source
 	}
 	if agentUUID == "" {
-		s.logger.Info("РћР±РЅРѕРІР»РµРЅРёРµ agent_instance РїСЂРѕРїСѓС‰РµРЅРѕ: РЅРµ Р·Р°РґР°РЅ agent_uuid", "source", source, "workstation_id", wsID)
+		s.logger.Info("Р С›Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С‘Р Вµ agent_instance Р С—РЎР‚Р С•Р С—РЎС“РЎвЂ°Р ВµР Р…Р С•: Р Р…Р Вµ Р В·Р В°Р Т‘Р В°Р Р… agent_uuid", "source", source, "workstation_id", wsID)
 		return nil
 	}
 	var agent models.Agent
@@ -937,7 +974,7 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 		if err := tx.Create(&agent).Error; err != nil {
 			return err
 		}
-		s.logger.Info("РЎРѕР·РґР°РЅ agent_instance", "agent_uuid", agentUUID, "workstation_id", wsID)
+		s.logger.Info("Р РЋР С•Р В·Р Т‘Р В°Р Р… agent_instance", "agent_uuid", agentUUID, "workstation_id", wsID)
 		return nil
 	}
 	updates := map[string]interface{}{"workstation_id": wsID, "last_heartbeat": time.Now()}
@@ -956,7 +993,7 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 	if err := tx.Model(&models.Agent{}).Where("uuid = ?", agentUUID).Updates(updates).Error; err != nil {
 		return err
 	}
-	s.logger.Info("РћР±РЅРѕРІР»РµРЅ agent_instance", "agent_uuid", agentUUID, "workstation_id", wsID)
+	s.logger.Info("Р С›Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р… agent_instance", "agent_uuid", agentUUID, "workstation_id", wsID)
 	return nil
 }
 
@@ -977,6 +1014,179 @@ func (s *agentObservationRepo) resolveConflicts(tx *gorm.DB, obs *models.AgentOb
 	_ = tx
 	_ = obs
 	return nil
+}
+
+func (s *agentObservationRepo) writeOwnerChange(tx *gorm.DB, entityType, entityID, fromOwnerID, toOwnerID, source, comment string) error {
+	if strings.TrimSpace(fromOwnerID) == "" || strings.TrimSpace(toOwnerID) == "" || strings.TrimSpace(fromOwnerID) == strings.TrimSpace(toOwnerID) {
+		return nil
+	}
+	record := models.OwnerChangeHistory{
+		EntityType:   entityType,
+		EntityID:     entityID,
+		FromOwnerID:  strPtr(fromOwnerID),
+		ToOwnerID:    strings.TrimSpace(toOwnerID),
+		ChangeSource: strings.TrimSpace(source),
+		Comment:      strPtr(comment),
+	}
+	return tx.Create(&record).Error
+}
+
+func (s *agentObservationRepo) isNetworkHubServer(tx *gorm.DB, srv *server.Server) (bool, error) {
+	if srv == nil || srv.OwnerID == nil || strings.TrimSpace(*srv.OwnerID) == "" {
+		return false, nil
+	}
+	var owner company.Company
+	if err := tx.Where("id = ?", strings.TrimSpace(*srv.OwnerID)).First(&owner).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(owner.OwnerMode) == models.CompanyOwnerModeNetworkHub, nil
+}
+
+func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID string, data *api.AgentDataDTO) (string, bool, error) {
+	if strings.TrimSpace(hubCompanyID) == "" {
+		return "", false, nil
+	}
+	var children []company.Company
+	if err := tx.Where("parent_id = ?", hubCompanyID).Find(&children).Error; err != nil {
+		return "", false, err
+	}
+	if len(children) == 0 {
+		return "", false, nil
+	}
+	childIDs := make([]string, 0, len(children))
+	for _, child := range children {
+		childIDs = append(childIDs, child.ID)
+	}
+
+	owners := map[string]struct{}{}
+	if sn := normalizeSerial(data.SerialNumber); sn != "" {
+		var fr fiscal.FiscalRegister
+		if err := tx.Where("fr_serial_normalized = ? AND owner_id IN ?", sn, childIDs).First(&fr).Error; err == nil && fr.OwnerID != nil {
+			owners[strings.TrimSpace(*fr.OwnerID)] = struct{}{}
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, err
+		}
+	}
+
+	conditions := []string{}
+	values := []interface{}{}
+	if tv := normRID(data.TeamviewerID); tv != "" {
+		conditions = append(conditions, "teamviewer = ?")
+		values = append(values, tv)
+	}
+	if lm := normRID(data.LitemanagerID); lm != "" {
+		conditions = append(conditions, "litemanager = ?")
+		values = append(values, lm)
+	}
+	if ad := normRID(data.AnydeskID); ad != "" {
+		conditions = append(conditions, "anydesk = ?")
+		values = append(values, ad)
+	}
+	if len(conditions) > 0 {
+		var list []workstation.Workstation
+		if err := tx.Where("owner_id IN ?", childIDs).Where(strings.Join(conditions, " OR "), values...).Find(&list).Error; err != nil {
+			return "", false, err
+		}
+		for i := range list {
+			if list[i].OwnerID != nil && strings.TrimSpace(*list[i].OwnerID) != "" {
+				owners[strings.TrimSpace(*list[i].OwnerID)] = struct{}{}
+			}
+		}
+	}
+
+	if len(owners) != 1 {
+		return "", false, nil
+	}
+	for ownerID := range owners {
+		return ownerID, true, nil
+	}
+	return "", false, nil
+}
+
+func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string, srv *server.Server) (*models.NetworkCandidate, error) {
+	if srv == nil || srv.OwnerID == nil || strings.TrimSpace(*srv.OwnerID) == "" {
+		return nil, errors.New("для network-кандидата не найден сервер или его владелец")
+	}
+	var candidate models.NetworkCandidate
+	err := tx.Where("hub_company_id = ? AND server_id = ? AND status IN ?", strings.TrimSpace(*srv.OwnerID), srv.ID, []string{models.NetworkCandidateStatusNew, models.NetworkCandidateStatusInReview}).
+		Order("id desc").
+		First(&candidate).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		candidate = models.NetworkCandidate{
+			Status:       models.NetworkCandidateStatusNew,
+			HubCompanyID: strings.TrimSpace(*srv.OwnerID),
+			ServerID:     srv.ID,
+			ServerKey:    strPtr(serverKey),
+			ServerCRMID:  strPtr(strings.TrimSpace(data.CRMID)),
+			ServerURL:    strPtr(normalizedRMS),
+		}
+		if err := tx.Create(&candidate).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	var group models.NetworkCandidateGroup
+	if err := tx.Where("candidate_id = ? AND observation_id = ?", candidate.ID, obs.ID).First(&group).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		group = models.NetworkCandidateGroup{
+			CandidateID:   candidate.ID,
+			ObservationID: obs.ID,
+			Status:        models.NetworkCandidateGroupStatusActive,
+		}
+		if err := tx.Create(&group).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	wsUUID := workstationUUIDByRemote(data.TeamviewerID, data.LitemanagerID)
+	var wsCount int64
+	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
+		return nil, err
+	}
+	if wsCount == 0 {
+		wsStage := models.NetworkCandidateWSStaging{
+			GroupID:         group.ID,
+			ObservedAt:      observedAt,
+			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
+			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
+			WorkstationUUID: strPtr(wsUUID),
+			TeamviewerID:    normRIDPtr(data.TeamviewerID),
+			LitemanagerID:   normRIDPtr(data.LitemanagerID),
+			AnydeskID:       normRIDPtr(data.AnydeskID),
+			URLRms:          strPtr(normalizedRMS),
+		}
+		if err := tx.Create(&wsStage).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
+		frStage := models.NetworkCandidateFRStaging{
+			GroupID:          group.ID,
+			ObservedAt:       observedAt,
+			SerialNumber:     strPtr(sn),
+			SerialNormalized: strPtr(normalizeSerial(sn)),
+			RNKKT:            strPtr(strings.TrimSpace(data.RNM)),
+			ModelName:        strPtr(strings.TrimSpace(data.ModelName)),
+			INN:              strPtr(strings.TrimSpace(data.INN)),
+			FNNumber:         strPtr(strings.TrimSpace(data.FNSerial)),
+			FNExpireDate:     parseDate(data.DateTimeEnd),
+			OrganizationName: strPtr(strings.TrimSpace(data.OrganizationName)),
+			Address:          strPtr(strings.TrimSpace(data.Address)),
+		}
+		if err := tx.Create(&frStage).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &candidate, nil
 }
 
 func (s *agentObservationRepo) isStaleByAgentStream(tx *gorm.DB, source string, data *api.AgentDataDTO, observedAt time.Time) (bool, time.Time, error) {
@@ -1166,7 +1376,7 @@ func valOrNil(v *string) interface{} {
 	return strings.TrimSpace(*v)
 }
 
-// ptrValue Р±РµР·РѕРїР°СЃРЅРѕ РІРѕР·РІСЂР°С‰Р°РµС‚ Р·РЅР°С‡РµРЅРёРµ СЃС‚СЂРѕРєРѕРІРѕРіРѕ СѓРєР°Р·Р°С‚РµР»СЏ.
+// ptrValue Р В±Р ВµР В·Р С•Р С—Р В°РЎРѓР Р…Р С• Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ РЎРѓРЎвЂљРЎР‚Р С•Р С”Р С•Р Р†Р С•Р С–Р С• РЎС“Р С”Р В°Р В·Р В°РЎвЂљР ВµР В»РЎРЏ.
 func ptrValue(v *string) string {
 	if v == nil {
 		return ""
@@ -1176,7 +1386,7 @@ func ptrValue(v *string) string {
 
 var cabinetIDRegex = regexp.MustCompile(`\d+`)
 
-// extractCabinetClientID РёР·РІР»РµРєР°РµС‚ С‡РёСЃР»РѕРІРѕР№ РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ РєР°Р±РёРЅРµС‚Р° РёР· СЃСЃС‹Р»РєРё.
+// extractCabinetClientID Р С‘Р В·Р Р†Р В»Р ВµР С”Р В°Р ВµРЎвЂљ РЎвЂЎР С‘РЎРѓР В»Р С•Р Р†Р С•Р в„– Р С‘Р Т‘Р ВµР Р…РЎвЂљР С‘РЎвЂћР С‘Р С”Р В°РЎвЂљР С•РЎР‚ Р С”Р В°Р В±Р С‘Р Р…Р ВµРЎвЂљР В° Р С‘Р В· РЎРѓРЎРѓРЎвЂ№Р В»Р С”Р С‘.
 func extractCabinetClientID(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

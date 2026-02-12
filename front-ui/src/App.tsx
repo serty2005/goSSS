@@ -14,6 +14,7 @@ import TicketDetailsPage from '@/pages/TicketDetailsPage';
 import CompanyPage from '@/pages/companies/CompanyPage';
 import CompaniesListPage from '@/pages/companies/CompaniesListPage';
 import AcceptancePage from '@/pages/candidates/AcceptancePage';
+import NetworkAcceptancePage from '@/pages/candidates/NetworkAcceptancePage';
 import ProfilePage from '@/pages/ProfilePage';
 
 import ServerDetails from '@/pages/equipment/ServerDetails';
@@ -107,6 +108,14 @@ const App: React.FC = () => {
                 element={(
                   <SupportOrAdminRoute>
                     <AcceptancePage />
+                  </SupportOrAdminRoute>
+                )}
+              />
+              <Route
+                path="network-acceptance"
+                element={(
+                  <SupportOrAdminRoute>
+                    <NetworkAcceptancePage />
                   </SupportOrAdminRoute>
                 )}
               />

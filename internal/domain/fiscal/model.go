@@ -2,6 +2,7 @@ package fiscal
 
 import (
 	"etalon-server/internal/domain/common"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -35,8 +36,12 @@ type FiscalRegister struct {
 	AttributeMarked        *bool          `json:"attribute_marked"`
 	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
 	WorkstationID          *string        `gorm:"column:workstation_id;type:text;index"`
+	OwnerBindingMode       string         `gorm:"column:owner_binding_mode;type:varchar(16);default:'auto';index" json:"owner_binding_mode"`
 }
 
 func (fr *FiscalRegister) BeforeCreate(tx *gorm.DB) (err error) {
+	if strings.TrimSpace(fr.OwnerBindingMode) == "" {
+		fr.OwnerBindingMode = "auto"
+	}
 	return fr.Base.BeforeCreate(tx)
 }

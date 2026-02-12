@@ -607,3 +607,72 @@ export interface CandidateApprovePayload {
   comment?: string;
 }
 
+export type NetworkCandidateStatus = 'NEW' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface NetworkCandidateDTO {
+  id: number;
+  status: NetworkCandidateStatus;
+  hub_company_id: string;
+  server_id: string;
+  server_key?: string;
+  server_crm_id?: string;
+  server_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NetworkCandidateWSStagingDTO {
+  id: number;
+  group_id: number;
+  observed_at: string;
+  hostname?: string;
+  agent_uuid?: string;
+  workstation_uuid?: string;
+  teamviewer_id?: string;
+  litemanager_id?: string;
+  anydesk_id?: string;
+  url_rms?: string;
+}
+
+export interface NetworkCandidateFRStagingDTO {
+  id: number;
+  group_id: number;
+  observed_at: string;
+  serial_number?: string;
+  serial_normalized?: string;
+  rn_kkt?: string;
+  model_name?: string;
+  inn?: string;
+  fn_number?: string;
+  fn_expire_date?: string;
+  organization_name?: string;
+  address?: string;
+}
+
+export interface NetworkCandidateGroupDTO {
+  group: {
+    id: number;
+    candidate_id: number;
+    observation_id: number;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  };
+  ws?: NetworkCandidateWSStagingDTO;
+  frs: NetworkCandidateFRStagingDTO[];
+}
+
+export interface NetworkCandidateDetailsDTO {
+  candidate: NetworkCandidateDTO;
+  groups: NetworkCandidateGroupDTO[];
+}
+
+export interface NetworkCandidateApprovePayload {
+  child_company_id?: string;
+  child_company?: {
+    title: string;
+    address?: string;
+  };
+  comment?: string;
+}
+

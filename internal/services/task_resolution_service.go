@@ -78,8 +78,6 @@ func (s *taskResolutionServiceImpl) Resolve(ctx context.Context, taskID uint, dt
 				err = s.handleUpdateInSD(ctx, task)
 			case "create":
 				err = s.handleAddEquipment(txCtx, task, dto.ResolutionPayload)
-			case "update_owner":
-				err = s.handleOwnerMismatch(txCtx, task, dto.ResolutionPayload)
 			case "delete_duplicates":
 				err = s.handleResolveDuplicate(txCtx, task, dto.ResolutionPayload)
 			}
@@ -200,29 +198,6 @@ func (s *taskResolutionServiceImpl) handleResolveDuplicate(ctx context.Context, 
 		if err != nil {
 			s.logger.Error("Ошибка 'мягкого удаления' дубликата", "uuid", uuid, "error", err)
 		}
-	}
-	return nil
-}
-
-// handleOwnerMismatch обрабатывает задачу о смене владельца.
-func (s *taskResolutionServiceImpl) handleOwnerMismatch(ctx context.Context, task *models.ReconciliationTask, payload map[string]interface{}) error {
-	newOwnerID, ok := payload["new_owner_id"].(string)
-	if !ok {
-		return ErrInvalidPayload
-	}
-
-	updates := map[string]interface{}{"owner_id": newOwnerID}
-	var err error
-	switch task.EntityType {
-	case "Server":
-		_, err = s.serverRepo.Update(ctx, nil, task.EntityUUID, updates)
-	case "Workstation":
-		_, err = s.workstationRepo.Update(ctx, nil, task.EntityUUID, updates)
-	case "FiscalRegister":
-		_, err = s.frRepo.Update(ctx, nil, task.EntityUUID, updates)
-	}
-	if err != nil {
-		return ErrInternalExecution
 	}
 	return nil
 }

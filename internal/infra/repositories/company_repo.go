@@ -93,6 +93,12 @@ func (r *companyRepo) GetByIDs(ctx context.Context, internalIDs []string) ([]com
 	return entities, err
 }
 
+func (r *companyRepo) GetChildren(ctx context.Context, parentID string) ([]company.Company, error) {
+	var entities []company.Company
+	err := r.getDB(ctx).WithContext(ctx).Where("parent_id = ?", parentID).Find(&entities).Error
+	return entities, err
+}
+
 func (r *companyRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*company.Company, error) {
 	var entity company.Company
 	err := r.getDB(ctx).WithContext(ctx).Unscoped().Where("id = ?", internalID).First(&entity).Error

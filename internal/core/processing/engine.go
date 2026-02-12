@@ -265,15 +265,7 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 
 		areRelated := p.reconciliationEngine.AreCompaniesRelated(srvOwner, wsOwner)
 		if !areRelated {
-			// Создаем задачу owner_mismatch
-			log.Warn("Владельцы не связаны. Создание задачи owner_mismatch.")
-
-			// В качестве эталонного владельца берем владельца Сервера (Приоритет 1)
-			action := p.reconciliationEngine.CreateConflictTask(ctx, "owner_mismatch", srvOwner, data, report.FoundServer, report.FoundWorkstation)
-			if action != nil {
-				result.Actions = append(result.Actions, *action)
-			}
-			return result // Прерываем обработку, требуется вмешательство человека
+			log.Warn("Владельцы не связаны. Контур owner_mismatch отключен, обработка продолжается в автоматическом режиме.")
 		} else {
 			log.Info("Компании связаны (холдинг/филиал). Конфликт игнорируется.")
 		}
@@ -420,14 +412,7 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 	p.logger.Debug("Результат проверки родства компаний", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID, "are_related", areRelated)
 
 	if !areRelated {
-		p.logger.Debug("Компании не связаны, создание задачи owner_mismatch", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID)
-		action := p.reconciliationEngine.CreateConflictTask(ctx, "owner_mismatch", equipmentOwnerID, data, server)
-		if action != nil {
-			p.logger.Debug("Задача owner_mismatch создана", "task_type", action.Task.TaskType)
-			res.Actions = append(res.Actions, *action)
-		} else {
-			p.logger.Debug("Задача owner_mismatch уже существует, пропускаем")
-		}
+		p.logger.Debug("Компании не связаны, owner_mismatch отключен", "server_owner", serverPrimaryOwnerID, "equipment_owner", equipmentOwnerID)
 	}
 }
 

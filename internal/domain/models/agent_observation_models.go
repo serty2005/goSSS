@@ -34,9 +34,10 @@ type AgentObservation struct {
 	Status      string         `gorm:"type:varchar(32);index" json:"status"`
 	ErrorText   *string        `gorm:"type:text" json:"error_text"`
 
-	WorkstationID *string `gorm:"type:text;index" json:"workstation_id"`
-	CandidateID   *uint   `gorm:"index" json:"candidate_id"`
-	FRID          *string `gorm:"type:text;index" json:"fr_id"`
+	WorkstationID      *string `gorm:"type:text;index" json:"workstation_id"`
+	CandidateID        *uint   `gorm:"index" json:"candidate_id"`
+	NetworkCandidateID *uint   `gorm:"index" json:"network_candidate_id"`
+	FRID               *string `gorm:"type:text;index" json:"fr_id"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

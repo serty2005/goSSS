@@ -2,6 +2,7 @@ package workstation
 
 import (
 	"etalon-server/internal/domain/common"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -24,8 +25,12 @@ type Workstation struct {
 	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
 	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
 	OwnerID                *string        `gorm:"type:text;index"`
+	OwnerBindingMode       string         `gorm:"column:owner_binding_mode;type:varchar(16);default:'auto';index" json:"owner_binding_mode"`
 }
 
 func (w *Workstation) BeforeCreate(tx *gorm.DB) (err error) {
+	if strings.TrimSpace(w.OwnerBindingMode) == "" {
+		w.OwnerBindingMode = "auto"
+	}
 	return w.Base.BeforeCreate(tx)
 }

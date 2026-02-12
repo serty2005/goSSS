@@ -20,6 +20,7 @@ type Repository interface {
 
 	FindBySerialNumber(ctx context.Context, sn string) (*FiscalRegister, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]FiscalRegister, error)
+	SetOwnerWithBinding(ctx context.Context, tx *gorm.DB, internalID string, ownerID string, bindingMode string) (bool, error)
 
 	// Методы массовой блокировки
 	LockByOwner(ctx context.Context, tx *gorm.DB, ownerID string) error
