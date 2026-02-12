@@ -10,14 +10,15 @@ import (
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
-	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
+	infraDB "etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,17 +58,8 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 		return err
 	}
 
-	s.logger.Info("Создание схемы базы данных через AutoMigrate...")
-	err := s.db.AutoMigrate(
-		&user.User{}, &user.Role{},
-		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
-		&tickets.FileAsset{}, &tickets.TicketFileLink{},
-		&company.Company{}, &server.Server{}, &workstation.Workstation{},
-		&fiscal.FiscalRegister{}, &contract.Contract{},
-		&models.AgentFile{}, &models.ReconciliationTask{},
-		&models.Agent{}, &models.CompanyContract{}, &models.ExternalSystemLink{}, &models.EquipmentStatusLog{},
-	)
-	if err != nil {
+	s.logger.Info("Создание схемы базы данных через общую миграцию...")
+	if err := infraDB.Migrate(s.db); err != nil {
 		s.logger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
 		return err
 	}
@@ -276,25 +268,36 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 
 // clearDatabase удаляет все таблицы для полного пересоздания базы.
 func (s *Seeder) clearDatabase() error {
-	// Порядок удаления важен из-за Foreign Keys
-	tables := []string{
-		"equipment_status_logs", "external_system_links", "company_contracts",
-		"user_roles", "roles", // Users tables
-		"server_additional_owners",
-		"ticket_file_links", "file_assets",
-		"ticket_comments", "ticket_histories", "attachments", "tickets", // Ticket tables
-		"reconciliation_tasks", "agent_files", "fiscal_registers", "workstations",
-		"servers", "contracts", "companies", "users", "agents",
+	var tableNames []string
+	if err := s.db.Raw(`
+		SELECT tablename
+		FROM pg_tables
+		WHERE schemaname = 'public'
+	`).Scan(&tableNames).Error; err != nil {
+		return fmt.Errorf("не удалось получить список таблиц: %w", err)
 	}
-	s.logger.Info("Удаление существующих таблиц...")
-	for _, table := range tables {
-		if err := s.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table)).Error; err != nil {
-			if !strings.Contains(err.Error(), "does not exist") {
-				s.logger.Warn("Не удалось удалить таблицу", "table", table, "error", err)
-			}
-		}
+
+	if len(tableNames) == 0 {
+		s.logger.Info("В схеме public нет таблиц для удаления.")
+		return nil
 	}
+
+	sort.Strings(tableNames)
+	quoted := make([]string, 0, len(tableNames))
+	for _, table := range tableNames {
+		quoted = append(quoted, quoteIdentifier(table))
+	}
+
+	s.logger.Info("Удаление всех таблиц в схеме public...", "count", len(quoted))
+	if err := s.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", strings.Join(quoted, ", "))).Error; err != nil {
+		return fmt.Errorf("не удалось удалить таблицы: %w", err)
+	}
+
 	return nil
+}
+
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 type ticketExport struct {

@@ -22,7 +22,7 @@ const contractTypeOptions = [
   'TS Standart',
 ];
 
-const normalizeServices = (raw: ContractDetailDTO['Services'] | ContractDetailDTO['services']): string[] => {
+const normalizeServices = (raw: ContractDetailDTO['services']): string[] => {
   if (Array.isArray(raw)) {
     return raw.map((item) => String(item));
   }
@@ -56,8 +56,8 @@ const CompanyPage: React.FC = () => {
   });
 
   const company = companyRes?.data;
-  const contractID = company?.ContractID || company?.contract_id;
-  const contractType = company?.ContractType || company?.contract_type;
+  const contractID = company?.contract_id;
+  const contractType = company?.contract_type;
 
   const { data: contractRes } = useQuery({
     queryKey: ['contract', contractID, 'company-modal'],
@@ -69,12 +69,12 @@ const CompanyPage: React.FC = () => {
     if (!isContractEditOpen) {
       return;
     }
-    const liveContractType = normalizeServices(contractRes?.data?.services ?? contractRes?.data?.Services)[0];
+    const liveContractType = normalizeServices(contractRes?.data?.services)[0];
     contractForm.setFieldsValue({
       contract_type: liveContractType || contractType || contractTypeOptions[0],
-      contract_state: ((contractRes?.data?.state ?? contractRes?.data?.State) === 'active' ? 'active' : 'inactive'),
+      contract_state: ((contractRes?.data?.state) === 'active' ? 'active' : 'inactive'),
     });
-  }, [contractRes?.data?.services, contractRes?.data?.Services, contractRes?.data?.state, contractRes?.data?.State, contractForm, contractType, isContractEditOpen]);
+  }, [contractRes?.data?.services, contractRes?.data?.state, contractForm, contractType, isContractEditOpen]);
 
   const updateCompanyMutation = useMutation({
     mutationFn: async (values: { title: string; address: string }) => {
@@ -101,7 +101,7 @@ const CompanyPage: React.FC = () => {
       }
 
       const currentContract = await contractsApi.getContract(contractID);
-      const services = normalizeServices(currentContract.data.services ?? currentContract.data.Services);
+      const services = normalizeServices(currentContract.data.services);
       const nextServices = services.length > 0 ? [...services] : [''];
       nextServices[0] = values.contract_type;
 
@@ -146,14 +146,14 @@ const CompanyPage: React.FC = () => {
   }
 
   if (!company) return <Empty description="Компания не найдена" />;
-  const companyID = resolveCompanyID(company) || company.ID || company.id || '';
+  const companyID = resolveCompanyID(company) || company.id || '';
 
-  const parentTitle = company.ParentTitle || company.parent_title;
+  const parentTitle = company.parent_title;
 
   const openCompanyEdit = () => {
     companyForm.setFieldsValue({
-      title: company.Title || company.title || '',
-      address: company.Address || company.address || '',
+      title: company.title || '',
+      address: company.address || '',
     });
     setIsCompanyEditOpen(true);
   };
@@ -161,8 +161,8 @@ const CompanyPage: React.FC = () => {
   const openContractEdit = () => {
     if (!contractID) return;
 
-    const resolvedType = normalizeServices(contractRes?.data?.services ?? contractRes?.data?.Services)[0] || contractType || contractTypeOptions[0];
-    const resolvedState = (contractRes?.data?.state ?? contractRes?.data?.State) === 'active' ? 'active' : 'inactive';
+    const resolvedType = normalizeServices(contractRes?.data?.services)[0] || contractType || contractTypeOptions[0];
+    const resolvedState = (contractRes?.data?.state) === 'active' ? 'active' : 'inactive';
     contractForm.setFieldsValue({
       contract_type: resolvedType,
       contract_state: resolvedState,
@@ -287,13 +287,13 @@ const CompanyPage: React.FC = () => {
               <BankOutlined />
             </div>
             <div style={{ minWidth: 0 }}>
-              <Title level={4} style={{ margin: 0 }}>{company.Title || company.title}</Title>
-              <Text type="secondary" ellipsis style={{ display: 'block' }}>{company.Address || company.address || '-'}</Text>
+              <Title level={4} style={{ margin: 0 }}>{company.title}</Title>
+              <Text type="secondary" ellipsis style={{ display: 'block' }}>{company.address || '-'}</Text>
             </div>
           </div>
 
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
-            {(company.ActiveContract ?? company.active_contract) ? (
+            {company.active_contract ? (
               <Tag icon={<CheckCircleOutlined />} color="success">Активен</Tag>
             ) : (
               <Tag icon={<CloseCircleOutlined />} color="default">Завершён</Tag>
@@ -302,9 +302,9 @@ const CompanyPage: React.FC = () => {
         </div>
 
         <Descriptions bordered size="small" column={2} className="compact-descriptions" style={{ marginTop: 12 }}>
-          <Descriptions.Item label="Юр. название">{company.AdditionalName || company.additional_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="Юр. название">{company.additional_name || '-'}</Descriptions.Item>
           <Descriptions.Item label="Родительская компания">
-            {company.ParentID && parentTitle ? <Link to={`/companies/${company.ParentID}`}>{parentTitle}</Link> : parentTitle || '-'}
+            {company.parent_id && parentTitle ? <Link to={`/companies/${company.parent_id}`}>{parentTitle}</Link> : parentTitle || '-'}
           </Descriptions.Item>
           <Descriptions.Item label="Контракт" span={2}>
             {contractID ? (

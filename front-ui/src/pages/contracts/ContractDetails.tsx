@@ -34,7 +34,7 @@ const ContractDetails: React.FC = () => {
   const updateMutation = useMutation({
     mutationFn: async (values: { state: string; contract_type: string }) => {
       const current = contractRes?.data;
-      const services = normalizeServices(current?.services ?? current?.Services);
+      const services = normalizeServices(current?.services);
       const nextServices = services.length > 0 ? [...services] : [''];
       nextServices[0] = values.contract_type.trim();
 
@@ -52,7 +52,7 @@ const ContractDetails: React.FC = () => {
   });
 
   const contract = contractRes?.data;
-  const services = useMemo(() => normalizeServices(contract?.services ?? contract?.Services), [contract?.services, contract?.Services]);
+  const services = useMemo(() => normalizeServices(contract?.services), [contract?.services]);
 
   if (isLoading) {
     return (
@@ -68,7 +68,7 @@ const ContractDetails: React.FC = () => {
 
   if (!hasInitialized) {
     form.setFieldsValue({
-      state: contract.state || contract.State || 'active',
+      state: contract.state || 'active',
       contract_type: services[0] || '',
     });
     setHasInitialized(true);
@@ -90,12 +90,12 @@ const ContractDetails: React.FC = () => {
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <div>
             <Title level={4} style={{ margin: 0 }}>Контракт</Title>
-            <Text type="secondary">{contract.id || contract.ID}</Text>
+            <Text type="secondary">{contract.id}</Text>
           </div>
         </Space>
         <Badge
-          status={(contract.state || contract.State) === 'active' ? 'success' : 'default'}
-          text={contract.state || contract.State || 'unknown'}
+          status={contract.state === 'active' ? 'success' : 'default'}
+          text={contract.state || 'unknown'}
         />
       </div>
 

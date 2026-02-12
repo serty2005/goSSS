@@ -1,4 +1,4 @@
-// Общий конверт ответа API
+﻿// Общий конверт ответа API
 export interface ApiResponse<T> {
   status: 'success' | 'error';
   data: T;
@@ -27,25 +27,25 @@ export interface CompanyOwner {
 }
 
 export interface CompanyModel {
-  ID?: string;
+
   id?: string;
-  Title?: string;
+
   title?: string;
-  Address?: string;
+
   address?: string;
-  AdditionalName?: string;
+
   additional_name?: string;
-  ActiveContract?: boolean;
+
   active_contract?: boolean;
-  ParentID?: string;
+
   parent_id?: string;
-  ParentTitle?: string;
+
   parent_title?: string;
-  ContractID?: string;
+
   contract_id?: string;
-  ContractType?: string;
+
   contract_type?: string;
-  LastModifiedDate?: string;
+
   last_modified_date?: string;
 }
 
@@ -88,6 +88,7 @@ export interface WorkstationEntity {
   uuid: string;
   external_uuid?: string;
   device_name?: string;
+  is_new?: boolean;
   
   anydesk?: string;
   teamviewer?: string;
@@ -119,6 +120,7 @@ export interface FiscalEntity {
   fr_downloader?: string;
   
   organization_name?: string;
+  legal_name?: string;
   inn?: string;
   
   health_status: 'ok' | 'attention_required' | 'locked';
@@ -209,7 +211,7 @@ export interface TicketListItemDTO {
   bitrix_deal_title?: string;
   assignee?: {
     id: number;
-    fullName: string;
+    full_name: string;
   };
 }
 
@@ -227,7 +229,7 @@ export interface TicketDTO {
   updated_at: string;
   assignee?: {
     id: number;
-    fullName: string;
+    full_name: string;
   };
   company_id: string;
   contract_id?: string;
@@ -329,48 +331,48 @@ export type UserSchedule = '2/2' | '3/3' | '5/2';
 export interface UserAdminDTO {
   id: number;
   username: string;
-  fullName: string;
-  firstName: string;
-  lastName: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
   position: UserPosition;
   roles: string[];
-  externalSystemId?: string;
-  externalType?: string;
-  scheduleType: UserSchedule;
-  isActive: boolean;
-  hasLoggedIn: boolean;
+  external_system_id?: string;
+  external_type?: string;
+  schedule_type: UserSchedule;
+  is_active: boolean;
+  has_logged_in: boolean;
   integrations?: UserIntegrationDTO[];
 }
 
 export interface UserIntegrationDTO {
   id: number;
-  integrationType: string;
-  externalId: string;
-  isVerified: boolean;
-  isLocked?: boolean;
-  verifiedName?: string;
+  integration_type: string;
+  external_id: string;
+  is_verified: boolean;
+  is_locked?: boolean;
+  verified_name?: string;
 }
 
 export interface UserCreatePayload {
   username: string;
   password: string;
-  firstName: string;
-  lastName: string;
+  first_name: string;
+  last_name: string;
   position: UserPosition;
-  externalSystemId?: string;
-  externalType?: string;
-  scheduleType: UserSchedule;
+  external_system_id?: string;
+  external_type?: string;
+  schedule_type: UserSchedule;
 }
 
 export interface UserUpdatePayload {
   username?: string;
   password?: string;
-  firstName?: string;
-  lastName?: string;
+  first_name?: string;
+  last_name?: string;
   position?: UserPosition;
-  externalSystemId?: string;
-  externalType?: string;
-  scheduleType?: UserSchedule;
+  external_system_id?: string;
+  external_type?: string;
+  schedule_type?: UserSchedule;
 }
 
 // DTO для обновления оборудования
@@ -400,71 +402,69 @@ export interface UpdateFiscalDTO {
 export interface LicensesDict {
   [key: string]: {
     name: string;
-    dateFrom: string;
-    dateUntil: string;
+    date_from: string;
+    date_until: string;
   };
 }
 
 export interface FiscalDetailDTO {
-  ID: string;
-  ModelKKT?: string;
-  RNKKT?: string;
-  LegalName?: string;
-  INN?: string;
-  FRSerialNumber?: string;
-  FNNumber?: string;
+  id: string;
+  model_kkt?: string;
+  rn_kkt?: string;
+  legal_name?: string;
+  inn?: string;
+  fr_serial_number?: string;
+  fn_number?: string;
   
   // Внимание: смешанный регистр в JSON
   kkt_reg_date?: string;
   fn_expire_date?: string;
   
-  FRFirmware?: string;
-  FRDownloader?: string;
-  DriverVersion?: string;
+  fr_firmware?: string;
+  fr_downloader?: string;
+  driver_version?: string;
   
-  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+  health_status?: 'ok' | 'attention_required' | 'locked';
   
   // Внимание: lowercase в JSON
   address?: string;
-  Description?: string;
+  description?: string;
   
-  Licenses?: LicensesDict;
+  licenses?: LicensesDict;
 }
 
 export interface WorkstationDetailDTO {
-  ID: string;
-  DeviceName?: string;
-  Teamviewer?: string;
-  Anydesk?: string;
-  Litemanager?: string;
-  Description?: string;
-  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+  id: string;
+  device_name?: string;
+  teamviewer?: string;
+  anydesk?: string;
+  litemanager?: string;
+  description?: string;
+  health_status?: 'ok' | 'attention_required' | 'locked';
 }
 
 export interface ServerDetailDTO {
-  ID: string;
-  UniqueID?: string;
-  IP?: string;
-  DeviceName?: string;
-  ServerName?: string;
-  ServerVersion?: string;
-  ServerEdition?: string;
+  id: string;
+  unique_id?: string;
+  ip?: string;
+  device_name?: string;
+  server_name?: string;
+  server_version?: string;
+  server_edition?: string;
   
-  // PascalCase
-  LastPolledAt?: string;
-  Status?: 'active' | 'offline' | 'unknown'; // Operational Status
-  HealthStatus?: 'ok' | 'attention_required' | 'locked';
+  last_polled_at?: string;
+  status?: 'active' | 'offline' | 'unknown'; // Operational status
+  health_status?: 'ok' | 'attention_required' | 'locked';
   
-  CabinetLink?: string;
-  PartnersLink?: string;
+  cabinet_link?: string;
   partners_link?: string;
-  CRMid?: string;
+  crm_id?: string;
   
-  RDP?: string;
-  Teamviewer?: string;
-  Anydesk?: string;
-  Litemanager?: string;
-  Description?: string;
+  rdp?: string;
+  teamviewer?: string;
+  anydesk?: string;
+  litemanager?: string;
+  description?: string;
 }
 
 // ... (предыдущие TaskDTO и прочее остаются)
@@ -527,13 +527,9 @@ export interface UpdateFiscalPayload {
 }
 
 export interface ContractDetailDTO {
-  ID?: string;
   id?: string;
-  State?: string;
   state?: string;
-  Services?: string[] | Record<string, unknown>;
   services?: string[] | Record<string, unknown>;
-  Recipients?: string[] | Record<string, unknown>;
   recipients?: string[] | Record<string, unknown>;
   service_level?: number;
   state_start_time?: string;
@@ -610,3 +606,4 @@ export interface CandidateApprovePayload {
   }>;
   comment?: string;
 }
+

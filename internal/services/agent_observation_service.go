@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,19 +28,23 @@ import (
 )
 
 type CandidateApproveInput struct {
-	CandidateID uint
-	CompanyID   string
-	ServerID    *string
-	ServerCRMID *string
-	ServerURL   *string
-	ServerName  *string
-	ServerDesc  *string
-	Comment     *string
+	CandidateID       uint
+	CompanyID         string
+	ServerID          *string
+	ServerCRMID       *string
+	ServerURL         *string
+	ServerUniqueID    *string
+	ServerCabinetLink *string
+	ServerName        *string
+	ServerDesc        *string
+	Comment           *string
 
 	CompanyTitle          *string
 	CompanyAddress        *string
 	CompanyAdditionalName *string
 	CompanyParentID       *string
+	ContractMode          *string
+	ContractType          *string
 
 	Workstations []CandidateWorkstationInput
 }
@@ -125,7 +131,7 @@ func (s *agentObservationServiceImpl) ApplyObservation(ctx context.Context, sour
 			return tx.Save(obs).Error
 		}
 
-		srv, err := s.findServer(tx, data.CRMID, serverKey)
+		srv, err := s.findServer(tx, data.CRMID, serverKey, normalizedRMS)
 		if err != nil {
 			return err
 		}
@@ -142,8 +148,25 @@ func (s *agentObservationServiceImpl) ApplyObservation(ctx context.Context, sour
 				"crm_id", strings.TrimSpace(data.CRMID),
 			)
 		}
+		staleByAgent, agentLastObservedAt, err := s.isStaleByAgentStream(tx, source, data, observedAt)
+		if err != nil {
+			return err
+		}
+		if staleByAgent {
+			msg := fmt.Sprintf("устаревшие данные агента: observed_at=%s, last_observed_at=%s", observedAt.UTC().Format(time.RFC3339), agentLastObservedAt.UTC().Format(time.RFC3339))
+			obs.Status = models.AgentObservationStatusIgnoredStale
+			obs.ErrorText = &msg
+			s.logger.Info("Наблюдение отклонено как устаревшее относительно потока агента",
+				"observation_id", obs.ID,
+				"source", source,
+				"observed_at", observedAt,
+				"agent_last_observed_at", agentLastObservedAt,
+				"action", "agent_stale_guard",
+			)
+			return tx.Save(obs).Error
+		}
 		if srv == nil || !hasRemoteID(data) {
-			c, err := s.stage(tx, obs, data, observedAt, normalizedRMS, serverKey)
+			c, err := s.stage(tx, obs, data, observedAt, normalizedRMS, serverKey, srv)
 			if err != nil {
 				return err
 			}
@@ -161,19 +184,7 @@ func (s *agentObservationServiceImpl) ApplyObservation(ctx context.Context, sour
 		if err != nil {
 			return err
 		}
-		if ws == nil {
-			c, err := s.stage(tx, obs, data, observedAt, normalizedRMS, serverKey)
-			if err != nil {
-				return err
-			}
-			obs.CandidateID = &c.ID
-			obs.Status = models.AgentObservationStatusStaged
-			s.logger.Info("Наблюдение отправлено в staging: станция не сопоставлена",
-				"observation_id", obs.ID,
-				"candidate_id", c.ID,
-			)
-			return tx.Save(obs).Error
-		}
+
 		obs.WorkstationID = &ws.ID
 
 		if err := s.upsertAgent(tx, source, data, ws.ID, observedAt); err != nil {
@@ -251,14 +262,29 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		if err != nil {
 			return err
 		}
-		if err := tx.Model(&server.Server{}).Where("id = ?", srv.ID).Updates(map[string]interface{}{
-			"owner_id":    in.CompanyID,
-			"server_key":  valOrNil(out.ServerKey),
-			"crm_id":      valOrNil(in.ServerCRMID),
-			"ip":          valOrNil(in.ServerURL),
-			"device_name": valOrNil(in.ServerName),
-			"description": valOrNil(in.ServerDesc),
-		}).Error; err != nil {
+		serverUpdates := map[string]interface{}{
+			"owner_id":   in.CompanyID,
+			"server_key": valOrNil(out.ServerKey),
+		}
+		if v := valOrNil(in.ServerCRMID); v != nil {
+			serverUpdates["crm_id"] = v
+		}
+		if v := valOrNil(in.ServerURL); v != nil {
+			serverUpdates["ip"] = v
+		}
+		if v := valOrNil(in.ServerName); v != nil {
+			serverUpdates["device_name"] = v
+		}
+		if v := valOrNil(in.ServerDesc); v != nil {
+			serverUpdates["description"] = v
+		}
+		if v := valOrNil(in.ServerUniqueID); v != nil {
+			serverUpdates["unique_id"] = v
+		}
+		if cabinetID := extractCabinetClientID(ptrValue(in.ServerCabinetLink)); cabinetID != "" {
+			serverUpdates["cabinet_link"] = cabinetID
+		}
+		if err := tx.Model(&server.Server{}).Where("id = ?", srv.ID).Updates(serverUpdates).Error; err != nil {
 			return err
 		}
 		s.logger.Info("Подтверждение кандидата: сервер подготовлен",
@@ -372,7 +398,84 @@ func (s *agentObservationServiceImpl) ensureCompany(tx *gorm.DB, in CandidateApp
 	if err := tx.Create(&newCompany).Error; err != nil {
 		return "", err
 	}
+	if err := s.applyContractForNewCompany(tx, newCompany.ID, newCompany.ParentID, in); err != nil {
+		return "", err
+	}
 	return newCompany.ID, nil
+}
+
+// applyContractForNewCompany применяет выбранный сценарий контракта для новой компании.
+func (s *agentObservationServiceImpl) applyContractForNewCompany(tx *gorm.DB, companyID string, parentID *string, in CandidateApproveInput) error {
+	mode := strings.ToLower(strings.TrimSpace(ptrValue(in.ContractMode)))
+	if mode == "" {
+		return errors.New("для новой компании нужно выбрать сценарий контракта")
+	}
+
+	switch mode {
+	case "inherit_parent":
+		parentCompanyID := strings.TrimSpace(ptrValue(parentID))
+		if parentCompanyID == "" {
+			return errors.New("для наследования контракта необходимо выбрать родительскую компанию")
+		}
+		contractID, err := s.findActiveContractIDByCompany(tx, parentCompanyID)
+		if err != nil {
+			return err
+		}
+		if err := s.linkContractToCompany(tx, contractID, companyID); err != nil {
+			return err
+		}
+	case "new":
+		contractType := strings.TrimSpace(ptrValue(in.ContractType))
+		if contractType == "" {
+			return errors.New("для нового контракта нужно выбрать тип обслуживания")
+		}
+		state := "active"
+		services, _ := json.Marshal([]string{contractType})
+		newContract := contract.Contract{
+			State:        &state,
+			Services:     datatypes.JSON(services),
+			ServiceLevel: -1,
+		}
+		if err := tx.Create(&newContract).Error; err != nil {
+			return err
+		}
+		if err := s.linkContractToCompany(tx, newContract.ID, companyID); err != nil {
+			return err
+		}
+	default:
+		return errors.New("неизвестный сценарий контракта")
+	}
+
+	active := true
+	return tx.Model(&company.Company{}).Where("id = ?", companyID).Update("active_contract", active).Error
+}
+
+// findActiveContractIDByCompany возвращает ID последнего активного контракта компании.
+func (s *agentObservationServiceImpl) findActiveContractIDByCompany(tx *gorm.DB, companyID string) (string, error) {
+	var contractID string
+	err := tx.Table("contracts").
+		Select("contracts.id").
+		Joins("JOIN company_contracts ON company_contracts.contract_id = contracts.id").
+		Where("company_contracts.company_id = ? AND contracts.state = ?", companyID, "active").
+		Order("contracts.updated_at DESC").
+		Limit(1).
+		Scan(&contractID).Error
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(contractID) == "" {
+		return "", errors.New("у родительской компании нет активного контракта")
+	}
+	return contractID, nil
+}
+
+// linkContractToCompany создаёт связь контракта и компании в таблице company_contracts.
+func (s *agentObservationServiceImpl) linkContractToCompany(tx *gorm.DB, contractID, companyID string) error {
+	return tx.Exec(
+		"INSERT INTO company_contracts (contract_id, company_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+		contractID,
+		companyID,
+	).Error
 }
 
 // renameApprovedWorkstations обновляет имена станций, заданные оператором на форме подтверждения.
@@ -402,7 +505,7 @@ func (s *agentObservationServiceImpl) renameApprovedWorkstations(tx *gorm.DB, ca
 		if targetID == "" {
 			continue
 		}
-		if err := tx.Model(&workstation.Workstation{}).Where("id = ?", targetID).Update("device_name", name).Error; err != nil {
+		if err := tx.Model(&workstation.Workstation{}).Where("id = ?", targetID).Updates(map[string]interface{}{"device_name": name, "is_new": false}).Error; err != nil {
 			return err
 		}
 	}
@@ -416,6 +519,11 @@ func (s *agentObservationServiceImpl) ensureServer(tx *gorm.DB, c *models.Candid
 			return nil, err
 		}
 		return &srv, nil
+	}
+	if c.ExistingServerID != nil && strings.TrimSpace(*c.ExistingServerID) != "" {
+		if err := tx.Where("id = ?", strings.TrimSpace(*c.ExistingServerID)).First(&srv).Error; err == nil {
+			return &srv, nil
+		}
 	}
 	if in.ServerCRMID != nil && strings.TrimSpace(*in.ServerCRMID) != "" {
 		if err := tx.Where("crm_id = ?", strings.TrimSpace(*in.ServerCRMID)).First(&srv).Error; err == nil {
@@ -431,6 +539,8 @@ func (s *agentObservationServiceImpl) ensureServer(tx *gorm.DB, c *models.Candid
 		OwnerID:     &in.CompanyID,
 		CRMid:       in.ServerCRMID,
 		IP:          in.ServerURL,
+		UniqueID:    in.ServerUniqueID,
+		CabinetLink: strPtr(extractCabinetClientID(ptrValue(in.ServerCabinetLink))),
 		DeviceName:  in.ServerName,
 		Description: in.ServerDesc,
 		ServerKey:   c.ServerKey,
@@ -441,7 +551,7 @@ func (s *agentObservationServiceImpl) ensureServer(tx *gorm.DB, c *models.Candid
 	return &srv, nil
 }
 
-func (s *agentObservationServiceImpl) findServer(tx *gorm.DB, crmID, serverKey string) (*server.Server, error) {
+func (s *agentObservationServiceImpl) findServer(tx *gorm.DB, crmID, serverKey, normalizedRMS string) (*server.Server, error) {
 	var srv server.Server
 	crmID = strings.TrimSpace(crmID)
 	if crmID != "" {
@@ -462,6 +572,34 @@ func (s *agentObservationServiceImpl) findServer(tx *gorm.DB, crmID, serverKey s
 			return nil, err
 		}
 	}
+	normalizedRMS = strings.TrimSpace(strings.ToLower(normalizedRMS))
+	if normalizedRMS != "" {
+		// Сначала проверяем точное совпадение по сохраненному IP/URL.
+		err := tx.Where("ip IS NOT NULL AND lower(trim(ip)) = ?", normalizedRMS).First(&srv).Error
+		if err == nil {
+			return &srv, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+
+		// Затем ищем по хосту и сравниваем после нормализации.
+		host := normalizedRMS
+		if strings.Contains(host, ":") {
+			host = strings.Split(host, ":")[0]
+		}
+		if host != "" {
+			var candidates []server.Server
+			if err := tx.Where("ip IS NOT NULL AND lower(ip) LIKE ?", "%"+strings.ToLower(host)+"%").Limit(200).Find(&candidates).Error; err != nil {
+				return nil, err
+			}
+			for i := range candidates {
+				if normalizeRMS(ptrValue(candidates[i].IP)) == normalizedRMS {
+					return &candidates[i], nil
+				}
+			}
+		}
+	}
 	return nil, nil
 }
 
@@ -471,16 +609,7 @@ func (s *agentObservationServiceImpl) applyWorkstation(tx *gorm.DB, srv *server.
 	if err != nil {
 		return nil, false, err
 	}
-	if ws == nil && !forceOwner {
-		s.logger.Info("Станция не найдена по идентификаторам, перенос в staging",
-			"hostname", strings.TrimSpace(data.Hostname),
-			"server_id", srv.ID,
-			"teamviewer_id", normRID(data.TeamviewerID),
-			"litemanager_id", normRID(data.LitemanagerID),
-			"anydesk_id", normRID(data.AnydeskID),
-		)
-		return nil, false, nil
-	}
+
 	if ws == nil {
 		ws = &workstation.Workstation{}
 	}
@@ -503,6 +632,8 @@ func (s *agentObservationServiceImpl) applyWorkstation(tx *gorm.DB, srv *server.
 		ws.Anydesk = normRIDPtr(data.AnydeskID)
 		ws.IdentityHash = strPtr(identity)
 		ws.LastModifiedDate = &observedAt
+		// Новая станция из потока наблюдений помечается для последующего именования оператором.
+		ws.IsNew = !forceOwner
 		if err := tx.Create(ws).Error; err != nil {
 			return nil, false, err
 		}
@@ -511,20 +642,34 @@ func (s *agentObservationServiceImpl) applyWorkstation(tx *gorm.DB, srv *server.
 			"server_id", srv.ID,
 			"owner_id", ptrValue(ws.OwnerID),
 			"hostname", ptrValue(ws.DeviceName),
+			"is_new", ws.IsNew,
 		)
 	} else {
+		incomingName := strings.TrimSpace(data.Hostname)
 		updates := map[string]interface{}{
 			"server_id":          srv.ID,
 			"last_modified_date": observedAt,
-			"device_name":        valOrNil(strPtr(strings.TrimSpace(data.Hostname))),
 			"identity_hash":      valOrNil(strPtr(identity)),
+		}
+		// После ручного именования (is_new=false) не перезаписываем название станции из hostname.
+		if ws.IsNew || strings.TrimSpace(ptrValue(ws.DeviceName)) == "" {
+			updates["device_name"] = valOrNil(strPtr(incomingName))
 		}
 		if forceOwner {
 			updates["owner_id"] = valOrNil(srv.OwnerID)
 		} else if ws.OwnerID == nil && srv.OwnerID != nil {
 			updates["owner_id"] = *srv.OwnerID
 		} else if ws.OwnerID != nil && srv.OwnerID != nil && *ws.OwnerID != *srv.OwnerID {
-			_ = s.createOrRefreshTask(tx, "ownership_conflict_ws", ws.ID, "Конфликт владельца рабочей станции", map[string]interface{}{"workstation_id": ws.ID, "current_owner": *ws.OwnerID, "incoming_owner": *srv.OwnerID})
+			prevOwner := *ws.OwnerID
+			updates["owner_id"] = *srv.OwnerID
+			s.logger.Info("Выполнена автоматическая смена владельца рабочей станции по данным агента",
+				"action", "agent_auto_transfer_workstation_owner",
+				"workstation_id", ws.ID,
+				"server_id", srv.ID,
+				"previous_owner_id", prevOwner,
+				"new_owner_id", *srv.OwnerID,
+				"observed_at", observedAt,
+			)
 		}
 		if tv := normRIDPtr(data.TeamviewerID); tv != nil {
 			updates["teamviewer"] = *tv
@@ -641,7 +786,17 @@ func (s *agentObservationServiceImpl) applyFiscal(tx *gorm.DB, srv *server.Serve
 	} else if fr.OwnerID == nil && srv.OwnerID != nil {
 		updates["owner_id"] = *srv.OwnerID
 	} else if fr.OwnerID != nil && srv.OwnerID != nil && *fr.OwnerID != *srv.OwnerID {
-		_ = s.createOrRefreshTask(tx, "ownership_conflict_fr", fr.ID, "Конфликт владельца ФР", map[string]interface{}{"fr_id": fr.ID, "current_owner": *fr.OwnerID, "incoming_owner": *srv.OwnerID})
+		prevOwner := *fr.OwnerID
+		updates["owner_id"] = *srv.OwnerID
+		s.logger.Info("Выполнена автоматическая смена владельца фискального регистратора по данным агента",
+			"action", "agent_auto_transfer_fiscal_owner",
+			"fr_id", fr.ID,
+			"workstation_id", ws.ID,
+			"server_id", srv.ID,
+			"previous_owner_id", prevOwner,
+			"new_owner_id", *srv.OwnerID,
+			"observed_at", observedAt,
+		)
 	}
 	if err := tx.Model(&fiscal.FiscalRegister{}).Where("id = ?", fr.ID).Updates(updates).Error; err != nil {
 		return nil, false, err
@@ -683,8 +838,12 @@ func (s *agentObservationServiceImpl) findWorkstation(tx *gorm.DB, data *api.Age
 	return nil, nil
 }
 
-func (s *agentObservationServiceImpl) stage(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string) (*models.Candidate, error) {
-	c, err := s.findOrCreateCandidate(tx, data.CRMID, serverKey, normalizedRMS)
+func (s *agentObservationServiceImpl) stage(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string, srv *server.Server) (*models.Candidate, error) {
+	var existingServerID *string
+	if srv != nil && strings.TrimSpace(srv.ID) != "" {
+		existingServerID = &srv.ID
+	}
+	c, err := s.findOrCreateCandidate(tx, data.CRMID, serverKey, normalizedRMS, existingServerID)
 	if err != nil {
 		return nil, err
 	}
@@ -707,11 +866,15 @@ func (s *agentObservationServiceImpl) stage(tx *gorm.DB, obs *models.AgentObserv
 	return c, nil
 }
 
-func (s *agentObservationServiceImpl) findOrCreateCandidate(tx *gorm.DB, crmID, serverKey, rms string) (*models.Candidate, error) {
+func (s *agentObservationServiceImpl) findOrCreateCandidate(tx *gorm.DB, crmID, serverKey, rms string, existingServerID *string) (*models.Candidate, error) {
 	var c models.Candidate
 	crmID = strings.TrimSpace(crmID)
 	if crmID != "" {
 		if err := tx.Where("server_crm_id = ? AND status <> ?", crmID, models.CandidateStatusApproved).Order("id desc").First(&c).Error; err == nil {
+			if c.ExistingServerID == nil && existingServerID != nil {
+				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
+				c.ExistingServerID = existingServerID
+			}
 			s.logger.Info("Найден существующий кандидат по CRM ID",
 				"candidate_id", c.ID,
 				"server_crm_id", crmID,
@@ -721,6 +884,10 @@ func (s *agentObservationServiceImpl) findOrCreateCandidate(tx *gorm.DB, crmID, 
 	}
 	if strings.TrimSpace(serverKey) != "" {
 		if err := tx.Where("server_key = ? AND status <> ?", serverKey, models.CandidateStatusApproved).Order("id desc").First(&c).Error; err == nil {
+			if c.ExistingServerID == nil && existingServerID != nil {
+				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
+				c.ExistingServerID = existingServerID
+			}
 			s.logger.Info("Найден существующий кандидат по server_key",
 				"candidate_id", c.ID,
 				"server_key", serverKey,
@@ -729,7 +896,14 @@ func (s *agentObservationServiceImpl) findOrCreateCandidate(tx *gorm.DB, crmID, 
 		}
 	}
 	meta, _ := json.Marshal(map[string]interface{}{"server_url": rms})
-	c = models.Candidate{ServerKey: strPtr(serverKey), ServerCRMID: strPtr(crmID), ServerURL: strPtr(rms), Status: models.CandidateStatusNew, Meta: datatypes.JSON(meta)}
+	c = models.Candidate{
+		ServerKey:        strPtr(serverKey),
+		ServerCRMID:      strPtr(crmID),
+		ServerURL:        strPtr(rms),
+		Status:           models.CandidateStatusNew,
+		Meta:             datatypes.JSON(meta),
+		ExistingServerID: existingServerID,
+	}
 	if err := tx.Create(&c).Error; err != nil {
 		return nil, err
 	}
@@ -739,6 +913,7 @@ func (s *agentObservationServiceImpl) findOrCreateCandidate(tx *gorm.DB, crmID, 
 		"candidate_id", c.ID,
 		"server_key", serverKey,
 		"server_crm_id", crmID,
+		"existing_server_id", ptrValue(c.ExistingServerID),
 	)
 	return &c, nil
 }
@@ -802,6 +977,28 @@ func (s *agentObservationServiceImpl) resolveConflicts(tx *gorm.DB, obs *models.
 	_ = tx
 	_ = obs
 	return nil
+}
+
+func (s *agentObservationServiceImpl) isStaleByAgentStream(tx *gorm.DB, source string, data *api.AgentDataDTO, observedAt time.Time) (bool, time.Time, error) {
+	agentUUID := strings.TrimSpace(data.AgentUUID)
+	if agentUUID == "" && isUUID(source) {
+		agentUUID = strings.TrimSpace(source)
+	}
+	if agentUUID == "" {
+		return false, time.Time{}, nil
+	}
+	var agent models.Agent
+	if err := tx.Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, time.Time{}, nil
+		}
+		return false, time.Time{}, err
+	}
+	if agent.LastObservedAt == nil {
+		return false, time.Time{}, nil
+	}
+	last := agent.LastObservedAt.UTC()
+	return observedAt.Before(last), last, nil
 }
 
 func parseObservedAt(v string) time.Time {
@@ -975,4 +1172,15 @@ func ptrValue(v *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*v)
+}
+
+var cabinetIDRegex = regexp.MustCompile(`\d+`)
+
+// extractCabinetClientID извлекает числовой идентификатор кабинета из ссылки.
+func extractCabinetClientID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return cabinetIDRegex.FindString(raw)
 }

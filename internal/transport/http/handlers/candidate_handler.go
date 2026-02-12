@@ -99,6 +99,7 @@ func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 		"server_key":          candidate.ServerKey,
 		"server_crm_id":       candidate.ServerCRMID,
 		"server_url":          candidate.ServerURL,
+		"existing_server_id":  candidate.ExistingServerID,
 		"status":              candidate.Status,
 		"ticket_id":           candidate.TicketID,
 		"approved_company_id": candidate.ApprovedCompanyID,
@@ -133,11 +134,15 @@ func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		input.CompanyAddress = strPtrOrNil(req.Company.Address)
 		input.CompanyAdditionalName = strPtrOrNil(req.Company.AdditionalName)
 		input.CompanyParentID = strPtrOrNil(req.Company.ParentID)
+		input.ContractMode = strPtrOrNil(req.Company.ContractMode)
+		input.ContractType = strPtrOrNil(req.Company.ContractType)
 	}
 	if req.Server != nil {
 		input.ServerID = strPtrOrNil(req.Server.ServerID)
 		input.ServerCRMID = strPtrOrNil(req.Server.CRMID)
 		input.ServerURL = strPtrOrNil(req.Server.URLRms)
+		input.ServerUniqueID = strPtrOrNil(req.Server.UniqueID)
+		input.ServerCabinetLink = strPtrOrNil(req.Server.CabinetLink)
 		input.ServerName = strPtrOrNil(req.Server.DeviceName)
 		input.ServerDesc = strPtrOrNil(req.Server.Description)
 	}
@@ -170,12 +175,16 @@ type candidateApproveRequest struct {
 		Address        *string `json:"address"`
 		AdditionalName *string `json:"additional_name"`
 		ParentID       *string `json:"parent_id"`
+		ContractMode   *string `json:"contract_mode"`
+		ContractType   *string `json:"contract_type"`
 	} `json:"company"`
 	Server *struct {
 		Mode        string  `json:"mode"`
 		ServerID    *string `json:"server_id"`
 		CRMID       *string `json:"crm_id"`
 		URLRms      *string `json:"url_rms"`
+		UniqueID    *string `json:"unique_id"`
+		CabinetLink *string `json:"cabinet_link"`
 		DeviceName  *string `json:"device_name"`
 		Description *string `json:"description"`
 	} `json:"server"`

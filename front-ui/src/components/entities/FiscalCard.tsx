@@ -64,10 +64,10 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
       }
     >
       <div style={{ marginBottom: 12 }}>
-        <Text strong style={{ display: 'block' }}>{data.organization_name}</Text>
+        <Text strong style={{ display: 'block' }}>{data.legal_name}</Text>
         {data.inn && <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>ИНН: {data.inn}</Text>}
         {/* address теперь типизирован как string | undefined, проверка безопасна */}
-        {data.address && <Text type="secondary" style={{ fontSize: 12 }}>| {data.address}</Text>}
+        {data.address && <Text type="secondary" style={{ fontSize: 12 }}>| {String(data.address)}</Text>}
       </div>
 
       <Space direction="vertical" size={4} style={{ width: '100%' }}>

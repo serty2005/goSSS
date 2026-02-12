@@ -61,9 +61,9 @@ export const ticketsApi = {
     return response.data;
   },
 
-  assign: async (id: number | string, assigneeId?: number) => {
+  assign: async (id: number | string, assignee_id?: number) => {
     const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/assign`, {
-      assignee_id: assigneeId ?? null,
+      assignee_id: assignee_id ?? null,
     });
     return response.data;
   },

@@ -32,7 +32,8 @@ type EventBus interface {
 	Subscribe(eventType string, handler EventHandler)
 
 	// SubscribeChannel создает канал и подписывает его на указанные типы событий (для SSE/Streaming).
-	// Канал будет закрыт автоматически при отмене контекста.
+	// При отмене контекста подписчик удаляется из шины.
+	// Закрытие каналов выполняется централизованно при остановке шины.
 	SubscribeChannel(ctx context.Context, bufferSize int, eventTypes ...string) <-chan Event
 
 	Start(ctx context.Context, logger logger.LoggerInterface)
@@ -123,7 +124,6 @@ func (b *InMemoryEventBus) SubscribeChannel(ctx context.Context, bufferSize int,
 		b.mu.Lock()
 		delete(b.chanSubs, ch)
 		b.mu.Unlock()
-		close(ch)
 		if b.logger != nil {
 			b.logger.Debug("Channel subscriber disconnected and removed")
 		}

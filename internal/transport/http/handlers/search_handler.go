@@ -302,6 +302,7 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 					UUID:            ws.ID,
 					ServiceDeskUUID: externalUUID,
 					DeviceName:      ws.DeviceName,
+					IsNew:           ws.IsNew,
 					HealthStatus:    ws.HealthStatus,
 					StatusDetails:   statusDetails,
 					Anydesk:         ws.Anydesk,

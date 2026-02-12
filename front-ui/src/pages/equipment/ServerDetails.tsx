@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Tag, Space, Typography, Spin, Badge, message } from 'antd';
@@ -74,11 +74,11 @@ const ServerDetails: React.FC = () => {
           <Space>
             <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Server')}</div>
             <div>
-              <Title level={4} style={{ margin: 0 }}>{server.DeviceName || server.ServerName || 'Сервер'}</Title>
-              <Text type="secondary">{server.ID}</Text>
+              <Title level={4} style={{ margin: 0 }}>{server.device_name || server.server_name || 'Сервер'}</Title>
+              <Text type="secondary">{server.id}</Text>
             </div>
           </Space>
-          <Tag color={getStatusColor(server.Status) === 'success' ? 'green' : 'red'}>{(server.Status || 'unknown').toUpperCase()}</Tag>
+          <Tag color={getStatusColor(server.status) === 'success' ? 'green' : 'red'}>{(server.status || 'unknown').toUpperCase()}</Tag>
         </Space>
 
         {canEdit && (
@@ -96,25 +96,25 @@ const ServerDetails: React.FC = () => {
           <Card title="Основная информация" className="glass-panel" size="small">
             <Descriptions bordered column={2} className="compact-descriptions">
               <Descriptions.Item label="Название устройства">
-                <InlineFieldEditor value={server.DeviceName} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
+                <InlineFieldEditor value={server.device_name} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
               </Descriptions.Item>
               <Descriptions.Item label="Имя сервера">
-                <InlineFieldEditor value={server.ServerName} editable={canEdit} onSave={(v) => saveField('server_name', v)} saving={updateMutation.isPending && activeField === 'server_name'} />
+                <InlineFieldEditor value={server.server_name} editable={canEdit} onSave={(v) => saveField('server_name', v)} saving={updateMutation.isPending && activeField === 'server_name'} />
               </Descriptions.Item>
               <Descriptions.Item label="IP адрес">
-                <InlineFieldEditor value={server.IP} editable={canEdit} onSave={(v) => saveField('ip', v)} saving={updateMutation.isPending && activeField === 'ip'} />
+                <InlineFieldEditor value={server.ip} editable={canEdit} onSave={(v) => saveField('ip', v)} saving={updateMutation.isPending && activeField === 'ip'} />
               </Descriptions.Item>
               <Descriptions.Item label="Health Status">
-                <Badge status={getStatusColor(server.HealthStatus)} text={server.HealthStatus} />
+                <Badge status={getStatusColor(server.health_status)} text={server.health_status} />
               </Descriptions.Item>
               <Descriptions.Item label="Unique ID">
-                <InlineFieldEditor value={server.UniqueID} editable={canEdit} onSave={(v) => saveField('unique_id', v)} saving={updateMutation.isPending && activeField === 'unique_id'} />
+                <InlineFieldEditor value={server.unique_id} editable={canEdit} onSave={(v) => saveField('unique_id', v)} saving={updateMutation.isPending && activeField === 'unique_id'} />
               </Descriptions.Item>
               <Descriptions.Item label="CRM ID">
-                <InlineFieldEditor value={server.CRMid} editable={canEdit} onSave={(v) => saveField('crm_id', v)} saving={updateMutation.isPending && activeField === 'crm_id'} />
+                <InlineFieldEditor value={server.crm_id} editable={canEdit} onSave={(v) => saveField('crm_id', v)} saving={updateMutation.isPending && activeField === 'crm_id'} />
               </Descriptions.Item>
               <Descriptions.Item label="Описание" span={2}>
-                <InlineFieldEditor value={server.Description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
+                <InlineFieldEditor value={server.description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -122,12 +122,12 @@ const ServerDetails: React.FC = () => {
           <Card title="Программное обеспечение" className="glass-panel" size="small">
             <Descriptions bordered column={2} className="compact-descriptions">
               <Descriptions.Item label="Версия сервера">
-                <InlineFieldEditor value={server.ServerVersion} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />
+                <InlineFieldEditor value={server.server_version} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />
               </Descriptions.Item>
               <Descriptions.Item label="Редакция">
-                <InlineFieldEditor value={server.ServerEdition} editable={canEdit} onSave={(v) => saveField('server_edition', v)} saving={updateMutation.isPending && activeField === 'server_edition'} />
+                <InlineFieldEditor value={server.server_edition} editable={canEdit} onSave={(v) => saveField('server_edition', v)} saving={updateMutation.isPending && activeField === 'server_edition'} />
               </Descriptions.Item>
-              <Descriptions.Item label="Посл. опрос">{formatDate(server.LastPolledAt)}</Descriptions.Item>
+              <Descriptions.Item label="Посл. опрос">{formatDate(server.last_polled_at)}</Descriptions.Item>
             </Descriptions>
           </Card>
         </Space>
@@ -136,20 +136,20 @@ const ServerDetails: React.FC = () => {
           <Card title="Удаленный доступ" className="glass-panel" size="small">
             <Descriptions column={1} layout="vertical" className="compact-descriptions">
               <Descriptions.Item label="AnyDesk">
-                <InlineFieldEditor value={server.Anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
+                <InlineFieldEditor value={server.anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
               </Descriptions.Item>
               <Descriptions.Item label="TeamViewer">
-                <InlineFieldEditor value={server.Teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
+                <InlineFieldEditor value={server.teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
               </Descriptions.Item>
-              <Descriptions.Item label="RDP">
-                <InlineFieldEditor value={server.RDP} editable={canEdit} onSave={(v) => saveField('rdp', v)} saving={updateMutation.isPending && activeField === 'rdp'} />
+              <Descriptions.Item label="rdp">
+                <InlineFieldEditor value={server.rdp} editable={canEdit} onSave={(v) => saveField('rdp', v)} saving={updateMutation.isPending && activeField === 'rdp'} />
               </Descriptions.Item>
               <Descriptions.Item label="LiteManager">
-                <InlineFieldEditor value={server.Litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
+                <InlineFieldEditor value={server.litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
               </Descriptions.Item>
               <Descriptions.Item label="Кабинет дилера">
-                {(server.PartnersLink || server.partners_link) ? (
-                  <a href={server.PartnersLink || server.partners_link} target="_blank" rel="noopener noreferrer">Partners Portal</a>
+                {server.partners_link ? (
+                  <a href={server.partners_link} target="_blank" rel="noopener noreferrer">Partners Portal</a>
                 ) : '-'}
               </Descriptions.Item>
             </Descriptions>
@@ -161,3 +161,4 @@ const ServerDetails: React.FC = () => {
 };
 
 export default ServerDetails;
+

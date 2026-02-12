@@ -33,6 +33,9 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 
 // Migrate выполняет автомиграцию схемы базы данных.
 func Migrate(db *gorm.DB) error {
+	if err := cleanupOrphanUserIntegrations(db); err != nil {
+		return err
+	}
 	if err := db.AutoMigrate(
 		&user.User{}, &user.Role{}, &user.Integration{},
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
@@ -70,6 +73,23 @@ func Migrate(db *gorm.DB) error {
 	}
 
 	return nil
+}
+
+func cleanupOrphanUserIntegrations(db *gorm.DB) error {
+	// Для существующих БД удаляем записи интеграций, указывающие на несуществующих пользователей.
+	// Иначе AutoMigrate не сможет добавить FK fk_users_integrations.
+	if !db.Migrator().HasTable("user_integrations") || !db.Migrator().HasTable("users") {
+		return nil
+	}
+
+	return db.Exec(`
+		DELETE FROM user_integrations ui
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM users u
+			WHERE u.id = ui.user_id
+		);
+	`).Error
 }
 
 // SeedAdminUser создает пользователя-администратора, если он не существует.

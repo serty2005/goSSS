@@ -400,12 +400,12 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	for i, item := range items {
 		var assignee *struct {
 			ID       uint   `json:"id"`
-			FullName string `json:"fullName"`
+			FullName string `json:"full_name"`
 		}
 		if item.Assignee != nil {
 			assignee = &struct {
 				ID       uint   `json:"id"`
-				FullName string `json:"fullName"`
+				FullName string `json:"full_name"`
 			}{
 				ID:       item.Assignee.ID,
 				FullName: item.Assignee.FullName,
@@ -517,12 +517,12 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 
 	var assignee *struct {
 		ID       uint   `json:"id"`
-		FullName string `json:"fullName"`
+		FullName string `json:"full_name"`
 	}
 	if details.Metadata.Assignee != nil {
 		assignee = &struct {
 			ID       uint   `json:"id"`
-			FullName string `json:"fullName"`
+			FullName string `json:"full_name"`
 		}{
 			ID:       details.Metadata.Assignee.ID,
 			FullName: details.Metadata.Assignee.FullName,
@@ -544,7 +544,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		AssigneeID  *uint      `json:"assignee_id"`
 		Assignee    *struct {
 			ID       uint   `json:"id"`
-			FullName string `json:"fullName"`
+			FullName string `json:"full_name"`
 		} `json:"assignee,omitempty"`
 		ReporterID           *uint   `json:"reporter_id"`
 		ReporterName         string  `json:"reporter_name"`

@@ -6,13 +6,13 @@ const normalize = (value?: string | null) => {
 };
 
 export const resolveCompanyID = (company: CompanyModel) =>
-  normalize(company.ID || company.id);
+  normalize(company.id);
 
 export const resolveCompanyTitle = (company: CompanyModel) =>
-  normalize(company.Title || company.title || company.AdditionalName || company.additional_name || resolveCompanyID(company));
+  normalize(company.title || company.additional_name || resolveCompanyID(company));
 
 export const resolveCompanyParentTitle = (company: CompanyModel) =>
-  normalize(company.ParentTitle || company.parent_title);
+  normalize(company.parent_title);
 
 export const formatHierarchyTitle = (title: string, parentTitle?: string) => {
   const cleanTitle = normalize(title);

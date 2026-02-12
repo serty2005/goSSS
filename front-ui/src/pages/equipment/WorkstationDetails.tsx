@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message } from 'antd';
@@ -67,11 +67,11 @@ const WorkstationDetails: React.FC = () => {
           <Space>
             <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Workstation')}</div>
             <div>
-              <Title level={4} style={{ margin: 0 }}>{ws.DeviceName || 'Рабочая станция'}</Title>
-              <Text type="secondary">{ws.ID}</Text>
+              <Title level={4} style={{ margin: 0 }}>{ws.device_name || 'Рабочая станция'}</Title>
+              <Text type="secondary">{ws.id}</Text>
             </div>
           </Space>
-          <Badge status={getStatusColor(ws.HealthStatus)} text={ws.HealthStatus} />
+          <Badge status={getStatusColor(ws.health_status)} text={ws.health_status} />
         </Space>
 
         {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}
@@ -80,19 +80,19 @@ const WorkstationDetails: React.FC = () => {
       <Card title="Детали рабочей станции" className="glass-panel" size="small">
         <Descriptions bordered column={1} className="compact-descriptions">
           <Descriptions.Item label="Название устройства">
-            <InlineFieldEditor value={ws.DeviceName} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
+            <InlineFieldEditor value={ws.device_name} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
           </Descriptions.Item>
           <Descriptions.Item label="Описание">
-            <InlineFieldEditor value={ws.Description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
+            <InlineFieldEditor value={ws.description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
           </Descriptions.Item>
           <Descriptions.Item label="AnyDesk">
-            <InlineFieldEditor value={ws.Anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
+            <InlineFieldEditor value={ws.anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
           </Descriptions.Item>
           <Descriptions.Item label="TeamViewer">
-            <InlineFieldEditor value={ws.Teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
+            <InlineFieldEditor value={ws.teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
           </Descriptions.Item>
           <Descriptions.Item label="LiteManager">
-            <InlineFieldEditor value={ws.Litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
+            <InlineFieldEditor value={ws.litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -101,3 +101,4 @@ const WorkstationDetails: React.FC = () => {
 };
 
 export default WorkstationDetails;
+

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -135,7 +135,7 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       title: 'Исполнитель',
       dataIndex: 'assignee',
       key: 'assignee',
-      render: (assignee?: { fullName: string }) => assignee?.fullName || '-',
+      render: (assignee?: { full_name: string }) => assignee?.full_name || '-',
     },
   ];
 
@@ -158,4 +158,5 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
 };
 
 export default TicketTable;
+
 

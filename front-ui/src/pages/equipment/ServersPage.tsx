@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Empty, Space, Spin, Table, Tag, Typography } from 'antd';
@@ -28,13 +28,13 @@ const ServersPage: React.FC = () => {
 
   const rows: Row[] = (data?.data || []).map((item) => {
     const row = item as Record<string, unknown>;
-    const id = String(row.ID || row.id || '');
+    const id = String(row.id || '');
     return {
       id,
-      name: String(row.DeviceName || row.device_name || row.ServerName || row.server_name || id || 'Сервер'),
-      ip: String(row.IP || row.ip || '-'),
-      status: String(row.Status || row.status || 'unknown'),
-      ownerId: String(row.OwnerID || row.owner_id || ''),
+      name: String(row.device_name || row.server_name || id || 'Сервер'),
+      ip: String(row.ip || '-'),
+      status: String(row.status || 'unknown'),
+      ownerId: String(row.owner_id || ''),
     };
   });
 
@@ -88,3 +88,4 @@ const ServersPage: React.FC = () => {
 };
 
 export default ServersPage;
+

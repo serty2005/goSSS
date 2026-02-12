@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -163,10 +163,10 @@ const MainLayout: React.FC = () => {
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
               <Space style={{ cursor: 'pointer' }}>
                 {user && (
-                  <Text>{user.firstName} {user.lastName} • {user.scheduleType}</Text>
+                  <Text>{user.first_name} {user.last_name} • {user.schedule_type}</Text>
                 )}
                 <Avatar style={{ backgroundColor: token.colorPrimary }}>
-                  {user?.fullName?.[0] || 'A'}
+                  {user?.full_name?.[0] || 'A'}
                 </Avatar>
               </Space>
             </Dropdown>
@@ -188,4 +188,5 @@ const MainLayout: React.FC = () => {
 };
 
 export default MainLayout;
+
 

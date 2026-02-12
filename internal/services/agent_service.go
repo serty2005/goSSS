@@ -36,17 +36,15 @@ type agentServiceImpl struct {
 	companyRepo company.Repository
 	db          *gorm.DB
 	bus         eventbus.EventBus
-	obsService  AgentObservationService
 }
 
-func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus, obsService AgentObservationService) AgentService {
+func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, db *gorm.DB, bus eventbus.EventBus) AgentService {
 	return &agentServiceImpl{
 		logger:      logger,
 		agentRepo:   agentRepo,
 		companyRepo: companyRepo,
 		db:          db,
 		bus:         bus,
-		obsService:  obsService,
 	}
 }
 
@@ -122,11 +120,13 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		}
 	}
 
-	if s.obsService != nil {
-		if _, err := s.obsService.ApplyObservation(ctx, targetUUID, data); err != nil {
-			s.logger.Error("Не удалось применить наблюдение агента", "uuid", targetUUID, "error", err)
-		}
-	}
+	s.bus.Publish(eventbus.Event{
+		Type: events.AgentObservationRequested,
+		Payload: events.AgentObservationPayload{
+			Source: targetUUID,
+			Data:   *data,
+		},
+	})
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
 	if agentType == "sssruner" {

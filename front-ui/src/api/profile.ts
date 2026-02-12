@@ -1,4 +1,4 @@
-import apiClient from './axios';
+﻿import apiClient from './axios';
 import { ApiResponse } from '@/types/api';
 
 export const profileApi = {
@@ -7,8 +7,9 @@ export const profileApi = {
     return response.data;
   },
 
-  updateIntegrations: async (payload: { integrations: Array<{ integrationType: string; externalId: string }> }) => {
+  updateIntegrations: async (payload: { integrations: Array<{ integration_type: string; external_id: string }> }) => {
     const response = await apiClient.patch<ApiResponse<any>>('/profile/integrations', payload);
     return response.data;
   },
 };
+

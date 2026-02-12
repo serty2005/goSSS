@@ -13,6 +13,7 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/services"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"strings"
@@ -41,6 +42,7 @@ type Orchestrator struct {
 	taskRepo        repositories.TaskRepo
 	linkRepo        repositories.LinkRepo
 	engine          ProcessingEngine
+	obsService      services.AgentObservationService
 }
 
 // NewOrchestrator создает новый экземпляр Оркестратора.
@@ -48,11 +50,11 @@ func NewOrchestrator(
 	logger logger.LoggerInterface, db *gorm.DB, bus eventbus.EventBus, sdClient external.ExternalSystemClient,
 	companyRepo company.Repository, serverRepo server.Repository,
 	workstationRepo workstation.Repository, frRepo fiscal.Repository,
-	taskRepo repositories.TaskRepo, linkRepo repositories.LinkRepo, engine ProcessingEngine,
+	taskRepo repositories.TaskRepo, linkRepo repositories.LinkRepo, engine ProcessingEngine, obsService services.AgentObservationService,
 ) *Orchestrator {
 	return &Orchestrator{
 		logger, db, bus, sdClient, companyRepo, serverRepo, workstationRepo,
-		frRepo, taskRepo, linkRepo, engine,
+		frRepo, taskRepo, linkRepo, engine, obsService,
 	}
 }
 
@@ -61,12 +63,34 @@ func (o *Orchestrator) Start(ctx context.Context) {
 	o.logger.Info("Оркестратор запущен и подписан на события.")
 	o.bus.Subscribe(events.ServiceDeskEntityUpdated, o.handleServiceDeskEntityUpdate)
 	o.bus.Subscribe(events.ServiceDeskEntityDeleted, o.handleServiceDeskEntityDelete)
-	o.bus.Subscribe(events.ContractsStatusRecalculated, o.handleContractsStatusRecalculated)
+	// Временно не подписываемся на ContractsStatusRecalculated:
+	// текущий пересчет контрактов выполняется напрямую в contract service.
+	// Подписка будет возвращена после обновления контура контрактной синхронизации.
 	o.bus.Subscribe(events.DuplicatesFound, o.handleDuplicatesFound)
 	o.bus.Subscribe(events.AgentDataReceived, o.handleAgentDataReceived)
+	o.bus.Subscribe(events.AgentObservationRequested, o.handleAgentObservationRequested)
 	o.bus.Subscribe(events.ServerPollingSucceeded, o.handleServerPollingSucceeded)
 	o.bus.Subscribe(events.ServerPollingFailed, o.handleServerPollingFailed)
 	o.bus.Subscribe(events.FiscalRegisterDiscrepancyFound, o.handleFiscalRegisterDiscrepancy)
+}
+
+func (o *Orchestrator) handleAgentObservationRequested(ctx context.Context, event eventbus.Event) {
+	payload, ok := event.Payload.(events.AgentObservationPayload)
+	if !ok {
+		o.logger.Error("Некорректная полезная нагрузка для события AgentObservationRequested")
+		return
+	}
+	if o.obsService == nil {
+		o.logger.Error("Сервис наблюдений агента не инициализирован")
+		return
+	}
+
+	log := o.logger.With("source", payload.Source)
+	if _, err := o.obsService.ApplyObservation(ctx, payload.Source, &payload.Data); err != nil {
+		log.Error("Не удалось применить наблюдение агента", "error", err)
+		return
+	}
+	log.Debug("Наблюдение агента успешно применено")
 }
 
 // handleServiceDeskEntityUpdate обрабатывает обновление сущности из внешней системы.
@@ -227,6 +251,8 @@ func (o *Orchestrator) handleServiceDeskEntityDelete(ctx context.Context, event 
 	}
 }
 
+// handleContractsStatusRecalculated сохранен для быстрого возврата event-контура контрактов.
+// В текущей конфигурации подписка на событие временно отключена в Start().
 func (o *Orchestrator) handleContractsStatusRecalculated(ctx context.Context, event eventbus.Event) {
 	payload, ok := event.Payload.(events.ContractsStatusPayload)
 	if !ok {

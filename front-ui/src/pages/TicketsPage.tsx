@@ -239,11 +239,9 @@ const TicketsPage: React.FC = () => {
   });
 
   const companyTitle = useMemo(() => {
-    const companyData = companyResponse?.data as { Title?: string; title?: string; AdditionalName?: string; additional_name?: string } | undefined;
+    const companyData = companyResponse?.data;
     return (
-      companyData?.Title ||
       companyData?.title ||
-      companyData?.AdditionalName ||
       companyData?.additional_name ||
       details?.company_name ||
       metadata?.company_name ||

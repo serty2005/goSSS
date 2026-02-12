@@ -45,9 +45,9 @@ func (h *UserHandler) ListAssignees(w http.ResponseWriter, r *http.Request) {
 
 	type assigneeDTO struct {
 		ID       uint   `json:"id"`
-		FullName string `json:"fullName"`
+		FullName string `json:"full_name"`
 		Username string `json:"username"`
-		IsActive bool   `json:"isActive"`
+		IsActive bool   `json:"is_active"`
 	}
 
 	result := make([]assigneeDTO, 0, len(users))

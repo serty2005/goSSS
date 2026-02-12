@@ -73,7 +73,11 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{Data: items, Limit: limit, Offset: offset})
+	dtos := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		dtos = append(dtos, toServerResponse(item))
+	}
+	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{Data: dtos, Limit: limit, Offset: offset})
 }
 
 func (h *ServerHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -98,33 +102,9 @@ func (h *ServerHandler) Get(w http.ResponseWriter, r *http.Request) {
 		utils.SafeStringDereference(item.CabinetLink),
 		utils.SafeStringDereference(item.IP),
 	)
-	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"ID":               item.ID,
-		"CreatedAt":        item.CreatedAt,
-		"UpdatedAt":        item.UpdatedAt,
-		"DeletedAt":        item.DeletedAt,
-		"UniqueID":         item.UniqueID,
-		"IP":               item.IP,
-		"CabinetLink":      item.CabinetLink,
-		"DeviceName":       item.DeviceName,
-		"LastModifiedDate": item.LastModifiedDate,
-		"Litemanager":      item.Litemanager,
-		"ServerVersion":    item.ServerVersion,
-		"Description":      item.Description,
-		"OwnerID":          item.OwnerID,
-		"AdditionalOwners": item.AdditionalOwners,
-		"ServerName":       item.ServerName,
-		"ServerEdition":    item.ServerEdition,
-		"LastPolledAt":     item.LastPolledAt,
-		"Status":           item.Status,
-		"HealthStatus":     item.HealthStatus,
-		"StatusDetails":    item.StatusDetails,
-		"CRMid":            item.CRMid,
-		"RDP":              item.RDP,
-		"Teamviewer":       item.Teamviewer,
-		"Anydesk":          item.Anydesk,
-		"PartnersLink":     partnersLink,
-	})
+	payload := toServerResponse(*item)
+	payload["partners_link"] = partnersLink
+	response.RespondWithJSON(w, http.StatusOK, payload)
 }
 
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +124,7 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusCreated, item)
+	response.RespondWithJSON(w, http.StatusCreated, toServerResponse(*item))
 }
 
 func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -186,4 +166,37 @@ func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func toServerResponse(item server.Server) map[string]interface{} {
+	var statusDetails interface{}
+	if len(item.StatusDetails) > 0 {
+		_ = json.Unmarshal(item.StatusDetails, &statusDetails)
+	}
+	return map[string]interface{}{
+		"id":                 item.ID,
+		"created_at":         item.CreatedAt,
+		"updated_at":         item.UpdatedAt,
+		"deleted_at":         item.DeletedAt,
+		"unique_id":          item.UniqueID,
+		"ip":                 item.IP,
+		"cabinet_link":       item.CabinetLink,
+		"device_name":        item.DeviceName,
+		"last_modified_date": item.LastModifiedDate,
+		"litemanager":        item.Litemanager,
+		"server_version":     item.ServerVersion,
+		"description":        item.Description,
+		"owner_id":           item.OwnerID,
+		"additional_owners":  item.AdditionalOwners,
+		"server_name":        item.ServerName,
+		"server_edition":     item.ServerEdition,
+		"last_polled_at":     item.LastPolledAt,
+		"status":             item.Status,
+		"health_status":      item.HealthStatus,
+		"status_details":     statusDetails,
+		"crm_id":             item.CRMid,
+		"rdp":                item.RDP,
+		"teamviewer":         item.Teamviewer,
+		"anydesk":            item.Anydesk,
+	}
 }

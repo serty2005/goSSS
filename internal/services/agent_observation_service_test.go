@@ -128,7 +128,7 @@ func TestApplyObservation_StaleIgnored(t *testing.T) {
 	require.Equal(t, models.AgentObservationStatusIgnoredStale, obs.Status)
 }
 
-func TestApplyObservation_OwnershipConflictTaskCreated(t *testing.T) {
+func TestApplyObservation_OwnerTransferredToServerOwner(t *testing.T) {
 	db, svc := setupObsService(t)
 	ownerSrv := "cmp-2"
 	ownerWS := "cmp-1"
@@ -145,11 +145,60 @@ func TestApplyObservation_OwnershipConflictTaskCreated(t *testing.T) {
 	var wsAfter workstation.Workstation
 	require.NoError(t, db.First(&wsAfter, "id = ?", ws.ID).Error)
 	require.NotNil(t, wsAfter.OwnerID)
-	require.Equal(t, ownerWS, *wsAfter.OwnerID)
+	require.Equal(t, ownerSrv, *wsAfter.OwnerID)
+	require.NotNil(t, wsAfter.ServerID)
+	require.Equal(t, srv.ID, *wsAfter.ServerID)
 
-	var task models.ReconciliationTask
-	require.NoError(t, db.First(&task, "task_type = ? AND entity_uuid = ?", "ownership_conflict_ws", ws.ID).Error)
-	require.Equal(t, "new", task.Status)
+	var taskCount int64
+	require.NoError(t, db.Model(&models.ReconciliationTask{}).Where("task_type = ? AND entity_uuid = ?", "ownership_conflict_ws", ws.ID).Count(&taskCount).Error)
+	require.EqualValues(t, 0, taskCount)
+}
+
+func TestApplyObservation_StaleByAgentStreamIgnored(t *testing.T) {
+	db, svc := setupObsService(t)
+	ownerSrv := "cmp-2"
+	ownerWS := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &ownerSrv, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+
+	lastModified := time.Date(2026, 1, 10, 10, 0, 0, 0, time.UTC)
+	ws := workstation.Workstation{
+		IdentityHash:    strRef(identityHash("111", "LM-1")),
+		Teamviewer:      strRef("111"),
+		Litemanager:     strRef("LM-1"),
+		OwnerID:         &ownerWS,
+		LastModifiedDate: &lastModified,
+	}
+	require.NoError(t, db.Create(&ws).Error)
+
+	agentUUID := "11111111-1111-1111-1111-111111111111"
+	agentLastObservedAt := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	agent := models.Agent{
+		UUID:           agentUUID,
+		Type:           "workstation",
+		Status:         models.StatusActive,
+		WorkstationID:  &ws.ID,
+		LastObservedAt: &agentLastObservedAt,
+	}
+	require.NoError(t, db.Create(&agent).Error)
+
+	obs, err := svc.ApplyObservation(context.Background(), agentUUID, &api.AgentDataDTO{
+		Hostname:      "ws",
+		URLRms:        "example.com",
+		CRMID:         crm,
+		CurrentTime:   "2026-01-10 11:00:00",
+		TeamviewerID:  "111",
+		LitemanagerID: "LM-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusIgnoredStale, obs.Status)
+
+	var wsAfter workstation.Workstation
+	require.NoError(t, db.First(&wsAfter, "id = ?", ws.ID).Error)
+	require.NotNil(t, wsAfter.OwnerID)
+	require.Equal(t, ownerWS, *wsAfter.OwnerID)
+	require.Nil(t, wsAfter.ServerID)
 }
 
 func TestApplyObservation_KnownServerAppliesToExistingWorkstation(t *testing.T) {
@@ -171,6 +220,130 @@ func TestApplyObservation_KnownServerAppliesToExistingWorkstation(t *testing.T) 
 	require.Equal(t, srv.ID, *wsAfter.ServerID)
 	require.NotNil(t, wsAfter.OwnerID)
 	require.Equal(t, owner, *wsAfter.OwnerID)
+}
+
+func TestApplyObservation_KnownServerCreatesNewWorkstationWithoutCandidate(t *testing.T) {
+	db, svc := setupObsService(t)
+	owner := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &owner, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+
+	obs, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{
+		Hostname:      "ws-new",
+		URLRms:        "example.com",
+		CRMID:         crm,
+		CurrentTime:   "2026-01-10 10:00:00",
+		TeamviewerID:  "777",
+		LitemanagerID: "LM-777",
+		SerialNumber:  "SN-777",
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusApplied, obs.Status)
+	require.Nil(t, obs.CandidateID)
+	require.NotNil(t, obs.WorkstationID)
+
+	var ws workstation.Workstation
+	require.NoError(t, db.First(&ws, "id = ?", *obs.WorkstationID).Error)
+	require.True(t, ws.IsNew)
+	require.NotNil(t, ws.OwnerID)
+	require.Equal(t, owner, *ws.OwnerID)
+	require.NotNil(t, ws.ServerID)
+	require.Equal(t, srv.ID, *ws.ServerID)
+
+	var fr fiscal.FiscalRegister
+	require.NoError(t, db.First(&fr, "fr_serial_normalized = ?", "SN-777").Error)
+	require.NotNil(t, fr.OwnerID)
+	require.Equal(t, owner, *fr.OwnerID)
+	require.NotNil(t, fr.WorkstationID)
+	require.Equal(t, ws.ID, *fr.WorkstationID)
+}
+
+func TestApplyObservation_DoesNotOverwriteManualWorkstationName(t *testing.T) {
+	db, svc := setupObsService(t)
+	owner := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &owner, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+
+	ws := workstation.Workstation{
+		IdentityHash: strRef(identityHash("555", "LM-555")),
+		Teamviewer:   strRef("555"),
+		Litemanager:  strRef("LM-555"),
+		OwnerID:      &owner,
+		DeviceName:   strRef("Ручное имя"),
+		IsNew:        false,
+	}
+	require.NoError(t, db.Create(&ws).Error)
+
+	obs, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{
+		Hostname:      "auto-hostname",
+		URLRms:        "example.com",
+		CRMID:         crm,
+		CurrentTime:   "2026-01-10 10:00:00",
+		TeamviewerID:  "555",
+		LitemanagerID: "LM-555",
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusApplied, obs.Status)
+
+	var wsAfter workstation.Workstation
+	require.NoError(t, db.First(&wsAfter, "id = ?", ws.ID).Error)
+	require.NotNil(t, wsAfter.DeviceName)
+	require.Equal(t, "Ручное имя", *wsAfter.DeviceName)
+	require.False(t, wsAfter.IsNew)
+}
+
+func TestApplyObservation_FiscalOwnerTransferredToServerOwner(t *testing.T) {
+	db, svc := setupObsService(t)
+	ownerSrv := "cmp-2"
+	ownerFR := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &ownerSrv, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+
+	ws := workstation.Workstation{
+		IdentityHash: strRef(identityHash("333", "LM-333")),
+		Teamviewer:   strRef("333"),
+		Litemanager:  strRef("LM-333"),
+		OwnerID:      &ownerSrv,
+	}
+	require.NoError(t, db.Create(&ws).Error)
+
+	sn := "SN-333"
+	normalizedSN := "SN-333"
+	fr := fiscal.FiscalRegister{
+		OwnerID:            &ownerFR,
+		WorkstationID:      &ws.ID,
+		FRSerialNumber:     &sn,
+		FRSerialNormalized: &normalizedSN,
+	}
+	require.NoError(t, db.Create(&fr).Error)
+
+	obs, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{
+		Hostname:      "ws",
+		URLRms:        "example.com",
+		CRMID:         crm,
+		CurrentTime:   "2026-01-10 10:00:00",
+		TeamviewerID:  "333",
+		LitemanagerID: "LM-333",
+		SerialNumber:  "SN-333",
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusApplied, obs.Status)
+	require.NotNil(t, obs.FRID)
+	require.Equal(t, fr.ID, *obs.FRID)
+
+	var frAfter fiscal.FiscalRegister
+	require.NoError(t, db.First(&frAfter, "id = ?", fr.ID).Error)
+	require.NotNil(t, frAfter.OwnerID)
+	require.Equal(t, ownerSrv, *frAfter.OwnerID)
+	require.NotNil(t, frAfter.WorkstationID)
+	require.Equal(t, ws.ID, *frAfter.WorkstationID)
+
+	var taskCount int64
+	require.NoError(t, db.Model(&models.ReconciliationTask{}).Where("task_type = ? AND entity_uuid = ?", "ownership_conflict_fr", fr.ID).Count(&taskCount).Error)
+	require.EqualValues(t, 0, taskCount)
 }
 
 func strRef(v string) *string {

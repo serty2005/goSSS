@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Empty, Space, Spin, Table, Typography } from 'antd';
@@ -28,13 +28,13 @@ const FiscalsPage: React.FC = () => {
 
   const rows: Row[] = (data?.data || []).map((item) => {
     const row = item as Record<string, unknown>;
-    const id = String(row.ID || row.id || '');
+    const id = String(row.id || '');
     return {
       id,
-      model: String(row.ModelKKT || row.model_kkt || 'ККТ'),
-      rnm: String(row.RNKKT || row.rn_kkt || '-'),
-      serial: String(row.FRSerialNumber || row.fr_serial_number || '-'),
-      ownerId: String(row.OwnerID || row.owner_id || ''),
+      model: String(row.model_kkt || 'ККТ'),
+      rnm: String(row.rn_kkt || '-'),
+      serial: String(row.fr_serial_number || '-'),
+      ownerId: String(row.owner_id || ''),
     };
   });
 
@@ -82,3 +82,4 @@ const FiscalsPage: React.FC = () => {
 };
 
 export default FiscalsPage;
+

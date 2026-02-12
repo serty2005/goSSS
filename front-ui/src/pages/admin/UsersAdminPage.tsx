@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
@@ -47,8 +47,8 @@ const mapPositionLabel = (position: UserPosition): string => {
   return found?.label ?? position;
 };
 
-const getExternalPlaceholder = (externalType?: string): string => {
-  switch (externalType) {
+const getExternalPlaceholder = (external_type?: string): string => {
+  switch (external_type) {
     case 'telegram':
       return '@login';
     case 'naumen':
@@ -69,8 +69,8 @@ const UsersAdminPage: React.FC = () => {
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
 
-  const watchedCreateExternalType = Form.useWatch('externalType', createForm);
-  const watchedEditExternalType = Form.useWatch('externalType', editForm);
+  const watchedCreateExternalType = Form.useWatch('external_type', createForm);
+  const watchedEditExternalType = Form.useWatch('external_type', editForm);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-users'],
@@ -107,9 +107,9 @@ const UsersAdminPage: React.FC = () => {
   });
 
   const statusMutation = useMutation({
-    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) => usersApi.updateUserStatus(id, isActive),
+    mutationFn: ({ id, is_active }: { id: number; is_active: boolean }) => usersApi.updateUserStatus(id, is_active),
     onSuccess: (_, variables) => {
-      message.success(variables.isActive ? 'Пользователь разблокирован' : 'Пользователь заблокирован');
+      message.success(variables.is_active ? 'Пользователь разблокирован' : 'Пользователь заблокирован');
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
     onError: (error: any) => {
@@ -121,12 +121,12 @@ const UsersAdminPage: React.FC = () => {
     setSelectedUser(user);
     editForm.setFieldsValue({
       username: user.username,
-      firstName: user.firstName,
-      lastName: user.lastName,
+      first_name: user.first_name,
+      last_name: user.last_name,
       position: user.position,
-      scheduleType: user.scheduleType,
-      externalType: user.externalType,
-      externalSystemId: user.externalSystemId,
+      schedule_type: user.schedule_type,
+      external_type: user.external_type,
+      external_system_id: user.external_system_id,
       password: undefined,
     });
     setIsEditOpen(true);
@@ -136,10 +136,10 @@ const UsersAdminPage: React.FC = () => {
     () => [
       {
         title: 'Сотрудник',
-        key: 'fullName',
+        key: 'full_name',
         render: (_, record) => (
           <Space direction="vertical" size={0}>
-            <Text strong>{record.fullName}</Text>
+            <Text strong>{record.full_name}</Text>
             <Text type="secondary">@{record.username}</Text>
           </Space>
         ),
@@ -152,33 +152,33 @@ const UsersAdminPage: React.FC = () => {
       },
       {
         title: 'График',
-        dataIndex: 'scheduleType',
-        key: 'scheduleType',
+        dataIndex: 'schedule_type',
+        key: 'schedule_type',
       },
       {
         title: 'Внешняя система',
         key: 'external',
         render: (_, record) => {
-          if (!record.externalSystemId && !record.externalType) {
+          if (!record.external_system_id && !record.external_type) {
             return <Text type="secondary">Не указано</Text>;
           }
-          return <Text>{record.externalType}: {record.externalSystemId}</Text>;
+          return <Text>{record.external_type}: {record.external_system_id}</Text>;
         },
       },
       {
         title: 'Первый вход',
-        dataIndex: 'hasLoggedIn',
-        key: 'hasLoggedIn',
+        dataIndex: 'has_logged_in',
+        key: 'has_logged_in',
         width: 140,
-        render: (hasLoggedIn: boolean) => (hasLoggedIn ? <Tag color="blue">Выполнен</Tag> : <Tag>Не было</Tag>),
+        render: (has_logged_in: boolean) => (has_logged_in ? <Tag color="blue">Выполнен</Tag> : <Tag>Не было</Tag>),
       },
       {
         title: 'Статус',
-        dataIndex: 'isActive',
-        key: 'isActive',
+        dataIndex: 'is_active',
+        key: 'is_active',
         width: 140,
-        render: (isActive: boolean) =>
-          isActive ? <Tag color="success">Активен</Tag> : <Tag color="default">Заблокирован</Tag>,
+        render: (is_active: boolean) =>
+          is_active ? <Tag color="success">Активен</Tag> : <Tag color="default">Заблокирован</Tag>,
       },
       {
         title: 'Действия',
@@ -191,13 +191,13 @@ const UsersAdminPage: React.FC = () => {
               <Button icon={<EditOutlined />} onClick={() => openEditModal(record)}>
                 Редактировать
               </Button>
-              {record.isActive ? (
+              {record.is_active ? (
                 <Popconfirm
                   title="Заблокировать пользователя?"
                   description="Пользователь не сможет войти в систему."
                   okText="Заблокировать"
                   cancelText="Отмена"
-                  onConfirm={() => statusMutation.mutate({ id: record.id, isActive: false })}
+                  onConfirm={() => statusMutation.mutate({ id: record.id, is_active: false })}
                   disabled={isCurrentUser}
                 >
                   <Button danger icon={<StopOutlined />} disabled={isCurrentUser} loading={statusMutation.isPending}>
@@ -209,7 +209,7 @@ const UsersAdminPage: React.FC = () => {
                   type="default"
                   icon={<CheckCircleOutlined />}
                   loading={statusMutation.isPending}
-                  onClick={() => statusMutation.mutate({ id: record.id, isActive: true })}
+                  onClick={() => statusMutation.mutate({ id: record.id, is_active: true })}
                 >
                   Разблокировать
                 </Button>
@@ -225,11 +225,11 @@ const UsersAdminPage: React.FC = () => {
   const normalizePayload = (values: UserCreatePayload | UserUpdatePayload) => ({
     ...values,
     username: values.username?.trim(),
-    firstName: values.firstName?.trim(),
-    lastName: values.lastName?.trim(),
+    first_name: values.first_name?.trim(),
+    last_name: values.last_name?.trim(),
     password: values.password?.trim() || undefined,
-    externalType: values.externalType?.trim() || undefined,
-    externalSystemId: values.externalSystemId?.trim() || undefined,
+    external_type: values.external_type?.trim() || undefined,
+    external_system_id: values.external_system_id?.trim() || undefined,
   });
 
   const onCreate = (values: UserCreatePayload) => {
@@ -242,7 +242,7 @@ const UsersAdminPage: React.FC = () => {
     }
 
     const payload = normalizePayload(values) as UserUpdatePayload;
-    if (selectedUser.hasLoggedIn) {
+    if (selectedUser.has_logged_in) {
       delete payload.username;
       delete payload.password;
     }
@@ -287,7 +287,7 @@ const UsersAdminPage: React.FC = () => {
           form={createForm}
           layout="vertical"
           onFinish={onCreate}
-          initialValues={{ position: 'intern', scheduleType: '5/2' }}
+          initialValues={{ position: 'intern', schedule_type: '5/2' }}
         >
           <Form.Item name="username" label="Логин" rules={[{ required: true, message: 'Введите логин' }]}>
             <Input placeholder="Логин" />
@@ -297,11 +297,11 @@ const UsersAdminPage: React.FC = () => {
             <Input.Password placeholder="Пароль" />
           </Form.Item>
 
-          <Form.Item name="firstName" label="Имя" rules={[{ required: true, message: 'Введите имя' }]}>
+          <Form.Item name="first_name" label="Имя" rules={[{ required: true, message: 'Введите имя' }]}>
             <Input placeholder="Имя" />
           </Form.Item>
 
-          <Form.Item name="lastName" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
+          <Form.Item name="last_name" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
             <Input placeholder="Фамилия" />
           </Form.Item>
 
@@ -309,18 +309,18 @@ const UsersAdminPage: React.FC = () => {
             <Select options={positionOptions} />
           </Form.Item>
 
-          <Form.Item name="scheduleType" label="График" rules={[{ required: true, message: 'Выберите график' }]}>
+          <Form.Item name="schedule_type" label="График" rules={[{ required: true, message: 'Выберите график' }]}>
             <Select options={scheduleOptions} />
           </Form.Item>
 
           <Row gutter={12}>
             <Col span={10}>
-              <Form.Item name="externalType" label="Внешняя система">
+              <Form.Item name="external_type" label="Внешняя система">
                 <Select allowClear options={externalTypeOptions} placeholder="Выберите" />
               </Form.Item>
             </Col>
             <Col span={14}>
-              <Form.Item name="externalSystemId" label="ID">
+              <Form.Item name="external_system_id" label="ID">
                 <Input placeholder={getExternalPlaceholder(watchedCreateExternalType)} />
               </Form.Item>
             </Col>
@@ -347,21 +347,21 @@ const UsersAdminPage: React.FC = () => {
           onFinish={onEdit}
         >
           <Form.Item name="username" label="Логин">
-            <Input disabled={selectedUser?.hasLoggedIn} placeholder="Логин" />
+            <Input disabled={selectedUser?.has_logged_in} placeholder="Логин" />
           </Form.Item>
 
           <Form.Item name="password" label="Новый пароль">
             <Input.Password
-              disabled={selectedUser?.hasLoggedIn}
-              placeholder={selectedUser?.hasLoggedIn ? 'После первого входа меняет только сотрудник' : 'Оставьте пустым, если без изменений'}
+              disabled={selectedUser?.has_logged_in}
+              placeholder={selectedUser?.has_logged_in ? 'После первого входа меняет только сотрудник' : 'Оставьте пустым, если без изменений'}
             />
           </Form.Item>
 
-          <Form.Item name="firstName" label="Имя" rules={[{ required: true, message: 'Введите имя' }]}>
+          <Form.Item name="first_name" label="Имя" rules={[{ required: true, message: 'Введите имя' }]}>
             <Input placeholder="Имя" />
           </Form.Item>
 
-          <Form.Item name="lastName" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
+          <Form.Item name="last_name" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
             <Input placeholder="Фамилия" />
           </Form.Item>
 
@@ -369,24 +369,24 @@ const UsersAdminPage: React.FC = () => {
             <Select options={positionOptions} />
           </Form.Item>
 
-          <Form.Item name="scheduleType" label="График" rules={[{ required: true, message: 'Выберите график' }]}>
+          <Form.Item name="schedule_type" label="График" rules={[{ required: true, message: 'Выберите график' }]}>
             <Select options={scheduleOptions} />
           </Form.Item>
 
           <Row gutter={12}>
             <Col span={10}>
-              <Form.Item name="externalType" label="Внешняя система">
+              <Form.Item name="external_type" label="Внешняя система">
                 <Select allowClear options={externalTypeOptions} placeholder="Выберите" />
               </Form.Item>
             </Col>
             <Col span={14}>
-              <Form.Item name="externalSystemId" label="ID">
+              <Form.Item name="external_system_id" label="ID">
                 <Input placeholder={getExternalPlaceholder(watchedEditExternalType)} />
               </Form.Item>
             </Col>
           </Row>
 
-          {selectedUser?.hasLoggedIn && (
+          {selectedUser?.has_logged_in && (
             <Text type="secondary">Логин и пароль уже нельзя менять администратору после первого входа сотрудника.</Text>
           )}
         </Form>
@@ -396,3 +396,4 @@ const UsersAdminPage: React.FC = () => {
 };
 
 export default UsersAdminPage;
+

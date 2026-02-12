@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { UserIntegrationDTO } from '@/types/api';
 
@@ -6,17 +6,17 @@ import type { UserIntegrationDTO } from '@/types/api';
 export interface User {
   id: number;
   username: string;
-  fullName: string;
-  firstName: string;
-  lastName: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
   position: string;
   roles: string[];
-  externalSystemId?: string;
-  externalType?: string;
+  external_system_id?: string;
+  external_type?: string;
   integrations?: UserIntegrationDTO[];
-  scheduleType: string;
-  isActive: boolean;
-  hasLoggedIn: boolean;
+  schedule_type: string;
+  is_active: boolean;
+  has_logged_in: boolean;
 }
 
 interface AuthState {
@@ -43,3 +43,4 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+

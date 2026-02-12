@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -192,7 +192,7 @@ const AcceptancePage: React.FC = () => {
       const row = raw as Record<string, string | undefined>;
       const value = row.id || row.ID || '';
       const name = row.device_name || row.server_name || 'Сервер';
-      const crm = row.crm_id || row.CRMid || '';
+      const crm = row.crm_id || row.crm_id || '';
       const ip = row.ip || row.IP || '';
       return {
         value,
@@ -603,3 +603,4 @@ const AcceptancePage: React.FC = () => {
 };
 
 export default AcceptancePage;
+

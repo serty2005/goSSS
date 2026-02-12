@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Empty, List, Space, Spin, Tag, Typography } from 'antd';
@@ -42,9 +42,9 @@ const CompaniesListPage: React.FC = () => {
               const id = resolveCompanyID(company);
               const title = resolveCompanyTitle(company) || id;
               const parentTitle = resolveCompanyParentTitle(company);
-              const address = company.Address || company.address;
-              const additional = company.AdditionalName || company.additional_name;
-              const isActive = (company.ActiveContract ?? company.active_contract) === true;
+              const address = company.address;
+              const additional = company.additional_name;
+              const is_active = company.active_contract === true;
 
               return (
                 <List.Item key={id || title}>
@@ -52,7 +52,7 @@ const CompaniesListPage: React.FC = () => {
                     <Space size={8}>
                       <BankOutlined />
                       {id ? <Link to={`/companies/${id}`}>{title}</Link> : <Text strong>{title}</Text>}
-                      <Tag color={isActive ? 'success' : 'default'}>{isActive ? 'Активен' : 'Завершён'}</Tag>
+                      <Tag color={is_active ? 'success' : 'default'}>{is_active ? 'Активен' : 'Завершён'}</Tag>
                     </Space>
                     {parentTitle && <Text type="secondary">Группа: {parentTitle}</Text>}
                     {additional && <Text type="secondary">Юр. название: {additional}</Text>}
@@ -69,3 +69,4 @@ const CompaniesListPage: React.FC = () => {
 };
 
 export default CompaniesListPage;
+

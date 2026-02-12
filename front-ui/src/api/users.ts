@@ -1,4 +1,4 @@
-import apiClient from './axios';
+﻿import apiClient from './axios';
 import { ApiResponse, UserAdminDTO, UserCreatePayload, UserUpdatePayload } from '@/types/api';
 
 export const usersApi = {
@@ -8,7 +8,7 @@ export const usersApi = {
   },
 
   getAssignees: async () => {
-    const response = await apiClient.get<ApiResponse<Array<{ id: number; fullName: string; username: string; isActive: boolean }>>>('/profile/assignees');
+    const response = await apiClient.get<ApiResponse<Array<{ id: number; full_name: string; username: string; is_active: boolean }>>>('/profile/assignees');
     return response.data;
   },
 
@@ -22,8 +22,9 @@ export const usersApi = {
     return response.data;
   },
 
-  updateUserStatus: async (id: number, isActive: boolean) => {
-    const response = await apiClient.patch<ApiResponse<UserAdminDTO>>(`/users/${id}/status`, { isActive });
+  updateUserStatus: async (id: number, is_active: boolean) => {
+    const response = await apiClient.patch<ApiResponse<UserAdminDTO>>(`/users/${id}/status`, { is_active });
     return response.data;
   },
 };
+

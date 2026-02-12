@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+﻿import React, { useMemo } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, Card, Form, Input, Space, Typography, message, Select } from 'antd';
 import { profileApi } from '@/api/profile';
@@ -10,7 +10,7 @@ type CredentialsForm = {
   username: string;
   password?: string;
   confirmPassword?: string;
-  integrations?: Array<{ integrationType?: string; externalId?: string; isLocked?: boolean; isVerified?: boolean; verifiedName?: string }>;
+  integrations?: Array<{ integration_type?: string; external_id?: string; is_locked?: boolean; is_verified?: boolean; verified_name?: string }>;
 };
 
 const integrationOptions = [
@@ -26,11 +26,11 @@ const ProfilePage: React.FC = () => {
 
   const initialIntegrations = useMemo(() => {
     return (user?.integrations || []).map((item) => ({
-      integrationType: item.integrationType,
-      externalId: item.externalId,
-      isLocked: item.isLocked,
-      isVerified: item.isVerified,
-      verifiedName: item.verifiedName,
+      integration_type: item.integration_type,
+      external_id: item.external_id,
+      is_locked: item.is_locked,
+      is_verified: item.is_verified,
+      verified_name: item.verified_name,
     }));
   }, [user?.integrations]);
 
@@ -39,7 +39,7 @@ const ProfilePage: React.FC = () => {
   });
 
   const updateIntegrationsMutation = useMutation({
-    mutationFn: (payload: { integrations: Array<{ integrationType: string; externalId: string }> }) => profileApi.updateIntegrations(payload),
+    mutationFn: (payload: { integrations: Array<{ integration_type: string; external_id: string }> }) => profileApi.updateIntegrations(payload),
   });
 
   const onFinish = async (values: CredentialsForm) => {
@@ -57,16 +57,16 @@ const ProfilePage: React.FC = () => {
 
     const normalizedIntegrations = (values.integrations || [])
       .map((item) => ({
-        integrationType: String(item.integrationType || '').trim().toLowerCase(),
-        externalId: String(item.externalId || '').trim(),
+        integration_type: String(item.integration_type || '').trim().toLowerCase(),
+        external_id: String(item.external_id || '').trim(),
       }))
-      .filter((item) => item.integrationType && item.externalId);
+      .filter((item) => item.integration_type && item.external_id);
 
     const currentIntegrations = (user.integrations || [])
-      .map((item) => `${item.integrationType}:${item.externalId}`)
+      .map((item) => `${item.integration_type}:${item.external_id}`)
       .sort();
     const nextIntegrations = normalizedIntegrations
-      .map((item) => `${item.integrationType}:${item.externalId}`)
+      .map((item) => `${item.integration_type}:${item.external_id}`)
       .sort();
     const integrationsChanged = currentIntegrations.join('|') !== nextIntegrations.join('|');
 
@@ -88,17 +88,17 @@ const ProfilePage: React.FC = () => {
           updatedUser = {
             ...updatedUser,
             integrations: dtoUser.integrations || [],
-            externalType: dtoUser.externalType,
-            externalSystemId: dtoUser.externalSystemId,
+            external_type: dtoUser.external_type,
+            external_system_id: dtoUser.external_system_id,
           };
         } else {
           updatedUser = {
             ...updatedUser,
             integrations: normalizedIntegrations.map((item, index) => ({
               id: index + 1,
-              integrationType: item.integrationType,
-              externalId: item.externalId,
-              isVerified: false,
+              integration_type: item.integration_type,
+              external_id: item.external_id,
+              is_verified: false,
             })),
           };
         }
@@ -165,23 +165,23 @@ const ProfilePage: React.FC = () => {
                   <Space key={field.key} style={{ display: 'flex', width: '100%' }} align="start">
                     <Form.Item
                       {...field}
-                      name={[field.name, 'integrationType']}
+                      name={[field.name, 'integration_type']}
                       label="Система"
                       rules={[{ required: true, message: 'Выберите систему' }]}
                       style={{ minWidth: 180, marginBottom: 0 }}
                     >
-                      <Select options={integrationOptions} placeholder="Система" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'isLocked']))} />
+                      <Select options={integrationOptions} placeholder="Система" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
                     </Form.Item>
                     <Form.Item
                       {...field}
-                      name={[field.name, 'externalId']}
+                      name={[field.name, 'external_id']}
                       label="ID"
                       rules={[{ required: true, message: 'Введите ID' }]}
                       style={{ flex: 1, marginBottom: 0 }}
                     >
-                      <Input placeholder="ID во внешней системе" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'isLocked']))} />
+                      <Input placeholder="ID во внешней системе" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
                     </Form.Item>
-                    {!form.getFieldValue(['integrations', field.name, 'isLocked']) ? (
+                    {!form.getFieldValue(['integrations', field.name, 'is_locked']) ? (
                       <Button onClick={() => remove(field.name)} danger style={{ marginTop: 30 }}>
                         Удалить
                       </Button>
@@ -212,3 +212,4 @@ const ProfilePage: React.FC = () => {
 };
 
 export default ProfilePage;
+

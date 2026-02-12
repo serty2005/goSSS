@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
@@ -133,11 +133,9 @@ const TicketDetailsPage: React.FC = () => {
   });
 
   const companyTitle = useMemo(() => {
-    const companyData = companyResponse?.data as { Title?: string; title?: string; AdditionalName?: string; additional_name?: string } | undefined;
+    const companyData = companyResponse?.data as { title?: string; additional_name?: string } | undefined;
     return (
-      companyData?.Title ||
       companyData?.title ||
-      companyData?.AdditionalName ||
       companyData?.additional_name ||
       details?.company_name ||
       metadata?.company_name ||
@@ -147,8 +145,7 @@ const TicketDetailsPage: React.FC = () => {
   }, [companyResponse?.data, details?.company_name, metadata?.company_id, metadata?.company_name]);
 
   const contractID = metadata?.contract_id
-    || (companyResponse?.data as { ContractID?: string; contract_id?: string } | undefined)?.ContractID
-    || (companyResponse?.data as { ContractID?: string; contract_id?: string } | undefined)?.contract_id;
+    || (companyResponse?.data as { contract_id?: string } | undefined)?.contract_id;
   const { data: contractResponse } = useQuery({
     queryKey: ['contract', contractID],
     queryFn: () => contractsApi.getContract(contractID || ''),
@@ -156,14 +153,13 @@ const TicketDetailsPage: React.FC = () => {
     staleTime: 60_000,
   });
   const contractType = useMemo(() => {
-    const companyContractType = (companyResponse?.data as { ContractType?: string; contract_type?: string } | undefined)?.ContractType
-      || (companyResponse?.data as { ContractType?: string; contract_type?: string } | undefined)?.contract_type;
-    const rawServices = contractResponse?.data?.services ?? contractResponse?.data?.Services;
+    const companyContractType = (companyResponse?.data as { contract_type?: string } | undefined)?.contract_type;
+    const rawServices = contractResponse?.data?.services;
     if (Array.isArray(rawServices) && rawServices.length > 0 && String(rawServices[0]).trim() !== '') {
       return String(rawServices[0]).trim();
     }
     return companyContractType || '-';
-  }, [companyResponse?.data, contractResponse?.data?.services, contractResponse?.data?.Services]);
+  }, [companyResponse?.data, contractResponse?.data?.services]);
 
   const { data: usersResponse } = useQuery({
     queryKey: ['users-assignees'],
@@ -174,8 +170,8 @@ const TicketDetailsPage: React.FC = () => {
   const assigneeOptions = useMemo(
     () =>
       (usersResponse?.data || [])
-        .filter((item) => item.isActive)
-        .map((item) => ({ value: item.id, label: item.fullName || item.username })),
+        .filter((item) => item.is_active)
+        .map((item) => ({ value: item.id, label: item.full_name || item.username })),
     [usersResponse?.data],
   );
 
@@ -255,7 +251,7 @@ const TicketDetailsPage: React.FC = () => {
           ...(item.entity_type === 'Server' ? [{ label: 'IP', value: dataRow.ip }] : []),
           { label: 'AnyDesk', value: dataRow.anydesk },
           { label: 'TeamViewer', value: dataRow.teamviewer },
-          { label: 'RDP', value: dataRow.rdp },
+          { label: 'rdp', value: dataRow.rdp },
           { label: 'LM', value: dataRow.litemanager },
         ].filter((entry) => entry.value);
         if (rows.length === 0) return null;
@@ -283,7 +279,7 @@ const TicketDetailsPage: React.FC = () => {
       .map((raw) => {
         const item = raw as Record<string, unknown>;
         return {
-          id: String(item.id || item.ID || ''),
+          id: String(item.id || ''),
           fileName: String(item.file_name || item.FileName || 'Файл'),
           filePath: String(item.file_path || item.FilePath || '')
             .replace(/^\/static\//, '/api/static/')
@@ -932,3 +928,4 @@ const TicketDetailsPage: React.FC = () => {
 };
 
 export default TicketDetailsPage;
+

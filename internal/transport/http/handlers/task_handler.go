@@ -141,7 +141,7 @@ func (h *TaskHandler) buildTaskDTO(ctx context.Context, task models.Reconciliati
 	if task.EntityType != "" && task.EntityUUID != "" && domain.TaskType(task.TaskType) != domain.TaskAddEquipment {
 		link, _ := h.linkRepo.GetByInternalID(ctx, nil, "naumen", task.EntityUUID)
 		if link != nil {
-			detailsMap["externalUUID"] = link.ServiceDeskUUID
+			detailsMap["external_uuid"] = link.ServiceDeskUUID
 		}
 	}
 
@@ -163,8 +163,8 @@ func (h *TaskHandler) enrichAddEquipmentDetails(task models.ReconciliationTask) 
 		return struct {
 			EtalonOwnerID    string                    `json:"etalon_owner_id"`
 			EquipmentData    api.FiscalRegisterRichDTO `json:"equipment_data"`
-			OrganizationName string                    `json:"organizationName"`
-			SerialNumber     string                    `json:"serialNumber"`
+			OrganizationName string                    `json:"organization_name"`
+			SerialNumber     string                    `json:"serial_number"`
 			URLRms           string                    `json:"url_rms"`
 			TeamviewerID     string                    `json:"teamviewer_id"`
 			AnydeskID        string                    `json:"anydesk_id"`
@@ -408,6 +408,7 @@ func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws workstat
 	dto := api.WorkstationRichDTO{
 		UUID:          ws.ID,
 		DeviceName:    ws.DeviceName,
+		IsNew:         ws.IsNew,
 		HealthStatus:  ws.HealthStatus,
 		StatusDetails: statusDetails,
 		Anydesk:       ws.Anydesk,

@@ -223,10 +223,10 @@ func setupRepositories(db *gorm.DB) Repositories {
 		ServerRepo:      infraRepos.NewServerRepo(db),
 		WorkstationRepo: infraRepos.NewWorkstationRepo(db),
 		FRRepo:          infraRepos.NewFiscalRegisterRepo(db),
-		AgentRepo:       repositories.NewAgentRepo(db),
-		TaskRepo:        repositories.NewTaskRepo(db),
+		AgentRepo:       infraRepos.NewAgentRepo(db),
+		TaskRepo:        infraRepos.NewTaskRepo(db),
 		UserRepo:        infraRepos.NewUserRepo(db),
-		LinkRepo:        repositories.NewLinkRepo(db),
+		LinkRepo:        infraRepos.NewLinkRepo(db),
 		BitrixRepo:      infraRepos.NewBitrixRepo(db),
 	}
 }
@@ -271,7 +271,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 	return Services{
 		AuthService:           services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentObservation:      obsService,
-		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus, obsService),
+		AgentService:          services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.DB, app.EventBus),
 		TaskResolutionService: services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), app.DB, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TaskService:           taskSvc.NewService(app.Logger.With("component", "task_service"), transactor, app.DB),
 		ServerActionsService:  services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, app.DB, clients.IikoClient),
@@ -308,7 +308,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	// --- 4. Настройка остальных сервисов ---
 	reconciliationEngine := processing.NewReconciliationEngine(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, srvs.EntityMatcherService, app.Logger.With("component", "reconciliation_engine"))
 	engine := processing.NewProcessingEngine(app.Logger.With("component", "processing_engine"), repos.TaskRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, reconciliationEngine, srvs.EntityMatcherService)
-	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine)
+	orchestrator := processing.NewOrchestrator(app.Logger.With("component", "orchestrator"), app.DB, app.EventBus, clients.SDClient, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.TaskRepo, repos.LinkRepo, engine, srvs.AgentObservation)
 	orchestrator.Start(context.Background())
 
 	// Передаем IntegrationManager вместо SDClient

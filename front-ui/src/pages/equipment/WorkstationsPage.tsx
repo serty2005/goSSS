@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Empty, Space, Spin, Table, Typography } from 'antd';
@@ -28,13 +28,13 @@ const WorkstationsPage: React.FC = () => {
 
   const rows: Row[] = (data?.data || []).map((item) => {
     const row = item as Record<string, unknown>;
-    const id = String(row.ID || row.id || '');
+    const id = String(row.id || '');
     return {
       id,
-      name: String(row.DeviceName || row.device_name || id || 'Рабочая станция'),
-      anydesk: String(row.Anydesk || row.anydesk || '-'),
-      teamviewer: String(row.Teamviewer || row.teamviewer || '-'),
-      ownerId: String(row.OwnerID || row.owner_id || ''),
+      name: String(row.device_name || id || 'Рабочая станция'),
+      anydesk: String(row.anydesk || '-'),
+      teamviewer: String(row.teamviewer || '-'),
+      ownerId: String(row.owner_id || ''),
     };
   });
 
@@ -82,3 +82,4 @@ const WorkstationsPage: React.FC = () => {
 };
 
 export default WorkstationsPage;
+

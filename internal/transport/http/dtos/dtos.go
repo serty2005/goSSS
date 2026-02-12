@@ -41,8 +41,8 @@ type ErrorResponseDTO struct {
 // LicenseInfo описывает одну лицензию из данных агента.
 type LicenseInfo struct {
 	Name      string `json:"name"`
-	DateFrom  string `json:"dateFrom"`
-	DateUntil string `json:"dateUntil"`
+	DateFrom  string `json:"date_from"`
+	DateUntil string `json:"date_until"`
 }
 
 // LicensesField - это специальный тип для поля 'licenses',
@@ -156,7 +156,7 @@ type TicketListDTO struct {
 	BitrixDealTitle      string    `json:"bitrix_deal_title"`
 	Assignee             *struct {
 		ID       uint   `json:"id"`
-		FullName string `json:"fullName"`
+		FullName string `json:"full_name"`
 	} `json:"assignee,omitempty"`
 }
 
@@ -341,26 +341,26 @@ type LoginRequestDTO struct {
 type UserDTO struct {
 	ID               uint                 `json:"id"`
 	Username         string               `json:"username"`
-	FullName         string               `json:"fullName"`
-	FirstName        string               `json:"firstName"`
-	LastName         string               `json:"lastName"`
+	FullName         string               `json:"full_name"`
+	FirstName        string               `json:"first_name"`
+	LastName         string               `json:"last_name"`
 	Position         string               `json:"position"`
 	Roles            []string             `json:"roles"`
-	ExternalSystemID *string              `json:"externalSystemId,omitempty"`
-	ExternalType     *string              `json:"externalType,omitempty"`
-	ScheduleType     string               `json:"scheduleType"`
-	IsActive         bool                 `json:"isActive"`
-	HasLoggedIn      bool                 `json:"hasLoggedIn"`
+	ExternalSystemID *string              `json:"external_system_id,omitempty"`
+	ExternalType     *string              `json:"external_type,omitempty"`
+	ScheduleType     string               `json:"schedule_type"`
+	IsActive         bool                 `json:"is_active"`
+	HasLoggedIn      bool                 `json:"has_logged_in"`
 	Integrations     []UserIntegrationDTO `json:"integrations,omitempty"`
 }
 
 type UserIntegrationDTO struct {
 	ID              uint   `json:"id"`
-	IntegrationType string `json:"integrationType"`
-	ExternalID      string `json:"externalId"`
-	IsVerified      bool   `json:"isVerified"`
-	IsLocked        bool   `json:"isLocked"`
-	VerifiedName    string `json:"verifiedName,omitempty"`
+	IntegrationType string `json:"integration_type"`
+	ExternalID      string `json:"external_id"`
+	IsVerified      bool   `json:"is_verified"`
+	IsLocked        bool   `json:"is_locked"`
+	VerifiedName    string `json:"verified_name,omitempty"`
 }
 
 // LoginResponseDTO - тело ответа при успешном входе.
@@ -373,30 +373,30 @@ type LoginResponseDTO struct {
 type UserCreateDTO struct {
 	Username         string   `json:"username" validate:"required"`
 	Password         string   `json:"password" validate:"required,min=6"`
-	FirstName        string   `json:"firstName" validate:"required"`
-	LastName         string   `json:"lastName" validate:"required"`
+	FirstName        string   `json:"first_name" validate:"required"`
+	LastName         string   `json:"last_name" validate:"required"`
 	Position         string   `json:"position" validate:"required"`
 	Roles            []string `json:"roles,omitempty"`
-	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
-	ExternalType     *string  `json:"externalType,omitempty"`
-	ScheduleType     string   `json:"scheduleType" validate:"required"`
+	ExternalSystemID *string  `json:"external_system_id,omitempty"`
+	ExternalType     *string  `json:"external_type,omitempty"`
+	ScheduleType     string   `json:"schedule_type" validate:"required"`
 }
 
 // UserUpdateDTO - DTO для обновления пользователя.
 type UserUpdateDTO struct {
 	Username         *string  `json:"username,omitempty"`
 	Password         *string  `json:"password,omitempty" validate:"omitempty,min=6"`
-	FirstName        *string  `json:"firstName,omitempty"`
-	LastName         *string  `json:"lastName,omitempty"`
+	FirstName        *string  `json:"first_name,omitempty"`
+	LastName         *string  `json:"last_name,omitempty"`
 	Position         *string  `json:"position,omitempty"`
 	Roles            []string `json:"roles,omitempty"`
-	ExternalSystemID *string  `json:"externalSystemId,omitempty"`
-	ExternalType     *string  `json:"externalType,omitempty"`
-	ScheduleType     *string  `json:"scheduleType,omitempty"`
+	ExternalSystemID *string  `json:"external_system_id,omitempty"`
+	ExternalType     *string  `json:"external_type,omitempty"`
+	ScheduleType     *string  `json:"schedule_type,omitempty"`
 }
 
 type UserStatusUpdateDTO struct {
-	IsActive bool `json:"isActive"`
+	IsActive bool `json:"is_active"`
 }
 
 type ProfileCredentialsUpdateDTO struct {
@@ -405,8 +405,8 @@ type ProfileCredentialsUpdateDTO struct {
 }
 
 type ProfileIntegrationUpdateItemDTO struct {
-	IntegrationType string `json:"integrationType"`
-	ExternalID      string `json:"externalId"`
+	IntegrationType string `json:"integration_type"`
+	ExternalID      string `json:"external_id"`
 }
 
 type ProfileIntegrationsUpdateDTO struct {
@@ -478,6 +478,7 @@ type WorkstationRichDTO struct {
 	UUID            string      `json:"uuid"`
 	ServiceDeskUUID *string     `json:"external_uuid,omitempty"`
 	DeviceName      *string     `json:"device_name,omitempty"`
+	IsNew           bool        `json:"is_new"`
 	HealthStatus    string      `json:"health_status,omitempty"`
 	StatusDetails   interface{} `json:"status_details,omitempty"`
 	Anydesk         *string     `json:"anydesk,omitempty"`

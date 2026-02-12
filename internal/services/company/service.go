@@ -208,6 +208,7 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 					UUID:            ws.ID,
 					ServiceDeskUUID: extUUID,
 					DeviceName:      ws.DeviceName,
+					IsNew:           ws.IsNew,
 					HealthStatus:    ws.HealthStatus,
 					StatusDetails:   statusDetails,
 					Anydesk:         ws.Anydesk,

@@ -13,6 +13,7 @@ import (
 	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -49,7 +50,7 @@ func (h *CompanyHandler) Get(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, comp)
+	response.RespondWithJSON(w, http.StatusOK, toCompanyResponseDTO(*comp))
 }
 
 func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +71,11 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, comps)
+	items := make([]companyResponseDTO, 0, len(comps))
+	for _, comp := range comps {
+		items = append(items, toCompanyResponseDTO(comp))
+	}
+	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
 func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +91,7 @@ func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Creation failed")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusCreated, comp)
+	response.RespondWithJSON(w, http.StatusCreated, toCompanyResponseDTO(*comp))
 }
 
 func (h *CompanyHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -176,4 +181,41 @@ func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Reques
 	// Если оборудования нет, items будет пустым слайсом (инициализирован в сервисе),
 	// json.Marshal сериализует его как [] (не null).
 	response.RespondWithJSON(w, http.StatusOK, items)
+}
+
+type companyResponseDTO struct {
+	ID               string  `json:"id"`
+	Title            string  `json:"title"`
+	Address          *string `json:"address,omitempty"`
+	AdditionalName   *string `json:"additional_name,omitempty"`
+	ActiveContract   *bool   `json:"active_contract,omitempty"`
+	ParentID         *string `json:"parent_id,omitempty"`
+	ParentTitle      *string `json:"parent_title,omitempty"`
+	ContractID       *string `json:"contract_id,omitempty"`
+	ContractType     *string `json:"contract_type,omitempty"`
+	LastModifiedDate *string `json:"last_modified_date,omitempty"`
+}
+
+func toCompanyResponseDTO(comp company.Company) companyResponseDTO {
+	var title string
+	if comp.Title != nil {
+		title = strings.TrimSpace(*comp.Title)
+	}
+	var lastModifiedDate *string
+	if comp.LastModifiedDate != nil {
+		formatted := comp.LastModifiedDate.Format("2006-01-02T15:04:05Z07:00")
+		lastModifiedDate = &formatted
+	}
+	return companyResponseDTO{
+		ID:               comp.ID,
+		Title:            title,
+		Address:          comp.Address,
+		AdditionalName:   comp.AdditionalName,
+		ActiveContract:   comp.ActiveContract,
+		ParentID:         comp.ParentID,
+		ParentTitle:      comp.ParentTitle,
+		ContractID:       comp.ContractID,
+		ContractType:     comp.ContractType,
+		LastModifiedDate: lastModifiedDate,
+	}
 }

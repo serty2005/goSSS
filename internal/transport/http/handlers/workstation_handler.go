@@ -55,7 +55,11 @@ func (h *WSHandler) List(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{Data: items, Limit: limit, Offset: offset})
+	dtos := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		dtos = append(dtos, toWorkstationResponse(item))
+	}
+	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{Data: dtos, Limit: limit, Offset: offset})
 }
 
 func (h *WSHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +73,7 @@ func (h *WSHandler) Get(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusNotFound, "Not Found")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, item)
+	response.RespondWithJSON(w, http.StatusOK, toWorkstationResponse(*item))
 }
 
 func (h *WSHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +88,7 @@ func (h *WSHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Creation Failed")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusCreated, item)
+	response.RespondWithJSON(w, http.StatusCreated, toWorkstationResponse(*item))
 }
 
 func (h *WSHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -111,4 +115,29 @@ func (h *WSHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func toWorkstationResponse(item workstation.Workstation) map[string]interface{} {
+	var statusDetails interface{}
+	if len(item.StatusDetails) > 0 {
+		_ = json.Unmarshal(item.StatusDetails, &statusDetails)
+	}
+	return map[string]interface{}{
+		"id":                 item.ID,
+		"created_at":         item.CreatedAt,
+		"updated_at":         item.UpdatedAt,
+		"deleted_at":         item.DeletedAt,
+		"identity_hash":      item.IdentityHash,
+		"teamviewer":         item.Teamviewer,
+		"anydesk":            item.Anydesk,
+		"litemanager":        item.Litemanager,
+		"device_name":        item.DeviceName,
+		"server_id":          item.ServerID,
+		"is_new":             item.IsNew,
+		"last_modified_date": item.LastModifiedDate,
+		"description":        item.Description,
+		"health_status":      item.HealthStatus,
+		"status_details":     statusDetails,
+		"owner_id":           item.OwnerID,
+	}
 }

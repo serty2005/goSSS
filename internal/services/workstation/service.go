@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
+	"strings"
 )
 
 type serviceImpl struct {
@@ -33,6 +34,15 @@ func (s *serviceImpl) Create(ctx context.Context, dto *api.WorkstationCreateDTO)
 
 func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]interface{}) error {
 	cleanData(data)
+	// После ручного именования станция перестаёт считаться новой.
+	if rawName, ok := data["device_name"]; ok {
+		if name, okCast := rawName.(string); okCast && name != "" {
+			data["device_name"] = strings.TrimSpace(name)
+		}
+		if name, okCast := data["device_name"].(string); okCast && name != "" {
+			data["is_new"] = false
+		}
+	}
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		updated, err := s.repo.Update(txCtx, nil, id, data)
 		if err != nil {

@@ -18,6 +18,8 @@ const (
 
 	// AgentDataReceived событие возникает, когда от агента (по API или через FTP) получены данные.
 	AgentDataReceived = "agent.data.received"
+	// AgentObservationRequested событие возникает, когда требуется применить наблюдение агента в доменной модели.
+	AgentObservationRequested = "agent.observation.requested"
 
 	// DuplicatesFound событие возникает, когда воркер поиска обнаружил дубликаты.
 	DuplicatesFound = "duplicates.found"
@@ -119,4 +121,10 @@ type FiscalRegisterDiscrepancyPayload struct {
 type AgentDataPayload struct {
 	Source string           // Источник данных: имя файла для FTP или UUID агента для API
 	Data   api.AgentDataDTO // Сами данные, полученные от агента
+}
+
+// AgentObservationPayload - полезная нагрузка для события AgentObservationRequested.
+type AgentObservationPayload struct {
+	Source string           // Источник данных: UUID агента для API или имя файла для FTP
+	Data   api.AgentDataDTO // Данные наблюдения
 }
