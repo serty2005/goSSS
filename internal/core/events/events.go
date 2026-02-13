@@ -1,3 +1,12 @@
+// Package events определяет типы событий и их payload для событийно-ориентированной архитектуры.
+// События используются для асинхронного взаимодействия между компонентами системы через EventBus.
+//
+// Паттерн использования:
+//   - Издатель: публикует событие через eventBus.Publish(eventName, payload)
+//   - Подписчик: регистрирует обработчик через eventBus.Subscribe(eventName, handler)
+//
+// Все события именуются в формате: <домен>.<сущность>.<действие>
+// Например: "agent.data.received", "servicedesk.entity.updated"
 package events
 
 import (
@@ -5,126 +14,263 @@ import (
 	"time"
 )
 
-// Константы для типов событий.
+// Константы типов событий системы.
+// Каждая константа определяет уникальный идентификатор события для шины событий.
 const (
-	// ContractsStatusRecalculated событие возникает, когда шлюз контрактов завершил синхронизацию и пересчет статусов.
+	// ContractsStatusRecalculated — событие завершения синхронизации контрактов.
+	// Публикуется: ContractGateway после обновления статусов контрактов.
+	// Подписчики: компоненты, зависящие от статуса контрактов (например, расчёт SLA).
+	// Payload: ContractsStatusPayload.
 	ContractsStatusRecalculated = "contracts.status.recalculated"
 
-	// ServiceDeskEntityUpdated событие возникает, когда из ServiceDesk получены обновленные данные о сущности.
+	// ServiceDeskEntityUpdated — событие обновления сущности в ServiceDesk (Naumen).
+	// Публикуется: ServiceDeskSyncWorker при получении обновлений из внешней системы.
+	// Подписчики: репозитории для обновления локальных данных.
+	// Payload: ServiceDeskEntityPayload.
 	ServiceDeskEntityUpdated = "servicedesk.entity.updated"
 
-	// ServiceDeskEntityDeleted событие возникает, когда сущность была удалена в ServiceDesk.
+	// ServiceDeskEntityDeleted — событие удаления сущности в ServiceDesk (Naumen).
+	// Публикуется: ServiceDeskSyncWorker при обнаружении удалённой сущности.
+	// Подписчики: репозитории для мягкого удаления локальных данных.
+	// Payload: ServiceDeskEntityDeletePayload.
 	ServiceDeskEntityDeleted = "servicedesk.entity.deleted"
 
-	// AgentDataReceived событие возникает, когда от агента (по API или через FTP) получены данные.
+	// AgentDataReceived — событие получения данных от агента.
+	// Публикуется: AgentFTPGateway (из JSON-файлов) или HTTP-хендлер (прямая отправка).
+	// Подписчики: Orchestrator для обработки данных агента.
+	// Payload: AgentDataPayload.
 	AgentDataReceived = "agent.data.received"
-	// AgentObservationRequested событие возникает, когда требуется применить наблюдение агента в доменной модели.
+
+	// AgentObservationRequested — событие запроса на применение наблюдения агента.
+	// Публикуется: Orchestrator после валидации данных AgentDataReceived.
+	// Подписчики: Engine для создания/обновления доменных сущностей.
+	// Payload: AgentObservationPayload.
 	AgentObservationRequested = "agent.observation.requested"
 
-	// DuplicatesFound событие возникает, когда воркер поиска обнаружил дубликаты.
+	// DuplicatesFound — событие обнаружения дубликатов оборудования.
+	// Публикуется: DuplicatesWorker при сканировании БД.
+	// Подписчики: UI для отображения предупреждений, Reconciliation для создания задач.
+	// Payload: DuplicatesFoundPayload.
 	DuplicatesFound = "duplicates.found"
 
-	// ServerPollingSucceeded событие возникает при успешном опросе статуса сервера.
+	// ServerPollingSucceeded — событие успешного опроса сервера.
+	// Публикуется: ServerPollingGateway при успешном ответе от сервера.
+	// Подписчики: репозитории для обновления статуса сервера.
+	// Payload: ServerPollingSucceededPayload.
 	ServerPollingSucceeded = "server.polling.succeeded"
-	// ServerPollingFailed событие возникает при неудачном опросе статуса сервера.
+
+	// ServerPollingFailed — событие неудачного опроса сервера.
+	// Публикуется: ServerPollingGateway при ошибке опроса.
+	// Подписчики: репозитории для обновления статуса, алертинг.
+	// Payload: ServerPollingFailedPayload.
 	ServerPollingFailed = "server.polling.failed"
-	// ServerPollingRequested событие для ручного запуска опроса одного сервера.
+
+	// ServerPollingRequested — событие запроса ручного опроса сервера.
+	// Публикуется: HTTP-хендлер при запросе пользователя.
+	// Подписчики: ServerPollingGateway для выполнения опроса.
+	// Payload: ServerPollingRequestedPayload.
 	ServerPollingRequested = "server.polling.requested"
 
-	// ServiceDeskCreateRequested событие для асинхронного создания сущности в ServiceDesk.
+	// ServiceDeskCreateRequested — событие запроса создания сущности в ServiceDesk.
+	// Публикуется: HTTP-хендлеры при создании новых сущностей.
+	// Подписчики: ServiceDeskWorker для асинхронной отправки в Naumen.
+	// Payload: ServiceDeskModificationPayload.
 	ServiceDeskCreateRequested = "servicedesk.entity.create.requested"
-	// ServiceDeskUpdateRequested событие для асинхронного обновления сущности в ServiceDesk.
+
+	// ServiceDeskUpdateRequested — событие запроса обновления сущности в ServiceDesk.
+	// Публикуется: HTTP-хендлеры при изменении сущностей.
+	// Подписчики: ServiceDeskWorker для асинхронной отправки в Naumen.
+	// Payload: ServiceDeskModificationPayload.
 	ServiceDeskUpdateRequested = "servicedesk.entity.update.requested"
-	// FiscalRegisterDiscrepancyFound событие возникает, когда воркер обнаружил расхождение данных ФР.
+
+	// FiscalRegisterDiscrepancyFound — событие обнаружения расхождения данных ФР.
+	// Публикуется: DiscrepancyWorker при сравнении локальных данных с ServiceDesk.
+	// Подписчики: Reconciliation для создания задач на согласование.
+	// Payload: FiscalRegisterDiscrepancyPayload.
 	FiscalRegisterDiscrepancyFound = "discrepancy.fiscal_register.found"
 
-	// TicketUpdated событие возникает, когда воркер обнаружил обновление тикета.
+	// TicketUpdated — событие обновления тикета в ServiceDesk.
+	// Публикуется: TicketSyncWorker при обнаружении изменений.
+	// Подписчики: UI через WebSocket для обновления в реальном времени.
+	// Payload: ID тикета.
 	TicketUpdated = "ticket.updated"
 )
 
-// ServiceDeskEntityPayload - полезная нагрузка для события ServiceDeskEntityUpdated.
+// ServiceDeskEntityPayload — полезная нагрузка для события ServiceDeskEntityUpdated.
+// Содержит полные данные сущности, полученные из ServiceDesk (Naumen).
 type ServiceDeskEntityPayload struct {
-	EntityType      string // Внутренний тип сущности: "Company", "Server"
-	ServiceDeskUUID string // UUID сущности во внешней системе
-	// Data теперь interface{}, чтобы принимать как map (legacy), так и Struct (Model)
-	Data interface{} // Полные данные сущности (map[string]interface{} ИЛИ *server.Server и т.д.)
+	// EntityType — внутренний тип сущности Etalon.
+	// Значения: "Company", "Server", "Workstation", "Fiscal".
+	EntityType string
+
+	// ServiceDeskUUID — идентификатор сущности во внешней системе ServiceDesk (Naumen).
+	ServiceDeskUUID string
+
+	// Data — полные данные сущности.
+	// Тип interface{} позволяет принимать как map[string]interface{} (legacy JSON),
+	// так и типизированные структуры (*server.Server и т.д.).
+	Data interface{}
 }
 
-// ServiceDeskEntityDeletePayload - полезная нагрузка для события ServiceDeskEntityDeleted.
+// ServiceDeskEntityDeletePayload — полезная нагрузка для события ServiceDeskEntityDeleted.
+// Содержит минимальные данные для идентификации удалённой сущности.
 type ServiceDeskEntityDeletePayload struct {
-	EntityType      string // Внутренний тип сущности
-	ServiceDeskUUID string // UUID удаленной сущности во внешней системе
+	// EntityType — внутренний тип сущности Etalon.
+	EntityType string
+
+	// ServiceDeskUUID — идентификатор удалённой сущности во внешней системе.
+	ServiceDeskUUID string
 }
 
-// ContractsStatusPayload - полезная нагрузка для события ContractsStatusRecalculated.
+// ContractsStatusPayload — полезная нагрузка для события ContractsStatusRecalculated.
+// Содержит карту статусов контрактов для всех компаний.
 type ContractsStatusPayload struct {
-	// Карта, где ключ - ВНУТРЕННИЙ ID компании, а значение - флаг, активен ли у нее контракт.
+	// CompanyActiveContract — карта активностей контрактов по компаниям.
+	// Ключ: внутренний UUID компании.
+	// Значение: true — активный контракт, false — неактивный/отсутствует.
 	CompanyActiveContract map[string]bool
 }
 
-// DuplicatesFoundPayload - полезная нагрузка для события DuplicatesFound.
+// DuplicatesFoundPayload — полезная нагрузка для события DuplicatesFound.
+// Описывает группу дубликатов, обнаруженных по одному полю.
 type DuplicatesFoundPayload struct {
-	EntityType  string   // 'Server', 'Workstation', 'FiscalRegister'
-	Field       string   // Поле, по которому найдены дубликаты ('ip', 'anydesk', и т.д.)
-	Value       string   // Значение поля, которое дублируется
-	InternalIDs []string // Список ВНУТРЕННИХ UUID всех сущностей в группе дубликатов
+	// EntityType — тип оборудования с дубликатами.
+	// Значения: "Server", "Workstation", "FiscalRegister".
+	EntityType string
+
+	// Field — поле, по которому обнаружены дубликаты.
+	// Значения: "ip", "anydesk", "serial_number", "hostname" и др.
+	Field string
+
+	// Value — значение поля, которое повторяется у нескольких сущностей.
+	Value string
+
+	// InternalIDs — список внутренних UUID всех сущностей в группе дубликатов.
+	// Используется для отображения в UI и создания задач на разрешение.
+	InternalIDs []string
 }
 
-// ServerPollingSucceededPayload - полезная нагрузка для успешного опроса.
+// ServerPollingSucceededPayload — полезная нагрузка для события ServerPollingSucceeded.
+// Содержит результаты успешного опроса сервера.
 type ServerPollingSucceededPayload struct {
-	ServerUUID    string
-	RequestID     string // Идентификатор запроса для связывания логов
-	ServerName    string
-	ServerEdition string
-	ServerVersion string
-	NewStatus     string
-	LastPolledAt  time.Time
-}
+	// ServerUUID — внутренний UUID сервера.
+	ServerUUID string
 
-// ServerPollingFailedPayload - полезная нагрузка для неудачного опроса.
-type ServerPollingFailedPayload struct {
-	ServerUUID   string
-	RequestID    string // Идентификатор запроса для связывания логов
-	NewStatus    string // 'offline', 'archived' или 'undefined'
-	ErrorMessage string
+	// RequestID — идентификатор запроса для трассировки в логах.
+	RequestID string
+
+	// ServerName — имя сервера для логирования и отображения.
+	ServerName string
+
+	// ServerEdition — редакция ОС сервера (например, "Standard", "Datacenter").
+	ServerEdition string
+
+	// ServerVersion — версия ОС сервера.
+	ServerVersion string
+
+	// NewStatus — новый статус сервера после опроса.
+	// Значения: "online", "offline", "archived", "undefined".
+	NewStatus string
+
+	// LastPolledAt — время последнего успешного опроса.
 	LastPolledAt time.Time
 }
 
-// ServerPollingRequestedPayload - полезная нагрузка для ручного запуска.
+// ServerPollingFailedPayload — полезная нагрузка для события ServerPollingFailed.
+// Содержит информацию об ошибке опроса сервера.
+type ServerPollingFailedPayload struct {
+	// ServerUUID — внутренний UUID сервера.
+	ServerUUID string
+
+	// RequestID — идентификатор запроса для трассировки в логах.
+	RequestID string
+
+	// NewStatus — статус сервера после неудачного опроса.
+	// Значения: "offline", "archived", "undefined".
+	NewStatus string
+
+	// ErrorMessage — текст ошибки опроса.
+	ErrorMessage string
+
+	// LastPolledAt — время попытки опроса.
+	LastPolledAt time.Time
+}
+
+// ServerPollingRequestedPayload — полезная нагрузка для события ServerPollingRequested.
+// Инициирует ручной опрос конкретного сервера.
 type ServerPollingRequestedPayload struct {
+	// ServerUUID — внутренний UUID сервера для опроса.
 	ServerUUID string
 }
 
-// ServiceDeskModificationPayload - общая полезная нагрузка для событий создания/обновления в ServiceDesk.
+// ServiceDeskModificationPayload — полезная нагрузка для событий создания/обновления в ServiceDesk.
+// Используется для асинхронной синхронизации данных с внешней системой Naumen.
 type ServiceDeskModificationPayload struct {
-	TaskID            uint                   `json:"task_id"`
-	EntityType        string                 `json:"entity_type"`
-	EntityUUID        string                 `json:"entity_uuid,omitempty"` // Пусто для создания
-	TriggeredByUserID string                 `json:"triggered_by_user_id"`
-	PayloadForSD      map[string]interface{} `json:"payload_for_sd"` // Данные для отправки в SD
+	// TaskID — идентификатор задачи для отслеживания статуса.
+	TaskID uint `json:"task_id"`
+
+	// EntityType — тип сущности для создания/обновления.
+	// Значения: "Company", "Server", "Workstation", "Fiscal".
+	EntityType string `json:"entity_type"`
+
+	// EntityUUID — внутренний UUID сущности (пусто для создания новой).
+	EntityUUID string `json:"entity_uuid,omitempty"`
+
+	// TriggeredByUserID — UUID пользователя, инициировавшего операцию.
+	TriggeredByUserID string `json:"triggered_by_user_id"`
+
+	// PayloadForSD — данные для отправки в ServiceDesk в формате ключ-значение.
+	// Формат соответствует API Naumen.
+	PayloadForSD map[string]interface{} `json:"payload_for_sd"`
 }
 
-// DiscrepancyDetail описывает расхождение по одному полю.
+// DiscrepancyDetail описывает расхождение по одному полю между Etalon и ServiceDesk.
+// Используется для выявления рассинхронизации данных.
 type DiscrepancyDetail struct {
-	EtalonValue      interface{} `json:"etalon_value"`
+	// EtalonValue — значение поля в локальной БД Etalon.
+	EtalonValue interface{} `json:"etalon_value"`
+
+	// ServiceDeskValue — значение поля во внешней системе ServiceDesk (Naumen).
 	ServiceDeskValue interface{} `json:"service_desk_value"`
 }
 
-// FiscalRegisterDiscrepancyPayload - полезная нагрузка для события FiscalRegisterDiscrepancyFound.
+// FiscalRegisterDiscrepancyPayload — полезная нагрузка для события FiscalRegisterDiscrepancyFound.
+// Содержит все обнаруженные расхождения по фискальному регистратору.
 type FiscalRegisterDiscrepancyPayload struct {
-	FRInternalUUID    string                       `json:"fr_internal_uuid"`
-	FRServiceDeskUUID string                       `json:"fr_service_desk_uuid"`
-	Discrepancies     map[string]DiscrepancyDetail `json:"discrepancies"` // Карта: имя поля -> детали расхождения
+	// FRInternalUUID — внутренний UUID фискального регистратора в Etalon.
+	FRInternalUUID string `json:"fr_internal_uuid"`
+
+	// FRServiceDeskUUID — UUID фискального регистратора в ServiceDesk (Naumen).
+	FRServiceDeskUUID string `json:"fr_service_desk_uuid"`
+
+	// Discrepancies — карта расхождений по полям.
+	// Ключ: имя поля (например, "serial_number", "fiscal_memory_number").
+	// Значение: детали расхождения (значения в Etalon и ServiceDesk).
+	Discrepancies map[string]DiscrepancyDetail `json:"discrepancies"`
 }
 
-// AgentDataPayload - полезная нагрузка для события AgentDataReceived.
+// AgentDataPayload — полезная нагрузка для события AgentDataReceived.
+// Содержит "сырые" данные, полученные от агента до обработки.
 type AgentDataPayload struct {
-	Source string           // Источник данных: имя файла для FTP или UUID агента для API
-	Data   api.AgentDataDTO // Сами данные, полученные от агента
+	// Source — источник данных.
+	// Для FTP: имя JSON-файла (например, "550e8400-e29b-41d4-a716-446655440000.json").
+	// Для API: UUID агента.
+	Source string
+
+	// Data — данные агента, распарсенные из JSON.
+	// Структура определяется агентом (sssruner).
+	Data api.AgentDataDTO
 }
 
-// AgentObservationPayload - полезная нагрузка для события AgentObservationRequested.
+// AgentObservationPayload — полезная нагрузка для события AgentObservationRequested.
+// Содержит данные наблюдения, готовые к применению в доменной модели.
 type AgentObservationPayload struct {
-	Source string           // Источник данных: UUID агента для API или имя файла для FTP
-	Data   api.AgentDataDTO // Данные наблюдения
+	// Source — источник данных для логирования.
+	// Для API: UUID агента.
+	// Для FTP: имя файла.
+	Source string
+
+	// Data — данные наблюдения агента.
+	// Проходят предварительную валидацию в Orchestrator.
+	Data api.AgentDataDTO
 }

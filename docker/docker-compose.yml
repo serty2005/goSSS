@@ -10,11 +10,8 @@ services:
       - .env
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ${HOST_PROJECT_PATH}/etalon-mcp/init-mcp-user.sh:/docker-entrypoint-initdb.d/99-init-mcp.sh
     ports:
-      - "5456:5432"
-    networks:
-      - etalon-net
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s

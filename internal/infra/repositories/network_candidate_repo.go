@@ -81,7 +81,7 @@ func (r *networkCandidateRepo) GetByID(ctx context.Context, id uint) (*domainrep
 
 func (r *networkCandidateRepo) Approve(ctx context.Context, in domainrepos.NetworkCandidateApproveInput) (*models.NetworkCandidate, error) {
 	if in.CandidateID == 0 {
-		return nil, errors.New("candidate_id РѕР±СЏР·Р°С‚РµР»РµРЅ")
+		return nil, errors.New("candidate_id обязателен")
 	}
 	var out models.NetworkCandidate
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -128,7 +128,7 @@ func (r *networkCandidateRepo) Approve(ctx context.Context, in domainrepos.Netwo
 
 func (r *networkCandidateRepo) RemoveGroup(ctx context.Context, candidateID, groupID uint) (*models.NetworkCandidate, error) {
 	if candidateID == 0 || groupID == 0 {
-		return nil, errors.New("candidate_id Рё group_id РѕР±СЏР·Р°С‚РµР»СЊРЅС‹")
+		return nil, errors.New("candidate_id и group_id обязательны")
 	}
 	var newCandidate models.NetworkCandidate
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -205,13 +205,13 @@ func (r *networkCandidateRepo) ensureChildCompany(tx *gorm.DB, hubCompanyID stri
 			return "", err
 		}
 		if existing.ParentID == nil || strings.TrimSpace(*existing.ParentID) != strings.TrimSpace(hubCompanyID) {
-			return "", fmt.Errorf("РІС‹Р±СЂР°РЅРЅР°СЏ РєРѕРјРїР°РЅРёСЏ РЅРµ СЏРІР»СЏРµС‚СЃСЏ РґРѕС‡РµСЂРЅРµР№ РґР»СЏ hub %s", hubCompanyID)
+			return "", fmt.Errorf("выбранная компания не является дочерней для hub %s", hubCompanyID)
 		}
 		return existing.ID, nil
 	}
 	title := strings.TrimSpace(ncPtrValue(in.ChildCompanyTitle))
 	if title == "" {
-		return "", errors.New("СѓРєР°Р¶РёС‚Рµ child_company_id РёР»Рё child_company.title")
+		return "", errors.New("укажите child_company_id или child_company.title")
 	}
 	entity := company.Company{
 		Title:     &title,
@@ -305,7 +305,7 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 	}
 	if ws.OwnerID != nil && strings.TrimSpace(*ws.OwnerID) != "" && *ws.OwnerID != ownerID {
 		fromOwner := strings.TrimSpace(*ws.OwnerID)
-		changeComment := fmt.Sprintf("РЎРјРµРЅР° РІР»Р°РґРµР»СЊС†Р° СЃ %s РЅР° %s", fromOwner, ownerID)
+		changeComment := fmt.Sprintf("Смена владельца с %s на %s", fromOwner, ownerID)
 		if strings.TrimSpace(comment) != "" {
 			changeComment = changeComment + ". " + strings.TrimSpace(comment)
 		}
@@ -397,7 +397,7 @@ func (r *networkCandidateRepo) applyGroupFiscals(tx *gorm.DB, groupID uint, srv 
 		}
 		if fr.OwnerID != nil && strings.TrimSpace(*fr.OwnerID) != "" && *fr.OwnerID != ownerID {
 			fromOwner := strings.TrimSpace(*fr.OwnerID)
-			changeComment := fmt.Sprintf("РЎРјРµРЅР° РІР»Р°РґРµР»СЊС†Р° СЃ %s РЅР° %s", fromOwner, ownerID)
+			changeComment := fmt.Sprintf("Смена владельца с %s на %s", fromOwner, ownerID)
 			if strings.TrimSpace(comment) != "" {
 				changeComment = changeComment + ". " + strings.TrimSpace(comment)
 			}
