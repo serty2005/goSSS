@@ -90,6 +90,7 @@ const ProfilePage: React.FC = () => {
             integrations: dtoUser.integrations || [],
             external_type: dtoUser.external_type,
             external_system_id: dtoUser.external_system_id,
+            profile_config: dtoUser.profile_config || updatedUser.profile_config,
           };
         } else {
           updatedUser = {
@@ -212,4 +213,3 @@ const ProfilePage: React.FC = () => {
 };
 
 export default ProfilePage;
-

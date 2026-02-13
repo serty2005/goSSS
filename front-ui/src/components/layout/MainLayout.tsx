@@ -1,5 +1,5 @@
-﻿import React, { useState } from 'react';
-import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space } from 'antd';
+﻿import React, { useMemo, useRef, useState } from 'react';
+import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
@@ -14,25 +14,165 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SunOutlined,
-  MoonOutlined
+  MoonOutlined,
 } from '@ant-design/icons';
+import { useMutation } from '@tanstack/react-query';
 import HeaderSearch from '@/components/common/HeaderSearch';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
+import { profileApi } from '@/api/profile';
+import { buildProfileConfigWithPalettes, paletteFromProfileConfig } from '@/theme/profileConfig';
+import { defaultThemePalettes, type ThemeMode, type ThemePalette } from '@/theme/themeConfig';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
+type EditableColorKey = 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor';
+
+const colorLabels: Record<EditableColorKey, string> = {
+  primary: 'Акцент',
+  bgLayout: 'Фон страницы',
+  bgContainer: 'Фон форм',
+  borderColor: 'Границы',
+};
+
+const palettePresets: Array<{
+  key: string;
+  label: string;
+  light: Pick<ThemePalette, 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor'>;
+  dark: Pick<ThemePalette, 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor'>;
+}> = [
+  {
+    key: 'classic',
+    label: 'Классика',
+    light: { primary: '#1677ff', bgLayout: '#f0f2f5', bgContainer: '#ffffff', borderColor: '#d9d9d9' },
+    dark: { primary: '#177ddc', bgLayout: '#000000', bgContainer: '#141414', borderColor: '#303030' },
+  },
+  {
+    key: 'mint',
+    label: 'Мята',
+    light: { primary: '#13c2c2', bgLayout: '#eefaf9', bgContainer: '#ffffff', borderColor: '#a8d8d8' },
+    dark: { primary: '#36cfc9', bgLayout: '#0b1516', bgContainer: '#111f20', borderColor: '#245054' },
+  },
+  {
+    key: 'amber',
+    label: 'Янтарь',
+    light: { primary: '#faad14', bgLayout: '#fff8e6', bgContainer: '#fffdf7', borderColor: '#e8d3a3' },
+    dark: { primary: '#d89614', bgLayout: '#1a1408', bgContainer: '#241b0c', borderColor: '#5e4a1d' },
+  },
+  {
+    key: 'graphite',
+    label: 'Графит',
+    light: { primary: '#595959', bgLayout: '#f5f5f5', bgContainer: '#ffffff', borderColor: '#bfbfbf' },
+    dark: { primary: '#8c8c8c', bgLayout: '#0f0f0f', bgContainer: '#1a1a1a', borderColor: '#3a3a3a' },
+  },
+];
+
+const normalizeColor = (value: string | undefined, fallback: string) => {
+  const candidate = String(value || '').trim().toLowerCase();
+  return /^#[\da-f]{6}$/.test(candidate) ? candidate : fallback;
+};
+
 const MainLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
+    primary: null,
+    bgLayout: null,
+    bgContainer: null,
+    borderColor: null,
+  });
+
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = antTheme.useToken();
 
-  const { themeMode, toggleTheme } = useUiStore();
-  const { user, logout } = useAuthStore();
+  const themeMode = useUiStore((state) => state.themeMode);
+  const setTheme = useUiStore((state) => state.setTheme);
+
+  const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
+  const logout = useAuthStore((state) => state.logout);
+
   const isAdmin = Boolean(user?.roles?.includes('admin'));
   const canAccessAcceptance = Boolean(user?.roles?.includes('admin') || user?.roles?.includes('support_specialist'));
+
+  const lightPalette = useMemo(() => {
+    const palette = paletteFromProfileConfig(user?.profile_config, 'light');
+    return {
+      primary: normalizeColor(palette.primary, defaultThemePalettes.light.primary),
+      bgLayout: normalizeColor(palette.bgLayout, defaultThemePalettes.light.bgLayout),
+      bgContainer: normalizeColor(palette.bgContainer, defaultThemePalettes.light.bgContainer),
+      borderColor: normalizeColor(palette.borderColor, defaultThemePalettes.light.borderColor),
+    };
+  }, [user?.profile_config]);
+
+  const darkPalette = useMemo(() => {
+    const palette = paletteFromProfileConfig(user?.profile_config, 'dark');
+    return {
+      primary: normalizeColor(palette.primary, defaultThemePalettes.dark.primary),
+      bgLayout: normalizeColor(palette.bgLayout, defaultThemePalettes.dark.bgLayout),
+      bgContainer: normalizeColor(palette.bgContainer, defaultThemePalettes.dark.bgContainer),
+      borderColor: normalizeColor(palette.borderColor, defaultThemePalettes.dark.borderColor),
+    };
+  }, [user?.profile_config]);
+
+  const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
+
+  const updateConfigMutation = useMutation({
+    mutationFn: (payload: { profile_config: Record<string, unknown> }) => profileApi.updateConfig(payload),
+  });
+
+  const persistProfileConfig = async (
+    nextMode: ThemeMode,
+    nextPalettes?: Record<ThemeMode, Pick<ThemePalette, 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor'>>,
+  ) => {
+    if (!user) {
+      setTheme(nextMode);
+      return;
+    }
+
+    const nextValues = nextPalettes || {
+      light: lightPalette,
+      dark: darkPalette,
+    };
+
+    const nextConfig = buildProfileConfigWithPalettes(user.profile_config, nextValues, nextMode);
+    const prevUser = user;
+
+    setTheme(nextMode);
+    setUser({ ...user, profile_config: nextConfig });
+
+    try {
+      const response = await updateConfigMutation.mutateAsync({ profile_config: nextConfig });
+      const dtoUser = (response as any)?.data;
+      if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
+        setUser({ ...prevUser, ...dtoUser });
+      }
+    } catch (error: any) {
+      setUser(prevUser);
+      setTheme(themeMode);
+      message.error(error?.response?.data?.error?.error || 'Не удалось сохранить цветовые настройки');
+    }
+  };
+
+  const handleToggleThemeMode = async () => {
+    const nextMode: ThemeMode = themeMode === 'light' ? 'dark' : 'light';
+    await persistProfileConfig(nextMode);
+  };
+
+  const handleSetColor = async (key: EditableColorKey, value: string) => {
+    const nextLight = { ...lightPalette };
+    const nextDark = { ...darkPalette };
+    const target = themeMode === 'light' ? nextLight : nextDark;
+
+    target[key] = value;
+
+    await persistProfileConfig(themeMode, {
+      light: nextLight,
+      dark: nextDark,
+    });
+  };
 
   const handleMenuClick = (key: string) => {
     navigate(key);
@@ -75,6 +215,7 @@ const MainLayout: React.FC = () => {
       ],
     },
   ];
+
   if (canAccessAcceptance) {
     menuItems.splice(3, 0, { key: '/acceptance', icon: <AuditOutlined />, label: 'Принятие на АО' });
     menuItems.splice(4, 0, { key: '/network-acceptance', icon: <AuditOutlined />, label: 'Принятие в сеть' });
@@ -86,6 +227,110 @@ const MainLayout: React.FC = () => {
   if (isAdmin) {
     menuItems.push({ key: '/admin', icon: <SettingOutlined />, label: 'Администрирование' });
   }
+
+  const themeMenuContent = (
+    <div style={{ width: 160 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Text strong>Оформление</Text>
+      </div>
+
+      <Segmented
+        block
+        size="small"
+        value={themeMode}
+        options={[
+          { label: 'День', value: 'light' },
+          { label: 'Ночь', value: 'dark' },
+        ]}
+        onChange={(value) => {
+          const nextMode = value as ThemeMode;
+          if (nextMode !== themeMode) {
+            void handleToggleThemeMode();
+          }
+        }}
+      />
+
+      <Divider style={{ margin: '8px 0' }} />
+
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {(Object.keys(colorLabels) as EditableColorKey[]).map((key) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>{colorLabels[key]}</Text>
+            <div style={{ position: 'relative', width: 20, height: 20 }}>
+              <input
+                ref={(node) => {
+                  colorInputRefs.current[key] = node;
+                }}
+                type="color"
+                value={activePalette[key]}
+                onChange={(event) => void handleSetColor(key, event.target.value)}
+                style={{
+                  position: 'absolute',
+                  opacity: 0,
+                  pointerEvents: 'none',
+                  width: 1,
+                  height: 1,
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => colorInputRefs.current[key]?.click()}
+                title={`${colorLabels[key]}: ${activePalette[key]}`}
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  border: `2px solid ${token.colorBorderSecondary}`,
+                  background: activePalette[key],
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </Space>
+
+      <Divider style={{ margin: '8px 0' }} />
+
+      <div>
+        <Text type="secondary" style={{ fontSize: 12 }}>Пресеты</Text>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }}>
+          {palettePresets.map((preset) => (
+            <Button
+              key={preset.key}
+              size="small"
+              onClick={() => void persistProfileConfig(themeMode, { light: preset.light, dark: preset.dark })}
+              loading={updateConfigMutation.isPending}
+              style={{ paddingInline: 6 }}
+            >
+              <Space size={6}>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: themeMode === 'light' ? preset.light.primary : preset.dark.primary,
+                    border: '1px solid #00000022',
+                  }}
+                />
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: themeMode === 'light' ? preset.light.bgLayout : preset.dark.bgLayout,
+                    border: '1px solid #00000022',
+                  }}
+                />
+                <Text style={{ fontSize: 12 }}>{preset.label}</Text>
+              </Space>
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -111,8 +356,8 @@ const MainLayout: React.FC = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#fff',
-              fontWeight: 'bold'
+              color: token.colorTextLightSolid,
+              fontWeight: 'bold',
             }}
           >
             {collapsed ? 'ES' : 'Etalon ServiceDesk'}
@@ -138,7 +383,7 @@ const MainLayout: React.FC = () => {
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
             position: 'sticky',
             top: 0,
-            zIndex: 10
+            zIndex: 10,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -155,11 +400,17 @@ const MainLayout: React.FC = () => {
           </div>
 
           <Space size="middle">
-            <Button
-              shape="circle"
-              icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />}
-              onClick={toggleTheme}
-            />
+            <Popover
+              trigger="click"
+              placement="leftTop"
+              align={{ offset: [0, 0] }}
+              arrow={false}
+              open={themeMenuOpen}
+              onOpenChange={setThemeMenuOpen}
+              content={themeMenuContent}
+            >
+              <Button shape="circle" icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />} />
+            </Popover>
 
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
               <Space style={{ cursor: 'pointer' }}>
@@ -189,5 +440,3 @@ const MainLayout: React.FC = () => {
 };
 
 export default MainLayout;
-
-

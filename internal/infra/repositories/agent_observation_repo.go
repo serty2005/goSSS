@@ -1553,8 +1553,11 @@ func (s *agentObservationRepo) stage(tx *gorm.DB, obs *models.AgentObservation, 
 	if err != nil {
 		return nil, err
 	}
-	wsUUID := workstationUUIDByRemote(data.TeamviewerID, data.LitemanagerID)
-	if err := tx.Create(&models.CandidateWorkstationStaging{CandidateID: c.ID, ObservationID: obs.ID, ObservedAt: observedAt, Hostname: strPtr(strings.TrimSpace(data.Hostname)), AgentUUID: strPtr(strings.TrimSpace(data.AgentUUID)), WorkstationUUID: strPtr(wsUUID), TeamviewerID: normRIDPtr(data.TeamviewerID), LitemanagerID: normRIDPtr(data.LitemanagerID), AnydeskID: normRIDPtr(data.AnydeskID), URLRms: strPtr(normalizedRMS)}).Error; err != nil {
+	stageWorkstationID, err := s.resolveStageWorkstationID(tx, data)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Create(&models.CandidateWorkstationStaging{CandidateID: c.ID, ObservationID: obs.ID, ObservedAt: observedAt, Hostname: strPtr(strings.TrimSpace(data.Hostname)), AgentUUID: strPtr(strings.TrimSpace(data.AgentUUID)), WorkstationUUID: stageWorkstationID, TeamviewerID: normRIDPtr(data.TeamviewerID), LitemanagerID: normRIDPtr(data.LitemanagerID), AnydeskID: normRIDPtr(data.AnydeskID), URLRms: strPtr(normalizedRMS)}).Error; err != nil {
 		return nil, err
 	}
 	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
@@ -1643,6 +1646,20 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 	if agentUUID == "" {
 		s.logger.Info("Обновление agent_instance пропущено: не задан agent_uuid", "source", source, "workstation_id", wsID)
 		return nil
+	}
+	detachResult := tx.Model(&models.Agent{}).
+		Where("workstation_id = ? AND uuid <> ?", wsID, agentUUID).
+		Update("workstation_id", nil)
+	if detachResult.Error != nil {
+		return detachResult.Error
+	}
+	if detachResult.RowsAffected > 0 {
+		s.logger.Info(
+			"Сброшены дублирующие привязки агентов к РС",
+			"workstation_id", wsID,
+			"kept_agent_uuid", agentUUID,
+			"detached_agents_count", detachResult.RowsAffected,
+		)
 	}
 	var agent models.Agent
 	err := tx.Where("uuid = ?", agentUUID).First(&agent).Error
@@ -1946,7 +1963,10 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 		}
 	}
 
-	wsUUID := workstationUUIDByRemote(data.TeamviewerID, data.LitemanagerID)
+	stageWorkstationID, err := s.resolveStageWorkstationID(tx, data)
+	if err != nil {
+		return nil, err
+	}
 	var wsCount int64
 	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
 		return nil, err
@@ -1957,7 +1977,7 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 			ObservedAt:      observedAt,
 			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
 			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
-			WorkstationUUID: strPtr(wsUUID),
+			WorkstationUUID: stageWorkstationID,
 			TeamviewerID:    normRIDPtr(data.TeamviewerID),
 			LitemanagerID:   normRIDPtr(data.LitemanagerID),
 			AnydeskID:       normRIDPtr(data.AnydeskID),
@@ -2116,7 +2136,10 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 		}
 	}
 
-	wsUUID := workstationUUIDByRemote(data.TeamviewerID, data.LitemanagerID)
+	stageWorkstationID, err := s.resolveStageWorkstationID(tx, data)
+	if err != nil {
+		return nil, err
+	}
 	var wsCount int64
 	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
 		return nil, err
@@ -2127,7 +2150,7 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 			ObservedAt:      observedAt,
 			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
 			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
-			WorkstationUUID: strPtr(wsUUID),
+			WorkstationUUID: stageWorkstationID,
 			TeamviewerID:    normRIDPtr(data.TeamviewerID),
 			LitemanagerID:   normRIDPtr(data.LitemanagerID),
 			AnydeskID:       normRIDPtr(data.AnydeskID),
@@ -2341,15 +2364,23 @@ func hasRemoteID(data *api.AgentDataDTO) bool {
 	return normRID(data.TeamviewerID) != "" || normRID(data.LitemanagerID) != "" || normRID(data.AnydeskID) != ""
 }
 
-// workstationUUIDByRemote генерирует UUID v5 на основе пары TeamViewer:LiteManager.
-// Используется для идентификации РС при отсутствии записи в БД.
-func workstationUUIDByRemote(tv, lm string) string {
-	tv = normRID(tv)
-	lm = normRID(lm)
-	if tv == "" || lm == "" {
-		return ""
+// resolveStageWorkstationID ищет уже существующую РС по remote IDs и
+// возвращает ее реальный ID для сохранения в staging.
+// Если РС не найдена, возвращает nil.
+func (s *agentObservationRepo) resolveStageWorkstationID(tx *gorm.DB, data *api.AgentDataDTO) (*string, error) {
+	identity := identityHash(data.TeamviewerID, data.LitemanagerID)
+	ws, err := s.findWorkstation(tx, data, identity)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка поиска РС для staging: %w", err)
 	}
-	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(tv+":"+lm)).String()
+	if ws == nil {
+		return nil, nil
+	}
+	wsID := strings.TrimSpace(ws.ID)
+	if wsID == "" {
+		return nil, nil
+	}
+	return &wsID, nil
 }
 
 // identityHash вычисляет SHA256 хеш от пары TeamViewer:LiteManager.

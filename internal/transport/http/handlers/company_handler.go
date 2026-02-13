@@ -210,7 +210,7 @@ func (h *CompanyHandler) GetChildren(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toCompanyChildDTO(child))
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{"data": items})
+	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
 type companyResponseDTO struct {

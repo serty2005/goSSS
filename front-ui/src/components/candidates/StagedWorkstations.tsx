@@ -13,7 +13,7 @@ export interface CandidateWorkstationDraft {
   teamviewer_id?: string;
   litemanager_id?: string;
   anydesk_id?: string;
-  agent_uuids?: string[];
+  agent_uuid?: string;
   observed_at?: string;
 }
 

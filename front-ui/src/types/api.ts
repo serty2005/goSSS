@@ -353,6 +353,26 @@ export interface UserIntegrationDTO {
   verified_name?: string;
 }
 
+export interface ThemePaletteConfigDTO {
+  primary?: string;
+  bg_layout?: string;
+  bg_container?: string;
+  border_color?: string;
+}
+
+export interface UserInterfaceConfigDTO {
+  theme_mode?: 'light' | 'dark';
+  theme_palettes?: {
+    light?: ThemePaletteConfigDTO;
+    dark?: ThemePaletteConfigDTO;
+  };
+}
+
+export interface UserProfileConfigDTO {
+  interface?: UserInterfaceConfigDTO;
+  [key: string]: unknown;
+}
+
 export interface UserCreatePayload {
   username: string;
   password: string;

@@ -18,7 +18,7 @@ export const useUiStore = create<UiState>()(
       setTheme: (mode) => set({ themeMode: mode }),
     }),
     {
-      name: 'etalon-ui-storage', // unique name for localStorage
+      name: 'etalon-ui-storage',
     }
   )
 );

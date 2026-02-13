@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, theme as antTheme } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
@@ -33,6 +33,7 @@ const normalizeServices = (raw: ContractDetailDTO['services']): string[] => {
 };
 
 const CompanyPage: React.FC = () => {
+  const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
@@ -259,7 +260,7 @@ const CompanyPage: React.FC = () => {
     <div>
       <Card className="glass-panel company-summary-card" style={{ marginBottom: 16 }} size="small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <Link to="/companies" style={{ display: 'inline-flex', alignItems: 'center', color: '#8c8c8c' }}>
+          <Link to="/companies" style={{ display: 'inline-flex', alignItems: 'center', color: token.colorTextSecondary }}>
             <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад к списку
           </Link>
           {canEditBase && (
@@ -273,14 +274,14 @@ const CompanyPage: React.FC = () => {
               style={{
                 width: 44,
                 height: 44,
-                background: '#e6f7ff',
+                background: 'var(--app-color-primary-soft)',
                 borderRadius: 8,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 marginRight: 10,
                 fontSize: 22,
-                color: '#1890ff',
+                color: token.colorPrimary,
                 flexShrink: 0,
               }}
             >

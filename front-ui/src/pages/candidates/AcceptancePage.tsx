@@ -109,7 +109,11 @@ const maxObservedAt = (left?: string, right?: string) => {
 };
 
 const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): CandidateWorkstationDraft[] => {
-  const merged = new Map<string, CandidateWorkstationDraft & { staging_ids: number[]; observation_ids: number[] }>();
+  const merged = new Map<string, CandidateWorkstationDraft & {
+    staging_ids: number[];
+    observation_ids: number[];
+    agent_observed_at?: string;
+  }>();
 
   items.forEach((item, index) => {
     const key = buildMergeKey(item, index);
@@ -128,7 +132,8 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
         teamviewer_id: item.teamviewer_id,
         litemanager_id: item.litemanager_id,
         anydesk_id: item.anydesk_id,
-        agent_uuids: item.agent_uuid ? [item.agent_uuid] : [],
+        agent_uuid: item.agent_uuid,
+        agent_observed_at: item.observed_at,
         observed_at: item.observed_at,
       });
       return;
@@ -147,8 +152,14 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     existing.litemanager_id = existing.litemanager_id || item.litemanager_id;
     existing.anydesk_id = existing.anydesk_id || item.anydesk_id;
     existing.observed_at = maxObservedAt(existing.observed_at, item.observed_at);
-    if (item.agent_uuid && !existing.agent_uuids?.includes(item.agent_uuid)) {
-      existing.agent_uuids = [...(existing.agent_uuids || []), item.agent_uuid];
+    if (item.agent_uuid) {
+      const shouldReplaceAgent = !existing.agent_uuid
+        || !existing.agent_observed_at
+        || (item.observed_at ? dayjs(item.observed_at).isAfter(dayjs(existing.agent_observed_at)) : false);
+      if (shouldReplaceAgent) {
+        existing.agent_uuid = item.agent_uuid;
+        existing.agent_observed_at = item.observed_at;
+      }
     }
   });
 
@@ -163,7 +174,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     teamviewer_id: item.teamviewer_id,
     litemanager_id: item.litemanager_id,
     anydesk_id: item.anydesk_id,
-    agent_uuids: item.agent_uuids || [],
+    agent_uuid: item.agent_uuid,
     observed_at: item.observed_at,
   }));
 };
@@ -282,7 +293,7 @@ const AcceptancePage: React.FC = () => {
       teamviewer_id: item.teamviewer_id,
       litemanager_id: item.litemanager_id,
       anydesk_id: item.anydesk_id,
-      agent_uuids: item.agent_uuids || [],
+      agent_uuid: item.agent_uuid,
       observed_at: item.observed_at,
     }));
 
@@ -433,17 +444,24 @@ const AcceptancePage: React.FC = () => {
 
   const stagedFiscals = selectedCandidate?.staged_fiscals || [];
   const observationAgents = useMemo(() => {
-    const map: Record<number, string[]> = {};
+    const map: Record<number, { agent_uuid: string; observed_at?: string }> = {};
     (selectedCandidate?.staged_workstations || []).forEach((item) => {
       if (!item.observation_id || !item.agent_uuid) return;
-      if (!map[item.observation_id]) {
-        map[item.observation_id] = [];
-      }
-      if (!map[item.observation_id].includes(item.agent_uuid)) {
-        map[item.observation_id].push(item.agent_uuid);
+      const current = map[item.observation_id];
+      const shouldReplace = !current
+        || !current.observed_at
+        || (item.observed_at ? dayjs(item.observed_at).isAfter(dayjs(current.observed_at)) : false);
+      if (shouldReplace) {
+        map[item.observation_id] = {
+          agent_uuid: item.agent_uuid,
+          observed_at: item.observed_at,
+        };
       }
     });
-    return map;
+    return Object.entries(map).reduce<Record<number, string>>((acc, [observationID, value]) => {
+      acc[Number(observationID)] = value.agent_uuid;
+      return acc;
+    }, {});
   }, [selectedCandidate?.staged_workstations]);
   const companyMode = (formValues?.company_mode || 'new') as CompanyMode;
   const selectedExistingCompanyID = String(formValues?.company_id || '').trim();

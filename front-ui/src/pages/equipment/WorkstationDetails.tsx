@@ -1,7 +1,7 @@
 ﻿import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
@@ -13,6 +13,7 @@ import { canEditEquipment } from '@/utils/permissions';
 const { Title, Text } = Typography;
 
 const WorkstationDetails: React.FC = () => {
+  const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -65,7 +66,7 @@ const WorkstationDetails: React.FC = () => {
         <Space align="center">
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <Space>
-            <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('Workstation')}</div>
+            <div style={{ fontSize: 24, color: token.colorPrimary }}>{getEntityIcon('Workstation')}</div>
             <div>
               <Title level={4} style={{ margin: 0 }}>{ws.device_name || 'Рабочая станция'}</Title>
               <Text type="secondary">{ws.id}</Text>

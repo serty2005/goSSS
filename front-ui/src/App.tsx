@@ -27,7 +27,8 @@ import UsersAdminPage from '@/pages/admin/UsersAdminPage';
 
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
-import { getThemeConfig } from '@/theme/themeConfig';
+import { getThemeConfig, getThemeCssVariables, resolveThemePalette } from '@/theme/themeConfig';
+import { paletteFromProfileConfig } from '@/theme/profileConfig';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -66,15 +67,25 @@ const SupportOrAdminRoute = ({ children }: { children: React.ReactNode }) => {
 
 const App: React.FC = () => {
   const themeMode = useUiStore((state) => state.themeMode);
+  const profileConfig = useAuthStore((state) => state.user?.profile_config);
+  const paletteByMode = paletteFromProfileConfig(profileConfig, themeMode);
+  const resolvedPalette = resolveThemePalette(themeMode, paletteByMode);
 
   useEffect(() => {
-    const colorBgLayout = themeMode === 'dark' ? '#000000' : '#f0f2f5';
-    document.body.style.backgroundColor = colorBgLayout;
-  }, [themeMode]);
+    document.body.style.backgroundColor = resolvedPalette.bgLayout;
+  }, [resolvedPalette.bgLayout]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const cssVars = getThemeCssVariables(themeMode, paletteByMode);
+    Object.entries(cssVars).forEach(([name, value]) => {
+      root.style.setProperty(name, value);
+    });
+  }, [themeMode, paletteByMode]);
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode)}>
+      <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode, paletteByMode)}>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />

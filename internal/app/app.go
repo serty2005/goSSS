@@ -433,6 +433,7 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.Get("/", a.CompanyHandler.Search)
 			r.Get("/{id}", a.CompanyHandler.Get)
 			r.Get("/{id}/infrastructure", a.CompanyHandler.GetInfrastructure)
+			r.Get("/{id}/children", a.CompanyHandler.GetChildren)
 
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.CompanyHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.CompanyHandler.Update)
@@ -503,6 +504,8 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.Get("/assignees", a.UserHandler.ListAssignees)
 			r.Patch("/credentials", a.UserHandler.UpdateMyCredentials)
 			r.Patch("/integrations", a.UserHandler.UpdateMyIntegrations)
+			r.Get("/config", a.UserHandler.GetMyProfileConfig)
+			r.Patch("/config", a.UserHandler.UpdateMyProfileConfig)
 		})
 
 		r.Route("/users", func(r chi.Router) {

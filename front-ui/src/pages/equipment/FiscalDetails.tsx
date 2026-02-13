@@ -1,7 +1,7 @@
 ﻿import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
@@ -15,6 +15,7 @@ import { canEditEquipment } from '@/utils/permissions';
 const { Title, Text } = Typography;
 
 const FiscalDetails: React.FC = () => {
+  const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -85,7 +86,7 @@ const FiscalDetails: React.FC = () => {
         <Space align="center">
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
           <Space>
-            <div style={{ fontSize: 24, color: '#1890ff' }}>{getEntityIcon('FiscalRegister')}</div>
+            <div style={{ fontSize: 24, color: token.colorPrimary }}>{getEntityIcon('FiscalRegister')}</div>
             <div>
               <Title level={4} style={{ margin: 0 }}>{fiscal.model_kkt || 'ККТ'}</Title>
               <Text type="secondary">{fiscal.fr_serial_number || fiscal.id}</Text>

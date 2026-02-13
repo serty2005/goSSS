@@ -7,7 +7,7 @@ import { CandidateWorkstationDraft } from '@/components/candidates/StagedWorksta
 interface StagedAgentEntitiesProps {
   workstations: CandidateWorkstationDraft[];
   fiscals: CandidateFiscalStagingDTO[];
-  observationAgents: Record<number, string[]>;
+  observationAgents: Record<number, string>;
   onWorkstationNameChange: (mergeKey: string, nextName: string) => void;
   onGroupClick: (params: { agentID: string; observationIDs: number[]; unresolvedServer: boolean }) => void;
 }
@@ -44,34 +44,30 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
     };
 
     workstations.forEach((ws) => {
-      const agentIDs = ws.agent_uuids && ws.agent_uuids.length > 0 ? ws.agent_uuids : [NO_AGENT_ID];
-      agentIDs.forEach((agentID) => {
-        const group = ensure(agentID || NO_AGENT_ID);
-        if (!group.workstations.some((item) => item.merge_key === ws.merge_key)) {
-          group.workstations.push(ws);
-        }
-        (ws.observation_ids || (ws.observation_id ? [ws.observation_id] : []))
-          .filter((id): id is number => typeof id === 'number' && id > 0)
-          .forEach((id) => {
-            if (!group.observationIDs.includes(id)) {
-              group.observationIDs.push(id);
-            }
-          });
-      });
+      const agentID = String(ws.agent_uuid || '').trim() || NO_AGENT_ID;
+      const group = ensure(agentID);
+      if (!group.workstations.some((item) => item.merge_key === ws.merge_key)) {
+        group.workstations.push(ws);
+      }
+      (ws.observation_ids || (ws.observation_id ? [ws.observation_id] : []))
+        .filter((id): id is number => typeof id === 'number' && id > 0)
+        .forEach((id) => {
+          if (!group.observationIDs.includes(id)) {
+            group.observationIDs.push(id);
+          }
+        });
     });
 
     fiscals.forEach((fr) => {
-      const byObservation = observationAgents[fr.observation_id] || [];
-      const agentIDs = byObservation.length > 0 ? byObservation : [NO_AGENT_ID];
-      agentIDs.forEach((agentID) => {
-        const group = ensure(agentID || NO_AGENT_ID);
-        if (!group.fiscals.some((item) => item.id === fr.id)) {
-          group.fiscals.push(fr);
-        }
-        if (fr.observation_id && !group.observationIDs.includes(fr.observation_id)) {
-          group.observationIDs.push(fr.observation_id);
-        }
-      });
+      const byObservation = String(observationAgents[fr.observation_id] || '').trim();
+      const agentID = byObservation || NO_AGENT_ID;
+      const group = ensure(agentID);
+      if (!group.fiscals.some((item) => item.id === fr.id)) {
+        group.fiscals.push(fr);
+      }
+      if (fr.observation_id && !group.observationIDs.includes(fr.observation_id)) {
+        group.observationIDs.push(fr.observation_id);
+      }
     });
 
     return Array.from(map.values());
@@ -175,7 +171,7 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
 
         {groupsWithoutAgent.length > 0 ? (
           <>
-            <Tag color="orange">Нераспознанные агенты</Tag>
+            <Tag color="orange">Агент без UUID</Tag>
             {groupsWithoutAgent.map((group, index) => (
               <Card
                 key={`${group.agentID}-${index}`}
@@ -189,7 +185,6 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
                 })}
               >
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  <Text strong>Сервер не распознан</Text>
 
                   {group.workstations.map((ws) => {
                     const isEditing = editingKey === ws.merge_key;

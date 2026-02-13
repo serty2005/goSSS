@@ -16,6 +16,7 @@ import {
   Tag,
   Typography,
   message,
+  theme as antTheme,
 } from 'antd';
 import { MenuOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -173,6 +174,7 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing,
 };
 
 const TicketsPage: React.FC = () => {
+  const { token } = antTheme.useToken();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -745,7 +747,7 @@ const TicketsPage: React.FC = () => {
                   value={commentDraft}
                   onChange={(event) => setCommentDraft(event.target.value)}
                 />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#595959' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorTextSecondary }}>
                   <input
                     type="checkbox"
                     checked={commentIsPrivate}

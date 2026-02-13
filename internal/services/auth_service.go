@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
@@ -108,10 +109,23 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 			IsActive:         u.IsActive,
 			HasLoggedIn:      u.HasLoggedIn,
 			Integrations:     mapUserIntegrationsToDTO(u.Integrations),
+			ProfileConfig:    mapProfileConfig(u.ProfileConfig),
 		},
 	}
 
 	return response, nil
+}
+
+func mapProfileConfig(raw []byte) map[string]interface{} {
+	if len(raw) == 0 {
+		return map[string]interface{}{}
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(raw, &result); err != nil || result == nil {
+		return map[string]interface{}{}
+	}
+	return result
 }
 
 func mapUserIntegrationsToDTO(items []user.Integration) []api.UserIntegrationDTO {

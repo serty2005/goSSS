@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Badge, Button, Space, Typography, Tooltip, message, Tag } from 'antd';
+import { Card, Badge, Button, Space, Typography, Tooltip, message, Tag, theme as antTheme } from 'antd';
 import { CopyOutlined, LinkOutlined, SyncOutlined, GlobalOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -15,6 +15,7 @@ interface Props {
 const { Text, Paragraph } = Typography;
 
 const ServerCard: React.FC<Props> = ({ data }) => {
+  const { token } = antTheme.useToken();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -65,7 +66,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
         onClick={handleCardClick}
         title={
           <Space>
-            <GlobalOutlined style={{ color: '#1890ff' }} />
+            <GlobalOutlined style={{ color: token.colorPrimary }} />
             <Text strong>{data.device_name || 'Cloud Server'}</Text>
           </Space>
         }
@@ -231,7 +232,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
          )}
       </div>
 
-      <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: 8 }}>
+      <div style={{ borderTop: '1px solid var(--app-color-divider)', paddingTop: 8 }}>
         <Space direction="vertical" size={0} style={{ width: '100%' }}>
           {renderAccessLink('AnyDesk', data.anydesk)}
           {renderAccessLink('TeamViewer', data.teamviewer)}

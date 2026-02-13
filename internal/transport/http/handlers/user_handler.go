@@ -228,6 +228,75 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*updated))
 }
 
+func (h *UserHandler) GetMyProfileConfig(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РѕРїСЂРµРґРµР»С‘РЅ")
+		return
+	}
+
+	u, err := h.userRepo.GetByID(r.Context(), currentUserID)
+	if err != nil {
+		log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїСЂРѕС„РёР»СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ", "id", currentUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїСЂРѕС„РёР»СЊ")
+		return
+	}
+	if u == nil {
+		response.RespondWithError(w, http.StatusNotFound, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"profile_config": parseProfileConfig(u.ProfileConfig),
+	})
+}
+
+func (h *UserHandler) UpdateMyProfileConfig(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РѕРїСЂРµРґРµР»С‘РЅ")
+		return
+	}
+
+	var dto api.ProfileConfigUpdateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅРѕРµ С‚РµР»Рѕ Р·Р°РїСЂРѕСЃР°")
+		return
+	}
+	if dto.ProfileConfig == nil {
+		response.RespondWithError(w, http.StatusBadRequest, "РџРѕР»Рµ profile_config РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ")
+		return
+	}
+
+	payload, err := json.Marshal(dto.ProfileConfig)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ profile_config")
+		return
+	}
+
+	u, err := h.userRepo.GetByID(r.Context(), currentUserID)
+	if err != nil {
+		log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ", "id", currentUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ")
+		return
+	}
+	if u == nil {
+		response.RespondWithError(w, http.StatusNotFound, "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ")
+		return
+	}
+
+	u.ProfileConfig = payload
+	if err := h.userRepo.Update(r.Context(), u); err != nil {
+		log.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ profile_config", "id", currentUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ profile_config")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*u))
+}
+
 func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
 	users, err := h.userRepo.GetAll(r.Context())
@@ -531,7 +600,20 @@ func toUserDTO(u user.User) api.UserDTO {
 		IsActive:         u.IsActive,
 		HasLoggedIn:      u.HasLoggedIn,
 		Integrations:     integrations,
+		ProfileConfig:    parseProfileConfig(u.ProfileConfig),
 	}
+}
+
+func parseProfileConfig(raw []byte) map[string]interface{} {
+	if len(raw) == 0 {
+		return map[string]interface{}{}
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(raw, &result); err != nil || result == nil {
+		return map[string]interface{}{}
+	}
+	return result
 }
 
 func (h *UserHandler) verifyBitrixIntegration(ctx context.Context, u *user.User, externalID string) (bool, string) {
