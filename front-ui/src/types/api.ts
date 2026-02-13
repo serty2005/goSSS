@@ -550,6 +550,7 @@ export interface CandidateWorkstationStagingDTO {
   litemanager_id?: string;
   anydesk_id?: string;
   url_rms?: string;
+  name?: string;
 }
 
 export interface CandidateFiscalStagingDTO {
@@ -584,28 +585,41 @@ export interface CandidateDTO {
 }
 
 export interface CandidateApprovePayload {
-  company_id?: string;
-  company?: {
-    title: string;
-    address?: string;
-    additional_name?: string;
-    parent_id?: string;
-  };
-  server?: {
-    mode: 'existing' | 'new';
-    server_id?: string;
-    crm_id?: string;
-    url_rms?: string;
-    device_name?: string;
-    description?: string;
-  };
-  workstations?: Array<{
-    staging_id?: number;
-    name: string;
-    workstation_uuid?: string;
-  }>;
-  comment?: string;
+	company_id?: string;
+	company?: {
+		title: string;
+		address?: string;
+		additional_name?: string;
+		parent_id?: string;
+		contract_mode?: 'inherit_parent' | 'new';
+		contract_type?: string;
+	};
+	server?: {
+		mode: 'existing' | 'new';
+		server_id?: string;
+		crm_id?: string;
+		url_rms?: string;
+		unique_id?: string;
+		cabinet_link?: string;
+		device_name?: string;
+		description?: string;
+	};
+	workstations?: Array<{
+		staging_id?: number;
+		name: string;
+		workstation_uuid?: string;
+	}>;
+	comment?: string;
+	// Ручной ввод remote IDs (опционально).
+	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+	teamviewer_id?: string;
+	litemanager_id?: string;
+	anydesk_id?: string;
 }
+
+export type CompanyMode = 'existing' | 'new';
+export type ServerMode = 'existing' | 'new';
+export type ContractMode = 'inherit_parent' | 'new';
 
 export type NetworkCandidateStatus = 'NEW' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
@@ -617,6 +631,10 @@ export interface NetworkCandidateDTO {
   server_key?: string;
   server_crm_id?: string;
   server_url?: string;
+  // Информация о конфликте владельцев
+  conflict_info?: string;
+  ws_owner_candidate?: string;
+  fr_owner_candidate?: string;
   created_at: string;
   updated_at: string;
 }

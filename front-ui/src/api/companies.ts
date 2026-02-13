@@ -26,4 +26,10 @@ export const companiesApi = {
     const response = await apiClient.get<ApiResponse<InfrastructureItem[]>>(`/companies/${id}/infrastructure`);
     return response.data;
   },
+
+  // Получение дочерних компаний
+  getChildren: async (companyId: string) => {
+    const response = await apiClient.get<ApiResponse<CompanyModel[]>>(`/companies/${companyId}/children`);
+    return response.data;
+  },
 };

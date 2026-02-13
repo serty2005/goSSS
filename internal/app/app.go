@@ -179,6 +179,29 @@ func (a *Application) SeedDBAndExit() {
 	os.Exit(0)
 }
 
+// SeedFromFTPCacheAndExit инициализирует БД из локального кэша FTP и загружает данные агентов.
+// Используется при запуске с флагом --seed-ftp-cache для обработки ранее скачанных файлов
+// без обращения к FTP-серверу.
+func (a *Application) SeedFromFTPCacheAndExit() {
+	a.Logger.Info("Запуск в режиме инициализации из FTP-кэша...")
+	ctx := context.Background()
+
+	// 1. Инициализируем записи в БД из существующих файлов кэша
+	if err := a.AgentFTPGateway.InitializeDBFromCache(ctx); err != nil {
+		a.Logger.Warn("Ошибка инициализации БД из кэша", "error", err)
+	}
+
+	// 2. Загружаем данные агентов из кэша
+	processedCount, err := a.AgentFTPGateway.LoadAgentDataFromCache(ctx)
+	if err != nil {
+		a.Logger.Warn("Ошибка загрузки данных из кэша", "error", err)
+	}
+
+	a.Logger.Info("Инициализация из FTP-кэша завершена", "processed_files", processedCount)
+	a.Logger.Info("Программа завершает работу.")
+	os.Exit(0)
+}
+
 func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, error) {
 	database, err := db.NewConnection(cfg)
 	if err != nil {
@@ -274,7 +297,28 @@ type Services struct {
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
 	transactor := db.NewGormTransactor(app.DB)
-	obsService := services.NewAgentObservationService(app.Logger.With("component", "agent_observation_service"), app.DB)
+
+	// Создаем сервисы для определения владельца network-hub
+	ownerResolver := services.NewOwnerResolverService(
+		app.Logger.With("component", "owner_resolver"),
+		app.DB,
+		repos.CompanyRepo,
+		repos.WorkstationRepo,
+		repos.FRRepo,
+	)
+	hubDetector := services.NewNetworkHubDetectorService(
+		app.Logger.With("component", "hub_detector"),
+		app.DB,
+		repos.CompanyRepo,
+	)
+
+	// Создаем AgentObservationService с внедренными сервисами
+	obsService := services.NewAgentObservationServiceWithDeps(
+		app.Logger.With("component", "agent_observation_service"),
+		app.DB,
+		ownerResolver,
+		hubDetector,
+	)
 
 	return Services{
 		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),

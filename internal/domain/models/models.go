@@ -185,6 +185,11 @@ type AgentFile struct {
 	// Дополнительный критерий для определения изменений.
 	LastProcessedFileSize int64 `gorm:"not null"`
 
+	// PayloadHash — SHA256 хеш содержимого файла.
+	// Используется для идемпотентности: если хеш не изменился, файл не обрабатывается.
+	// Вычисляется от сырого содержимого JSON-файла.
+	PayloadHash string `gorm:"type:char(64);index"`
+
 	// LastSeenFRSerial — последний замеченный серийный номер фискального регистратора.
 	// Используется для отслеживания связи "файл -> ФР".
 	LastSeenFRSerial *string `gorm:"type:text;index"`
@@ -192,6 +197,11 @@ type AgentFile struct {
 	// LastSeenRMSUrl — последний замеченный URL RMS (Iiko).
 	// Используется для отслеживания связи "файл -> ресторан Iiko".
 	LastSeenRMSUrl *string `gorm:"type:text"`
+
+	// LastCheckedModTime — время последней проверки модификации файла на FTP через MDTM.
+	// Используется для оптимизации синхронизации: позволяет проверить изменения без скачивания.
+	// Если время на FTP совпадает с этим значением, файл не нужно скачивать.
+	LastCheckedModTime *time.Time `gorm:"type:timestamp"`
 
 	// CreatedAt — время первой обработки файла.
 	CreatedAt time.Time

@@ -252,7 +252,7 @@ func (g *serviceDeskGatewayImpl) processDiffs(
 }
 
 func (g *serviceDeskGatewayImpl) fetchAndPublishEvents(
-	ctx context.Context,
+	_ context.Context,
 	entityType string,
 	externalUUIDs []string,
 	fetcher FetcherFunc,

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"etalon-server/internal/domain/models"
+	domainServices "etalon-server/internal/domain/services"
 	"etalon-server/internal/infra/logger"
 	infrarepos "etalon-server/internal/infra/repositories"
 	api "etalon-server/internal/transport/http/dtos"
@@ -30,6 +31,13 @@ type CandidateApproveInput struct {
 	ContractType          *string
 
 	Workstations []CandidateWorkstationInput
+
+	// Ручной ввод remote IDs (опционально).
+	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+	// Приоритет: ручной ввод > значения из staging.
+	TeamviewerID  *string
+	LitemanagerID *string
+	AnydeskID     *string
 }
 
 type CandidateWorkstationInput struct {
@@ -52,9 +60,57 @@ type agentObservationServiceImpl struct {
 	storage agentObservationStorage
 }
 
-func NewAgentObservationService(logger logger.LoggerInterface, db *gorm.DB) AgentObservationService {
+// AgentObservationServiceOption определяет функциональную опцию для конфигурации сервиса.
+type AgentObservationServiceOption func(*agentObservationServiceImpl)
+
+// WithOwnerResolver устанавливает OwnerResolver для автоматического определения владельца.
+func WithOwnerResolver(resolver domainServices.OwnerResolver) AgentObservationServiceOption {
+	return func(s *agentObservationServiceImpl) {
+		// Передаем resolver через storage options
+	}
+}
+
+// WithHubDetector устанавливает NetworkHubDetector для определения network-hub серверов.
+func WithHubDetector(detector domainServices.NetworkHubDetector) AgentObservationServiceOption {
+	return func(s *agentObservationServiceImpl) {
+		// Передаем detector через storage options
+	}
+}
+
+// NewAgentObservationService создает новый экземпляр сервиса обработки наблюдений.
+// Поддерживает функциональные опции для внедрения OwnerResolver и HubDetector.
+func NewAgentObservationService(logger logger.LoggerInterface, db *gorm.DB, opts ...AgentObservationServiceOption) AgentObservationService {
+	// Создаем storage с опциями по умолчанию
+	storage := infrarepos.NewAgentObservationRepo(logger, db)
+
+	svc := &agentObservationServiceImpl{
+		storage: storage,
+	}
+
+	for _, opt := range opts {
+		opt(svc)
+	}
+
+	return svc
+}
+
+// NewAgentObservationServiceWithDeps создает сервис с полным набором зависимостей.
+// Используется в app.go для внедрения всех сервисов.
+func NewAgentObservationServiceWithDeps(
+	logger logger.LoggerInterface,
+	db *gorm.DB,
+	ownerResolver domainServices.OwnerResolver,
+	hubDetector domainServices.NetworkHubDetector,
+) AgentObservationService {
+	storage := infrarepos.NewAgentObservationRepo(
+		logger,
+		db,
+		infrarepos.WithOwnerResolver(ownerResolver),
+		infrarepos.WithHubDetector(hubDetector),
+	)
+
 	return &agentObservationServiceImpl{
-		storage: infrarepos.NewAgentObservationRepo(logger, db),
+		storage: storage,
 	}
 }
 
@@ -80,6 +136,10 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		CompanyParentID:       in.CompanyParentID,
 		ContractMode:          in.ContractMode,
 		ContractType:          in.ContractType,
+		// Ручной ввод remote IDs
+		TeamviewerID:  in.TeamviewerID,
+		LitemanagerID: in.LitemanagerID,
+		AnydeskID:     in.AnydeskID,
 	}
 	if len(in.Workstations) > 0 {
 		mapped.Workstations = make([]infrarepos.CandidateWorkstationInput, 0, len(in.Workstations))

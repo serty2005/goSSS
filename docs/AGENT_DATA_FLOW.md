@@ -20,10 +20,10 @@ flowchart TD
         B2[AgentHandler]
     end
 
-    subgraph Обработка и валидация
-        C1[Валидация AgentDataDTO]
-        C2[Проверка на дубликаты]
-        C3[Нормализация данных]
+    subgraph Транспортный слой
+        C1[Парсинг JSON]
+        C2[Идемпотентность по payload_hash]
+        C3[Передача в ApplyObservation]
     end
 
     subgraph Применение наблюдений
@@ -32,15 +32,16 @@ flowchart TD
     end
 
     subgraph Поиск и сопоставление
-        E1[EntityMatcherService]
-        E2[findServer]
-        E3[findWorkstation]
-        E4[findBySerialNumber]
+        E1[findServer]
+        E2[findWorkstation]
+        E3[findFiscal]
     end
 
     subgraph Бизнес-логика
-        F1[ProcessingEngine]
-        F2[ReconciliationEngine]
+        F1[Валидация данных]
+        F2[Определение владельца]
+        F3[Создание/обновление сущностей]
+        F4[Staging кандидатов]
     end
 
     subgraph Хранилище
@@ -53,12 +54,6 @@ flowchart TD
         G7[agents]
     end
 
-    subgraph События
-        H1[EventBus]
-        H2[AgentDataReceived]
-        H3[AgentObservationRequested]
-    end
-
     A1 -->|JSON файлы| B1
     A2 -->|HTTP POST| B2
     B1 -->|AgentDataDTO| C1
@@ -68,23 +63,22 @@ flowchart TD
     C3 --> D1
     D1 --> D2
     D2 --> E1
-    E1 --> E2
-    E1 --> E3
-    E1 --> E4
+    D2 --> E2
+    D2 --> E3
+    E1 --> F1
     E2 --> F1
     E3 --> F1
-    E4 --> F1
     F1 --> F2
-    F2 --> G1
+    F2 --> F3
+    F2 --> F4
+    F3 --> G1
+    F4 --> G1
     D2 --> G2
     D2 --> G3
-    F2 --> G4
-    F2 --> G5
-    F2 --> G6
+    F3 --> G4
+    F3 --> G5
+    F3 --> G6
     D2 --> G7
-    B1 -.->|публикация| H1
-    H1 -.->|подписка| H2
-    H2 -.->|Orchestrator| F1
 ```
 
 ---
@@ -96,15 +90,19 @@ flowchart TD
 **Файл:** [`internal/core/gateways/agent_ftp_gateway.go`](internal/core/gateways/agent_ftp_gateway.go)
 
 **Механизм:**
-- Периодический опрос FTP-сервера по таймеру (инвал конфигурируется через `AgentFTPInterval`)
+- Периодический опрос FTP-сервера по таймеру (интервал конфигурируется через `AgentFTPInterval`)
 - Скачивание JSON-файлов в локальный кэш (`FTPCachePath`)
-- Идемпотентная обработка: файлы обрабатываются только при изменении (проверка по `mod_time` и `size`)
+- Двухуровневая идемпотентность:
+  1. Быстрая проверка по `mod_time` и `size` файла
+  2. Точная проверка по `payload_hash` (SHA256 от содержимого)
 
 **Ключевые функции:**
-- [`Start()`](internal/core/gateways/agent_ftp_gateway.go:44) — запуск цикла опроса
-- [`syncLocalCacheWithFTP()`](internal/core/gateways/agent_ftp_gateway.go:193) — синхронизация файлов
-- [`processFile()`](internal/core/gateways/agent_ftp_gateway.go:327) — обработка одного файла
-- [`validateAgentData()`](internal/core/gateways/agent_ftp_gateway.go:119) — валидация данных
+- [`Start()`](internal/core/gateways/agent_ftp_gateway.go:75) — запуск цикла опроса
+- [`syncLocalCacheWithFTP()`](internal/core/gateways/agent_ftp_gateway.go:290) — синхронизация файлов
+- [`processFile()`](internal/core/gateways/agent_ftp_gateway.go:517) — обработка одного файла (транспортная функция)
+- [`computePayloadHash()`](internal/core/gateways/agent_ftp_gateway.go:667) — вычисление хеша для идемпотентности
+
+**Важно:** FTP-шлюз является транспортным слоем и не выполняет бизнес-валидацию. Все решения о создании/обновлении сущностей принимаются в `ApplyObservation`.
 
 **Типы файлов:**
 - Числовые имена (например, `123456.json`) — данные фискальных регистраторов
@@ -112,11 +110,12 @@ flowchart TD
 
 ### 1.2 HTTP API
 
-**Файл:** `internal/transport/http/handlers/agent_handler.go` (не рассматривался детально)
+**Файл:** `internal/transport/http/handlers/agent_handler.go`
 
 **Механизм:**
 - REST API endpoint для прямой отправки данных от агентов
 - Синхронная обработка с немедленным ответом
+- Передача данных в `ApplyObservation` без дополнительной валидации
 
 ---
 
@@ -160,31 +159,34 @@ type AgentDataDTO struct {
 
 ## 3. Этапы обработки данных
 
-### 3.1 Валидация и нормализация
+### 3.1 Транспортный слой (FTP Gateway)
 
-**Место:** [`validateAgentData()`](internal/core/gateways/agent_ftp_gateway.go:119)
+**Место:** [`processFile()`](internal/core/gateways/agent_ftp_gateway.go:517)
 
-**Проверки:**
-1. Обязательные поля: `hostname`, `url_rms`
-2. Валидация IP-адреса сервера
-3. Исключение локальных адресов (127.x, 10.x, 192.168.x, 172.16-31.x)
-4. Наличие полезных данных (serial_number, crm_id, remote_ids)
+Транспортная функция отвечает только за:
+1. Чтение файла из локального кэша
+2. Проверку идемпотентности по `mod_time`, `size` и `payload_hash`
+3. Парсинг JSON в `AgentDataDTO`
+4. Передачу данных в `ApplyObservation`
 
-**Нормализация:**
-- IP-адрес сервера приводится к единому формату (host:port)
-- ID удаленного доступа очищаются от пробелов и значения "None"
+**Важно:** Бизнес-валидация НЕ выполняется в шлюзе. Все решения принимаются в `ApplyObservation`.
 
-### 3.2 Регистрация наблюдения
+### 3.2 Регистрация наблюдения (ApplyObservation)
 
 **Файл:** [`internal/infra/repositories/agent_observation_repo.go`](internal/infra/repositories/agent_observation_repo.go)
 
-**Метод:** [`ApplyObservation()`](internal/infra/repositories/agent_observation_repo.go:73)
+**Метод:** [`ApplyObservation()`](internal/infra/repositories/agent_observation_repo.go:124)
 
 **Алгоритм:**
 1. Вычисление хеша payload для идемпотентности
 2. Создание записи `AgentObservation` со статусом `PROCESSING`
-3. Проверка на дубликаты по `payload_hash`
-4. Проверка на устаревшие данные (сравнение `observed_at` с предыдущим)
+3. Проверка на дубликаты по `payload_hash` (идемпотентность)
+4. Проверка на локальный адрес (игнорирование 127.x, 10.x, 192.168.x, 172.16-31.x)
+5. Проверка на устаревшие данные (сравнение `observed_at` с `agent.last_observed_at`)
+6. Поиск сервера по CRM ID, server_key или IP/URL
+7. Определение владельца (для network-hub серверов)
+8. Поиск/создание Workstation и FiscalRegister
+9. При отсутствии сервера или remote IDs — создание кандидата
 
 **Статусы наблюдения:**
 - `PROCESSING` — в обработке
@@ -250,16 +252,35 @@ type AgentDataDTO struct {
 ### 3.6 Staging кандидатов
 
 **Условия создания кандидата:**
-1. Сервер не найден
-2. Нет remote IDs для идентификации РС
+1. Сервер не найден (srv == nil)
+2. Отсутствуют remote IDs для идентификации РС (!hasRemoteID)
 
-**Метод:** [`stage()`](internal/infra/repositories/agent_observation_repo.go:878)
+**Метод:** [`stage()`](internal/infra/repositories/agent_observation_repo.go:1380)
 
 **Создаваемые записи:**
 - `Candidate` — основная запись кандидата
 - `CandidateWorkstationStaging` — данные РС для подтверждения
 - `CandidateFiscalStaging` — данные ФР для подтверждения
 - `ReconciliationTask` типа `candidate_connection`
+
+### 3.7 Подтверждение кандидата (ApproveCandidate)
+
+**Метод:** [`ApproveCandidate()`](internal/infra/repositories/agent_observation_repo.go:452)
+
+**Алгоритм:**
+1. Получение кандидата из БД
+2. Создание или получение компании
+3. Создание или получение сервера
+4. Обработка всех staged-наблюдений
+5. Создание/обновление Workstation и FiscalRegister
+
+**Ручной ввод remote IDs:**
+При подтверждении кандидата оператор может указать remote IDs вручную:
+- `teamviewer_id` — ID TeamViewer
+- `litemanager_id` — ID LiteManager
+- `anydesk_id` — ID AnyDesk
+
+Это используется когда агент не собрал remote IDs (программы удаленного доступа не установлены или не обнаружены). Приоритет: ручной ввод > значения из staging.
 
 ---
 
@@ -451,13 +472,21 @@ log.Debug("Результат поиска сервера",
 ### 9.1 Идемпотентность
 
 Обработка данных идемпотентна на двух уровнях:
-1. **Уровень файла** — проверка `mod_time` и `size` в `agent_files`
-2. **Уровень payload** — проверка `payload_hash` в `agent_observations`
+
+1. **Уровень файла (быстрая проверка):**
+   - Проверка `mod_time` и `size` в таблице `agent_files`
+   - Позволяет быстро пропустить неизменённые файлы без чтения содержимого
+
+2. **Уровень payload (точная проверка):**
+   - Вычисление SHA256 хеша от содержимого файла
+   - Проверка `payload_hash` в таблице `agent_observations`
+   - Гарантирует идемпотентность даже при изменении метаданных файла
 
 ### 9.2 Защита от устаревших данных
 
 - Сравнение `observed_at` с `agent.last_observed_at`
 - Пропуск данных, которые старше последнего обработанного
+- Защита от обработки старых файлов при восстановлении связи
 
 ### 9.3 Trusted Update Rules
 
@@ -484,5 +513,5 @@ log.Debug("Результат поиска сервера",
 | Репозитории | `internal/infra/repositories/agent_observation_repo.go` |
 | Модели | `internal/domain/models/agent_observation_models.go` |
 | DTO | `internal/transport/http/dtos/dtos.go` |
-| События | `internal/core/events/events.go` |
 | Обработка | `internal/core/processing/engine.go`, `orchestrator.go`, `reconciliation.go` |
+| Handlers | `internal/transport/http/handlers/candidate_handler.go` |

@@ -28,6 +28,10 @@ const (
 const (
 	OwnerChangeSourceManualResolution = "manual_resolution"
 	OwnerChangeSourceNetworkAuto      = "network_auto"
+	OwnerChangeSourceNetworkAutoWS    = "network_auto_ws"
+	OwnerChangeSourceNetworkAutoFR    = "network_auto_fr"
+	OwnerChangeSourceNetworkAutoBoth  = "network_auto_both"
+	OwnerChangeSourceNetworkConflict  = "network_conflict"
 	OwnerChangeSourceCandidateApprove = "candidate_approve"
 )
 
@@ -44,15 +48,22 @@ type OwnerChangeHistory struct {
 }
 
 type NetworkCandidate struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Status       string    `gorm:"type:varchar(32);index;not null" json:"status"`
-	HubCompanyID string    `gorm:"type:text;index;not null" json:"hub_company_id"`
-	ServerID     string    `gorm:"type:text;index;not null" json:"server_id"`
-	ServerKey    *string   `gorm:"type:text;index" json:"server_key"`
-	ServerCRMID  *string   `gorm:"column:server_crm_id;type:text;index" json:"server_crm_id"`
-	ServerURL    *string   `gorm:"type:text" json:"server_url"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint    `gorm:"primaryKey" json:"id"`
+	Status       string  `gorm:"type:varchar(32);index;not null" json:"status"`
+	HubCompanyID string  `gorm:"type:text;index;not null" json:"hub_company_id"`
+	ServerID     string  `gorm:"type:text;index;not null" json:"server_id"`
+	ServerKey    *string `gorm:"type:text;index" json:"server_key"`
+	ServerCRMID  *string `gorm:"column:server_crm_id;type:text;index" json:"server_crm_id"`
+	ServerURL    *string `gorm:"type:text" json:"server_url"`
+	// ConflictInfo содержит описание конфликта владельцев.
+	// Заполняется когда РС найдена у одной дочерней компании, а ФР у другой.
+	ConflictInfo *string `gorm:"type:text" json:"conflict_info"`
+	// WSOwnerCandidate содержит ID компании-кандидата по РС (при конфликте).
+	WSOwnerCandidate *string `gorm:"type:text" json:"ws_owner_candidate"`
+	// FROwnerCandidate содержит ID компании-кандидата по ФР (при конфликте).
+	FROwnerCandidate *string   `gorm:"type:text" json:"fr_owner_candidate"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type NetworkCandidateGroup struct {

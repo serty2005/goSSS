@@ -11,10 +11,24 @@ import (
 	"github.com/jlaffaye/ftp"
 )
 
+// FTPFileInfo содержит метаданные файла с FTP-сервера.
+// Используется для передачи информации о файле без необходимости дополнительных запросов.
+type FTPFileInfo struct {
+	Name    string    // Имя файла
+	Size    int64     // Размер файла в байтах
+	ModTime time.Time // Время последней модификации
+	IsDir   bool      // Является ли директорией
+}
+
 // FTPClient определяет интерфейс для работы с FTP-сервером.
 type FTPClient interface {
 	ListFiles(path string) ([]*ftp.Entry, error)
 	DownloadFile(path string) ([]byte, error)
+	GetModTime(path string) (time.Time, error)
+	// IsTimePreciseInList возвращает true, если сервер поддерживает MLSD
+	// и время модификации в List() возвращается с точностью до секунды.
+	// Это позволяет избежать лишних запросов MDTM для каждого файла.
+	IsTimePreciseInList() bool
 }
 
 type ftpClientImpl struct {
@@ -91,4 +105,40 @@ func (f *ftpClientImpl) DownloadFile(path string) ([]byte, error) {
 	_ = bytes.NewReader(buf)
 
 	return buf, nil
+}
+
+// GetModTime возвращает время последней модификации файла на FTP сервере.
+// Использует команду MDTM для получения времени без скачивания файла.
+// Это позволяет оптимизировать синхронизацию - проверять изменения до скачивания.
+func (f *ftpClientImpl) GetModTime(path string) (time.Time, error) {
+	c, err := f.getConn()
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer c.Quit()
+
+	modTime, err := c.GetTime(path)
+	if err != nil {
+		f.logger.Error("Не удалось получить время модификации файла", "path", path, "error", err)
+		return time.Time{}, err
+	}
+
+	return modTime, nil
+}
+
+// IsTimePreciseInList проверяет, поддерживает ли сервер команду MLSD.
+// Если сервер поддерживает MLSD, то метод List() возвращает точное время
+// модификации файлов с точностью до секунды, и нет необходимости
+// делать отдельные запросы MDTM для каждого файла.
+func (f *ftpClientImpl) IsTimePreciseInList() bool {
+	c, err := f.getConn()
+	if err != nil {
+		f.logger.Warn("Не удалось подключиться к FTP для проверки MLSD", "error", err)
+		return false
+	}
+	defer c.Quit()
+
+	result := c.IsTimePreciseInList()
+	f.logger.Debug("Проверка поддержки MLSD на FTP сервере", "supported", result)
+	return result
 }

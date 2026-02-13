@@ -147,6 +147,11 @@ func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Ручной ввод remote IDs (приоритет над значениями из staging)
+	input.TeamviewerID = strPtrOrNil(req.TeamviewerID)
+	input.LitemanagerID = strPtrOrNil(req.LitemanagerID)
+	input.AnydeskID = strPtrOrNil(req.AnydeskID)
+
 	updated, err := h.obsSrv.ApproveCandidate(r.Context(), input)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("не удалось подтвердить кандидата", "candidate_id", id, "error", err)
@@ -184,6 +189,13 @@ type candidateApproveRequest struct {
 		Name            string  `json:"name"`
 	} `json:"workstations"`
 	Comment *string `json:"comment"`
+
+	// Ручной ввод remote IDs (опционально).
+	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+	// Приоритет: ручной ввод > значения из staging.
+	TeamviewerID  *string `json:"teamviewer_id,omitempty"`
+	LitemanagerID *string `json:"litemanager_id,omitempty"`
+	AnydeskID     *string `json:"anydesk_id,omitempty"`
 }
 
 // parseCandidateID извлекает ID кандидата из URL.

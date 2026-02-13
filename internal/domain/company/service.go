@@ -15,4 +15,7 @@ type Service interface {
 
 	// GetInfrastructure возвращает список всего активного оборудования компании.
 	GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error)
+
+	// GetChildren возвращает список дочерних компаний для указанной hub-компании.
+	GetChildren(ctx context.Context, companyID string) ([]Company, error)
 }

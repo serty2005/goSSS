@@ -109,6 +109,29 @@ func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, o
 	return s.companyRepo.Search(ctx, term, true, limit, offset)
 }
 
+// GetChildren возвращает список дочерних компаний для указанной hub-компании.
+func (s *serviceImpl) GetChildren(ctx context.Context, companyID string) ([]company.Company, error) {
+	// Проверяем существование родительской компании
+	comp, err := s.companyRepo.GetByID(ctx, companyID)
+	if err != nil {
+		if err == domain.ErrNotFound {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("ошибка при проверке компании: %w", err)
+	}
+	if comp == nil {
+		return nil, domain.ErrNotFound
+	}
+
+	// Получаем дочерние компании
+	children, err := s.companyRepo.GetChildren(ctx, companyID)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при получении дочерних компаний: %w", err)
+	}
+
+	return children, nil
+}
+
 // GetInfrastructure возвращает плоский список оборудования компании.
 func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error) {
 	// 1. Проверяем существование компании

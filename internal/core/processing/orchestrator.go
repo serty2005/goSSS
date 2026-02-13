@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
@@ -23,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -164,14 +166,24 @@ func (o *Orchestrator) handleAgentObservationRequested(ctx context.Context, even
 		return
 	}
 
-	log := o.logger.With("source", payload.Source)
+	traceID := payload.TraceID
+	if strings.TrimSpace(traceID) == "" {
+		traceID = uuid.New().String()
+	}
+
+	log := o.logger.With(
+		"trace_id", traceID,
+		"operation", "handle_observation",
+		"source", payload.Source,
+	)
 	log.Debug("Начало обработки наблюдения агента",
 		"has_server_data", payload.Data.URLRms != "",
 		"has_workstation_data", payload.Data.Hostname != "",
 		"has_fiscal_data", payload.Data.SerialNumber != "",
 	)
 
-	if _, err := o.obsService.ApplyObservation(ctx, payload.Source, &payload.Data); err != nil {
+	ctxWithTrace := contextkeys.WithTraceID(ctx, traceID)
+	if _, err := o.obsService.ApplyObservation(ctxWithTrace, payload.Source, &payload.Data); err != nil {
 		log.Error("Не удалось применить наблюдение агента", "error", err)
 		return
 	}
@@ -568,7 +580,16 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 		return
 	}
 
-	log := o.logger.With("source", payload.Source)
+	traceID := payload.TraceID
+	if strings.TrimSpace(traceID) == "" {
+		traceID = uuid.New().String()
+	}
+
+	log := o.logger.With(
+		"trace_id", traceID,
+		"operation", "handle_agent_data",
+		"source", payload.Source,
+	)
 	log.Debug("Оркестратор НАЧАЛ обработку события AgentDataReceived",
 		"has_rms_url", payload.Data.URLRms != "",
 		"has_hostname", payload.Data.Hostname != "",
@@ -576,7 +597,8 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 	)
 
 	// Делегируем анализ данных движку
-	result := o.engine.ProcessAgentData(ctx, payload.Source, &payload.Data)
+	ctxWithTrace := contextkeys.WithTraceID(ctx, traceID)
+	result := o.engine.ProcessAgentData(ctxWithTrace, payload.Source, &payload.Data)
 
 	if len(result.Actions) == 0 {
 		log.Debug("Движок не вернул никаких действий для выполнения")
@@ -610,7 +632,7 @@ func (o *Orchestrator) handleAgentDataReceived(ctx context.Context, event eventb
 
 			case ActionUpdate:
 				action.Updates["last_updated_by"] = "agent"
-				if err := o.performUpdate(ctx, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
+				if err := o.performUpdate(ctxWithTrace, tx, action.EntityType, action.EntityUUID, action.Updates); err != nil {
 					log.Error("Ошибка обновления сущности",
 						"entity_type", action.EntityType,
 						"entity_uuid", action.EntityUUID,

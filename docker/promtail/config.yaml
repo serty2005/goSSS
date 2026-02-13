@@ -1,0 +1,107 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    timeout: 10s
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+      max_retries: 10
+
+scrape_configs:
+  - job_name: etalon-server-json
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: etalon-server
+          env: local
+          __path__: /var/log/etalon/app.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            # Базовые поля slog JSON
+            time: time
+            level: level
+            msg: msg
+            component: component
+
+            # Сквозная трассировка агентского флоу
+            trace_id: trace_id
+            operation: operation
+            source: source
+
+            # Идентификаторы сущностей
+            observation_id: observation_id
+            server_id: server_id
+            workstation_id: workstation_id
+            fr_id: fr_id
+            candidate_id: candidate_id
+
+            # Статусы/ошибки
+            status: status
+            error: error
+
+            # Служебные/legacy поля (не в labels)
+            request_id: request_id
+            url: url
+            status_code: status_code
+            attempt: attempt
+            system: system
+            username: username
+            file: file
+            local_path: local_path
+            size: size
+            ftp_time: ftp_time
+            is_new: is_new
+            is_new_file: is_new_file
+            mod_time: mod_time
+            last_mod_time: last_mod_time
+
+      - template:
+          source: level
+          template: '{{ ToUpper .Value }}'
+
+      - labels:
+          # Только низкокардинальные поля
+          level:
+          component:
+          operation:
+          status:
+
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+
+      - structured_metadata:
+          # Трассировка и корреляция
+          trace_id:
+          operation:
+          source:
+
+          # Идентификаторы сущностей
+          observation_id:
+          server_id:
+          workstation_id:
+          fr_id:
+          candidate_id:
+
+          # Диагностика
+          status:
+          error:
+          request_id:
+          username:
+          file:
+
+limits_config:
+  readline_rate_enabled: true
+  readline_rate: 10000
+  readline_burst: 20000
+
+tracing:
+  enabled: false

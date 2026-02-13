@@ -1,10 +1,11 @@
-package services
+﻿package services
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/core/events"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
@@ -14,6 +15,8 @@ import (
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -65,9 +68,22 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		return nil, fmt.Errorf("не удалось создать агента в БД: %w", err)
 	}
 
-	payload := events.AgentDataPayload{Source: req.AgentUUID, Data: req.InitialData}
+	traceID := contextkeys.GetTraceID(ctx)
+	if traceID == "" {
+		traceID = uuid.New().String()
+	}
+
+	payload := events.AgentDataPayload{
+		TraceID: traceID,
+		Source:  req.AgentUUID,
+		Data:    req.InitialData,
+	}
 	s.bus.Publish(eventbus.Event{Type: events.AgentDataReceived, Payload: payload})
-	s.logger.Info("Новый агент зарегистрирован", "uuid", req.AgentUUID)
+	s.logger.Info("Новый агент зарегистрирован",
+		"trace_id", traceID,
+		"operation", "register_agent",
+		"source", req.AgentUUID,
+	)
 	return agent, nil
 }
 
@@ -116,9 +132,15 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		}
 	}
 
+	traceID := contextkeys.GetTraceID(ctx)
+	if traceID == "" {
+		traceID = uuid.New().String()
+	}
+
 	s.bus.Publish(eventbus.Event{
 		Type: events.AgentObservationRequested,
 		Payload: events.AgentObservationPayload{
+			TraceID: traceID,
 			Source: targetUUID,
 			Data:   *data,
 		},
@@ -159,3 +181,4 @@ func (s *agentServiceImpl) GetAgentConfig(ctx context.Context, uuid string) (*ap
 	}
 	return &configDTO, nil
 }
+

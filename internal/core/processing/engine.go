@@ -1,4 +1,4 @@
-// Файл: internal/core/processing/engine.go
+﻿// Файл: internal/core/processing/engine.go
 //
 // Package processing содержит движок обработки агентских данных.
 // Движок отвечает за сверку данных от агентов мониторинга с существующими
@@ -20,6 +20,7 @@ package processing
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
@@ -35,6 +36,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 )
 
@@ -374,7 +376,16 @@ func (p *processingEngineImpl) ProcessDuplicates(ctx context.Context, payload ev
 //   - data.CRMID → ServerCRMID
 //   - весь payload → PayloadJSON
 func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source string, data *api.AgentDataDTO) *ProcessingResult {
-	log := p.logger.With("операция", "ProcessAgentData", "source", source)
+	traceID := contextkeys.GetTraceID(ctx)
+	if traceID == "" {
+		traceID = uuid.New().String()
+	}
+
+	log := p.logger.With(
+		"trace_id", traceID,
+		"operation", "process_agent_data",
+		"source", source,
+	)
 	log.Debug("Начало обработки данных агента",
 		"hostname", data.Hostname,
 		"crm_id", data.CRMID,
@@ -659,8 +670,8 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 //   - Пропускает заблокированные серверы (health_status = "locked")
 //   - Проверяет родство компаний владельца сервера и оборудования
 //   - Логирует результат проверки для диагностики
-func (p *processingEngineImpl) processServerActions(ctx context.Context, res *ProcessingResult, equipmentOwnerID string, server *server.Server, data *api.AgentDataDTO) {
-	log := p.logger.With("операция", "processServerActions")
+func (p *processingEngineImpl) processServerActions(_ context.Context, _ *ProcessingResult, equipmentOwnerID string, server *server.Server, data *api.AgentDataDTO) {
+	log := p.logger.With("operation", "process_server_actions")
 
 	serverID := "nil"
 	if server != nil {
@@ -719,7 +730,7 @@ func (p *processingEngineImpl) processServerActions(ctx context.Context, res *Pr
 //   - data.LitemanagerID → litemanager (с извлечением из additional_properties)
 //   - data.AnydeskID → anydesk (с валидацией)
 func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, res *ProcessingResult, ownerID string, ws *workstation.Workstation, data *api.AgentDataDTO) {
-	log := p.logger.With("операция", "processWorkstationActions")
+	log := p.logger.With("operation", "process_workstation_actions")
 
 	agentTV := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
@@ -795,7 +806,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 //   - data.AttributeMarked → attribute_marked
 //   - data.OFDName → ofd_name
 func (p *processingEngineImpl) processFiscalRegisterActions(ctx context.Context, res *ProcessingResult, ownerID string, fr *fiscal.FiscalRegister, data *api.AgentDataDTO) {
-	log := p.logger.With("операция", "processFiscalRegisterActions")
+	log := p.logger.With("operation", "process_fiscal_register_actions")
 
 	log.Debug("Данные ФР от агента",
 		"serial_number", data.SerialNumber,

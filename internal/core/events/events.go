@@ -252,6 +252,9 @@ type FiscalRegisterDiscrepancyPayload struct {
 // AgentDataPayload — полезная нагрузка для события AgentDataReceived.
 // Содержит "сырые" данные, полученные от агента до обработки.
 type AgentDataPayload struct {
+	// TraceID — сквозной идентификатор трассировки
+	TraceID string
+
 	// Source — источник данных.
 	// Для FTP: имя JSON-файла (например, "550e8400-e29b-41d4-a716-446655440000.json").
 	// Для API: UUID агента.
@@ -265,6 +268,9 @@ type AgentDataPayload struct {
 // AgentObservationPayload — полезная нагрузка для события AgentObservationRequested.
 // Содержит данные наблюдения, готовые к применению в доменной модели.
 type AgentObservationPayload struct {
+	// TraceID — сквозной идентификатор трассировки
+	TraceID string
+
 	// Source — источник данных для логирования.
 	// Для API: UUID агента.
 	// Для FTP: имя файла.

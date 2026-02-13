@@ -1,26 +1,27 @@
 ﻿# Etalon-Server API Reference
 
+## 1. Общие сведения
 
-## 1. РћР±С‰РёРµ СЃРІРµРґРµРЅРёСЏ
+* **Base URL:** `/api`
+* **Protocol:** HTTP/1.1 (REST) & Server-Sent Events (SSE)
+* **Content-Type:** `application/json`
+* **Date Format:** ISO 8601 (`2023-10-27T10:00:00Z`)
 
-*   **Base URL:** `/api`
-*   **Protocol:** HTTP/1.1 (REST) & Server-Sent Events (SSE)
-*   **Content-Type:** `application/json`
-*   **Date Format:** ISO 8601 (`2023-10-27T10:00:00Z`)
+### 1.1. Аутентификация
 
-### 1.1. РђСѓС‚РµРЅС‚РёС„РёРєР°С†РёСЏ
-Р’СЃРµ Р·Р°РїСЂРѕСЃС‹ Рє Р·Р°С‰РёС‰РµРЅРЅС‹Рј СЌРЅРґРїРѕРёРЅС‚Р°Рј С‚СЂРµР±СѓСЋС‚ Р·Р°РіРѕР»РѕРІРѕРє:
+Все запросы к защищённым эндпоинтам требуют заголовок:
 `Authorization: Bearer <your_jwt_token>`
 
-### 1.2. Р¤РѕСЂРјР°С‚ РѕС‚РІРµС‚РѕРІ (Envelope Pattern)
-Р’СЃРµ РѕС‚РІРµС‚С‹ API РѕР±РµСЂРЅСѓС‚С‹ РІ РµРґРёРЅС‹Р№ РєРѕРЅРІРµСЂС‚.
+### 1.2. Формат ответов (Envelope Pattern)
 
-**РЈСЃРїРµС€РЅС‹Р№ РѕС‚РІРµС‚ (200 OK, 201 Created, 202 Accepted):**
+Все ответы API обёрнуты в единый конверт.
+
+**Успешный ответ (200 OK, 201 Created, 202 Accepted):**
 ```json
 {
   "status": "success",
-  "data": { ... },       // РћСЃРЅРѕРІРЅС‹Рµ РґР°РЅРЅС‹Рµ (РѕР±СЉРµРєС‚ РёР»Рё РјР°СЃСЃРёРІ)
-  "meta": {              // РњРµС‚Р°РґР°РЅРЅС‹Рµ (РїСЂРёСЃСѓС‚СЃС‚РІСѓСЋС‚ РїСЂРё РїР°РіРёРЅР°С†РёРё)
+  "data": { ... },
+  "meta": {
     "total": 100,
     "limit": 50,
     "offset": 0,
@@ -30,21 +31,22 @@
 }
 ```
 
-**РћС‚РІРµС‚ СЃ РѕС€РёР±РєРѕР№ (4xx, 5xx):**
+**Ответ с ошибкой (4xx, 5xx):**
 ```json
 {
   "status": "error",
   "error": {
-    "error": "РћРїРёСЃР°РЅРёРµ РѕС€РёР±РєРё РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РёР»Рё СЂР°Р·СЂР°Р±РѕС‚С‡РёРєР°"
+    "error": "Описание ошибки для пользователя или разработчика"
   }
 }
 ```
 
 ---
 
-## 2. РђСѓС‚РµРЅС‚РёС„РёРєР°С†РёСЏ
+## 2. Аутентификация
 
-### 2.1. Р’С…РѕРґ РІ СЃРёСЃС‚РµРјСѓ
+### 2.1. Вход в систему
+
 `POST /auth/login`
 
 **Request Body:**
@@ -64,7 +66,7 @@
     "user": {
       "id": 1,
       "username": "admin",
-      "fullName": "Р“Р»Р°РІРЅС‹Р№ РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ",
+      "fullName": "Главный Администратор",
       "roles": ["admin"]
     }
   }
@@ -73,16 +75,17 @@
 
 ---
 
-## 3. Р“Р»РѕР±Р°Р»СЊРЅС‹Р№ РїРѕРёСЃРє (Search)
+## 3. Глобальный поиск (Search)
 
-РћСЃРЅРѕРІРЅРѕР№ РёРЅСЃС‚СЂСѓРјРµРЅС‚ РЅР°РІРёРіР°С†РёРё. РС‰РµС‚ РљРѕРјРїР°РЅРёРё, РЎРµСЂРІРµСЂС‹, Р Р°Р±РѕС‡РёРµ СЃС‚Р°РЅС†РёРё Рё Р¤Р  РїРѕ РІРІРµРґРµРЅРЅРѕР№ СЃС‚СЂРѕРєРµ. Р РµР·СѓР»СЊС‚Р°С‚С‹ СЃРіСЂСѓРїРїРёСЂРѕРІР°РЅС‹ РїРѕ РљРѕРјРїР°РЅРёСЏРј-РІР»Р°РґРµР»СЊС†Р°Рј.
+Основной инструмент навигации. Ищет Компании, Серверы, Рабочие станции и ФР по введённой строке. Результаты сгруппированы по Компаниям-владельцам.
 
-### 3.1. РџРѕРёСЃРє СЃСѓС‰РЅРѕСЃС‚РµР№
+### 3.1. Поиск сущностей
+
 `GET /search`
 
 **Parameters:**
-*   `term` (string, required): РџРѕРёСЃРєРѕРІР°СЏ С„СЂР°Р·Р° (IP, Serial, Name, Address, INN).
-*   `limit` (int, optional): Р›РёРјРёС‚ Р·Р°РїРёСЃРµР№ (default: 50).
+* `term` (string, required): Поисковая фраза (IP, Serial, Name, Address, INN).
+* `limit` (int, optional): Лимит записей (default: 50).
 
 **Response:**
 ```json
@@ -93,11 +96,11 @@
       {
         "owner": {
           "uuid": "internal-uuid-company",
-          "external_uuid": "sd-uuid-company", // РњРѕР¶РµС‚ Р±С‹С‚СЊ null
-          "name": "РћРћРћ Р РѕРјР°С€РєР°",
-          "address": "Рі. РњРѕСЃРєРІР°, СѓР». Р›РµРЅРёРЅР° 1",
+          "external_uuid": "sd-uuid-company",
+          "name": "ООО Ромашка",
+          "address": "г. Москва, ул. Ленина 1",
           "active_contract": true,
-          "parent_info": { "uuid": "parent-uuid", "name": "РҐРѕР»РґРёРЅРі Р“СЂСѓРїРї" }
+          "parent_info": { "uuid": "parent-uuid", "name": "Холдинг Групп" }
         },
         "found_entities": [
           {
@@ -106,8 +109,8 @@
               "uuid": "srv-uuid",
               "device_name": "SRV-01",
               "ip": "192.168.1.10:8080",
-              "operational_status": "active", // active, offline, unknown
-              "health_status": "ok" // ok, attention_required, locked
+              "operational_status": "active",
+              "health_status": "ok"
             }
           },
           {
@@ -128,16 +131,17 @@
 
 ---
 
-## 4. Р—Р°РґР°С‡Рё СЃРІРµСЂРєРё (Tasks)
+## 4. Задачи сверки (Tasks)
 
-Р Р°Р±РѕС‡РµРµ РјРµСЃС‚Рѕ РѕРїРµСЂР°С‚РѕСЂР°. Р—РґРµСЃСЊ РѕС‚РѕР±СЂР°Р¶Р°СЋС‚СЃСЏ РєРѕРЅС„Р»РёРєС‚С‹ РґР°РЅРЅС‹С… Рё РЅРѕРІС‹Рµ СѓСЃС‚СЂРѕР№СЃС‚РІР°, С‚СЂРµР±СѓСЋС‰РёРµ СЂРµС€РµРЅРёСЏ.
+Рабочее место оператора. Здесь отображаются конфликты данных и новые устройства, требующие решения.
 
-### 4.1. РџРѕР»СѓС‡РёС‚СЊ СЃРїРёСЃРѕРє Р·Р°РґР°С‡
+### 4.1. Получить список задач
+
 `GET /tasks`
 
 **Parameters:**
-*   `status` (string, optional): `new`, `resolved`, `rejected`, `pending_sd_action`, `sd_error`.
-*   `limit`, `offset` (pagination).
+* `status` (string, optional): `new`, `resolved`, `rejected`, `pending_sd_action`, `sd_error`.
+* `limit`, `offset` (pagination).
 
 **Response:**
 ```json
@@ -146,16 +150,14 @@
   "data": [
     {
       "id": 101,
-      "task_type": "add_equipment", 
+      "task_type": "add_equipment",
       "entity_type": "FiscalRegister",
       "status": "new",
       "created_at": "2023-10-27T10:00:00Z",
       "details": {
-        // РЎС‚СЂСѓРєС‚СѓСЂР° Р·Р°РІРёСЃРёС‚ РѕС‚ task_type.
-        // РџСЂРёРјРµСЂ РґР»СЏ add_equipment:
-        "agent_data": { ... },     // РџРѕР»РЅС‹Рµ СЃС‹СЂС‹Рµ РґР°РЅРЅС‹Рµ РѕС‚ Р°РіРµРЅС‚Р°
-        "etalon_owner_id": "...",  // РџСЂРµРґР»Р°РіР°РµРјС‹Р№ РІР»Р°РґРµР»РµС†
-        "equipment_data": {        // РЎС„РѕСЂРјРёСЂРѕРІР°РЅРЅС‹Рµ РґР°РЅРЅС‹Рµ РґР»СЏ РїСЂРµРІСЊСЋ
+        "agent_data": { ... },
+        "etalon_owner_id": "...",
+        "equipment_data": {
            "rn_kkt": "...",
            "serial_number": "..."
         }
@@ -165,65 +167,60 @@
 }
 ```
 
-### 4.2. Р РµС€РёС‚СЊ Р·Р°РґР°С‡Сѓ (Resolve)
+### 4.2. Решить задачу (Resolve)
+
 `POST /tasks/{id}/resolve`
 
-Р”РµР№СЃС‚РІРёРµ Р·Р°РІРёСЃРёС‚ РѕС‚ `resolution_payload.action`.
+Действие зависит от `resolution_payload.action`.
 
-**Request Body (РџСЂРёРјРµСЂ: РџРѕРґС‚РІРµСЂРґРёС‚СЊ СЃРѕР·РґР°РЅРёРµ):**
+**Request Body (Пример: Подтвердить создание):**
 ```json
 {
   "status": "resolved",
-  "comment": "РћР±РѕСЂСѓРґРѕРІР°РЅРёРµ РґРѕР±Р°РІР»РµРЅРѕ РєРѕСЂСЂРµРєС‚РЅРѕ",
-  "resolution_payload": {
-    "action": "create" 
-  }
-}
-```
-
-**Request Body (РџСЂРёРјРµСЂ: РЎРјРµРЅРёС‚СЊ РІР»Р°РґРµР»СЊС†Р°):**
-```json
-{
-  "status": "resolved",
+  "comment": "Оборудование добавлено корректно",
   "resolution_payload": {
     "action": "create"
   }
 }
 ```
 
-### 4.3. РЎРѕР·РґР°С‚СЊ СЃСѓС‰РЅРѕСЃС‚СЊ РІ ServiceDesk (РЅР° РѕСЃРЅРѕРІРµ Р·Р°РґР°С‡Рё)
+### 4.3. Создать сущность в ServiceDesk (на основе задачи)
+
 `POST /tasks/{id}/create-entity-in-sd`
 
-РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ Р·Р°РґР°С‡ С‚РёРїР° `add_equipment`, РєРѕРіРґР° РѕРїРµСЂР°С‚РѕСЂ РїРѕРґС‚РІРµСЂРґРёР» РґР°РЅРЅС‹Рµ Рё С…РѕС‡РµС‚ РѕС‚РїСЂР°РІРёС‚СЊ РёС… РІ Naumen.
+Используется для задач типа `add_equipment`, когда оператор подтвердил данные и хочет отправить их в Naumen.
 
 **Request Body:**
 ```json
 {
-  "entity_type": "FiscalRegister" // РёР»Рё Server, Workstation
+  "entity_type": "FiscalRegister"
 }
 ```
-**Response:** `202 Accepted` (РѕРїРµСЂР°С†РёСЏ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ Р°СЃРёРЅС…СЂРѕРЅРЅРѕ, СЃС‚Р°С‚СѓСЃ Р·Р°РґР°С‡Рё РёР·РјРµРЅРёС‚СЃСЏ РЅР° `pending_sd_action`).
 
-### 4.4. РџРѕР»СѓС‡РёС‚СЊ РіСЂСѓРїРїС‹ РґСѓР±Р»РёРєР°С‚РѕРІ
+**Response:** `202 Accepted` (операция выполняется асинхронно, статус задачи изменится на `pending_sd_action`).
+
+### 4.4. Получить группы дубликатов
+
 `GET /duplicates`
 
-Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє РіСЂСѓРїРї СЃСѓС‰РЅРѕСЃС‚РµР№, Сѓ РєРѕС‚РѕСЂС‹С… СЃРѕРІРїР°РґР°СЋС‚ РєР»СЋС‡РµРІС‹Рµ РїРѕР»СЏ (IP, Serial, TeamViewer ID).
+Возвращает список групп сущностей, у которых совпадают ключевые поля (IP, Serial, TeamViewer ID).
 
 ---
 
-## 5. РўРёРєРµС‚С‹ (ServiceDesk)
+## 5. Тикеты (ServiceDesk)
 
-Р Р°Р±РѕС‚Р° СЃ Р·Р°СЏРІРєР°РјРё.
+Работа с заявками.
 
-### 5.1. РЎРїРёСЃРѕРє Р·Р°СЏРІРѕРє
+### 5.1. Список заявок
+
 `GET /tickets`
 
 **Parameters:**
-*   `company_id` (optional): Р¤РёР»СЊС‚СЂ РїРѕ РєРѕРјРїР°РЅРёРё.
-*   `asset_id` (optional): Р¤РёР»СЊС‚СЂ РїРѕ РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЋ.
-*   `status` (optional): `registered,inprogress,closed`.
-*   `search` (optional): РџРѕРёСЃРє РїРѕ С‚РµРјРµ РёР»Рё РЅРѕРјРµСЂСѓ.
-*   `limit`, `offset`.
+* `company_id` (optional): Фильтр по компании.
+* `asset_id` (optional): Фильтр по оборудованию.
+* `status` (optional): `registered,inprogress,closed`.
+* `search` (optional): Поиск по теме или номеру.
+* `limit`, `offset`.
 
 **Response:**
 ```json
@@ -235,7 +232,7 @@
       "number": 12345,
       "service_desk_uuid": "serviceCall$...",
       "status": "registered",
-      "subject": "РќРµ СЂР°Р±РѕС‚Р°РµС‚ РїСЂРёРЅС‚РµСЂ",
+      "subject": "Не работает принтер",
       "last_activity": "2023-10-27T12:00:00Z",
       "company_id": "..."
     }
@@ -244,83 +241,88 @@
 }
 ```
 
-### 5.2. Р”РµС‚Р°Р»Рё Р·Р°СЏРІРєРё
+### 5.2. Детали заявки
+
 `GET /tickets/{id}`
 
-Р’РѕР·РІСЂР°С‰Р°РµС‚ РїРѕР»РЅСѓСЋ РёРЅС„РѕСЂРјР°С†РёСЋ: РѕРїРёСЃР°РЅРёРµ (HTML), РёСЃС‚РѕСЂРёСЋ РёР·РјРµРЅРµРЅРёР№, РІР»РѕР¶РµРЅРёСЏ Рё РєРѕРјРјРµРЅС‚Р°СЂРёРё.
+Возвращает полную информацию: описание (HTML), историю изменений, вложения и комментарии.
 
-### 5.3. РЎРѕР·РґР°С‚СЊ Р·Р°СЏРІРєСѓ (Р’РЅСѓС‚СЂРµРЅРЅСЋСЋ)
+### 5.3. Создать заявку (Внутреннюю)
+
 `POST /tickets`
 
 **Request Body:**
 ```json
 {
-  "subject": "РџСЂРѕР±Р»РµРјР° СЃ РєР°СЃСЃРѕР№",
-  "description": "РћРїРёСЃР°РЅРёРµ РїСЂРѕР±Р»РµРјС‹...",
+  "subject": "Проблема с кассой",
+  "description": "Описание проблемы...",
   "company_id": "uuid-company",
-  "priority": "high", // low, medium, high, critical
+  "priority": "high",
   "type": "incident",
-  "asset_id": "uuid-fiscal", // РћРїС†РёРѕРЅР°Р»СЊРЅРѕ
+  "asset_id": "uuid-fiscal",
   "asset_type": "FiscalRegister"
 }
 ```
 
-### 5.4. РЎРјРµРЅРёС‚СЊ СЃС‚Р°С‚СѓСЃ
+### 5.4. Сменить статус
+
 `PATCH /tickets/{id}/status`
 
 **Request Body:**
 ```json
 {
   "status": "inprogress",
-  "comment": "Р’Р·СЏР» РІ СЂР°Р±РѕС‚Сѓ" // РћРїС†РёРѕРЅР°Р»СЊРЅРѕ
+  "comment": "Взял в работу"
 }
 ```
 
-### 5.5. РќР°Р·РЅР°С‡РёС‚СЊ РёСЃРїРѕР»РЅРёС‚РµР»СЏ
+### 5.5. Назначить исполнителя
+
 `PATCH /tickets/{id}/assign`
 
 **Request Body:**
 ```json
 {
-  "assignee_id": 12 // ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ СЃРёСЃС‚РµРјС‹ (User.ID), РёР»Рё null РґР»СЏ СЃРЅСЏС‚РёСЏ
+  "assignee_id": 12
 }
 ```
 
 ---
 
-## 6. РРЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂР° (CMDB)
+## 6. Инфраструктура (CMDB)
 
-CRUD РѕРїРµСЂР°С†РёРё РґР»СЏ РѕСЃРЅРѕРІРЅС‹С… СЃСѓС‰РЅРѕСЃС‚РµР№.
+CRUD операции для основных сущностей.
 
-### 6.1. РљРѕРјРїР°РЅРёРё
-*   `GET /companies/{id}`: Р”РµС‚Р°Р»Рё РєРѕРјРїР°РЅРёРё.
-*   `GET /companies/{id}/infrastructure`: **Р’Р°Р¶РЅС‹Р№ СЌРЅРґРїРѕРёРЅС‚**. Р’РѕР·РІСЂР°С‰Р°РµС‚ РїР»РѕСЃРєРёР№ СЃРїРёСЃРѕРє РІСЃРµРіРѕ РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЏ (Server, Workstation, FiscalRegister), РїСЂРёРЅР°РґР»РµР¶Р°С‰РµРіРѕ РєРѕРјРїР°РЅРёРё. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РїРѕСЃС‚СЂРѕРµРЅРёСЏ РґРµСЂРµРІР° РЅР° С„СЂРѕРЅС‚РµРЅРґРµ.
+### 6.1. Компании
+* `GET /companies/{id}`: Детали компании.
+* `GET /companies/{id}/infrastructure`: **Важный эндпоинт**. Возвращает плоский список всего оборудования (Server, Workstation, FiscalRegister), принадлежащего компании.
 
-### 6.2. РЎРµСЂРІРµСЂС‹
-*   `POST /servers/{id}/poll`: РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅС‹Р№ РѕРїСЂРѕСЃ СЃС‚Р°С‚СѓСЃР° (RMS/Iiko).
-*   `POST /servers/{id}/license`: РЈСЃС‚Р°РЅРѕРІРєР° Р»РёС†РµРЅР·РёРё (С‚СЂРµР±СѓРµС‚СЃСЏ `unique_id` РІ С‚РµР»Рµ).
-*   `POST /servers/{id}/additional_owners`: Р”РѕР±Р°РІРёС‚СЊ СЃРѕРІР»Р°РґРµР»СЊС†Р° (С‚РµР»Рѕ: `{"company_id": "..."}`).
+### 6.2. Серверы
+* `POST /servers/{id}/poll`: Принудительный опрос статуса (RMS/Iiko).
+* `POST /servers/{id}/license`: Установка лицензии (требуется `unique_id` в теле).
+* `POST /servers/{id}/additional_owners`: Добавить совладельца (тело: `{"company_id": "..."}`).
 
-### 6.3. РћР±С‰РёРµ CRUD
-Р”Р»СЏ `servers`, `workstations`, `fiscals` РґРѕСЃС‚СѓРїРЅС‹ СЃС‚Р°РЅРґР°СЂС‚РЅС‹Рµ РјРµС‚РѕРґС‹:
-*   `GET /{entity}/{id}`
-*   `PUT /{entity}/{id}` (РѕР±РЅРѕРІР»РµРЅРёРµ РїРѕР»РµР№)
-*   `DELETE /{entity}/{id}` (РјСЏРіРєРѕРµ СѓРґР°Р»РµРЅРёРµ)
+### 6.3. Общие CRUD
+
+Для `servers`, `workstations`, `fiscals` доступны стандартные методы:
+* `GET /{entity}/{id}`
+* `PUT /{entity}/{id}` (обновление полей)
+* `DELETE /{entity}/{id}` (мягкое удаление)
 
 ---
 
-## 7. Real-time РЎРѕР±С‹С‚РёСЏ (SSE)
+## 7. Real-time События (SSE)
 
-РџРѕРґРїРёСЃРєР° РЅР° РѕР±РЅРѕРІР»РµРЅРёСЏ РІ СЂРµР°Р»СЊРЅРѕРј РІСЂРµРјРµРЅРё.
+Подписка на обновления в реальном времени.
 
 **Endpoint:** `GET /events`
 
-**РўРёРїС‹ СЃРѕР±С‹С‚РёР№ (event):**
-*   `server.polling.succeeded`: РЎС‚Р°С‚СѓСЃ СЃРµСЂРІРµСЂР° РѕР±РЅРѕРІРёР»СЃСЏ (payload: `{ serverUUID, newStatus, ... }`).
-*   `server.polling.failed`: РЎРµСЂРІРµСЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ.
-*   `servicedesk.entity.create.requested`: Р—Р°РґР°С‡Р° СѓС€Р»Р° РІ РѕР±СЂР°Р±РѕС‚РєСѓ (СЃС‚Р°С‚СѓСЃ Р·Р°РґР°С‡Рё РёР·РјРµРЅРёР»СЃСЏ).
-*   `servicedesk.entity.updated`: РџСЂРёС€Р»Рё РЅРѕРІС‹Рµ РґР°РЅРЅС‹Рµ РёР· SD.
-*   `duplicates.found`: РќР°Р№РґРµРЅС‹ РЅРѕРІС‹Рµ РґСѓР±Р»РёРєР°С‚С‹.
+**Типы событий (event):**
+* `server.polling.succeeded`: Статус сервера обновился.
+* `server.polling.failed`: Сервер недоступен.
+* `servicedesk.entity.create.requested`: Задача ушла в обработку.
+* `servicedesk.entity.updated`: Пришли новые данные из SD.
+* `duplicates.found`: Найдены новые дубликаты.
 
 **Client Implementation (JS):**
 ```javascript
@@ -331,21 +333,108 @@ evtSource.addEventListener("server.polling.succeeded", (e) => {
 });
 ```
 
-## 8. Network Candidates
+---
 
-### 8.1. Список network-кандидатов
-GET /network-candidates
+## 8. Кандидаты (Candidates)
 
-Параметры: status, limit, offset.
+Работа с кандидатами на подключение к АО.
 
-### 8.2. Карточка network-кандидата
-GET /network-candidates/{id}`r
+### 8.1. Список кандидатов
+
+`GET /candidates`
+
+**Parameters:**
+* `status` (optional): `NEW`, `IN_REVIEW`, `APPROVED`, `REJECTED`, `ACTIVE` (default).
+* `limit`, `offset`.
+
+### 8.2. Карточка кандидата
+
+`GET /candidates/{id}`
+
+Возвращает кандидата с staged-данными по станциям и ФР.
+
+### 8.3. Подтверждение кандидата
+
+`POST /candidates/{id}/approve`
+
+**Request Body:**
+```json
+{
+  "company_id": "uuid-existing-company",
+  "company": {
+    "title": "Название новой компании",
+    "address": "Адрес",
+    "additional_name": "Доп. название",
+    "parent_id": "uuid-parent-company",
+    "contract_mode": "inherit_parent",
+    "contract_type": "full"
+  },
+  "server": {
+    "mode": "existing",
+    "server_id": "uuid-existing-server",
+    "crm_id": "CRM-123",
+    "url_rms": "server.domain.ru:8080",
+    "unique_id": "unique-identifier",
+    "cabinet_link": "https://cabinet.example.com/client/12345",
+    "device_name": "SRV-01",
+    "description": "Описание сервера"
+  },
+  "workstations": [
+    {
+      "staging_id": 1,
+      "workstation_uuid": "uuid-ws",
+      "name": "КАССА-01"
+    }
+  ],
+  "teamviewer_id": "123456789",
+  "litemanager_id": "987654321",
+  "anydesk_id": "123456789",
+  "comment": "Комментарий оператора"
+}
+```
+
+**Поля для ручного ввода remote IDs (опционально):**
+* `teamviewer_id` (string, optional) — ID TeamViewer для идентификации рабочей станции
+* `litemanager_id` (string, optional) — ID LiteManager для идентификации рабочей станции
+* `anydesk_id` (string, optional) — ID AnyDesk для идентификации рабочей станции
+
+Эти поля используются когда агент не собрал remote IDs (программы удалённого доступа не установлены или не обнаружены). Приоритет: ручной ввод > значения из staging.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "id": 1,
+    "status": "APPROVED",
+    "approved_company_id": "uuid-company",
+    "approved_server_id": "uuid-server"
+  }
+}
+```
+
+---
+
+## 9. Network Candidates
+
+### 9.1. Список network-кандидатов
+
+`GET /network-candidates`
+
+**Parameters:**
+* `status` (optional): `NEW`, `IN_REVIEW`, `APPROVED`, `REJECTED`.
+* `limit`, `offset`.
+
+### 9.2. Карточка network-кандидата
+
+`GET /network-candidates/{id}`
 
 Ответ содержит candidate и groups (1 WS + 0..N FR).
 
-### 8.3. Подтверждение network-кандидата
-POST /network-candidates/{id}/approve`r
+### 9.3. Подтверждение network-кандидата
 
-### 8.4. Перенос группы в новый кандидат
-POST /network-candidates/{id}/groups/{groupID}/remove`r
+`POST /network-candidates/{id}/approve`
 
+### 9.4. Перенос группы в новый кандидат
+
+`POST /network-candidates/{id}/groups/{groupID}/remove`

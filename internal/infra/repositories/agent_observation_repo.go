@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
+	domainServices "etalon-server/internal/domain/services"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
@@ -19,6 +21,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,6 +50,13 @@ type CandidateApproveInput struct {
 	ContractType          *string
 
 	Workstations []CandidateWorkstationInput
+
+	// Ручной ввод remote IDs (опционально).
+	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+	// Приоритет: ручной ввод > значения из staging.
+	TeamviewerID  *string
+	LitemanagerID *string
+	AnydeskID     *string
 }
 
 // CandidateWorkstationInput описывает имя станции, заданное оператором при подтверждении кандидата.
@@ -77,13 +87,89 @@ type AgentObservationService interface {
 // - Определение владельца для network-hub серверов
 // - Создание кандидатов для ручной обработки оператором
 type agentObservationRepo struct {
-	logger logger.LoggerInterface
-	db     *gorm.DB
+	logger        logger.LoggerInterface
+	db            *gorm.DB
+	negativeCache negativeCache // Кэш отрицательных результатов поиска сервера
+	ownerResolver domainServices.OwnerResolver
+	hubDetector   domainServices.NetworkHubDetector
+}
+
+// negativeCacheEntry представляет запись в кэше отрицательных результатов.
+// Хранит время добавления для проверки TTL.
+type negativeCacheEntry struct {
+	cachedAt time.Time
+}
+
+// negativeCache — thread-safe кэш для хранения отрицательных результатов поиска сервера.
+// Ключ: комбинация serverKey|normalizedRMS, значение: negativeCacheEntry с временем кэширования.
+type negativeCache struct {
+	entries sync.Map
+	ttl     time.Duration
+}
+
+// get проверяет наличие записи в кэше и её актуальность по TTL.
+// Возвращает true, если запись существует и не истёк TTL.
+func (c *negativeCache) get(key string) bool {
+	if c == nil {
+		return false
+	}
+	val, ok := c.entries.Load(key)
+	if !ok {
+		return false
+	}
+	entry, ok := val.(negativeCacheEntry)
+	if !ok {
+		return false
+	}
+	// Проверка TTL
+	return time.Since(entry.cachedAt) < c.ttl
+}
+
+// set добавляет запись в кэш с текущим временем.
+func (c *negativeCache) set(key string) {
+	if c == nil {
+		return
+	}
+	c.entries.Store(key, negativeCacheEntry{cachedAt: time.Now()})
+}
+
+// buildNegativeCacheKey строит ключ кэша из serverKey и normalizedRMS.
+// Используется для идентификации уникального поискового запроса.
+func buildNegativeCacheKey(serverKey, normalizedRMS string) string {
+	return fmt.Sprintf("%s|%s", serverKey, normalizedRMS)
+}
+
+// AgentObservationRepoOption определяет функциональную опцию для конфигурации репозитория.
+type AgentObservationRepoOption func(*agentObservationRepo)
+
+// WithOwnerResolver устанавливает OwnerResolver для автоматического определения владельца.
+func WithOwnerResolver(resolver domainServices.OwnerResolver) AgentObservationRepoOption {
+	return func(r *agentObservationRepo) {
+		r.ownerResolver = resolver
+	}
+}
+
+// WithHubDetector устанавливает NetworkHubDetector для определения network-hub серверов.
+func WithHubDetector(detector domainServices.NetworkHubDetector) AgentObservationRepoOption {
+	return func(r *agentObservationRepo) {
+		r.hubDetector = detector
+	}
 }
 
 // NewAgentObservationRepo создает новый экземпляр репозитория обработки наблюдений.
-func NewAgentObservationRepo(logger logger.LoggerInterface, db *gorm.DB) *agentObservationRepo {
-	return &agentObservationRepo{logger: logger, db: db}
+// Поддерживает функциональные опции для внедрения OwnerResolver и HubDetector.
+func NewAgentObservationRepo(logger logger.LoggerInterface, db *gorm.DB, opts ...AgentObservationRepoOption) *agentObservationRepo {
+	r := &agentObservationRepo{
+		logger: logger,
+		db:     db,
+		negativeCache: negativeCache{
+			ttl: 3 * time.Minute, // TTL кэша отрицательных результатов
+		},
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // ApplyObservation обрабатывает данные, полученные от агента мониторинга.
@@ -120,9 +206,20 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		return nil, errors.New("пустой payload")
 	}
 
+	// Извлекаем trace_id из контекста для сквозной трассировки
+	traceID := contextkeys.GetTraceID(ctx)
+	if traceID == "" {
+		traceID = uuid.New().String()
+	}
+
 	// Логирование входящих данных для трассировки
-	s.logger.Info("Начало обработки наблюдения",
+	log := s.logger.With(
+		"trace_id", traceID,
+		"operation", "apply_observation",
 		"source", source,
+	)
+
+	log.Info("Начало обработки наблюдения",
 		"agent_uuid", strings.TrimSpace(data.AgentUUID),
 		"hostname", strings.TrimSpace(data.Hostname),
 		"crm_id", strings.TrimSpace(data.CRMID),
@@ -177,9 +274,12 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			"server_crm_id", ptrValue(obs.ServerCRMID),
 		)
 
+		// Обогащаем логгер observation_id для последующих логов
+		log = log.With("observation_id", obs.ID)
+
 		// Проверка на повторную обработку (идемпотентность)
 		if obs.Status == models.AgentObservationStatusApplied || obs.Status == models.AgentObservationStatusStaged || obs.Status == models.AgentObservationStatusIgnored || obs.Status == models.AgentObservationStatusIgnoredStale {
-			s.logger.Info("Повторное наблюдение пропущено (идемпотентность)",
+			s.logger.Debug("Повторное наблюдение пропущено",
 				"observation_id", obs.ID,
 				"status", obs.Status,
 			)
@@ -199,7 +299,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		}
 
 		// Поиск сервера по CRM ID, server_key или IP/URL
-		srv, err := s.findServer(tx, data.CRMID, serverKey, normalizedRMS)
+		srv, err := s.findServer(tx, data.CRMID, serverKey, normalizedRMS, source)
 		if err != nil {
 			return fmt.Errorf("ошибка поиска сервера: %w", err)
 		}
@@ -240,7 +340,14 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 
 		// Обработка network-hub серверов (автоматическое определение владельца)
 		if srv != nil {
-			isHub, err := s.isNetworkHubServer(tx, srv)
+			// Используем инжектированный HubDetector или fallback на inline метод
+			var isHub bool
+			var err error
+			if s.hubDetector != nil {
+				isHub, err = s.hubDetector.IsNetworkHubServer(ctx, srv)
+			} else {
+				isHub, err = s.isNetworkHubServer(tx, srv)
+			}
 			if err != nil {
 				return fmt.Errorf("ошибка проверки network-hub: %w", err)
 			}
@@ -252,19 +359,63 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					"hub_company_id", ptrValue(srv.OwnerID),
 				)
 
-				ownerID, confident, err := s.resolveNetworkOwner(tx, strings.TrimSpace(ptrValue(srv.OwnerID)), data)
+				// Используем инжектированный OwnerResolver или fallback на inline метод
+				var resolution *domainServices.OwnerResolution
+				hubCompanyID := strings.TrimSpace(ptrValue(srv.OwnerID))
+				if s.ownerResolver != nil {
+					resolution, err = s.ownerResolver.Resolve(ctx, hubCompanyID,
+						normRID(data.TeamviewerID),
+						normRID(data.LitemanagerID),
+						normRID(data.AnydeskID),
+						normalizeSerial(data.SerialNumber),
+					)
+				} else {
+					// Fallback на inline метод для обратной совместимости
+					var ownerID string
+					var confident bool
+					ownerID, confident, err = s.resolveNetworkOwner(tx, hubCompanyID, data)
+					if err == nil {
+						resolution = &domainServices.OwnerResolution{
+							OwnerID:   ownerID,
+							Confident: confident,
+						}
+					}
+				}
 				if err != nil {
 					return fmt.Errorf("ошибка определения владельца: %w", err)
 				}
 
-				if confident && strings.TrimSpace(ownerID) != "" {
+				// Обработка конфликта владельцев
+				if resolution != nil && resolution.HasConflict {
+					s.logger.Warn("Обнаружен конфликт владельцев для network-hub",
+						"observation_id", obs.ID,
+						"server_id", srv.ID,
+						"ws_owner_id", resolution.WSMatch != nil,
+						"fr_owner_id", resolution.FRMatch != nil,
+					)
+					// Создаем network-candidate с информацией о конфликте
+					nc, err := s.stageNetworkCandidateWithConflict(tx, obs, data, observedAt, normalizedRMS, serverKey, srv, resolution)
+					if err != nil {
+						return fmt.Errorf("ошибка создания network-candidate с конфликтом: %w", err)
+					}
+					obs.NetworkCandidateID = &nc.ID
+					obs.Status = models.AgentObservationStatusStaged
+					s.logger.Info("Наблюдение отправлено в network-candidate (конфликт владельцев)",
+						"observation_id", obs.ID,
+						"network_candidate_id", nc.ID,
+						"hub_company_id", ptrValue(srv.OwnerID),
+					)
+					return tx.Save(obs).Error
+				}
+
+				if resolution != nil && resolution.Confident && strings.TrimSpace(resolution.OwnerID) != "" {
 					s.logger.Info("Владелец автоматически определен для network-hub",
 						"observation_id", obs.ID,
 						"server_id", srv.ID,
-						"resolved_owner_id", ownerID,
+						"resolved_owner_id", resolution.OwnerID,
 					)
 
-					ownerRef := strPtr(ownerID)
+					ownerRef := strPtr(resolution.OwnerID)
 					ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto)
 					if err != nil {
 						return fmt.Errorf("ошибка применения рабочей станции: %w", err)
@@ -316,8 +467,36 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			}
 		}
 
-		// Если сервер не найден или нет remote IDs — создаем кандидата
+		// Создание кандидата для ручного подтверждения оператором.
+		//
+		// Это намеренное поведение в двух случаях:
+		// 1. srv == nil — сервер не найден в системе, требуется создание нового сервера
+		// 2. !hasRemoteID(data) — агент не собрал ни один remote ID (TeamViewer, LiteManager, AnyDesk).
+		//    Без remote ID невозможно идентифицировать рабочую станцию.
+		//    Администратор должен вручную указать remote IDs при принятии кандидата на АО.
 		if srv == nil || !hasRemoteID(data) {
+			// Определяем причину staging для информативного логирования
+			var reason string
+			switch {
+			case srv == nil && !hasRemoteID(data):
+				reason = "сервер не найден и отсутствуют remote IDs"
+			case srv == nil:
+				reason = "сервер не найден в системе"
+			case !hasRemoteID(data):
+				reason = "отсутствуют remote IDs (TeamViewer/LiteManager/AnyDesk) — невозможно идентифицировать РС"
+			}
+
+			s.logger.Info("Создание кандидата для ручного подтверждения",
+				"observation_id", obs.ID,
+				"reason", reason,
+				"server_found", srv != nil,
+				"teamviewer_id", normRID(data.TeamviewerID),
+				"litemanager_id", normRID(data.LitemanagerID),
+				"anydesk_id", normRID(data.AnydeskID),
+				"server_key", serverKey,
+				"crm_id", strings.TrimSpace(data.CRMID),
+			)
+
 			c, err := s.stage(tx, obs, data, observedAt, normalizedRMS, serverKey, srv)
 			if err != nil {
 				return fmt.Errorf("ошибка создания кандидата: %w", err)
@@ -327,7 +506,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			s.logger.Info("Наблюдение отправлено в staging",
 				"observation_id", obs.ID,
 				"candidate_id", c.ID,
-				"reason", map[string]bool{"server_not_found": srv == nil, "no_remote_id": !hasRemoteID(data)},
+				"reason", reason,
 			)
 			return tx.Save(obs).Error
 		}
@@ -490,6 +669,30 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			if err := json.Unmarshal(so.PayloadJSON, &payload); err != nil {
 				continue
 			}
+
+			// Применение ручного ввода remote IDs (приоритет над значениями из staging)
+			if in.TeamviewerID != nil || in.LitemanagerID != nil || in.AnydeskID != nil {
+				s.logger.Info("Применение ручного ввода remote IDs",
+					"candidate_id", in.CandidateID,
+					"observation_id", so.ID,
+					"manual_teamviewer", ptrValue(in.TeamviewerID),
+					"manual_litemanager", ptrValue(in.LitemanagerID),
+					"manual_anydesk", ptrValue(in.AnydeskID),
+					"original_teamviewer", normRID(payload.TeamviewerID),
+					"original_litemanager", normRID(payload.LitemanagerID),
+					"original_anydesk", normRID(payload.AnydeskID),
+				)
+			}
+			if in.TeamviewerID != nil {
+				payload.TeamviewerID = *in.TeamviewerID
+			}
+			if in.LitemanagerID != nil {
+				payload.LitemanagerID = *in.LitemanagerID
+			}
+			if in.AnydeskID != nil {
+				payload.AnydeskID = *in.AnydeskID
+			}
+
 			obsAt := so.ObservedAt
 			if obsAt.IsZero() {
 				obsAt = parseObservedAt(payload.CurrentTime)
@@ -754,12 +957,24 @@ func (s *agentObservationRepo) ensureServer(tx *gorm.DB, c *models.Candidate, in
 //   - crmID: CRM идентификатор сервера
 //   - serverKey: UUID на основе URL (SHA1)
 //   - normalizedRMS: нормализованный URL/IP сервера (host:port)
+//   - source: источник вызова для логирования
 //
 // Возвращает:
 //   - *server.Server: найденный сервер или nil
 //   - error: ошибка БД (не включает ErrRecordNotFound)
-func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normalizedRMS string) (*server.Server, error) {
+func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normalizedRMS, source string) (*server.Server, error) {
 	var srv server.Server
+
+	// Проверка кэша отрицательных результатов
+	cacheKey := buildNegativeCacheKey(serverKey, normalizedRMS)
+	if s.negativeCache.get(cacheKey) {
+		s.logger.Debug("запрос уже был, пропускаем",
+			"source", source,
+			"server_key", serverKey,
+			"normalized_rms", normalizedRMS,
+		)
+		return nil, nil
+	}
 
 	// 1. Поиск по CRM ID (наивысший приоритет)
 	crmID = strings.TrimSpace(crmID)
@@ -836,7 +1051,10 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 		}
 	}
 
+	// Сервер не найден — сохраняем в кэше отрицательных результатов
+	s.negativeCache.set(cacheKey)
 	s.logger.Debug("Сервер не найден",
+		"source", source,
 		"crm_id", crmID,
 		"server_key", serverKey,
 		"normalized_rms", normalizedRMS,
@@ -1289,8 +1507,10 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 // stage создает или обновляет кандидата для ручной обработки оператором.
 //
 // Вызывается когда:
-//   - Сервер не найден (новый сервер)
-//   - Нет remote IDs для идентификации РС (невозможно создать РС без TeamViewer/LiteManager/AnyDesk)
+//   - Сервер не найден (srv == nil) — новый сервер, требуется создание
+//   - Нет remote IDs для идентификации РС (!hasRemoteID) — агент не собрал TeamViewer/LiteManager/AnyDesk.
+//     Это нормальная ситуация: агент мог не обнаружить установленные программы удаленного доступа.
+//     Администратор должен вручную указать remote IDs при подтверждении кандидата на АО.
 //
 // Алгоритм:
 // 1. Поиск существующего кандидата по CRM ID или server_key
@@ -1305,7 +1525,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 //   - observedAt: время наблюдения
 //   - normalizedRMS: нормализованный URL/IP сервера
 //   - serverKey: UUID на основе URL
-//   - srv: найденный сервер (может быть nil)
+//   - srv: найденный сервер (может быть nil при отсутствии сервера в системе)
 //
 // Возвращает:
 //   - *models.Candidate: созданный или найденный кандидат
@@ -1782,6 +2002,178 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 	return &candidate, nil
 }
 
+// stageNetworkCandidateWithConflict создает network-кандидата с информацией о конфликте владельцев.
+//
+// Вызывается когда:
+//   - Сервер найден и является network-hub
+//   - OwnerResolver обнаружил конфликт (WS и ФР указывают на разные компании)
+//
+// Алгоритм аналогичен stageNetworkCandidate, но дополнительно:
+//   - Сохраняет информацию о конфликте в поле ConflictInfo
+//   - Заполняет WSOwnerCandidate и FROwnerCandidate для отображения оператору
+//
+// Параметры:
+//   - tx: транзакция БД
+//   - obs: запись наблюдения для связывания
+//   - data: данные от агента
+//   - observedAt: время наблюдения
+//   - normalizedRMS: нормализованный URL/IP сервера
+//   - serverKey: UUID на основе URL
+//   - srv: найденный network-hub сервер (обязателен)
+//   - resolution: результат разрешения владельца с информацией о конфликте
+//
+// Возвращает:
+//   - *models.NetworkCandidate: созданный или найденный network-кандидат
+//   - error: ошибка БД или если сервер/владелец не найдены
+func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string, srv *server.Server, resolution *domainServices.OwnerResolution) (*models.NetworkCandidate, error) {
+	if srv == nil || srv.OwnerID == nil || strings.TrimSpace(*srv.OwnerID) == "" {
+		s.logger.Error("Ошибка создания network-candidate: сервер или владелец не найдены",
+			"observation_id", obs.ID,
+			"has_server", srv != nil,
+			"has_owner_id", srv != nil && srv.OwnerID != nil,
+		)
+		return nil, errors.New("для network-кандидата не найден сервер или его владелец")
+	}
+
+	s.logger.Debug("Создание network-candidate с конфликтом для hub-сервера",
+		"observation_id", obs.ID,
+		"server_id", srv.ID,
+		"hub_company_id", ptrValue(srv.OwnerID),
+		"server_key", serverKey,
+		"has_ws_match", resolution.WSMatch != nil,
+		"has_fr_match", resolution.FRMatch != nil,
+	)
+
+	// Формирование информации о конфликте
+	var conflictInfoStr string
+	var wsOwnerCandidate, frOwnerCandidate *string
+	if resolution.WSMatch != nil {
+		wsOwnerCandidate = strPtr(resolution.WSMatch.OwnerID)
+	}
+	if resolution.FRMatch != nil {
+		frOwnerCandidate = strPtr(resolution.FRMatch.OwnerID)
+	}
+	if resolution.ConflictInfo != "" {
+		conflictInfoStr = resolution.ConflictInfo
+	} else {
+		// Формируем описание конфликта
+		parts := []string{}
+		if resolution.WSMatch != nil {
+			parts = append(parts, fmt.Sprintf("РС найдена у владельца %s (по %s)", resolution.WSMatch.OwnerID, resolution.WSMatch.MatchBy))
+		}
+		if resolution.FRMatch != nil {
+			parts = append(parts, fmt.Sprintf("ФР найден у владельца %s (по %s)", resolution.FRMatch.OwnerID, resolution.FRMatch.MatchBy))
+		}
+		conflictInfoStr = strings.Join(parts, "; ")
+	}
+
+	var candidate models.NetworkCandidate
+	err := tx.Where("hub_company_id = ? AND server_id = ? AND status IN ?", strings.TrimSpace(*srv.OwnerID), srv.ID, []string{models.NetworkCandidateStatusNew, models.NetworkCandidateStatusInReview}).
+		Order("id desc").
+		First(&candidate).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		candidate = models.NetworkCandidate{
+			Status:           models.NetworkCandidateStatusNew,
+			HubCompanyID:     strings.TrimSpace(*srv.OwnerID),
+			ServerID:         srv.ID,
+			ServerKey:        strPtr(serverKey),
+			ServerCRMID:      strPtr(strings.TrimSpace(data.CRMID)),
+			ServerURL:        strPtr(normalizedRMS),
+			ConflictInfo:     strPtr(conflictInfoStr),
+			WSOwnerCandidate: wsOwnerCandidate,
+			FROwnerCandidate: frOwnerCandidate,
+		}
+		if err := tx.Create(&candidate).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		// Обновляем информацию о конфликте в существующем кандидате
+		updates := map[string]interface{}{
+			"conflict_info":      valOrNil(strPtr(conflictInfoStr)),
+			"ws_owner_candidate": valOrNil(wsOwnerCandidate),
+			"fr_owner_candidate": valOrNil(frOwnerCandidate),
+		}
+		if err := tx.Model(&models.NetworkCandidate{}).Where("id = ?", candidate.ID).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	var group models.NetworkCandidateGroup
+	if err := tx.Where("candidate_id = ? AND observation_id = ?", candidate.ID, obs.ID).First(&group).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		group = models.NetworkCandidateGroup{
+			CandidateID:   candidate.ID,
+			ObservationID: obs.ID,
+			Status:        models.NetworkCandidateGroupStatusActive,
+		}
+		if err := tx.Create(&group).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	wsUUID := workstationUUIDByRemote(data.TeamviewerID, data.LitemanagerID)
+	var wsCount int64
+	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
+		return nil, err
+	}
+	if wsCount == 0 {
+		wsStage := models.NetworkCandidateWSStaging{
+			GroupID:         group.ID,
+			ObservedAt:      observedAt,
+			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
+			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
+			WorkstationUUID: strPtr(wsUUID),
+			TeamviewerID:    normRIDPtr(data.TeamviewerID),
+			LitemanagerID:   normRIDPtr(data.LitemanagerID),
+			AnydeskID:       normRIDPtr(data.AnydeskID),
+			URLRms:          strPtr(normalizedRMS),
+		}
+		if err := tx.Create(&wsStage).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
+		frStage := models.NetworkCandidateFRStaging{
+			GroupID:          group.ID,
+			ObservedAt:       observedAt,
+			SerialNumber:     strPtr(sn),
+			SerialNormalized: strPtr(normalizeSerial(sn)),
+			RNKKT:            strPtr(strings.TrimSpace(data.RNM)),
+			ModelName:        strPtr(strings.TrimSpace(data.ModelName)),
+			INN:              strPtr(strings.TrimSpace(data.INN)),
+			FNNumber:         strPtr(strings.TrimSpace(data.FNSerial)),
+			FNExpireDate:     parseDate(data.DateTimeEnd),
+			OrganizationName: strPtr(strings.TrimSpace(data.OrganizationName)),
+			Address:          strPtr(strings.TrimSpace(data.Address)),
+		}
+		if err := tx.Create(&frStage).Error; err != nil {
+			return nil, err
+		}
+		s.logger.Debug("Создана FR-staging запись для network-candidate с конфликтом",
+			"candidate_id", candidate.ID,
+			"group_id", group.ID,
+			"serial_number", sn,
+		)
+	}
+
+	s.logger.Info("Network-candidate с конфликтом создан/обновлен",
+		"candidate_id", candidate.ID,
+		"hub_company_id", ptrValue(srv.OwnerID),
+		"server_id", srv.ID,
+		"observation_id", obs.ID,
+		"status", candidate.Status,
+		"ws_owner_candidate", ptrValue(wsOwnerCandidate),
+		"fr_owner_candidate", ptrValue(frOwnerCandidate),
+	)
+	return &candidate, nil
+}
+
 // isStaleByAgentStream проверяет, являются ли данные устаревшими по сравнению
 // с последним наблюдением от того же агента.
 // Используется для защиты от обработки старых данных при восстановлении связи.
@@ -1935,8 +2327,16 @@ func normRIDPtr(v string) *string {
 	return &n
 }
 
-// hasRemoteID проверяет наличие хотя бы одного remote ID.
-// Необходимо для создания рабочей станции.
+// hasRemoteID проверяет наличие хотя бы одного remote ID для идентификации рабочей станции.
+//
+// Проверяемые идентификаторы:
+//   - TeamViewer ID (teamviewer_id)
+//   - LiteManager ID (litemanager_id)
+//   - AnyDesk ID (anydesk_id)
+//
+// Возвращает true, если хотя бы один ID присутствует.
+// Если все ID отсутствуют — создание РС невозможно, наблюдение отправляется в staging.
+// В этом случае администратор должен вручную указать remote IDs при подтверждении кандидата.
 func hasRemoteID(data *api.AgentDataDTO) bool {
 	return normRID(data.TeamviewerID) != "" || normRID(data.LitemanagerID) != "" || normRID(data.AnydeskID) != ""
 }

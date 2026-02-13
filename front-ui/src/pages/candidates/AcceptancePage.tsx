@@ -6,12 +6,10 @@ import {
   Card,
   Col,
   Descriptions,
-  Divider,
   Drawer,
   Empty,
   Form,
   Input,
-  List,
   Row,
   Select,
   Space,
@@ -24,20 +22,32 @@ import {
 import dayjs from 'dayjs';
 import { candidatesApi } from '@/api/candidates';
 import { companiesApi } from '@/api/companies';
-import { equipmentApi } from '@/api/equipment';
+import { ticketsApi } from '@/api/tickets';
 import {
   CandidateApprovePayload,
   CandidateDTO,
   CandidateStatus,
   CandidateWorkstationStagingDTO,
+  BitrixServicePointDTO,
+  CompanyMode,
   CompanyModel,
+  ContractMode,
 } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import { AcceptanceButton } from '@/components/candidates/AcceptanceButton';
+import { AcceptanceForm } from '@/components/candidates/AcceptanceForm';
+import { StagedAgentEntities } from '@/components/candidates/StagedAgentEntities';
+import { CompanySearchOption } from '@/components/companies/CompanySearchSelect';
+import { CandidateWorkstationDraft } from '@/components/candidates/StagedWorkstations';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 type CandidateFilter = 'ACTIVE' | CandidateStatus | 'ALL';
-type CompanyMode = 'existing' | 'new';
-type ServerMode = 'existing' | 'new';
+
+const CONTRACT_TYPE_OPTIONS = [
+  'TS Cloud',
+  'TS Standart (без выездов)',
+  'TS Standart',
+];
 
 const STATUS_COLORS: Record<CandidateStatus, string> = {
   NEW: 'blue',
@@ -48,7 +58,7 @@ const STATUS_COLORS: Record<CandidateStatus, string> = {
 };
 
 // normalizeCandidate приводит ответ backend к формату фронта:
-// поддерживает как snake_case, так и поля в PascalCase.
+// все поля должны быть в snake_case.
 const normalizeCandidate = (raw: Record<string, unknown>): CandidateDTO => {
   const asNumber = (v: unknown): number => Number(v || 0);
   const asString = (v: unknown): string => String(v || '');
@@ -70,18 +80,97 @@ const normalizeCandidate = (raw: Record<string, unknown>): CandidateDTO => {
   };
 };
 
+const normalizeRemoteID = (value?: string) => String(value || '').trim().toLowerCase();
+
+const buildMergeKey = (item: CandidateWorkstationStagingDTO, fallbackIndex: number) => {
+  const tv = normalizeRemoteID(item.teamviewer_id);
+  const lm = normalizeRemoteID(item.litemanager_id);
+  const ad = normalizeRemoteID(item.anydesk_id);
+  const parts = [
+    tv ? `tv:${tv}` : '',
+    lm ? `lm:${lm}` : '',
+    ad ? `ad:${ad}` : '',
+  ].filter(Boolean);
+
+  if (parts.length > 0) {
+    return parts.join('|');
+  }
+
+  return `fallback:${item.workstation_uuid || item.id || fallbackIndex}`;
+};
+
+const maxObservedAt = (left?: string, right?: string) => {
+  if (!left) return right;
+  if (!right) return left;
+  return dayjs(left).isAfter(dayjs(right)) ? left : right;
+};
+
+const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): CandidateWorkstationDraft[] => {
+  const merged = new Map<string, CandidateWorkstationDraft & { staging_ids: number[] }>();
+
+  items.forEach((item, index) => {
+    const key = buildMergeKey(item, index);
+    const existing = merged.get(key);
+
+    if (!existing) {
+      merged.set(key, {
+        merge_key: key,
+        staging_id: item.id,
+        staging_ids: item.id ? [item.id] : [],
+        observation_id: item.observation_id,
+        workstation_uuid: item.workstation_uuid,
+        hostname: item.hostname || '',
+        name: item.hostname || '',
+        teamviewer_id: item.teamviewer_id,
+        litemanager_id: item.litemanager_id,
+        anydesk_id: item.anydesk_id,
+        agent_uuids: item.agent_uuid ? [item.agent_uuid] : [],
+        observed_at: item.observed_at,
+      });
+      return;
+    }
+
+    if (item.id && !existing.staging_ids.includes(item.id)) {
+      existing.staging_ids.push(item.id);
+    }
+    existing.hostname = existing.hostname || item.hostname || '';
+    existing.name = existing.name || item.hostname || '';
+    existing.workstation_uuid = existing.workstation_uuid || item.workstation_uuid;
+    existing.teamviewer_id = existing.teamviewer_id || item.teamviewer_id;
+    existing.litemanager_id = existing.litemanager_id || item.litemanager_id;
+    existing.anydesk_id = existing.anydesk_id || item.anydesk_id;
+    existing.observed_at = maxObservedAt(existing.observed_at, item.observed_at);
+    if (item.agent_uuid && !existing.agent_uuids?.includes(item.agent_uuid)) {
+      existing.agent_uuids = [...(existing.agent_uuids || []), item.agent_uuid];
+    }
+  });
+
+  return Array.from(merged.values()).map((item) => ({
+    merge_key: item.merge_key,
+    staging_id: item.staging_ids[0] || item.staging_id,
+    observation_id: item.observation_id,
+    workstation_uuid: item.workstation_uuid,
+    hostname: item.hostname,
+    name: item.name,
+    teamviewer_id: item.teamviewer_id,
+    litemanager_id: item.litemanager_id,
+    anydesk_id: item.anydesk_id,
+    agent_uuids: item.agent_uuids || [],
+    observed_at: item.observed_at,
+  }));
+};
+
 const AcceptancePage: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [status, setStatus] = useState<CandidateFilter>('ACTIVE');
   const [selectedCandidateID, setSelectedCandidateID] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [companyMode, setCompanyMode] = useState<CompanyMode>('existing');
-  const [serverMode, setServerMode] = useState<ServerMode>('new');
   const [companySearch, setCompanySearch] = useState('');
-  const [serverSearch, setServerSearch] = useState('');
+  const [workstationDrafts, setWorkstationDrafts] = useState<CandidateWorkstationDraft[]>([]);
 
   const [form] = Form.useForm();
+  const formValues = Form.useWatch([], form);
 
   const {
     data: candidatesData,
@@ -108,13 +197,15 @@ const AcceptancePage: React.FC = () => {
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
     queryKey: ['acceptance', 'companies', companySearch],
     queryFn: () => companiesApi.searchCompanies(companySearch, 30, 0),
+    enabled: drawerOpen,
     staleTime: 15_000,
   });
 
-  const { data: serversData, isLoading: isServersLoading } = useQuery({
-    queryKey: ['acceptance', 'servers', serverSearch],
-    queryFn: () => equipmentApi.listServers(serverSearch, 30, 0),
-    staleTime: 15_000,
+  const { data: bitrixServicePoints = [], isLoading: isBitrixServicePointsLoading } = useQuery({
+    queryKey: ['bitrix-service-points', 'acceptance'],
+    queryFn: () => ticketsApi.getBitrixServicePoints(),
+    enabled: drawerOpen,
+    staleTime: 30_000,
   });
 
   const approveMutation = useMutation({
@@ -126,6 +217,7 @@ const AcceptancePage: React.FC = () => {
       message.success('Кандидат успешно принят на АО');
       setDrawerOpen(false);
       setSelectedCandidateID(null);
+      setWorkstationDrafts([]);
       form.resetFields();
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
@@ -148,25 +240,30 @@ const AcceptancePage: React.FC = () => {
     if (!selectedCandidate) {
       return;
     }
-    setCompanyMode('existing');
-    setServerMode('new');
 
-    const wsDefaults = (selectedCandidate.staged_workstations || []).map((item) => ({
-      staging_id: item.id,
+    const wsDefaults = mergeCandidateWorkstations(selectedCandidate.staged_workstations || []).map((item) => ({
+      merge_key: item.merge_key,
+      staging_id: item.staging_id,
       workstation_uuid: item.workstation_uuid,
-      name: item.hostname || '',
+      hostname: item.hostname || '',
+      name: item.name || item.hostname || '',
+      teamviewer_id: item.teamviewer_id,
+      litemanager_id: item.litemanager_id,
+      anydesk_id: item.anydesk_id,
+      agent_uuids: item.agent_uuids || [],
+      observed_at: item.observed_at,
     }));
 
     form.setFieldsValue({
-      company_mode: 'existing',
-      server_mode: 'new',
-      server_crm_id: selectedCandidate.server_crm_id || '',
-      server_url_rms: selectedCandidate.server_url || '',
+      company_mode: 'new',
+      contract_mode: 'inherit_parent',
+      contract_type: CONTRACT_TYPE_OPTIONS[0],
       server_device_name: '',
-      server_description: '',
+      server_unique_id: '',
+      server_cabinet_link: '',
       workstations: wsDefaults.length ? wsDefaults : [{ name: '' }],
-      comment: '',
     });
+    setWorkstationDrafts(wsDefaults.length ? wsDefaults : []);
   }, [form, selectedCandidate]);
 
   const companyOptions = useMemo(() => {
@@ -177,29 +274,43 @@ const AcceptancePage: React.FC = () => {
         const id = resolveCompanyID(company);
         if (!id) return null;
         const title = resolveCompanyTitle(company) || id;
-        const parentTitle = resolveCompanyParentTitle(company);
+        const parentTitle = resolveCompanyParentTitle(company) || undefined;
         return {
           value: id,
-          label: parentTitle ? `${parentTitle} / ${title}` : title,
+          title,
+          parentTitle,
+          additionalName: company.additional_name || '',
+          address: company.address || '',
+          active_contract: Boolean(company.active_contract),
+          contract_type: company.contract_type || '',
         };
       })
-      .filter(Boolean) as Array<{ value: string; label: string }>;
+      .filter(Boolean) as Array<CompanySearchOption & {
+        additionalName: string;
+        address: string;
+        active_contract: boolean;
+        contract_type: string;
+      }>;
   }, [companiesData?.data]);
 
-  const serverOptions = useMemo(() => {
-    const list = serversData?.data || [];
-    return list.map((raw) => {
-      const row = raw as Record<string, string | undefined>;
-      const value = row.id || row.ID || '';
-      const name = row.device_name || row.server_name || 'Сервер';
-      const crm = row.crm_id || row.crm_id || '';
-      const ip = row.ip || row.IP || '';
-      return {
-        value,
-        label: `${name}${crm ? ` | CRM: ${crm}` : ''}${ip ? ` | ${ip}` : ''}`,
+  const companiesByID = useMemo(() => {
+    return companyOptions.reduce<Record<string, {
+      title: string;
+      additionalName: string;
+      address: string;
+      active_contract: boolean;
+      contract_type: string;
+    }>>((acc, item) => {
+      acc[item.value] = {
+        title: item.title,
+        additionalName: item.additionalName,
+        address: item.address,
+        active_contract: item.active_contract,
+        contract_type: item.contract_type,
       };
-    }).filter((item) => item.value);
-  }, [serversData?.data]);
+      return acc;
+    }, {});
+  }, [companyOptions]);
 
   const openCandidate = (candidateID: number) => {
     if (!candidateID) {
@@ -214,8 +325,7 @@ const AcceptancePage: React.FC = () => {
     const values = await form.validateFields();
 
     const payload: CandidateApprovePayload = {
-      comment: values.comment?.trim() || '',
-      workstations: (values.workstations || [])
+      workstations: workstationDrafts
         .map((item: { staging_id?: number; workstation_uuid?: string; name?: string }) => ({
           staging_id: item.staging_id,
           workstation_uuid: item.workstation_uuid,
@@ -232,23 +342,19 @@ const AcceptancePage: React.FC = () => {
         address: values.new_company_address || '',
         additional_name: values.new_company_additional_name || '',
         parent_id: values.new_company_parent_id || '',
+        contract_mode: values.contract_mode,
+        contract_type: values.contract_mode === 'new' ? values.contract_type : undefined,
       };
     }
 
-    if (values.server_mode === 'existing') {
-      payload.server = {
-        mode: 'existing',
-        server_id: values.server_id,
-      };
-    } else {
-      payload.server = {
-        mode: 'new',
-        crm_id: values.server_crm_id || '',
-        url_rms: values.server_url_rms || '',
-        device_name: values.server_device_name || '',
-        description: values.server_description || '',
-      };
-    }
+    payload.server = {
+      mode: 'new',
+      crm_id: selectedCandidate?.server_crm_id || '',
+      url_rms: selectedCandidate?.server_url || '',
+      unique_id: values.server_unique_id || '',
+      cabinet_link: values.server_cabinet_link || '',
+      device_name: values.server_device_name || '',
+    };
 
     approveMutation.mutate(payload);
   };
@@ -293,11 +399,131 @@ const AcceptancePage: React.FC = () => {
     },
   ];
 
-  const stagedWorkstations = selectedCandidate?.staged_workstations || [];
   const stagedFiscals = selectedCandidate?.staged_fiscals || [];
+  const observationAgents = useMemo(() => {
+    const map: Record<number, string[]> = {};
+    (selectedCandidate?.staged_workstations || []).forEach((item) => {
+      if (!item.observation_id || !item.agent_uuid) return;
+      if (!map[item.observation_id]) {
+        map[item.observation_id] = [];
+      }
+      if (!map[item.observation_id].includes(item.agent_uuid)) {
+        map[item.observation_id].push(item.agent_uuid);
+      }
+    });
+    return map;
+  }, [selectedCandidate?.staged_workstations]);
+  const companyMode = (formValues?.company_mode || 'new') as CompanyMode;
+  const selectedExistingCompanyID = String(formValues?.company_id || '').trim();
+  const selectedParentCompanyID = String(formValues?.new_company_parent_id || '').trim();
+  const selectedContractMode = (formValues?.contract_mode || 'inherit_parent') as ContractMode;
+  const selectedExistingCompany = selectedExistingCompanyID ? companiesByID[selectedExistingCompanyID] : undefined;
+  const selectedParentCompany = selectedParentCompanyID ? companiesByID[selectedParentCompanyID] : undefined;
+  const bitrixServicePointOptions = useMemo(() => {
+    if (!Array.isArray(bitrixServicePoints)) return [];
+    return (bitrixServicePoints as BitrixServicePointDTO[]).map((point) => ({
+      value: point.b24_element_id,
+      label: point.name,
+    }));
+  }, [bitrixServicePoints]);
+  const isBitrixEnabled = bitrixServicePointOptions.length > 0;
+
+  useEffect(() => {
+    if (!isBitrixEnabled) {
+      form.setFieldValue('bitrix_service_point_id', undefined);
+    }
+  }, [form, isBitrixEnabled]);
+
+  const handleWorkstationNameChange = (mergeKey: string, nextName: string) => {
+    const nextRows = workstationDrafts.map((item) => (
+      item.merge_key === mergeKey
+        ? { ...item, name: nextName.trim() || item.name || item.hostname || '' }
+        : item
+    ));
+    setWorkstationDrafts(nextRows);
+    form.setFieldValue('workstations', nextRows);
+  };
+
+  const candidateLastObservedAt = useMemo(() => {
+    const wsObserved = workstationDrafts.map((item) => item.observed_at).filter(Boolean) as string[];
+    const frObserved = stagedFiscals.map((item) => item.observed_at).filter(Boolean) as string[];
+    const allObserved = [...wsObserved, ...frObserved];
+    if (allObserved.length === 0) return '';
+    return allObserved.reduce((max, current) => (dayjs(current).isAfter(dayjs(max)) ? current : max));
+  }, [stagedFiscals, workstationDrafts]);
+
+  const approvalBlockReasons = useMemo(() => {
+    const reasons: string[] = [];
+
+    if (!selectedCandidate) {
+      reasons.push('Кандидат не загружен');
+      return reasons;
+    }
+
+    if (approveMutation.isPending) {
+      reasons.push('Идёт подтверждение кандидата');
+      return reasons;
+    }
+
+    if (companyMode === 'existing') {
+      if (!String(formValues?.company_id || '').trim()) {
+        reasons.push('Не выбрана компания');
+      }
+    } else {
+      if (!String(formValues?.new_company_title || '').trim()) {
+        reasons.push('Не указано название компании');
+      }
+      if (selectedContractMode === 'inherit_parent') {
+        if (!selectedParentCompanyID) {
+          reasons.push('Не выбрана родительская компания для наследования контракта');
+        } else if (!selectedParentCompany) {
+          reasons.push('Родительская компания не найдена в списке');
+        } else if (!selectedParentCompany.active_contract) {
+          reasons.push('У родительской компании нет активного контракта');
+        }
+      }
+      if (selectedContractMode === 'new' && !String(formValues?.contract_type || '').trim()) {
+        reasons.push('Не выбран тип обслуживания нового контракта');
+      }
+    }
+
+    if (!String(formValues?.server_device_name || '').trim()) {
+      reasons.push('Не указано имя сервера');
+    }
+    if (!String(formValues?.server_unique_id || '').trim()) {
+      reasons.push('Не указан UniqueID');
+    }
+    if (!String(formValues?.server_cabinet_link || '').trim()) {
+      reasons.push('Не указана ссылка на партнёрский кабинет');
+    }
+    if (isBitrixEnabled && !formValues?.bitrix_service_point_id) {
+      reasons.push('Не выбрана точка обслуживания Bitrix24');
+    }
+
+    const workstationRows = workstationDrafts as Array<{ name?: string }>;
+    workstationRows.forEach((item, index) => {
+      if (!String(item?.name || '').trim()) {
+        reasons.push(`Не указано имя станции #${index + 1}`);
+      }
+    });
+
+    return reasons;
+  }, [
+    approveMutation.isPending,
+    companyMode,
+    formValues,
+    selectedCandidate,
+    selectedContractMode,
+    selectedParentCompany,
+    selectedParentCompanyID,
+    isBitrixEnabled,
+    workstationDrafts,
+  ]);
+
+  const approvalBlocked = approvalBlockReasons.length > 0;
 
   return (
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <Space direction="vertical" size="small" style={{ width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
         <Title level={4} style={{ margin: 0 }}>Принятие на АО</Title>
         <Space>
@@ -350,19 +576,24 @@ const AcceptancePage: React.FC = () => {
         onClose={() => {
           setDrawerOpen(false);
           setSelectedCandidateID(null);
+          setWorkstationDrafts([]);
         }}
         extra={(
           <Space>
             <Button onClick={() => {
               setDrawerOpen(false);
               setSelectedCandidateID(null);
+              setWorkstationDrafts([]);
             }}
             >
               Отмена
             </Button>
-            <Button type="primary" loading={approveMutation.isPending} onClick={() => void onSubmit()}>
-              Подтвердить принятие
-            </Button>
+            <AcceptanceButton
+              isBlocked={approvalBlocked}
+              blockReasons={approvalBlockReasons}
+              onSubmit={onSubmit}
+              isPending={approveMutation.isPending}
+            />
           </Space>
         )}
       >
@@ -377,224 +608,73 @@ const AcceptancePage: React.FC = () => {
         {isCandidateLoading || !selectedCandidate ? (
           <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
         ) : (
-          <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Card size="small" title="Обнаруженные данные">
               <Descriptions column={2} bordered size="small">
                 <Descriptions.Item label="Статус">{selectedCandidate.status}</Descriptions.Item>
                 <Descriptions.Item label="CRM ID">{selectedCandidate.server_crm_id || '-'}</Descriptions.Item>
                 <Descriptions.Item label="Server Key">{selectedCandidate.server_key || '-'}</Descriptions.Item>
                 <Descriptions.Item label="Адрес сервера">{selectedCandidate.server_url || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Станций (staged)">
-                  {stagedWorkstations.length}
-                </Descriptions.Item>
-                <Descriptions.Item label="ФР (staged)">
-                  {stagedFiscals.length}
+                <Descriptions.Item label="Последнее наблюдение">
+                  {candidateLastObservedAt ? dayjs(candidateLastObservedAt).format('DD.MM.YYYY HH:mm:ss') : '-'}
                 </Descriptions.Item>
               </Descriptions>
             </Card>
 
-            <Row gutter={16}>
+            <Row gutter={12}>
               <Col span={12}>
-                <Card size="small" title="Станции из наблюдений">
-                  {stagedWorkstations.length === 0 ? (
-                    <Empty description="Нет staged станций" />
-                  ) : (
-                    <List
-                      dataSource={stagedWorkstations}
-                      renderItem={(item: CandidateWorkstationStagingDTO) => (
-                        <List.Item key={item.id}>
-                            <Space orientation="vertical" size={0}>
-                            <Text strong>{item.hostname || item.workstation_uuid || `Станция #${item.id}`}</Text>
-                            <Text type="secondary">TV: {item.teamviewer_id || '-'}</Text>
-                            <Text type="secondary">LM: {item.litemanager_id || '-'}</Text>
-                            <Text type="secondary">AD: {item.anydesk_id || '-'}</Text>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  )}
-                </Card>
+                <StagedAgentEntities
+                  workstations={workstationDrafts}
+                  fiscals={stagedFiscals}
+                  observationAgents={observationAgents}
+                  onWorkstationNameChange={handleWorkstationNameChange}
+                />
               </Col>
               <Col span={12}>
-                <Card size="small" title="ФР из наблюдений">
-                  {stagedFiscals.length === 0 ? (
-                    <Empty description="Нет staged ФР" />
-                  ) : (
-                    <List
-                      dataSource={stagedFiscals}
-                      renderItem={(item) => (
-                        <List.Item key={item.id}>
-                          <Space orientation="vertical" size={0}>
-                            <Text strong>{item.serial_number || item.serial_normalized || `ФР #${item.id}`}</Text>
-                            <Text type="secondary">РН ККТ: {item.rn_kkt || '-'}</Text>
-                            <Text type="secondary">Модель: {item.model_name || '-'}</Text>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  )}
+                <Card size="small" title="Параметры сервера">
+                  <Form form={form} layout="vertical">
+                    <Form.Item
+                      name="server_device_name"
+                      label="Имя сервера"
+                      style={{ marginBottom: 10 }}
+                      rules={[{ required: true, message: 'Укажите имя сервера' }]}
+                    >
+                      <Input />
+                    </Form.Item>
+                    <Form.Item
+                      name="server_unique_id"
+                      label="UniqueID"
+                      style={{ marginBottom: 10 }}
+                      rules={[{ required: true, message: 'Укажите UniqueID' }]}
+                    >
+                      <Input placeholder="например: 123-456-789" />
+                    </Form.Item>
+                    <Form.Item
+                      name="server_cabinet_link"
+                      label="Ссылка на партнёрский кабинет"
+                      style={{ marginBottom: 0 }}
+                      rules={[{ required: true, message: 'Укажите ссылку на кабинет' }]}
+                    >
+                      <Input placeholder="https://...clientid=12345" />
+                    </Form.Item>
+                  </Form>
                 </Card>
               </Col>
             </Row>
 
-            <Card size="small" title="Подтверждение принятия на АО">
-              <Form form={form} layout="vertical">
-                <Form.Item name="company_mode" label="Компания">
-                  <Select<CompanyMode>
-                    value={companyMode}
-                    onChange={(value) => {
-                      setCompanyMode(value);
-                    }}
-                    options={[
-                      { value: 'existing', label: 'Выбрать существующую' },
-                      { value: 'new', label: 'Создать новую' },
-                    ]}
-                  />
-                </Form.Item>
-
-                {companyMode === 'existing' ? (
-                  <Form.Item
-                    name="company_id"
-                    label="Компания"
-                    rules={[{ required: true, message: 'Выберите компанию' }]}
-                  >
-                    <Select
-                      showSearch
-                      filterOption={false}
-                      onSearch={setCompanySearch}
-                      loading={isCompaniesLoading}
-                      placeholder="Начните ввод названия компании"
-                      options={companyOptions}
-                    />
-                  </Form.Item>
-                ) : (
-                  <Row gutter={12}>
-                    <Col span={12}>
-                      <Form.Item
-                        name="new_company_title"
-                        label="Название компании"
-                        rules={[{ required: true, message: 'Введите название компании' }]}
-                      >
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                    <Col span={12}>
-                      <Form.Item name="new_company_additional_name" label="Юридическое название">
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                    <Col span={12}>
-                      <Form.Item name="new_company_address" label="Адрес">
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                    <Col span={12}>
-                      <Form.Item name="new_company_parent_id" label="Родительская компания (ID)">
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                )}
-
-                <Divider />
-
-                <Form.Item name="server_mode" label="Сервер">
-                  <Select<ServerMode>
-                    value={serverMode}
-                    onChange={(value) => {
-                      setServerMode(value);
-                    }}
-                    options={[
-                      { value: 'existing', label: 'Выбрать существующий сервер' },
-                      { value: 'new', label: 'Создать новый сервер' },
-                    ]}
-                  />
-                </Form.Item>
-
-                {serverMode === 'existing' ? (
-                  <Form.Item
-                    name="server_id"
-                    label="Сервер"
-                    rules={[{ required: true, message: 'Выберите сервер' }]}
-                  >
-                    <Select
-                      showSearch
-                      filterOption={false}
-                      onSearch={setServerSearch}
-                      loading={isServersLoading}
-                      placeholder="Поиск по серверу / CRM / IP"
-                      options={serverOptions}
-                    />
-                  </Form.Item>
-                ) : (
-                  <Row gutter={12}>
-                    <Col span={8}>
-                      <Form.Item name="server_crm_id" label="CRM ID сервера">
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                    <Col span={10}>
-                      <Form.Item
-                        name="server_url_rms"
-                        label="Адрес RMS"
-                        rules={[{ required: true, message: 'Укажите адрес RMS сервера' }]}
-                      >
-                        <Input placeholder="host:port" />
-                      </Form.Item>
-                    </Col>
-                    <Col span={6}>
-                      <Form.Item name="server_device_name" label="Имя сервера">
-                        <Input />
-                      </Form.Item>
-                    </Col>
-                    <Col span={24}>
-                      <Form.Item name="server_description" label="Комментарий по серверу">
-                        <Input.TextArea rows={2} />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                )}
-
-                <Divider />
-
-                <Form.List name="workstations">
-                  {(fields, { add, remove }) => (
-                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                      <Text strong>Наименования обнаруженных станций</Text>
-                      {fields.map((field) => (
-                        <Row key={field.key} gutter={8} align="middle">
-                          <Col span={10}>
-                            <Form.Item name={[field.name, 'name']} rules={[{ required: true, message: 'Укажите имя станции' }]}>
-                              <Input placeholder="Название станции" />
-                            </Form.Item>
-                          </Col>
-                          <Col span={8}>
-                            <Form.Item name={[field.name, 'workstation_uuid']}>
-                              <Input placeholder="UUID станции (если есть)" />
-                            </Form.Item>
-                          </Col>
-                          <Col span={4}>
-                            <Form.Item name={[field.name, 'staging_id']}>
-                              <Input placeholder="staging_id" />
-                            </Form.Item>
-                          </Col>
-                          <Col span={2}>
-                            <Button danger onClick={() => remove(field.name)}>Удалить</Button>
-                          </Col>
-                        </Row>
-                      ))}
-                      <Button onClick={() => add({ name: '' })}>Добавить станцию</Button>
-                    </Space>
-                  )}
-                </Form.List>
-
-                <Divider />
-
-                <Form.Item name="comment" label="Комментарий к принятию">
-                  <Input.TextArea rows={3} />
-                </Form.Item>
-              </Form>
-            </Card>
+            <AcceptanceForm
+              form={form}
+              companyMode={companyMode}
+              selectedContractMode={selectedContractMode}
+              selectedParentCompany={selectedParentCompany}
+              selectedExistingCompany={selectedExistingCompany}
+              companyOptions={companyOptions}
+              isCompaniesLoading={isCompaniesLoading}
+              isBitrixEnabled={isBitrixEnabled}
+              bitrixServicePointOptions={bitrixServicePointOptions}
+              isBitrixServicePointsLoading={isBitrixServicePointsLoading}
+              onCompanySearch={setCompanySearch}
+            />
           </Space>
         )}
       </Drawer>
@@ -603,4 +683,3 @@ const AcceptancePage: React.FC = () => {
 };
 
 export default AcceptancePage;
-

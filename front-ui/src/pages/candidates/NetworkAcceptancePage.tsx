@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Drawer, Empty, Form, Input, List, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Form, Input, List, Select, Space, Spin, Table, Tag, Typography, message, Divider } from 'antd';
 import dayjs from 'dayjs';
 import { networkCandidatesApi } from '@/api/networkCandidates';
 import { companiesApi } from '@/api/companies';
@@ -23,7 +23,6 @@ const NetworkAcceptancePage: React.FC = () => {
   const [selectedID, setSelectedID] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [companyMode, setCompanyMode] = useState<'existing' | 'new'>('existing');
-  const [companySearch, setCompanySearch] = useState('');
   const [form] = Form.useForm();
 
   const listQuery = useQuery({
@@ -36,11 +35,6 @@ const NetworkAcceptancePage: React.FC = () => {
     queryKey: ['network-candidate', selectedID],
     queryFn: () => networkCandidatesApi.get(selectedID as number),
     enabled: Boolean(selectedID),
-  });
-
-  const companiesQuery = useQuery({
-    queryKey: ['network-candidate-companies', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 30, 0),
   });
 
   const removeGroupMutation = useMutation({
@@ -68,6 +62,14 @@ const NetworkAcceptancePage: React.FC = () => {
   const rows = useMemo(() => ((listQuery.data?.data || []) as NetworkCandidateDTO[]), [listQuery.data?.data]);
   const details = useMemo(() => (detailsQuery.data?.data as NetworkCandidateDetailsDTO | undefined), [detailsQuery.data?.data]);
 
+  // Загрузка дочерних компаний hub-компании
+  const hubCompanyId = details?.candidate?.hub_company_id;
+  const companiesQuery = useQuery({
+    queryKey: ['network-candidate-children', hubCompanyId],
+    queryFn: () => companiesApi.getChildren(hubCompanyId as string),
+    enabled: Boolean(hubCompanyId),
+  });
+
   const companyOptions = useMemo(() => {
     const list = companiesQuery.data?.data || [];
     return list.map((item) => {
@@ -77,6 +79,21 @@ const NetworkAcceptancePage: React.FC = () => {
       return { value: id, label: parentTitle ? `${parentTitle} / ${title}` : title };
     }).filter((item) => item.value) as Array<{ value: string; label: string }>;
   }, [companiesQuery.data?.data]);
+
+  // Предзаполнение формы при наличии конфликта
+  React.useEffect(() => {
+    if (details?.candidate && drawerOpen) {
+      // При конфликте предзаполняем кандидата по РС (приоритет)
+      const preselectedCompany = details.candidate.ws_owner_candidate || details.candidate.fr_owner_candidate;
+      if (preselectedCompany) {
+        form.setFieldsValue({
+          company_mode: 'existing',
+          child_company_id: preselectedCompany,
+        });
+        setCompanyMode('existing');
+      }
+    }
+  }, [details?.candidate, drawerOpen, form]);
 
   const onApprove = async () => {
     const values = await form.validateFields();
@@ -95,6 +112,9 @@ const NetworkAcceptancePage: React.FC = () => {
     setCompanyMode('existing');
     form.setFieldsValue({ company_mode: 'existing' });
   };
+
+  // Проверка на конфликт
+  const hasConflict = details?.candidate?.conflict_info && details.candidate.conflict_info.length > 0;
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -132,6 +152,12 @@ const NetworkAcceptancePage: React.FC = () => {
               { title: 'Hub', dataIndex: 'hub_company_id', width: 220 },
               { title: 'Сервер', dataIndex: 'server_id', width: 220 },
               { title: 'CRM', dataIndex: 'server_crm_id', render: (v?: string) => v || '-' },
+              { 
+                title: 'Конфликт', 
+                dataIndex: 'conflict_info', 
+                width: 200,
+                render: (v?: string) => v ? <Tag color="warning">Конфликт владельцев</Tag> : '-'
+              },
               { title: 'Создан', dataIndex: 'created_at', width: 180, render: (v: string) => dayjs(v).format('DD.MM.YYYY HH:mm') },
               { title: 'Действие', key: 'action', width: 160, render: (_: unknown, row: NetworkCandidateDTO) => <Button type="primary" onClick={() => open(row.id)}>Открыть</Button> },
             ]}
@@ -162,6 +188,29 @@ const NetworkAcceptancePage: React.FC = () => {
                 <Text>CRM: {details.candidate.server_crm_id || '-'}</Text>
               </Space>
             </Card>
+
+            {/* Отображение информации о конфликте */}
+            {hasConflict && (
+              <Card size="small" title="Информация о конфликте" style={{ borderColor: '#faad14' }}>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Alert
+                    type="warning"
+                    message="Обнаружен конфликт владельцев"
+                    description={details.candidate.conflict_info}
+                    showIcon
+                  />
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Space>
+                    {details.candidate.ws_owner_candidate && (
+                      <Text>Кандидат по РС: <Text code>{details.candidate.ws_owner_candidate}</Text></Text>
+                    )}
+                    {details.candidate.fr_owner_candidate && (
+                      <Text>Кандидат по ФР: <Text code>{details.candidate.fr_owner_candidate}</Text></Text>
+                    )}
+                  </Space>
+                </Space>
+              </Card>
+            )}
 
             <Card size="small" title="Группы данных">
               {details.groups.length === 0 ? (
@@ -206,10 +255,9 @@ const NetworkAcceptancePage: React.FC = () => {
                   <Form.Item name="child_company_id" label="Дочерняя компания" rules={[{ required: true, message: 'Выберите компанию' }]}>
                     <Select
                       showSearch
-                      filterOption={false}
-                      onSearch={setCompanySearch}
                       options={companyOptions}
                       loading={companiesQuery.isLoading}
+                      placeholder="Выберите дочернюю компанию"
                     />
                   </Form.Item>
                 ) : (

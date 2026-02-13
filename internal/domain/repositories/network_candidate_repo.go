@@ -14,14 +14,14 @@ type NetworkCandidateApproveInput struct {
 }
 
 type NetworkCandidateDetails struct {
-	Candidate *models.NetworkCandidate
-	Groups    []NetworkCandidateGroupDetails
+	Candidate *models.NetworkCandidate       `json:"candidate"`
+	Groups    []NetworkCandidateGroupDetails `json:"groups"`
 }
 
 type NetworkCandidateGroupDetails struct {
-	Group models.NetworkCandidateGroup
-	WS    *models.NetworkCandidateWSStaging
-	FRs   []models.NetworkCandidateFRStaging
+	Group models.NetworkCandidateGroup       `json:"group"`
+	WS    *models.NetworkCandidateWSStaging  `json:"ws"`
+	FRs   []models.NetworkCandidateFRStaging `json:"frs"`
 }
 
 type NetworkCandidateRepo interface {

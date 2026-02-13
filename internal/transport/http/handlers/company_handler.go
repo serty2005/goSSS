@@ -34,6 +34,7 @@ func (h *CompanyHandler) RegisterRoutes(r chi.Router) {
 		r.Put("/{id}", h.Update)
 		r.Delete("/{id}", h.Delete)
 		r.Get("/{id}/infrastructure", h.GetInfrastructure)
+		r.Get("/{id}/children", h.GetChildren)
 	})
 }
 
@@ -183,6 +184,35 @@ func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Reques
 	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
+// GetChildren возвращает список дочерних компаний для hub-компании.
+func (h *CompanyHandler) GetChildren(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Company ID is required")
+		return
+	}
+
+	children, err := h.service.GetChildren(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			middleware.GetLogger(r.Context()).Warn("company not found for children request", "id", id)
+			response.RespondWithError(w, http.StatusNotFound, "Company not found")
+			return
+		}
+		middleware.GetLogger(r.Context()).Error("failed to get company children", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	// Формируем ответ в требуемом формате
+	items := make([]companyChildDTO, 0, len(children))
+	for _, child := range children {
+		items = append(items, toCompanyChildDTO(child))
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{"data": items})
+}
+
 type companyResponseDTO struct {
 	ID               string  `json:"id"`
 	Title            string  `json:"title"`
@@ -217,5 +247,22 @@ func toCompanyResponseDTO(comp company.Company) companyResponseDTO {
 		ContractID:       comp.ContractID,
 		ContractType:     comp.ContractType,
 		LastModifiedDate: lastModifiedDate,
+	}
+}
+
+// companyChildDTO представляет дочернюю компанию в ответе API.
+type companyChildDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func toCompanyChildDTO(comp company.Company) companyChildDTO {
+	var name string
+	if comp.Title != nil {
+		name = strings.TrimSpace(*comp.Title)
+	}
+	return companyChildDTO{
+		ID:   comp.ID,
+		Name: name,
 	}
 }
