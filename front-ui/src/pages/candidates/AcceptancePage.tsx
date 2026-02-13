@@ -10,6 +10,7 @@ import {
   Empty,
   Form,
   Input,
+  Modal,
   Row,
   Select,
   Space,
@@ -26,6 +27,7 @@ import { ticketsApi } from '@/api/tickets';
 import {
   CandidateApprovePayload,
   CandidateDTO,
+  CandidateObservationDTO,
   CandidateStatus,
   CandidateWorkstationStagingDTO,
   BitrixServicePointDTO,
@@ -69,6 +71,7 @@ const normalizeCandidate = (raw: Record<string, unknown>): CandidateDTO => {
     server_key: pick('server_key', 'ServerKey') as string | undefined,
     server_crm_id: pick('server_crm_id', 'ServerCRMID') as string | undefined,
     server_url: pick('server_url', 'ServerURL') as string | undefined,
+    existing_server_id: pick('existing_server_id', 'ExistingServerID') as string | undefined,
     status: asString(pick('status', 'Status')) as CandidateStatus,
     ticket_id: pick('ticket_id', 'TicketID') as number | undefined,
     approved_company_id: pick('approved_company_id', 'ApprovedCompanyID') as string | undefined,
@@ -106,7 +109,7 @@ const maxObservedAt = (left?: string, right?: string) => {
 };
 
 const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): CandidateWorkstationDraft[] => {
-  const merged = new Map<string, CandidateWorkstationDraft & { staging_ids: number[] }>();
+  const merged = new Map<string, CandidateWorkstationDraft & { staging_ids: number[]; observation_ids: number[] }>();
 
   items.forEach((item, index) => {
     const key = buildMergeKey(item, index);
@@ -118,6 +121,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
         staging_id: item.id,
         staging_ids: item.id ? [item.id] : [],
         observation_id: item.observation_id,
+        observation_ids: item.observation_id ? [item.observation_id] : [],
         workstation_uuid: item.workstation_uuid,
         hostname: item.hostname || '',
         name: item.hostname || '',
@@ -132,6 +136,9 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
 
     if (item.id && !existing.staging_ids.includes(item.id)) {
       existing.staging_ids.push(item.id);
+    }
+    if (item.observation_id && !existing.observation_ids.includes(item.observation_id)) {
+      existing.observation_ids.push(item.observation_id);
     }
     existing.hostname = existing.hostname || item.hostname || '';
     existing.name = existing.name || item.hostname || '';
@@ -149,6 +156,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     merge_key: item.merge_key,
     staging_id: item.staging_ids[0] || item.staging_id,
     observation_id: item.observation_id,
+    observation_ids: item.observation_ids,
     workstation_uuid: item.workstation_uuid,
     hostname: item.hostname,
     name: item.name,
@@ -168,6 +176,9 @@ const AcceptancePage: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState('');
   const [workstationDrafts, setWorkstationDrafts] = useState<CandidateWorkstationDraft[]>([]);
+  const [agentDataOpen, setAgentDataOpen] = useState(false);
+  const [agentDataTitle, setAgentDataTitle] = useState('');
+  const [agentObservations, setAgentObservations] = useState<CandidateObservationDTO[]>([]);
 
   const [form] = Form.useForm();
   const formValues = Form.useWatch([], form);
@@ -218,11 +229,30 @@ const AcceptancePage: React.FC = () => {
       setDrawerOpen(false);
       setSelectedCandidateID(null);
       setWorkstationDrafts([]);
+      setAgentDataOpen(false);
+      setAgentObservations([]);
       form.resetFields();
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
     onError: () => {
       message.error('Не удалось подтвердить кандидата');
+    },
+  });
+
+  const agentObservationsMutation = useMutation({
+    mutationFn: async (observationIDs: number[]) => {
+      if (!selectedCandidateID) {
+        return [];
+      }
+      const response = await candidatesApi.getCandidateObservations(selectedCandidateID, observationIDs);
+      return response.data || [];
+    },
+    onSuccess: (rows) => {
+      setAgentObservations(rows);
+    },
+    onError: () => {
+      setAgentObservations([]);
+      message.error('Не удалось загрузить полные данные агента');
     },
   });
 
@@ -244,6 +274,8 @@ const AcceptancePage: React.FC = () => {
     const wsDefaults = mergeCandidateWorkstations(selectedCandidate.staged_workstations || []).map((item) => ({
       merge_key: item.merge_key,
       staging_id: item.staging_id,
+      observation_id: item.observation_id,
+      observation_ids: item.observation_ids || (item.observation_id ? [item.observation_id] : []),
       workstation_uuid: item.workstation_uuid,
       hostname: item.hostname || '',
       name: item.name || item.hostname || '',
@@ -444,6 +476,23 @@ const AcceptancePage: React.FC = () => {
     form.setFieldValue('workstations', nextRows);
   };
 
+  const handleAgentGroupClick = (params: { agentID: string; observationIDs: number[]; unresolvedServer: boolean }) => {
+    const uniqueObservationIDs = Array.from(
+      new Set(params.observationIDs.filter((value) => Number.isFinite(value) && value > 0)),
+    );
+    setAgentDataTitle(
+      params.unresolvedServer
+        ? 'Нераспознанный сервер: полные данные агента'
+        : `Полные данные агента: ${params.agentID}`,
+    );
+    setAgentDataOpen(true);
+    setAgentObservations([]);
+    if (uniqueObservationIDs.length === 0) {
+      return;
+    }
+    agentObservationsMutation.mutate(uniqueObservationIDs);
+  };
+
   const candidateLastObservedAt = useMemo(() => {
     const wsObserved = workstationDrafts.map((item) => item.observed_at).filter(Boolean) as string[];
     const frObserved = stagedFiscals.map((item) => item.observed_at).filter(Boolean) as string[];
@@ -577,6 +626,8 @@ const AcceptancePage: React.FC = () => {
           setDrawerOpen(false);
           setSelectedCandidateID(null);
           setWorkstationDrafts([]);
+          setAgentDataOpen(false);
+          setAgentObservations([]);
         }}
         extra={(
           <Space>
@@ -584,6 +635,8 @@ const AcceptancePage: React.FC = () => {
               setDrawerOpen(false);
               setSelectedCandidateID(null);
               setWorkstationDrafts([]);
+              setAgentDataOpen(false);
+              setAgentObservations([]);
             }}
             >
               Отмена
@@ -615,6 +668,7 @@ const AcceptancePage: React.FC = () => {
                 <Descriptions.Item label="CRM ID">{selectedCandidate.server_crm_id || '-'}</Descriptions.Item>
                 <Descriptions.Item label="Server Key">{selectedCandidate.server_key || '-'}</Descriptions.Item>
                 <Descriptions.Item label="Адрес сервера">{selectedCandidate.server_url || '-'}</Descriptions.Item>
+                <Descriptions.Item label="Распознанный сервер">{selectedCandidate.existing_server_id || 'нет'}</Descriptions.Item>
                 <Descriptions.Item label="Последнее наблюдение">
                   {candidateLastObservedAt ? dayjs(candidateLastObservedAt).format('DD.MM.YYYY HH:mm:ss') : '-'}
                 </Descriptions.Item>
@@ -628,6 +682,7 @@ const AcceptancePage: React.FC = () => {
                   fiscals={stagedFiscals}
                   observationAgents={observationAgents}
                   onWorkstationNameChange={handleWorkstationNameChange}
+                  onGroupClick={handleAgentGroupClick}
                 />
               </Col>
               <Col span={12}>
@@ -678,6 +733,36 @@ const AcceptancePage: React.FC = () => {
           </Space>
         )}
       </Drawer>
+      <Modal
+        title={agentDataTitle}
+        open={agentDataOpen}
+        width={900}
+        onCancel={() => setAgentDataOpen(false)}
+        footer={null}
+      >
+        {agentObservationsMutation.isPending ? (
+          <div style={{ textAlign: 'center', padding: 24 }}>
+            <Spin />
+          </div>
+        ) : agentObservations.length === 0 ? (
+          <Empty description="Полные данные наблюдений не найдены" />
+        ) : (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {agentObservations.map((item) => (
+              <Card key={item.observation_id} size="small" title={`Наблюдение #${item.observation_id}`}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">
+                    Время наблюдения: {dayjs(item.observed_at).isValid() ? dayjs(item.observed_at).format('DD.MM.YYYY HH:mm:ss') : '-'}
+                  </Typography.Text>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {JSON.stringify(item.payload_json || {}, null, 2)}
+                  </pre>
+                </Space>
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 };

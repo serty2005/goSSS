@@ -101,6 +101,39 @@ func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetObservations возвращает исходные payload-данные наблюдений кандидата.
+func (h *CandidateHandler) GetObservations(w http.ResponseWriter, r *http.Request) {
+	id, err := parseCandidateID(r)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный идентификатор кандидата")
+		return
+	}
+
+	observationIDs, err := parseObservationIDs(r.URL.Query().Get("ids"))
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный параметр ids")
+		return
+	}
+
+	observations, err := h.candidateRepo.ListObservations(r.Context(), id, observationIDs)
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось получить наблюдения кандидата", "candidate_id", id, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера")
+		return
+	}
+
+	items := make([]map[string]interface{}, 0, len(observations))
+	for _, item := range observations {
+		items = append(items, map[string]interface{}{
+			"observation_id": item.ID,
+			"observed_at":    item.ObservedAt,
+			"payload_json":   item.PayloadJSON,
+		})
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, items)
+}
+
 // Approve подтверждает кандидата и запускает применение всех staged-наблюдений.
 func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	id, err := parseCandidateID(r)
@@ -215,6 +248,36 @@ func parseIntOrDefault(v string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func parseObservationIDs(raw string) ([]uint, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	result := make([]uint, 0, len(parts))
+	seen := make(map[uint]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		id64, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		id := uint(id64)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+
+	return result, nil
 }
 
 // strPtrOrNil возвращает trimmed-строку как указатель или nil.

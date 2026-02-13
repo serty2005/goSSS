@@ -574,6 +574,7 @@ export interface CandidateDTO {
   server_key?: string;
   server_crm_id?: string;
   server_url?: string;
+  existing_server_id?: string;
   status: CandidateStatus;
   ticket_id?: number;
   approved_company_id?: string;
@@ -582,6 +583,12 @@ export interface CandidateDTO {
   updated_at: string;
   staged_workstations?: CandidateWorkstationStagingDTO[];
   staged_fiscals?: CandidateFiscalStagingDTO[];
+}
+
+export interface CandidateObservationDTO {
+  observation_id: number;
+  observed_at: string;
+  payload_json: Record<string, unknown>;
 }
 
 export interface CandidateApprovePayload {

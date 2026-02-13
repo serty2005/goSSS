@@ -67,4 +67,17 @@ type CandidateRepo interface {
 	//   - []models.CandidateFiscalStaging: список staging-записей
 	//   - error: ошибка БД
 	ListFiscalStaging(ctx context.Context, candidateID uint) ([]models.CandidateFiscalStaging, error)
+
+	// ListObservations возвращает наблюдения кандидата с полным payload.
+	// Используется для просмотра исходных данных агента в UI.
+	//
+	// Параметры:
+	//   - ctx: контекст для отмены операции
+	//   - candidateID: ID кандидата
+	//   - observationIDs: опциональный список observation_id для фильтрации
+	//
+	// Возвращает:
+	//   - []models.AgentObservation: список наблюдений
+	//   - error: ошибка БД
+	ListObservations(ctx context.Context, candidateID uint, observationIDs []uint) ([]models.AgentObservation, error)
 }

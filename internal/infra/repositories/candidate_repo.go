@@ -55,3 +55,20 @@ func (r *candidateRepo) ListFiscalStaging(ctx context.Context, candidateID uint)
 		Find(&items).Error
 	return items, err
 }
+
+func (r *candidateRepo) ListObservations(ctx context.Context, candidateID uint, observationIDs []uint) ([]models.AgentObservation, error) {
+	var items []models.AgentObservation
+	query := r.db.WithContext(ctx).
+		Model(&models.AgentObservation{}).
+		Where("candidate_id = ?", candidateID)
+
+	if len(observationIDs) > 0 {
+		query = query.Where("id IN ?", observationIDs)
+	}
+
+	err := query.
+		Select("id", "observed_at", "payload_json").
+		Order("observed_at desc, id desc").
+		Find(&items).Error
+	return items, err
+}

@@ -6,6 +6,7 @@ export interface CandidateWorkstationDraft {
   merge_key: string;
   staging_id?: number;
   observation_id?: number;
+  observation_ids?: number[];
   workstation_uuid?: string;
   hostname?: string;
   name?: string;
