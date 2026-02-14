@@ -16,7 +16,7 @@ import {
   Upload,
   message,
 } from 'antd';
-import { ArrowLeftOutlined, InboxOutlined, PlayCircleOutlined, SyncOutlined, UploadOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, InboxOutlined, PlayCircleOutlined, SyncOutlined } from '@ant-design/icons';
 import type { UploadFile, UploadProps } from 'antd/es/upload/interface';
 import { useNavigate } from 'react-router-dom';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
@@ -216,6 +216,7 @@ const ServicePointsImportPage: React.FC = () => {
       setRowApplyState({});
       setSelectedRows([]);
       setVisibleCount(ROW_BATCH_SIZE);
+      previewMutation.mutate(incoming as unknown as File);
       return false;
     },
     onRemove: () => {
@@ -246,15 +247,26 @@ const ServicePointsImportPage: React.FC = () => {
       return [];
     }
 
+    const mappedColumns = new Set([mapping.code_column, mapping.name_column, mapping.contract_column].filter(Boolean));
+
     return preview.columns.map((column) => ({
-      title: `${column.key} · ${column.name}`,
+      title: (
+        <span style={mappedColumns.has(column.key) ? { color: '#1677ff', fontWeight: 600 } : undefined}>
+          {column.key} · {column.name}
+        </span>
+      ),
       dataIndex: column.key,
       key: column.key,
       ellipsis: true,
       width: 220,
+      onCell: () => (
+        mappedColumns.has(column.key)
+          ? { style: { backgroundColor: 'rgba(22, 119, 255, 0.08)' } }
+          : {}
+      ),
       render: (value: string) => value || <Text type="secondary">-</Text>,
     }));
-  }, [preview]);
+  }, [preview, mapping.code_column, mapping.name_column, mapping.contract_column]);
 
   const planItems = useMemo(() => {
     if (!syncPreview) {
@@ -311,14 +323,6 @@ const ServicePointsImportPage: React.FC = () => {
   const selectableRowSet = useMemo(() => {
     return new Set(planItems.filter(isActionable).map((item) => item.row));
   }, [planItems]);
-
-  const handlePreview = () => {
-    if (!file) {
-      message.warning('Сначала выберите файл');
-      return;
-    }
-    previewMutation.mutate(file);
-  };
 
   const handleBuildSyncPreview = () => {
     if (!file || !mapping.code_column || !mapping.name_column || !mapping.contract_column) {
@@ -388,17 +392,17 @@ const ServicePointsImportPage: React.FC = () => {
 
   return (
     <div>
+      <div style={{ marginBottom: 12 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin')}>Назад</Button>
+      </div>
       <Row gutter={[16, 16]} align="stretch" style={{ marginBottom: 16 }}>
         <Col xs={24} lg={12}>
           <Card className="glass-panel" style={{ height: '100%' }}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                <div>
-                  <Title level={4} style={{ marginBottom: 0 }}>Импорт точек обслуживания</Title>
-                  <Text type="secondary">Загрузите XLS/XLSX из 1С для расчёта плана синхронизации с Bitrix24.</Text>
-                </div>
-                <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin')}>Назад</Button>
-              </Space>
+              <div>
+                <Title level={4} style={{ marginBottom: 0 }}>Импорт точек обслуживания</Title>
+                <Text type="secondary">Загрузите XLS/XLSX из 1С для расчёта плана синхронизации с Bitrix24.</Text>
+              </div>
 
               <Dragger {...uploadProps} style={{ marginTop: 6 }}>
                 <p className="ant-upload-drag-icon"><InboxOutlined /></p>
@@ -406,58 +410,58 @@ const ServicePointsImportPage: React.FC = () => {
                 <p className="ant-upload-hint">Поддерживаются форматы .xls и .xlsx</p>
               </Dragger>
 
-              <Button icon={<UploadOutlined />} onClick={handlePreview} loading={previewMutation.isPending} disabled={!file}>
-                Прочитать файл
-              </Button>
+              {previewMutation.isPending && <Text type="secondary">Чтение файла...</Text>}
+
+              {preview ? (
+                <>
+                  <Alert type="info" showIcon message={`Заголовки: строка ${preview.header_row}. Строк с данными: ${preview.total_rows}.`} />
+
+                  <Form layout="vertical">
+                    <Row gutter={12}>
+                      <Col span={24}>
+                        <Form.Item label="Колонка кода 1С" required style={{ marginBottom: 10 }}>
+                          <Select options={mappingOptions} value={mapping.code_column} onChange={(value) => { setMapping((prev) => ({ ...prev, code_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={24}>
+                        <Form.Item label="Колонка названия точки" required style={{ marginBottom: 10 }}>
+                          <Select options={mappingOptions} value={mapping.name_column} onChange={(value) => { setMapping((prev) => ({ ...prev, name_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={24}>
+                        <Form.Item label="Колонка статуса контракта" required style={{ marginBottom: 8 }}>
+                          <Select options={mappingOptions} value={mapping.contract_column} onChange={(value) => { setMapping((prev) => ({ ...prev, contract_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Form>
+
+                  <Button icon={<SyncOutlined />} onClick={handleBuildSyncPreview} loading={syncPreviewMutation.isPending} disabled={!canBuildSyncPreview}>
+                    Рассчитать изменения в Bitrix24
+                  </Button>
+                </>
+              ) : (
+                <Text type="secondary">После выбора файла здесь появится выбор колонок.</Text>
+              )}
             </Space>
           </Card>
         </Col>
 
         <Col xs={24} lg={12}>
-          {preview ? (
-            <Card className="glass-panel" style={{ height: '100%' }}>
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <Alert type="info" showIcon message={`Заголовки: строка ${preview.header_row}. Строк с данными: ${preview.total_rows}.`} />
-
-                <Form layout="vertical">
-                  <Row gutter={12}>
-                    <Col span={24}>
-                      <Form.Item label="Колонка кода 1С" required style={{ marginBottom: 10 }}>
-                        <Select options={mappingOptions} value={mapping.code_column} onChange={(value) => { setMapping((prev) => ({ ...prev, code_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={24}>
-                      <Form.Item label="Колонка названия точки" required style={{ marginBottom: 10 }}>
-                        <Select options={mappingOptions} value={mapping.name_column} onChange={(value) => { setMapping((prev) => ({ ...prev, name_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={24}>
-                      <Form.Item label="Колонка статуса контракта" required style={{ marginBottom: 8 }}>
-                        <Select options={mappingOptions} value={mapping.contract_column} onChange={(value) => { setMapping((prev) => ({ ...prev, contract_column: value })); setSyncPreview(null); setSelectedRows([]); }} />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                </Form>
-
-                <Button icon={<SyncOutlined />} onClick={handleBuildSyncPreview} loading={syncPreviewMutation.isPending} disabled={!canBuildSyncPreview}>
-                  Рассчитать изменения в Bitrix24
-                </Button>
-
-                <Table
-                  rowKey={(_, index) => String(index)}
-                  dataSource={preview.sample_rows}
-                  columns={previewTableColumns}
-                  pagination={false}
-                  scroll={{ x: 'max-content', y: 220 }}
-                  size="small"
-                />
-              </Space>
-            </Card>
-          ) : (
-            <Card className="glass-panel" style={{ height: '100%' }}>
-              <Text type="secondary">После чтения файла здесь появятся выбор колонок и предпросмотр.</Text>
-            </Card>
-          )}
+          <Card className="glass-panel" style={{ height: '100%' }}>
+            {preview ? (
+              <Table
+                rowKey={(_, index) => String(index)}
+                dataSource={preview.sample_rows}
+                columns={previewTableColumns}
+                pagination={false}
+                scroll={{ x: 'max-content', y: 320 }}
+                size="small"
+              />
+            ) : (
+              <Text type="secondary">После чтения файла справа появится таблица предпросмотра.</Text>
+            )}
+          </Card>
         </Col>
       </Row>
 

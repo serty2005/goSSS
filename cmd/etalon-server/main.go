@@ -7,9 +7,9 @@ import (
 	"os"
 )
 
-// @title Etalon Server API
-// @version 1.0.0
-// @description API documentation for Etalon Server ServiceDesk system
+// @title XenionDesk API
+// @version 1.1.1
+// @description API documentation for XenionDesk system
 
 func main() {
 	seedFlag := flag.Bool("seed", false, "Наполнить базу данных тестовыми данными из файлов и выйти.")

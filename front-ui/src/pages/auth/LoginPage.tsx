@@ -45,7 +45,7 @@ const LoginPage: React.FC = () => {
         bordered={false}
       >
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={3} style={{ margin: 0 }}>Etalon ServiceDesk</Title>
+          <Title level={3} style={{ margin: 0 }}>MyHoreca XenionDesk</Title>
           <Typography.Text type="secondary">Вход в систему</Typography.Text>
         </div>
         

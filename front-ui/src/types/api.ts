@@ -49,6 +49,18 @@ export interface CompanyModel {
   last_modified_date?: string;
 }
 
+export interface CompanyBitrixMappingRowDTO {
+  company_id: string;
+  company_title: string;
+  company_parent_title?: string;
+  company_additional_name?: string;
+  company_address?: string;
+  bitrix_service_point_id?: number;
+  bitrix_service_point_name?: string;
+  bitrix_service_point_code?: string;
+  bitrix_service_point_enabled?: boolean;
+}
+
 export type AntBadgeStatus = 'success' | 'processing' | 'error' | 'default' | 'warning';
 
 // --- CMDB Entities (Rich DTOs) ---

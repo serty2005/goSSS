@@ -18,4 +18,7 @@ type Service interface {
 
 	// GetChildren возвращает список дочерних компаний для указанной hub-компании.
 	GetChildren(ctx context.Context, companyID string) ([]Company, error)
+
+	ListBitrixMappings(ctx context.Context, term string, limit, offset int) ([]BitrixMappingRow, error)
+	UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error
 }

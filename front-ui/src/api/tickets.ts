@@ -84,8 +84,10 @@ export const ticketsApi = {
     return response.data;
   },
 
-  getBitrixServicePoints: async () => {
-    const response = await apiClient.get<BitrixServicePointDTO[] | ApiResponse<BitrixServicePointDTO[]>>('/bitrix/service-points');
+  getBitrixServicePoints: async (params?: { term?: string; limit?: number; offset?: number; random_if_empty?: boolean }) => {
+    const response = await apiClient.get<BitrixServicePointDTO[] | ApiResponse<BitrixServicePointDTO[]>>('/bitrix/service-points', {
+      params,
+    });
     const payload = response.data as unknown;
     if (Array.isArray(payload)) {
       return payload;

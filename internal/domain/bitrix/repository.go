@@ -18,8 +18,19 @@ type Repository interface {
 
 	ReplaceServicePoints(ctx context.Context, points []ServicePoint) error
 	ListServicePoints(ctx context.Context) ([]ServicePoint, error)
+	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]ServicePoint, error)
 	UpdateServicePointOneCData(ctx context.Context, b24ElementID int64, oneCCode string, contractOn *bool) error
 
 	ReplaceUserCache(ctx context.Context, users []UserCache) error
 	ListUserCache(ctx context.Context) ([]UserCache, error)
+
+	GetServicePointByID(ctx context.Context, b24ElementID int64) (*ServicePoint, error)
+	ListServicePointsByIDs(ctx context.Context, ids []int64) ([]ServicePoint, error)
+
+	UpsertCompanyServicePointMapping(ctx context.Context, item *CompanyServicePointMapping) error
+	GetCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) (*CompanyServicePointMapping, error)
+	GetCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) (*CompanyServicePointMapping, error)
+	ListCompanyServicePointMappingsByCompanyIDs(ctx context.Context, companyIDs []string) ([]CompanyServicePointMapping, error)
+	DeleteCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) error
+	DeleteCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) error
 }

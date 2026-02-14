@@ -172,7 +172,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 				LIMIT 1
 			) AS contract_type
 		`).
-		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%")
+		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%")
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
 	}

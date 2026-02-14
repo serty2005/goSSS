@@ -34,3 +34,11 @@ func (c *Company) BeforeCreate(tx *gorm.DB) (err error) {
 	}
 	return c.Base.BeforeCreate(tx)
 }
+
+type BitrixMappingRow struct {
+	Company                  Company
+	BitrixServicePointID     *int64
+	BitrixServicePointName   *string
+	BitrixServicePointCode   *string
+	BitrixServicePointStatus *bool
+}

@@ -66,6 +66,7 @@ func Migrate(db *gorm.DB) error {
 		&bitrix.UserMap{},
 		&bitrix.ServicePoint{},
 		&bitrix.UserCache{},
+		&bitrix.CompanyServicePointMapping{},
 	); err != nil {
 		return err
 	}

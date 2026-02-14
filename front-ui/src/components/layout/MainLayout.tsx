@@ -360,7 +360,7 @@ const MainLayout: React.FC = () => {
               fontWeight: 'bold',
             }}
           >
-            {collapsed ? 'ES' : 'Etalon ServiceDesk'}
+            {collapsed ? 'XD' : 'MyHoreca XenionDesk'}
           </div>
         </div>
         <Menu

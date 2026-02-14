@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	domain "etalon-server/internal/domain"
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/interfaces"
@@ -15,6 +16,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -26,6 +28,7 @@ type serviceImpl struct {
 	workstationRepo workstation.Repository
 	frRepo          fiscal.Repository
 	linkRepo        repositories.LinkRepo
+	bitrixRepo      bitrix.Repository
 }
 
 // NewService создает сервис с зависимостями от репозиториев оборудования.
@@ -37,6 +40,7 @@ func NewService(
 	workstationRepo workstation.Repository,
 	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
+	bitrixRepo bitrix.Repository,
 ) company.Service {
 	return &serviceImpl{
 		logger:          logger,
@@ -46,6 +50,7 @@ func NewService(
 		workstationRepo: workstationRepo,
 		frRepo:          frRepo,
 		linkRepo:        linkRepo,
+		bitrixRepo:      bitrixRepo,
 	}
 }
 
@@ -299,4 +304,118 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 
 	wg.Wait()
 	return results, nil
+}
+
+func (s *serviceImpl) ListBitrixMappings(ctx context.Context, term string, limit, offset int) ([]company.BitrixMappingRow, error) {
+	companies, err := s.companyRepo.Search(ctx, term, true, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	if len(companies) == 0 {
+		return []company.BitrixMappingRow{}, nil
+	}
+
+	companyIDs := make([]string, 0, len(companies))
+	for _, item := range companies {
+		companyIDs = append(companyIDs, item.ID)
+	}
+
+	mappings, err := s.bitrixRepo.ListCompanyServicePointMappingsByCompanyIDs(ctx, companyIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	mappingByCompanyID := make(map[string]bitrix.CompanyServicePointMapping, len(mappings))
+	pointIDs := make([]int64, 0, len(mappings))
+	for _, item := range mappings {
+		mappingByCompanyID[item.CompanyID] = item
+		pointIDs = append(pointIDs, item.BitrixServicePointID)
+	}
+
+	points, err := s.bitrixRepo.ListServicePointsByIDs(ctx, pointIDs)
+	if err != nil {
+		return nil, err
+	}
+	pointByID := make(map[int64]bitrix.ServicePoint, len(points))
+	for _, item := range points {
+		pointByID[item.B24ElementID] = item
+	}
+
+	result := make([]company.BitrixMappingRow, 0, len(companies))
+	for _, item := range companies {
+		row := company.BitrixMappingRow{
+			Company: item,
+		}
+		mapping, ok := mappingByCompanyID[item.ID]
+		if ok {
+			id := mapping.BitrixServicePointID
+			row.BitrixServicePointID = &id
+			if point, pointOK := pointByID[id]; pointOK {
+				name := point.Name
+				row.BitrixServicePointName = &name
+				row.BitrixServicePointCode = point.OneCCode
+				row.BitrixServicePointStatus = point.ContractOn
+			}
+		}
+		result = append(result, row)
+	}
+
+	return result, nil
+}
+
+func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error {
+	normalizedCompanyID := ""
+	if companyID != nil {
+		normalizedCompanyID = strings.TrimSpace(*companyID)
+	}
+
+	var normalizedPointID *int64
+	if bitrixServicePointID != nil && *bitrixServicePointID > 0 {
+		id := *bitrixServicePointID
+		normalizedPointID = &id
+	}
+
+	if normalizedCompanyID == "" && normalizedPointID == nil {
+		return fmt.Errorf("не переданы данные для обновления сопоставления")
+	}
+
+	if normalizedCompanyID != "" {
+		comp, err := s.companyRepo.GetByID(ctx, normalizedCompanyID)
+		if err != nil {
+			return err
+		}
+		if comp == nil {
+			return domain.ErrNotFound
+		}
+	}
+
+	if normalizedPointID != nil {
+		point, err := s.bitrixRepo.GetServicePointByID(ctx, *normalizedPointID)
+		if err != nil {
+			return err
+		}
+		if point == nil {
+			return domain.ErrNotFound
+		}
+	}
+
+	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+		switch {
+		case normalizedCompanyID != "" && normalizedPointID != nil:
+			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID); err != nil {
+				return err
+			}
+			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID); err != nil {
+				return err
+			}
+			return s.bitrixRepo.UpsertCompanyServicePointMapping(txCtx, &bitrix.CompanyServicePointMapping{
+				CompanyID:            normalizedCompanyID,
+				BitrixServicePointID: *normalizedPointID,
+			})
+		case normalizedCompanyID != "":
+			return s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID)
+		default:
+			return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
+		}
+	})
 }

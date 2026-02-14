@@ -29,6 +29,7 @@ type BitrixSyncService interface {
 	PullFromBitrix(ctx context.Context) (int, int, error)
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
+	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error)
 	RefreshUsers(ctx context.Context) (int, error)
 	PreviewServicePointsImport(ctx context.Context, fileName string, content []byte) (*ServicePointImportPreview, error)
 	PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error)
@@ -268,6 +269,10 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 
 func (s *bitrixSyncService) ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error) {
 	return s.repo.ListServicePoints(ctx)
+}
+
+func (s *bitrixSyncService) SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error) {
+	return s.repo.SearchServicePoints(ctx, term, limit, offset, randomWhenEmpty)
 }
 
 func (s *bitrixSyncService) RefreshUsers(ctx context.Context) (int, error) {

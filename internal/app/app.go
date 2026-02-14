@@ -47,7 +47,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chi_middleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/swaggo/http-swagger"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"gorm.io/gorm"
 )
 
@@ -328,8 +328,8 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
 		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
 		EntityMatcherService:    services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo),
+		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo),
+		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
 		ContractService:         contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
 		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
@@ -431,6 +431,9 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/companies", func(r chi.Router) {
 			r.Get("/", a.CompanyHandler.Search)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/bitrix-service-point-mappings", a.CompanyHandler.ListBitrixMappings)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/bitrix-service-point-mappings", a.CompanyHandler.UpdateBitrixMapping)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/bitrix-service-point-mappings", a.CompanyHandler.ClearBitrixMapping)
 			r.Get("/{id}", a.CompanyHandler.Get)
 			r.Get("/{id}/infrastructure", a.CompanyHandler.GetInfrastructure)
 			r.Get("/{id}/children", a.CompanyHandler.GetChildren)
@@ -525,7 +528,7 @@ func (a *Application) setupRouter() *chi.Mux {
 	})
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to Etalon Server"))
+		w.Write([]byte("Welcome to XenionDesk"))
 	})
 
 	// Роут для Swagger документации

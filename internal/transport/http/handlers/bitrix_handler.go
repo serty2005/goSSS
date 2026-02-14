@@ -32,10 +32,27 @@ func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 }
 
 func (h *BitrixHandler) ListServicePoints(w http.ResponseWriter, r *http.Request) {
-	items, err := h.service.ListServicePoints(r.Context())
-	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	randomIfEmptyRaw := strings.TrimSpace(r.URL.Query().Get("random_if_empty"))
+	randomIfEmpty := randomIfEmptyRaw == "1" || strings.EqualFold(randomIfEmptyRaw, "true")
+
+	var items interface{}
+	if term != "" || limit > 0 || offset > 0 || randomIfEmpty {
+		result, searchErr := h.service.SearchServicePoints(r.Context(), term, limit, offset, randomIfEmpty)
+		if searchErr != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, searchErr.Error())
+			return
+		}
+		items = result
+	} else {
+		result, listErr := h.service.ListServicePoints(r.Context())
+		if listErr != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, listErr.Error())
+			return
+		}
+		items = result
 	}
 	response.RespondWithJSON(w, http.StatusOK, items)
 }

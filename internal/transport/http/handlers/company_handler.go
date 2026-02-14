@@ -79,6 +79,97 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
+func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Request) {
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := h.service.ListBitrixMappings(r.Context(), term, limit, offset)
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("failed to list bitrix mappings", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	items := make([]companyBitrixMappingDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, toCompanyBitrixMappingDTO(row))
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, items)
+}
+
+func (h *CompanyHandler) UpdateBitrixMapping(w http.ResponseWriter, r *http.Request) {
+	var payload updateCompanyBitrixMappingRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if err := h.service.UpdateBitrixMapping(r.Context(), payload.CompanyID, payload.BitrixServicePointID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *CompanyHandler) ClearBitrixMapping(w http.ResponseWriter, r *http.Request) {
+	var companyID *string
+	var pointID *int64
+
+	if value := strings.TrimSpace(r.URL.Query().Get("company_id")); value != "" {
+		companyID = &value
+	}
+
+	if value := strings.TrimSpace(r.URL.Query().Get("bitrix_service_point_id")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			response.RespondWithError(w, http.StatusBadRequest, "Invalid bitrix_service_point_id")
+			return
+		}
+		pointID = &parsed
+	}
+
+	if companyID == nil && pointID == nil {
+		response.RespondWithError(w, http.StatusBadRequest, "company_id or bitrix_service_point_id is required")
+		return
+	}
+
+	if err := h.service.UpdateBitrixMapping(r.Context(), companyID, nil); err != nil && companyID != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if companyID == nil {
+		if err := h.service.UpdateBitrixMapping(r.Context(), nil, pointID); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				response.RespondWithError(w, http.StatusNotFound, "Not Found")
+				return
+			}
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var dto api.CompanyCreateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -226,6 +317,23 @@ type companyResponseDTO struct {
 	LastModifiedDate *string `json:"last_modified_date,omitempty"`
 }
 
+type updateCompanyBitrixMappingRequest struct {
+	CompanyID            *string `json:"company_id"`
+	BitrixServicePointID *int64  `json:"bitrix_service_point_id"`
+}
+
+type companyBitrixMappingDTO struct {
+	CompanyID                 string  `json:"company_id"`
+	CompanyTitle              string  `json:"company_title"`
+	CompanyParentTitle        *string `json:"company_parent_title,omitempty"`
+	CompanyAdditionalName     *string `json:"company_additional_name,omitempty"`
+	CompanyAddress            *string `json:"company_address,omitempty"`
+	BitrixServicePointID      *int64  `json:"bitrix_service_point_id,omitempty"`
+	BitrixServicePointName    *string `json:"bitrix_service_point_name,omitempty"`
+	BitrixServicePointCode    *string `json:"bitrix_service_point_code,omitempty"`
+	BitrixServicePointEnabled *bool   `json:"bitrix_service_point_enabled,omitempty"`
+}
+
 func toCompanyResponseDTO(comp company.Company) companyResponseDTO {
 	var title string
 	if comp.Title != nil {
@@ -264,5 +372,23 @@ func toCompanyChildDTO(comp company.Company) companyChildDTO {
 	return companyChildDTO{
 		ID:   comp.ID,
 		Name: name,
+	}
+}
+
+func toCompanyBitrixMappingDTO(row company.BitrixMappingRow) companyBitrixMappingDTO {
+	var title string
+	if row.Company.Title != nil {
+		title = strings.TrimSpace(*row.Company.Title)
+	}
+	return companyBitrixMappingDTO{
+		CompanyID:                 row.Company.ID,
+		CompanyTitle:              title,
+		CompanyParentTitle:        row.Company.ParentTitle,
+		CompanyAdditionalName:     row.Company.AdditionalName,
+		CompanyAddress:            row.Company.Address,
+		BitrixServicePointID:      row.BitrixServicePointID,
+		BitrixServicePointName:    row.BitrixServicePointName,
+		BitrixServicePointCode:    row.BitrixServicePointCode,
+		BitrixServicePointEnabled: row.BitrixServicePointStatus,
 	}
 }
