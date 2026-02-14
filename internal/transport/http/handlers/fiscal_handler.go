@@ -140,6 +140,7 @@ func toFiscalResponse(item fiscal.FiscalRegister) map[string]interface{} {
 		"id":                        item.ID,
 		"created_at":                item.CreatedAt,
 		"updated_at":                item.UpdatedAt,
+		"last_updated_by":           item.LastUpdatedBy,
 		"deleted_at":                item.DeletedAt,
 		"model_kkt":                 item.ModelKKT,
 		"ffd":                       item.FFD,

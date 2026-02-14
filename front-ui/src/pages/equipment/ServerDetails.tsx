@@ -150,7 +150,7 @@ const ServerDetails: React.FC = () => {
               </Descriptions.Item>
               <Descriptions.Item label="Кабинет дилера">
                 {server.partners_link ? (
-                  <a href={server.partners_link} target="_blank" rel="noopener noreferrer">Partners Portal</a>
+                  <a href={server.partners_link} target="_blank" rel="noopener noreferrer">Партнёрский портал</a>
                 ) : '-'}
               </Descriptions.Item>
             </Descriptions>

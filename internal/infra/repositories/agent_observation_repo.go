@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -337,6 +338,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			)
 			return tx.Save(obs).Error
 		}
+		updater := resolveAgentUpdater(source, data)
 
 		// Обработка network-hub серверов (автоматическое определение владельца)
 		if srv != nil {
@@ -416,7 +418,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					)
 
 					ownerRef := strPtr(resolution.OwnerID)
-					ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto)
+					ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
 					if err != nil {
 						return fmt.Errorf("ошибка применения рабочей станции: %w", err)
 					}
@@ -429,7 +431,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					frApplied := false
 					frStale := false
 					if strings.TrimSpace(data.SerialNumber) != "" {
-						fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto)
+						fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
 						if err != nil {
 							return fmt.Errorf("ошибка применения ФР: %w", err)
 						}
@@ -512,7 +514,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		}
 
 		// Стандартная обработка: создание/обновление Workstation и FiscalRegister
-		ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, nil, "")
+		ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, nil, "", updater)
 		if err != nil {
 			return fmt.Errorf("ошибка применения рабочей станции: %w", err)
 		}
@@ -526,7 +528,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		frApplied := false
 		frStale := false
 		if strings.TrimSpace(data.SerialNumber) != "" {
-			fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, nil, "")
+			fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, nil, "", updater)
 			if err != nil {
 				return fmt.Errorf("ошибка применения ФР: %w", err)
 			}
@@ -697,12 +699,13 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			if obsAt.IsZero() {
 				obsAt = parseObservedAt(payload.CurrentTime)
 			}
-			ws, _, err := s.applyWorkstation(tx, srv, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove)
+			updater := resolveAgentUpdater(so.Source, &payload)
+			ws, _, err := s.applyWorkstation(tx, srv, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater)
 			if err != nil {
 				return err
 			}
 			if ws != nil && strings.TrimSpace(payload.SerialNumber) != "" {
-				if _, _, err := s.applyFiscal(tx, srv, ws, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove); err != nil {
+				if _, _, err := s.applyFiscal(tx, srv, ws, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater); err != nil {
 					return err
 				}
 			}
@@ -1090,7 +1093,7 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 //   - Если владельца нет: присваиваем владельца от сервера
 //   - Если binding!=manual и владелец отличается: обновляем владельца
 //   - Если binding=manual: не меняем владельца автоматически
-func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string) (*workstation.Workstation, bool, error) {
+func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*workstation.Workstation, bool, error) {
 	// Вычисление identity_hash для поиска существующей РС
 	identity := identityHash(data.TeamviewerID, data.LitemanagerID)
 
@@ -1139,6 +1142,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 		ws.Anydesk = normRIDPtr(data.AnydeskID)
 		ws.IdentityHash = strPtr(identity)
 		ws.LastModifiedDate = &observedAt
+		ws.LastUpdatedBy = updater
 		ws.IsNew = !forceOwner
 		if forceOwner {
 			ws.OwnerBindingMode = models.OwnerBindingModeManual
@@ -1166,6 +1170,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 	updates := map[string]interface{}{
 		"server_id":          srv.ID,
 		"last_modified_date": observedAt,
+		"last_updated_by":    updater,
 		"identity_hash":      valOrNil(strPtr(identity)),
 	}
 
@@ -1275,7 +1280,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 //   - Full Trust: все поля ФР обновляются из данных агента безусловно
 //   - Серийный номер нормализуется для надежного поиска
 //   - ФР привязывается к РС, а не напрямую к серверу
-func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string) (*fiscal.FiscalRegister, bool, error) {
+func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*fiscal.FiscalRegister, bool, error) {
 	// Нормализация серийного номера для поиска
 	sn := normalizeSerial(data.SerialNumber)
 	if sn == "" {
@@ -1318,6 +1323,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 			DriverVersion:      strPtr(strings.TrimSpace(data.InstalledDriver)),
 			FRFirmware:         strPtr(strings.TrimSpace(data.BootVersion)),
 			LastModifiedDate:   &observedAt,
+			Base:               common.Base{LastUpdatedBy: updater},
 		}
 		if forceOwner {
 			fr.OwnerBindingMode = models.OwnerBindingModeManual
@@ -1371,6 +1377,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 		"driver_version":       valOrNil(strPtr(strings.TrimSpace(data.InstalledDriver))),
 		"fr_firmware":          valOrNil(strPtr(strings.TrimSpace(data.BootVersion))),
 		"last_modified_date":   observedAt,
+		"last_updated_by":      updater,
 	}
 	if t := parseDate(data.DateTimeEnd); t != nil {
 		updates["fn_expire_date"] = *t
@@ -2407,6 +2414,19 @@ func payloadDigest(data *api.AgentDataDTO) (string, datatypes.JSON, error) {
 }
 
 // isUUID проверяет, является ли строка валидным UUID.
+func resolveAgentUpdater(source string, data *api.AgentDataDTO) string {
+	if data != nil {
+		if agentUUID := strings.TrimSpace(data.AgentUUID); agentUUID != "" {
+			return agentUUID
+		}
+	}
+	src := strings.TrimSpace(source)
+	if isUUID(src) {
+		return src
+	}
+	return "agent"
+}
+
 func isUUID(v string) bool {
 	_, err := uuid.Parse(strings.TrimSpace(v))
 	return err == nil

@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -201,6 +201,9 @@ const buildAgentClusters = (groups: NetworkCandidateGroupDTO[]): AgentCluster[] 
 
 const NetworkAcceptancePage: React.FC = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [status, setStatus] = useState<string>('ACTIVE');
   const [selectedID, setSelectedID] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -208,6 +211,42 @@ const NetworkAcceptancePage: React.FC = () => {
   const [selectedCluster, setSelectedCluster] = useState<AgentCluster | null>(null);
   const [clusterModalOpen, setClusterModalOpen] = useState(false);
   const [form] = Form.useForm();
+
+  const setRouteState = (params: { candidateID?: number | null; clusterKey?: string | null; clusterModal?: boolean }, replace = false) => {
+    const next = new URLSearchParams();
+    if (params.candidateID && params.candidateID > 0) {
+      next.set('candidate', String(params.candidateID));
+    }
+    if (params.clusterKey) {
+      next.set('cluster', params.clusterKey);
+    }
+    if (params.clusterModal) {
+      next.set('clusterModal', '1');
+    }
+
+    navigate(
+      {
+        pathname: '/network-acceptance',
+        search: next.toString() ? `?${next.toString()}` : '',
+      },
+      { replace },
+    );
+  };
+
+  const buildBackToPath = (candidateID?: number | null, clusterKey?: string | null, clusterModal = false) => {
+    const next = new URLSearchParams();
+    if (candidateID && candidateID > 0) {
+      next.set('candidate', String(candidateID));
+    }
+    if (clusterKey) {
+      next.set('cluster', clusterKey);
+    }
+    if (clusterModal) {
+      next.set('clusterModal', '1');
+    }
+    const query = next.toString();
+    return query ? `/network-acceptance?${query}` : '/network-acceptance';
+  };
 
   const listQuery = useQuery({
     queryKey: ['network-candidates', status],
@@ -240,6 +279,7 @@ const NetworkAcceptancePage: React.FC = () => {
       setSelectedCluster(null);
       setClusterModalOpen(false);
       form.resetFields();
+      setRouteState({}, true);
       void queryClient.invalidateQueries({ queryKey: ['network-candidates'] });
     },
     onError: () => message.error('Не удалось подтвердить network-кандидата'),
@@ -248,6 +288,9 @@ const NetworkAcceptancePage: React.FC = () => {
   const rows = useMemo(() => ((listQuery.data?.data || []) as NetworkCandidateDTO[]), [listQuery.data?.data]);
   const details = useMemo(() => (detailsQuery.data?.data as NetworkCandidateDetailsDTO | undefined), [detailsQuery.data?.data]);
   const clusters = useMemo(() => buildAgentClusters(details?.groups || []), [details?.groups]);
+  const selectedCandidateParam = Number(searchParams.get('candidate') || '0');
+  const selectedClusterParam = String(searchParams.get('cluster') || '').trim();
+  const clusterModalParam = searchParams.get('clusterModal') === '1';
 
   const listHubCompanyIDs = useMemo(
     () => Array.from(new Set(rows.map((row) => String(row.hub_company_id || '').trim()).filter(Boolean))),
@@ -327,6 +370,32 @@ const NetworkAcceptancePage: React.FC = () => {
   });
 
   useEffect(() => {
+    if (selectedCandidateParam > 0) {
+      setSelectedID((prev) => (prev === selectedCandidateParam ? prev : selectedCandidateParam));
+      setDrawerOpen(true);
+      return;
+    }
+    setDrawerOpen(false);
+    setSelectedID(null);
+    setSelectedCluster(null);
+    setClusterModalOpen(false);
+  }, [selectedCandidateParam]);
+
+  useEffect(() => {
+    if (!clusterModalParam || !selectedClusterParam) {
+      setSelectedCluster(null);
+      setClusterModalOpen(false);
+      return;
+    }
+    if (detailsQuery.isLoading || clusters.length === 0) {
+      return;
+    }
+    const found = clusters.find((item) => item.key === selectedClusterParam) || null;
+    setSelectedCluster(found);
+    setClusterModalOpen(Boolean(found));
+  }, [clusterModalParam, selectedClusterParam, clusters, detailsQuery.isLoading]);
+
+  useEffect(() => {
     if (details?.candidate && drawerOpen) {
       const preselectedCompany = details.candidate.ws_owner_candidate || details.candidate.fr_owner_candidate;
       if (preselectedCompany) {
@@ -360,6 +429,7 @@ const NetworkAcceptancePage: React.FC = () => {
     setSelectedCluster(null);
     setClusterModalOpen(false);
     form.setFieldsValue({ company_mode: 'existing' });
+    setRouteState({ candidateID: id });
   };
 
   const hasConflict = Boolean(details?.candidate?.conflict_info && details.candidate.conflict_info.length > 0);
@@ -465,6 +535,7 @@ const NetworkAcceptancePage: React.FC = () => {
           setSelectedID(null);
           setSelectedCluster(null);
           setClusterModalOpen(false);
+          setRouteState({});
         }}
         extra={(
           <Space>
@@ -474,6 +545,7 @@ const NetworkAcceptancePage: React.FC = () => {
                 setSelectedID(null);
                 setSelectedCluster(null);
                 setClusterModalOpen(false);
+                setRouteState({});
               }}
             >
               Отмена
@@ -537,8 +609,7 @@ const NetworkAcceptancePage: React.FC = () => {
                       hoverable
                       bodyStyle={{ padding: 10 }}
                       onClick={() => {
-                        setSelectedCluster(cluster);
-                        setClusterModalOpen(true);
+                        setRouteState({ candidateID: selectedID, clusterKey: cluster.key, clusterModal: true });
                       }}
                     >
                       <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -554,7 +625,12 @@ const NetworkAcceptancePage: React.FC = () => {
                           <Space key={item.id} direction="vertical" size={0} style={{ width: '100%' }}>
                             <Text strong>
                               {item.workstation_uuid ? (
-                                <Link to={`/workstations/${item.workstation_uuid}`}>
+                                <Link
+                                  to={`/workstations/${item.workstation_uuid}`}
+                                  state={{
+                                    backTo: buildBackToPath(selectedID, cluster.key, false),
+                                  }}
+                                >
                                   {workstationNames[item.workstation_uuid] || item.hostname || item.workstation_uuid}
                                 </Link>
                               ) : (
@@ -641,6 +717,7 @@ const NetworkAcceptancePage: React.FC = () => {
         onCancel={() => {
           setClusterModalOpen(false);
           setSelectedCluster(null);
+          setRouteState({ candidateID: selectedID, clusterKey: null, clusterModal: false });
         }}
         footer={null}
       >
@@ -680,7 +757,13 @@ const NetworkAcceptancePage: React.FC = () => {
                       <Text>
                         Станция:{' '}
                         {group.ws.workstation_uuid ? (
-                          <Link to={`/workstations/${group.ws.workstation_uuid}`}>
+                          <Link
+                            to={`/workstations/${group.ws.workstation_uuid}`}
+                            state={{
+                              backTo: buildBackToPath(selectedID, selectedCluster.key, true),
+                              from: location.pathname + location.search,
+                            }}
+                          >
                             {workstationNames[group.ws.workstation_uuid] || group.ws.workstation_uuid}
                           </Link>
                         ) : (

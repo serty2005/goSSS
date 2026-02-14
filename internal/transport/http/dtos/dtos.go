@@ -461,6 +461,9 @@ type ServerRichDTO struct {
 	UUID              string      `json:"uuid"`
 	ServiceDeskUUID   *string     `json:"external_uuid,omitempty"`
 	DeviceName        *string     `json:"device_name,omitempty"`
+	LastUpdatedBy     string      `json:"last_updated_by,omitempty"`
+	LastModifiedDate  *time.Time  `json:"last_modified_date,omitempty"`
+	UpdatedAt         time.Time   `json:"updated_at,omitempty"`
 	IP                *string     `json:"ip,omitempty"`
 	OperationalStatus string      `json:"operational_status,omitempty"`
 	HealthStatus      string      `json:"health_status,omitempty"`
@@ -480,21 +483,27 @@ type ServerRichDTO struct {
 
 // WorkstationRichDTO содержит полный набор полей Рабочей станции для UI.
 type WorkstationRichDTO struct {
-	UUID            string      `json:"uuid"`
-	ServiceDeskUUID *string     `json:"external_uuid,omitempty"`
-	DeviceName      *string     `json:"device_name,omitempty"`
-	IsNew           bool        `json:"is_new"`
-	HealthStatus    string      `json:"health_status,omitempty"`
-	StatusDetails   interface{} `json:"status_details,omitempty"`
-	Anydesk         *string     `json:"anydesk,omitempty"`
-	Teamviewer      *string     `json:"teamviewer,omitempty"`
-	Litemanager     *string     `json:"litemanager,omitempty"`
+	UUID             string      `json:"uuid"`
+	ServiceDeskUUID  *string     `json:"external_uuid,omitempty"`
+	DeviceName       *string     `json:"device_name,omitempty"`
+	LastUpdatedBy    string      `json:"last_updated_by,omitempty"`
+	LastModifiedDate *time.Time  `json:"last_modified_date,omitempty"`
+	UpdatedAt        time.Time   `json:"updated_at,omitempty"`
+	IsNew            bool        `json:"is_new"`
+	HealthStatus     string      `json:"health_status,omitempty"`
+	StatusDetails    interface{} `json:"status_details,omitempty"`
+	Anydesk          *string     `json:"anydesk,omitempty"`
+	Teamviewer       *string     `json:"teamviewer,omitempty"`
+	Litemanager      *string     `json:"litemanager,omitempty"`
 }
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.
 type FiscalRegisterRichDTO struct {
 	UUID               string      `json:"uuid"`
 	ServiceDeskUUID    *string     `json:"external_uuid,omitempty"`
+	LastUpdatedBy      string      `json:"last_updated_by,omitempty"`
+	LastModifiedDate   *time.Time  `json:"last_modified_date,omitempty"`
+	UpdatedAt          time.Time   `json:"updated_at,omitempty"`
 	HealthStatus       string      `json:"health_status,omitempty"`
 	StatusDetails      interface{} `json:"status_details,omitempty"`
 	RNKKT              *string     `json:"rn_kkt,omitempty"`

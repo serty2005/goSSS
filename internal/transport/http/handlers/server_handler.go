@@ -177,6 +177,7 @@ func toServerResponse(item server.Server) map[string]interface{} {
 		"id":                 item.ID,
 		"created_at":         item.CreatedAt,
 		"updated_at":         item.UpdatedAt,
+		"last_updated_by":    item.LastUpdatedBy,
 		"deleted_at":         item.DeletedAt,
 		"unique_id":          item.UniqueID,
 		"ip":                 item.IP,

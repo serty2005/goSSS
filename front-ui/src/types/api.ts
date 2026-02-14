@@ -57,6 +57,9 @@ export interface ServerEntity {
   uuid: string;
   external_uuid?: string;
   unique_id?: string;
+  last_updated_by?: string;
+  last_modified_date?: string;
+  updated_at?: string;
   
   device_name?: string;
   server_name?: string;
@@ -89,6 +92,9 @@ export interface WorkstationEntity {
   external_uuid?: string;
   device_name?: string;
   is_new?: boolean;
+  last_updated_by?: string;
+  last_modified_date?: string;
+  updated_at?: string;
   
   anydesk?: string;
   teamviewer?: string;
@@ -106,6 +112,9 @@ export interface WorkstationEntity {
 export interface FiscalEntity {
   uuid: string;
   external_uuid?: string;
+  last_updated_by?: string;
+  last_modified_date?: string;
+  updated_at?: string;
   
   model_kkt?: string;
   serial_number?: string;
@@ -429,6 +438,9 @@ export interface LicensesDict {
 
 export interface FiscalDetailDTO {
   id: string;
+  updated_at?: string;
+  last_updated_by?: string;
+  last_modified_date?: string;
   model_kkt?: string;
   rn_kkt?: string;
   legal_name?: string;
@@ -455,6 +467,9 @@ export interface FiscalDetailDTO {
 
 export interface WorkstationDetailDTO {
   id: string;
+  updated_at?: string;
+  last_updated_by?: string;
+  last_modified_date?: string;
   device_name?: string;
   teamviewer?: string;
   anydesk?: string;
@@ -465,6 +480,9 @@ export interface WorkstationDetailDTO {
 
 export interface ServerDetailDTO {
   id: string;
+  updated_at?: string;
+  last_updated_by?: string;
+  last_modified_date?: string;
   unique_id?: string;
   ip?: string;
   device_name?: string;

@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { Card, Badge, Space, Typography, Tooltip, Tag, Button, Modal, Form, Input, message } from 'antd';
+﻿import React, { useState } from 'react';
+import { Card, Space, Typography, Tooltip, Tag, Button, Modal, Form, Input, message } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import dayjs from 'dayjs';
 import { WorkstationEntity } from '@/types/api';
-import { getEntityIcon, getStatusColor } from '@/utils/mappers';
+import { getEntityIcon } from '@/utils/mappers';
 import { equipmentApi } from '@/api/equipment';
+import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 
 interface Props {
   data: WorkstationEntity;
@@ -18,6 +20,8 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
   const queryClient = useQueryClient();
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const [name, setName] = useState((data.device_name || '').trim());
+
+  const agentUpdate = getAgentUpdateMeta(data);
 
   const renameMutation = useMutation({
     mutationFn: (nextName: string) => equipmentApi.updateWorkstation(data.uuid, { device_name: nextName }),
@@ -59,25 +63,33 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
         hoverable
         onClick={handleCardClick}
         style={data.is_new ? { borderColor: '#91caff', boxShadow: '0 0 0 1px rgba(24, 144, 255, 0.25)' } : undefined}
-        title={
+        title={(
           <Space>
             {getEntityIcon('Workstation')}
-            <Text strong>{data.device_name || 'Workstation'}</Text>
+            <Text strong>{data.device_name || 'Рабочая станция'}</Text>
             {data.is_new && <Tag color="blue">Новая</Tag>}
           </Space>
-        }
-        extra={
+        )}
+        extra={(
           <Space size={8}>
-            <Tooltip title={`Health: ${data.health_status}`}>
-              <Badge status={getStatusColor(data.health_status)} text={String(data.health_status)} />
-            </Tooltip>
+            {agentUpdate && (
+              <Tooltip
+                title={agentUpdate.updatedAt
+                  ? `Агент ${agentUpdate.updater}, ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm:ss')}`
+                  : `Агент ${agentUpdate.updater}`}
+              >
+                <Tag color="blue" style={{ fontSize: 12, lineHeight: '22px', paddingInline: 10, marginRight: 0 }}>
+                  Агент
+                </Tag>
+              </Tooltip>
+            )}
             {data.is_new && (
               <Tooltip title="Переименовать станцию">
                 <Button type="text" size="small" icon={<EditOutlined />} onClick={openRename} />
               </Tooltip>
             )}
           </Space>
-        }
+        )}
       >
         <Space direction="vertical" size={2} style={{ width: '100%' }}>
           {data.description && (

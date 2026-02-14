@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
@@ -107,7 +108,11 @@ func (r *networkCandidateRepo) Approve(ctx context.Context, in domainrepos.Netwo
 			if err != nil {
 				return err
 			}
-			if err := r.applyGroupFiscals(tx, group.ID, &srv, wsEntity, childID, ncPtrValue(in.Comment)); err != nil {
+			wsUpdater := ""
+			if wsEntity != nil {
+				wsUpdater = strings.TrimSpace(wsEntity.LastUpdatedBy)
+			}
+			if err := r.applyGroupFiscals(tx, group.ID, &srv, wsEntity, childID, ncPtrValue(in.Comment), wsUpdater); err != nil {
 				return err
 			}
 		}
@@ -261,6 +266,10 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 	}
 
 	if !found {
+		updater := strings.TrimSpace(ncPtrValue(wsStage.AgentUUID))
+		if updater == "" {
+			updater = "agent"
+		}
 		ws = workstation.Workstation{
 			OwnerID:          ncStrPtr(ownerID),
 			OwnerBindingMode: models.OwnerBindingModeManual,
@@ -271,6 +280,7 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 			Anydesk:          ncStrPtr(ncNormRID(ncPtrValue(wsStage.AnydeskID))),
 			IdentityHash:     ncStrPtr(identity),
 			LastModifiedDate: timeRef(wsStage.ObservedAt),
+			Base:             common.Base{LastUpdatedBy: updater},
 			IsNew:            false,
 		}
 		if err := tx.Create(&ws).Error; err != nil {
@@ -279,11 +289,16 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 		return &ws, nil
 	}
 
+	updater := strings.TrimSpace(ncPtrValue(wsStage.AgentUUID))
+	if updater == "" {
+		updater = "agent"
+	}
 	updates := map[string]interface{}{
 		"owner_id":           ownerID,
 		"owner_binding_mode": models.OwnerBindingModeManual,
 		"server_id":          srv.ID,
 		"last_modified_date": wsStage.ObservedAt,
+		"last_updated_by":    updater,
 	}
 	if v := ncNormRID(ncPtrValue(wsStage.TeamviewerID)); v != "" {
 		updates["teamviewer"] = v
@@ -327,7 +342,10 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 	return &ws, nil
 }
 
-func (r *networkCandidateRepo) applyGroupFiscals(tx *gorm.DB, groupID uint, srv *server.Server, ws *workstation.Workstation, ownerID string, comment string) error {
+func (r *networkCandidateRepo) applyGroupFiscals(tx *gorm.DB, groupID uint, srv *server.Server, ws *workstation.Workstation, ownerID string, comment string, updater string) error {
+	if strings.TrimSpace(updater) == "" {
+		updater = "agent"
+	}
 	var frStages []models.NetworkCandidateFRStaging
 	if err := tx.Where("group_id = ?", groupID).Find(&frStages).Error; err != nil {
 		return err
@@ -363,6 +381,7 @@ func (r *networkCandidateRepo) applyGroupFiscals(tx *gorm.DB, groupID uint, srv 
 				LegalName:          stage.OrganizationName,
 				Address:            stage.Address,
 				LastModifiedDate:   timeRef(stage.ObservedAt),
+				Base:               common.Base{LastUpdatedBy: updater},
 			}
 			if stage.FNExpireDate != nil {
 				entity.FNExpireDate = stage.FNExpireDate
@@ -385,6 +404,7 @@ func (r *networkCandidateRepo) applyGroupFiscals(tx *gorm.DB, groupID uint, srv 
 			"legal_name":           ncValOrNil(stage.OrganizationName),
 			"address":              ncValOrNil(stage.Address),
 			"last_modified_date":   stage.ObservedAt,
+			"last_updated_by":      updater,
 		}
 		if workstationID != "" {
 			updates["workstation_id"] = workstationID

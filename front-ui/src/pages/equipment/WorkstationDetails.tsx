@@ -4,11 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
-import { getEntityIcon, getStatusColor } from '@/utils/mappers';
+import { getEntityIcon } from '@/utils/mappers';
 import { UpdateWorkstationPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
+import dayjs from 'dayjs';
+import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 
 const { Title, Text } = Typography;
 
@@ -42,6 +44,7 @@ const WorkstationDetails: React.FC = () => {
   if (!wsRes?.data) return <div>Рабочая станция не найдена</div>;
 
   const ws = wsRes.data;
+  const agentUpdate = getAgentUpdateMeta(ws);
 
   const saveField = (field: keyof UpdateWorkstationPayload, value: string) => {
     if (!canEdit) {
@@ -72,7 +75,12 @@ const WorkstationDetails: React.FC = () => {
               <Text type="secondary">{ws.id}</Text>
             </div>
           </Space>
-          <Badge status={getStatusColor(ws.health_status)} text={ws.health_status} />
+          {agentUpdate ? (
+            <Badge
+              color="#1677ff"
+              text={`Агент ${agentUpdate.updater}${agentUpdate.updatedAt ? ` • ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm')}` : ''}`}
+            />
+          ) : null}
         </Space>
 
         {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}

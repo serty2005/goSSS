@@ -4,13 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
-import { getEntityIcon, getStatusColor } from '@/utils/mappers';
+import { getEntityIcon } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
 import { UpdateFiscalPayload } from '@/types/api';
 import dayjs from 'dayjs';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
+import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 
 const { Title, Text } = Typography;
 
@@ -44,6 +45,7 @@ const FiscalDetails: React.FC = () => {
   if (!fiscalRes?.data) return <div>Фискальный регистратор не найден</div>;
 
   const fiscal = fiscalRes.data;
+  const agentUpdate = getAgentUpdateMeta(fiscal);
 
   const saveField = (field: keyof UpdateFiscalPayload, value: string) => {
     if (!canEdit) {
@@ -92,7 +94,12 @@ const FiscalDetails: React.FC = () => {
               <Text type="secondary">{fiscal.fr_serial_number || fiscal.id}</Text>
             </div>
           </Space>
-          <Badge status={getStatusColor(fiscal.health_status)} text={fiscal.health_status} />
+          {agentUpdate ? (
+            <Badge
+              color="#1677ff"
+              text={`Агент ${agentUpdate.updater}${agentUpdate.updatedAt ? ` • ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm')}` : ''}`}
+            />
+          ) : null}
         </Space>
 
         {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}

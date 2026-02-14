@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, theme as antTheme } from 'antd';
@@ -122,9 +122,8 @@ const CompanyPage: React.FC = () => {
     },
   });
 
-  const rawInfrastructure = infraRes?.data || [];
-
   const groupedInfra = useMemo(() => {
+    const rawInfrastructure = infraRes?.data ?? [];
     const servers: ServerEntity[] = [];
     const workstations: WorkstationEntity[] = [];
     const fiscals: FiscalEntity[] = [];
@@ -136,7 +135,7 @@ const CompanyPage: React.FC = () => {
     });
 
     return { servers, workstations, fiscals };
-  }, [rawInfrastructure]);
+  }, [infraRes?.data]);
 
   if (loadingCompany) {
     return (
@@ -229,7 +228,7 @@ const CompanyPage: React.FC = () => {
                 </Row>,
               )}
 
-              {rawInfrastructure.length === 0 && <Empty description="Оборудование не найдено" />}
+              {(infraRes?.data || []).length === 0 && <Empty description="Оборудование не найдено" />}
             </>
           )}
         </div>
@@ -258,8 +257,8 @@ const CompanyPage: React.FC = () => {
 
   return (
     <div>
-      <Card className="glass-panel company-summary-card" style={{ marginBottom: 16 }} size="small">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+      <Card className="glass-panel company-summary-card" style={{ marginBottom: 12 }} size="small" bodyStyle={{ padding: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <Link to="/companies" style={{ display: 'inline-flex', alignItems: 'center', color: token.colorTextSecondary }}>
             <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад к списку
           </Link>
@@ -268,19 +267,19 @@ const CompanyPage: React.FC = () => {
           )}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
             <div
               style={{
-                width: 44,
-                height: 44,
+                width: 38,
+                height: 38,
                 background: 'var(--app-color-primary-soft)',
                 borderRadius: 8,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 marginRight: 10,
-                fontSize: 22,
+                fontSize: 18,
                 color: token.colorPrimary,
                 flexShrink: 0,
               }}
@@ -288,21 +287,21 @@ const CompanyPage: React.FC = () => {
               <BankOutlined />
             </div>
             <div style={{ minWidth: 0 }}>
-              <Title level={4} style={{ margin: 0 }}>{company.title}</Title>
-              <Text type="secondary" ellipsis style={{ display: 'block' }}>{company.address || '-'}</Text>
+              <Title level={5} style={{ margin: 0 }}>{company.title}</Title>
+              <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>{company.address || '-'}</Text>
             </div>
           </div>
 
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
             {company.active_contract ? (
-              <Tag icon={<CheckCircleOutlined />} color="success">Активен</Tag>
+              <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginRight: 0 }}>Активен</Tag>
             ) : (
-              <Tag icon={<CloseCircleOutlined />} color="default">Завершён</Tag>
+              <Tag icon={<CloseCircleOutlined />} color="default" style={{ marginRight: 0 }}>Завершён</Tag>
             )}
           </div>
         </div>
 
-        <Descriptions bordered size="small" column={2} className="compact-descriptions" style={{ marginTop: 12 }}>
+        <Descriptions bordered size="small" column={2} className="compact-descriptions" style={{ marginTop: 10 }}>
           <Descriptions.Item label="Юр. название">{company.additional_name || '-'}</Descriptions.Item>
           <Descriptions.Item label="Родительская компания">
             {company.parent_id && parentTitle ? <Link to={`/companies/${company.parent_id}`}>{parentTitle}</Link> : parentTitle || '-'}

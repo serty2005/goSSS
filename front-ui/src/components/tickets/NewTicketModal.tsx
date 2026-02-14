@@ -237,9 +237,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       { label: 'TeamViewer', value: data.teamviewer as string | undefined },
       { label: 'rdp', value: data.rdp as string | undefined },
       { label: 'LM', value: data.litemanager as string | undefined },
+      ...(item.entity_type === 'Server'
+        ? [{ label: 'Партнёрский портал', value: data.partners_link as string | undefined, isLink: true }]
+        : []),
     ];
 
-    return items.filter((entry) => entry.value);
+    return items.filter((entry) => entry.value) as Array<{ label: string; value?: string; isLink?: boolean }>;
   };
 
   const connectionsGroups = useMemo(() => {
@@ -257,7 +260,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       .filter(Boolean) as Array<{
       key?: string;
       title: string;
-      connections: Array<{ label: string; value?: string }>;
+      connections: Array<{ label: string; value?: string; isLink?: boolean }>;
     }>;
 
     const ownGroups = infrastructure
@@ -273,7 +276,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       .filter(Boolean) as Array<{
       key?: string;
       title: string;
-      connections: Array<{ label: string; value?: string }>;
+      connections: Array<{ label: string; value?: string; isLink?: boolean }>;
     }>;
     return [...parentServerGroups, ...ownGroups];
   }, [infrastructure, parentInfrastructure]);
@@ -534,9 +537,18 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                           <Text strong>{group.title}</Text>
                           <Space orientation="vertical" size={0} style={{ width: '100%' }}>
                             {group.connections.map((entry) => (
-                              <Paragraph key={`${group.title}-${entry.label}-${entry.value}`} copyable={{ text: entry.value }} style={{ margin: 0 }}>
-                                <Text type="secondary">{entry.label}:</Text> {entry.value}
-                              </Paragraph>
+                              entry.isLink ? (
+                                <Paragraph key={`${group.title}-${entry.label}-${entry.value}`} style={{ margin: 0 }}>
+                                  <Text type="secondary">{entry.label}:</Text>{' '}
+                                  <a href={entry.value} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                    {entry.value}
+                                  </a>
+                                </Paragraph>
+                              ) : (
+                                <Paragraph key={`${group.title}-${entry.label}-${entry.value}`} copyable={{ text: entry.value }} style={{ margin: 0 }}>
+                                  <Text type="secondary">{entry.label}:</Text> {entry.value}
+                                </Paragraph>
+                              )
                             ))}
                           </Space>
                         </Space>

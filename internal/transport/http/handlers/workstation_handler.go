@@ -126,6 +126,7 @@ func toWorkstationResponse(item workstation.Workstation) map[string]interface{} 
 		"id":                 item.ID,
 		"created_at":         item.CreatedAt,
 		"updated_at":         item.UpdatedAt,
+		"last_updated_by":    item.LastUpdatedBy,
 		"deleted_at":         item.DeletedAt,
 		"identity_hash":      item.IdentityHash,
 		"teamviewer":         item.Teamviewer,
