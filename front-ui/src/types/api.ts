@@ -264,7 +264,67 @@ export interface BitrixServicePointDTO {
   b24_element_id: number;
   name: string;
   address?: string;
+  one_c_code?: string;
+  contract_on?: boolean | null;
   raw_json?: string;
+}
+
+export interface ServicePointImportColumnDTO {
+  key: string;
+  name: string;
+}
+
+export interface ServicePointImportPreviewDTO {
+  header_row: number;
+  columns: ServicePointImportColumnDTO[];
+  sample_rows: Record<string, string>[];
+  total_rows: number;
+}
+
+export interface ServicePointImportResultDTO {
+  processed_rows: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  not_found: number;
+  ambiguous: number;
+  not_found_names?: string[];
+  ambiguous_names?: string[];
+}
+
+export type ServicePointSyncAction = 'create' | 'update' | 'unchanged' | 'skipped' | 'ambiguous';
+
+export interface ServicePointSyncPlanItemDTO {
+  row: number;
+  name: string;
+  one_c_code: string;
+  contract_label?: string;
+  action: ServicePointSyncAction;
+  reason?: string;
+  b24_element_id?: number;
+  current_code?: string;
+  current_contract?: string;
+}
+
+export interface ServicePointSyncPreviewDTO {
+  processed_rows: number;
+  to_create: number;
+  to_update: number;
+  unchanged: number;
+  skipped: number;
+  ambiguous: number;
+  items: ServicePointSyncPlanItemDTO[];
+}
+
+export interface ServicePointSyncApplyResultDTO {
+  processed_rows: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  ambiguous: number;
+  applied_rows?: number[];
+  errors?: string[];
 }
 
 export interface TicketHistoryDTO {

@@ -34,9 +34,11 @@ type TimelineComment struct {
 }
 
 type ListElement struct {
-	ID      int64
-	Name    string
-	RawJSON string
+	ID         int64
+	Name       string
+	Code       string
+	Properties map[string]interface{}
+	RawJSON    string
 }
 
 type User struct {
@@ -212,12 +214,75 @@ func (c *Client) ListsElementGet(ctx context.Context, iblockTypeID string, ibloc
 		}
 		rawJSON, _ := json.Marshal(m)
 		result = append(result, ListElement{
-			ID:      toInt64(m["ID"]),
-			Name:    strings.TrimSpace(toString(m["NAME"])),
-			RawJSON: string(rawJSON),
+			ID:         toInt64(m["ID"]),
+			Name:       strings.TrimSpace(toString(m["NAME"])),
+			Code:       strings.TrimSpace(toString(m["CODE"])),
+			Properties: clonePropertyMap(m),
+			RawJSON:    string(rawJSON),
 		})
 	}
 	return result, next, nil
+}
+
+func (c *Client) ListsElementAdd(
+	ctx context.Context,
+	iblockTypeID string,
+	iblockID int,
+	elementCode string,
+	fields map[string]interface{},
+) (int64, error) {
+	body := map[string]interface{}{
+		"IBLOCK_TYPE_ID": iblockTypeID,
+		"IBLOCK_ID":      iblockID,
+		"ELEMENT_CODE":   elementCode,
+		"FIELDS":         fields,
+	}
+	raw, _, err := c.call(ctx, "lists.element.add", body)
+	if err != nil {
+		return 0, err
+	}
+	return toInt64(raw), nil
+}
+
+func (c *Client) ListsElementUpdate(
+	ctx context.Context,
+	iblockTypeID string,
+	iblockID int,
+	elementID int64,
+	fields map[string]interface{},
+) error {
+	body := map[string]interface{}{
+		"IBLOCK_TYPE_ID": iblockTypeID,
+		"IBLOCK_ID":      iblockID,
+		"ELEMENT_ID":     elementID,
+		"FIELDS":         fields,
+	}
+	_, _, err := c.call(ctx, "lists.element.update", body)
+	return err
+}
+
+func (c *Client) ListsFieldGet(ctx context.Context, iblockTypeID string, iblockID int, fieldID string) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"IBLOCK_TYPE_ID": iblockTypeID,
+		"IBLOCK_ID":      iblockID,
+		"FIELD_ID":       fieldID,
+	}
+	raw, _, err := c.call(ctx, "lists.field.get", body)
+	if err != nil {
+		return nil, err
+	}
+	resultMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("некорректный формат ответа lists.field.get")
+	}
+	for _, value := range resultMap {
+		fieldData, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		return fieldData, nil
+	}
+	return nil, errors.New("поле не найдено в ответе lists.field.get")
 }
 
 func (c *Client) UserGet(ctx context.Context, start int) ([]User, int, error) {
@@ -402,4 +467,14 @@ func toInt64(v interface{}) int64 {
 
 func toInt(v interface{}) int {
 	return int(toInt64(v))
+}
+
+func clonePropertyMap(src map[string]interface{}) map[string]interface{} {
+	props := make(map[string]interface{})
+	for key, value := range src {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(key)), "PROPERTY_") {
+			props[key] = value
+		}
+	}
+	return props
 }

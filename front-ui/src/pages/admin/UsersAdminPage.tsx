@@ -1,5 +1,6 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   Button,
   Card,
@@ -68,6 +69,7 @@ const UsersAdminPage: React.FC = () => {
   const [editForm] = Form.useForm<UserUpdatePayload>();
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
+  const navigate = useNavigate();
 
   const watchedCreateExternalType = Form.useWatch('external_type', createForm);
   const watchedEditExternalType = Form.useWatch('external_type', editForm);
@@ -274,6 +276,17 @@ const UsersAdminPage: React.FC = () => {
         />
       </Card>
 
+      <Card className="glass-panel" style={{ marginTop: 16 }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <div>
+            <Title level={5} style={{ marginBottom: 0 }}>Импорт точек обслуживания из 1С</Title>
+            <Text type="secondary">Загрузка XLS/XLSX и привязка кодов 1С к существующим точкам Bitrix24</Text>
+          </div>
+          <Button type="primary" onClick={() => navigate('/admin/service-points-import')}>
+            Открыть форму импорта
+          </Button>
+        </Space>
+      </Card>
       <Modal
         title="Новый сотрудник"
         open={isCreateOpen}
@@ -396,4 +409,5 @@ const UsersAdminPage: React.FC = () => {
 };
 
 export default UsersAdminPage;
+
 

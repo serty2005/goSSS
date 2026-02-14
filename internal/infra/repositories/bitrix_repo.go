@@ -3,6 +3,8 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/domain/bitrix"
+	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -97,13 +99,27 @@ func (r *bitrixRepo) GetUserMapByB24ID(ctx context.Context, b24UserID int64) (*b
 
 func (r *bitrixRepo) ReplaceServicePoints(ctx context.Context, points []bitrix.ServicePoint) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&bitrix.ServicePoint{}).Error; err != nil {
+		if len(points) == 0 {
+			return tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&bitrix.ServicePoint{}).Error
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "b24_element_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"name",
+				"address",
+				"raw_json",
+				"updated_at",
+			}),
+		}).CreateInBatches(points, 200).Error; err != nil {
 			return err
 		}
-		if len(points) == 0 {
-			return nil
+
+		ids := make([]int64, 0, len(points))
+		for _, point := range points {
+			ids = append(ids, point.B24ElementID)
 		}
-		return tx.CreateInBatches(points, 200).Error
+
+		return tx.Where("b24_element_id NOT IN ?", ids).Delete(&bitrix.ServicePoint{}).Error
 	})
 }
 
@@ -129,4 +145,22 @@ func (r *bitrixRepo) ListUserCache(ctx context.Context) ([]bitrix.UserCache, err
 	var items []bitrix.UserCache
 	err := r.db.WithContext(ctx).Order("name asc").Find(&items).Error
 	return items, err
+}
+
+func (r *bitrixRepo) UpdateServicePointOneCData(ctx context.Context, b24ElementID int64, oneCCode string, contractOn *bool) error {
+	normalizedCode := strings.TrimSpace(oneCCode)
+	if normalizedCode == "" {
+		return nil
+	}
+
+	updates := map[string]interface{}{
+		"one_c_code":        normalizedCode,
+		"one_c_contract_on": contractOn,
+		"updated_at":        time.Now(),
+	}
+
+	return r.db.WithContext(ctx).
+		Model(&bitrix.ServicePoint{}).
+		Where("b24_element_id = ?", b24ElementID).
+		Updates(updates).Error
 }

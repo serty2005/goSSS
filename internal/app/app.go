@@ -497,6 +497,9 @@ func (a *Application) setupRouter() *chi.Mux {
 		r.Route("/bitrix", func(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", a.BitrixHandler.ListServicePoints)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/refresh", a.BitrixHandler.RefreshServicePoints)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/preview", a.BitrixHandler.PreviewServicePointsImport)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/sync-preview", a.BitrixHandler.PreviewServicePointsSync)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/apply", a.BitrixHandler.ImportServicePoints)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/sync/pull", a.BitrixHandler.PullSync)
 		})
 

@@ -1,0 +1,982 @@
+package services
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	xlsreader "github.com/shakinm/xlsReader/xls"
+	"github.com/xuri/excelize/v2"
+)
+
+const (
+	bitrixServicePointContractProperty = "PROPERTY_361"
+	bitrixServicePointOneCCodeProperty = "PROPERTY_681"
+)
+
+type ServicePointImportColumn struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+type ServicePointImportPreview struct {
+	HeaderRow  int                        `json:"header_row"`
+	Columns    []ServicePointImportColumn `json:"columns"`
+	SampleRows []map[string]string        `json:"sample_rows"`
+	TotalRows  int                        `json:"total_rows"`
+}
+
+type ServicePointImportMapping struct {
+	CodeColumn     string `json:"code_column"`
+	NameColumn     string `json:"name_column"`
+	ContractColumn string `json:"contract_column"`
+}
+
+type ServicePointSyncAction string
+
+const (
+	ServicePointSyncActionCreate    ServicePointSyncAction = "create"
+	ServicePointSyncActionUpdate    ServicePointSyncAction = "update"
+	ServicePointSyncActionUnchanged ServicePointSyncAction = "unchanged"
+	ServicePointSyncActionSkipped   ServicePointSyncAction = "skipped"
+	ServicePointSyncActionAmbiguous ServicePointSyncAction = "ambiguous"
+)
+
+type ServicePointSyncPlanItem struct {
+	Row             int                    `json:"row"`
+	Name            string                 `json:"name"`
+	OneCCode        string                 `json:"one_c_code"`
+	ContractLabel   string                 `json:"contract_label,omitempty"`
+	Action          ServicePointSyncAction `json:"action"`
+	Reason          string                 `json:"reason,omitempty"`
+	B24ElementID    *int64                 `json:"b24_element_id,omitempty"`
+	CurrentCode     string                 `json:"current_code,omitempty"`
+	CurrentContract string                 `json:"current_contract,omitempty"`
+}
+
+type ServicePointSyncPreview struct {
+	ProcessedRows int                        `json:"processed_rows"`
+	ToCreate      int                        `json:"to_create"`
+	ToUpdate      int                        `json:"to_update"`
+	Unchanged     int                        `json:"unchanged"`
+	Skipped       int                        `json:"skipped"`
+	Ambiguous     int                        `json:"ambiguous"`
+	Items         []ServicePointSyncPlanItem `json:"items"`
+}
+
+type ServicePointSyncApplyResult struct {
+	ProcessedRows int      `json:"processed_rows"`
+	Created       int      `json:"created"`
+	Updated       int      `json:"updated"`
+	Unchanged     int      `json:"unchanged"`
+	Skipped       int      `json:"skipped"`
+	Ambiguous     int      `json:"ambiguous"`
+	AppliedRows   []int    `json:"applied_rows,omitempty"`
+	Errors        []string `json:"errors,omitempty"`
+}
+
+type ServicePointSyncApplyOptions struct {
+	SelectedRows []int `json:"selected_rows,omitempty"`
+}
+
+type importedServicePointRow struct {
+	Row         int
+	Name        string
+	OneCCode    string
+	ContractOn  *bool
+	ContractRaw string
+}
+
+type bitrixListFieldMeta struct {
+	FieldID       string
+	Multiple      bool
+	ListValueToID map[string]string
+}
+
+type bitrixServicePointState struct {
+	ID              int64
+	Name            string
+	Properties      map[string]interface{}
+	CurrentCode     string
+	CurrentContract *bool
+}
+
+func (s *bitrixSyncService) PreviewServicePointsImport(_ context.Context, fileName string, content []byte) (*ServicePointImportPreview, error) {
+	rows, err := parseSpreadsheetRows(fileName, content)
+	if err != nil {
+		return nil, err
+	}
+
+	headerRow, columns, err := detectColumns(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	sampleRows := make([]map[string]string, 0, 10)
+	totalRows := 0
+	for i := headerRow + 1; i < len(rows); i++ {
+		row := rows[i]
+		cells := make(map[string]string, len(columns))
+		hasData := false
+		for _, col := range columns {
+			idx, convErr := excelColumnKeyToIndex(col.Key)
+			if convErr != nil {
+				continue
+			}
+			value := normalizeCell(getCellValue(row, idx))
+			cells[col.Key] = value
+			if value != "" {
+				hasData = true
+			}
+		}
+		if !hasData {
+			continue
+		}
+		totalRows++
+		if len(sampleRows) < 10 {
+			sampleRows = append(sampleRows, cells)
+		}
+	}
+
+	return &ServicePointImportPreview{
+		HeaderRow:  headerRow + 1,
+		Columns:    columns,
+		SampleRows: sampleRows,
+		TotalRows:  totalRows,
+	}, nil
+}
+
+func (s *bitrixSyncService) PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error) {
+	if !s.IsEnabled() {
+		return nil, errors.New("синхронизация с Bitrix24 отключена или не настроена")
+	}
+
+	parsedRows, err := parseImportedServicePointRows(fileName, content, mapping)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, err := s.buildSyncPlan(ctx, parsedRows)
+	if err != nil {
+		return nil, err
+	}
+
+	return plan, nil
+}
+
+func (s *bitrixSyncService) ImportServicePoints(
+	ctx context.Context,
+	fileName string,
+	content []byte,
+	mapping ServicePointImportMapping,
+	options ServicePointSyncApplyOptions,
+) (*ServicePointSyncApplyResult, error) {
+	if !s.IsEnabled() {
+		return nil, errors.New("синхронизация с Bitrix24 отключена или не настроена")
+	}
+
+	parsedRows, err := parseImportedServicePointRows(fileName, content, mapping)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, err := s.buildSyncPlan(ctx, parsedRows)
+	if err != nil {
+		return nil, err
+	}
+
+	iblockID := s.cfg.BitrixServicePointsIBlockID
+	iblockType, err := s.client.ListsGetIblockTypeID(ctx, iblockID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось определить тип списка Bitrix24: %w", err)
+	}
+
+	oneCMeta, err := s.loadBitrixFieldMeta(ctx, iblockType, iblockID, bitrixServicePointOneCCodeProperty)
+	if err != nil {
+		return nil, err
+	}
+	contractMeta, err := s.loadBitrixFieldMeta(ctx, iblockType, iblockID, bitrixServicePointContractProperty)
+	if err != nil {
+		return nil, err
+	}
+
+	statesByName, err := s.fetchBitrixServicePointState(ctx, iblockType, iblockID)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedSet := make(map[int]struct{})
+	for _, row := range options.SelectedRows {
+		if row > 0 {
+			selectedSet[row] = struct{}{}
+		}
+	}
+
+	result := &ServicePointSyncApplyResult{
+		AppliedRows: make([]int, 0, 64),
+		Errors:      make([]string, 0, 16),
+	}
+
+	for _, item := range plan.Items {
+		if len(selectedSet) > 0 {
+			if _, ok := selectedSet[item.Row]; !ok {
+				continue
+			}
+		}
+
+		result.ProcessedRows++
+		switch item.Action {
+		case ServicePointSyncActionUnchanged:
+			result.Unchanged++
+		case ServicePointSyncActionSkipped:
+			result.Skipped++
+		case ServicePointSyncActionAmbiguous:
+			result.Ambiguous++
+		}
+
+		switch item.Action {
+		case ServicePointSyncActionCreate:
+			fields := map[string]interface{}{
+				"NAME": item.Name,
+			}
+			fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, item.OneCCode)
+			if contractOn, ok := contractLabelToBool(item.ContractLabel); ok {
+				contractValue, convErr := prepareContractFieldValue(contractMeta, contractOn)
+				if convErr != nil {
+					result.Errors = append(result.Errors, convErr.Error())
+					continue
+				}
+				fields[bitrixServicePointContractProperty] = contractValue
+			}
+
+			elementCode := fmt.Sprintf("autogen_%d", time.Now().UnixNano())
+			if _, createErr := s.client.ListsElementAdd(ctx, iblockType, iblockID, elementCode, fields); createErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("не удалось создать точку %q: %v", item.Name, createErr))
+				continue
+			}
+			result.Created++
+			result.AppliedRows = append(result.AppliedRows, item.Row)
+
+		case ServicePointSyncActionUpdate:
+			if item.B24ElementID == nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("не указан ID Bitrix для точки %q", item.Name))
+				continue
+			}
+			stateList := statesByName[normalizePointName(item.Name)]
+			if len(stateList) == 0 {
+				result.Errors = append(result.Errors, fmt.Sprintf("не найдена точка Bitrix для обновления %q", item.Name))
+				continue
+			}
+			state := stateList[0]
+
+			fields := map[string]interface{}{
+				"NAME": state.Name,
+			}
+			for propKey, propValue := range state.Properties {
+				fields[propKey] = normalizePropertyValueForWrite(propValue)
+			}
+			fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, item.OneCCode)
+			if contractOn, ok := contractLabelToBool(item.ContractLabel); ok {
+				contractValue, convErr := prepareContractFieldValue(contractMeta, contractOn)
+				if convErr != nil {
+					result.Errors = append(result.Errors, convErr.Error())
+					continue
+				}
+				fields[bitrixServicePointContractProperty] = contractValue
+			}
+
+			if updateErr := s.client.ListsElementUpdate(ctx, iblockType, iblockID, state.ID, fields); updateErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("не удалось обновить точку %q: %v", item.Name, updateErr))
+				continue
+			}
+			result.Updated++
+			result.AppliedRows = append(result.AppliedRows, item.Row)
+		}
+	}
+
+	if _, err := s.RefreshServicePoints(ctx); err != nil {
+		s.log.Warn("не удалось обновить локальный кэш точек Bitrix после синхронизации", "error", err)
+	}
+	_ = s.syncLocalOneCData(ctx, parsedRows)
+
+	if len(result.Errors) == 0 {
+		result.Errors = nil
+	}
+	if len(result.AppliedRows) == 0 {
+		result.AppliedRows = nil
+	}
+
+	return result, nil
+}
+
+func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedServicePointRow) (*ServicePointSyncPreview, error) {
+	iblockID := s.cfg.BitrixServicePointsIBlockID
+	iblockType, err := s.client.ListsGetIblockTypeID(ctx, iblockID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось определить тип списка Bitrix24: %w", err)
+	}
+
+	statesByName, err := s.fetchBitrixServicePointState(ctx, iblockType, iblockID)
+	if err != nil {
+		return nil, err
+	}
+
+	preview := &ServicePointSyncPreview{
+		Items: make([]ServicePointSyncPlanItem, 0, len(rows)),
+	}
+
+	for _, row := range rows {
+		preview.ProcessedRows++
+		if row.Name == "" || row.OneCCode == "" {
+			preview.Skipped++
+			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Row:           row.Row,
+				Name:          row.Name,
+				OneCCode:      row.OneCCode,
+				ContractLabel: contractBoolToLabel(row.ContractOn),
+				Action:        ServicePointSyncActionSkipped,
+				Reason:        "пустое название точки или код 1С",
+			})
+			continue
+		}
+
+		matches := statesByName[normalizePointName(row.Name)]
+		if len(matches) == 0 {
+			preview.ToCreate++
+			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Row:           row.Row,
+				Name:          row.Name,
+				OneCCode:      row.OneCCode,
+				ContractLabel: contractBoolToLabel(row.ContractOn),
+				Action:        ServicePointSyncActionCreate,
+				Reason:        "точка отсутствует в Bitrix24",
+			})
+			continue
+		}
+		if len(matches) > 1 {
+			preview.Ambiguous++
+			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Row:           row.Row,
+				Name:          row.Name,
+				OneCCode:      row.OneCCode,
+				ContractLabel: contractBoolToLabel(row.ContractOn),
+				Action:        ServicePointSyncActionAmbiguous,
+				Reason:        "в Bitrix24 найдено несколько точек с одинаковым NAME",
+			})
+			continue
+		}
+
+		state := matches[0]
+		desiredContract := contractBoolToLabel(row.ContractOn)
+		currentContract := contractBoolToLabel(state.CurrentContract)
+		needUpdate := false
+		if normalizeCell(state.CurrentCode) != normalizeCell(row.OneCCode) {
+			needUpdate = true
+		}
+		if row.ContractOn != nil && currentContract != desiredContract {
+			needUpdate = true
+		}
+
+		if needUpdate {
+			preview.ToUpdate++
+			id := state.ID
+			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Row:             row.Row,
+				Name:            row.Name,
+				OneCCode:        row.OneCCode,
+				ContractLabel:   desiredContract,
+				Action:          ServicePointSyncActionUpdate,
+				B24ElementID:    &id,
+				CurrentCode:     state.CurrentCode,
+				CurrentContract: currentContract,
+			})
+			continue
+		}
+
+		preview.Unchanged++
+		id := state.ID
+		preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+			Row:             row.Row,
+			Name:            row.Name,
+			OneCCode:        row.OneCCode,
+			ContractLabel:   desiredContract,
+			Action:          ServicePointSyncActionUnchanged,
+			B24ElementID:    &id,
+			CurrentCode:     state.CurrentCode,
+			CurrentContract: currentContract,
+		})
+	}
+
+	return preview, nil
+}
+
+func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, iblockType string, iblockID int) (map[string][]bitrixServicePointState, error) {
+	statesByName := make(map[string][]bitrixServicePointState)
+	start := 0
+	for {
+		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start)
+		if err != nil {
+			return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
+		}
+
+		for _, item := range items {
+			currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
+			contractValue := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
+			contractOn := parseContractStatus(contractValue)
+			state := bitrixServicePointState{
+				ID:              item.ID,
+				Name:            item.Name,
+				Properties:      item.Properties,
+				CurrentCode:     currentCode,
+				CurrentContract: contractOn,
+			}
+			normalizedName := normalizePointName(item.Name)
+			if normalizedName == "" {
+				continue
+			}
+			statesByName[normalizedName] = append(statesByName[normalizedName], state)
+		}
+
+		if next <= 0 {
+			break
+		}
+		start = next
+	}
+
+	return statesByName, nil
+}
+
+func (s *bitrixSyncService) loadBitrixFieldMeta(ctx context.Context, iblockType string, iblockID int, fieldID string) (*bitrixListFieldMeta, error) {
+	field, err := s.client.ListsFieldGet(ctx, iblockType, iblockID, fieldID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить метаданные поля %s: %w", fieldID, err)
+	}
+
+	meta := &bitrixListFieldMeta{
+		FieldID:       fieldID,
+		Multiple:      strings.EqualFold(strings.TrimSpace(toString(field["MULTIPLE"])), "Y"),
+		ListValueToID: make(map[string]string),
+	}
+
+	displayValues, _ := field["DISPLAY_VALUES_FORM"].(map[string]interface{})
+	for id, labelAny := range displayValues {
+		label := normalizeCell(toString(labelAny))
+		if label == "" {
+			continue
+		}
+		meta.ListValueToID[strings.ToLower(label)] = id
+	}
+
+	return meta, nil
+}
+
+func (s *bitrixSyncService) syncLocalOneCData(ctx context.Context, rows []importedServicePointRow) error {
+	servicePoints, err := s.repo.ListServicePoints(ctx)
+	if err != nil {
+		return err
+	}
+
+	pointsByName := make(map[string][]int, len(servicePoints))
+	for i := range servicePoints {
+		normalized := normalizePointName(servicePoints[i].Name)
+		if normalized == "" {
+			continue
+		}
+		pointsByName[normalized] = append(pointsByName[normalized], i)
+	}
+
+	for _, row := range rows {
+		if row.Name == "" || row.OneCCode == "" {
+			continue
+		}
+		indexes := pointsByName[normalizePointName(row.Name)]
+		if len(indexes) != 1 {
+			continue
+		}
+		point := servicePoints[indexes[0]]
+		if err := s.repo.UpdateServicePointOneCData(ctx, point.B24ElementID, row.OneCCode, row.ContractOn); err != nil {
+			s.log.Warn("не удалось обновить локальные данные 1С для точки Bitrix", "point_name", row.Name, "error", err)
+		}
+	}
+
+	return nil
+}
+
+func parseImportedServicePointRows(fileName string, content []byte, mapping ServicePointImportMapping) ([]importedServicePointRow, error) {
+	if err := validateImportMapping(mapping); err != nil {
+		return nil, err
+	}
+
+	rows, err := parseSpreadsheetRows(fileName, content)
+	if err != nil {
+		return nil, err
+	}
+
+	headerRow, _, err := detectColumns(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	codeIndex, err := excelColumnKeyToIndex(mapping.CodeColumn)
+	if err != nil {
+		return nil, fmt.Errorf("некорректная колонка кода: %w", err)
+	}
+	nameIndex, err := excelColumnKeyToIndex(mapping.NameColumn)
+	if err != nil {
+		return nil, fmt.Errorf("некорректная колонка названия: %w", err)
+	}
+	contractIndex, err := excelColumnKeyToIndex(mapping.ContractColumn)
+	if err != nil {
+		return nil, fmt.Errorf("некорректная колонка контракта: %w", err)
+	}
+
+	parsed := make([]importedServicePointRow, 0, len(rows)-headerRow)
+	for i := headerRow + 1; i < len(rows); i++ {
+		row := rows[i]
+		name := normalizeCell(getCellValue(row, nameIndex))
+		oneCCode := normalizeCell(getCellValue(row, codeIndex))
+		contractRaw := normalizeCell(getCellValue(row, contractIndex))
+		if name == "" && oneCCode == "" && contractRaw == "" {
+			continue
+		}
+
+		parsed = append(parsed, importedServicePointRow{
+			Row:         i + 1,
+			Name:        name,
+			OneCCode:    oneCCode,
+			ContractOn:  parseContractStatus(contractRaw),
+			ContractRaw: contractRaw,
+		})
+	}
+
+	return parsed, nil
+}
+
+func parseSpreadsheetRows(fileName string, content []byte) ([][]string, error) {
+	if len(content) == 0 {
+		return nil, errors.New("файл пустой")
+	}
+
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext == ".xls" {
+		rows, err := parseXLSRows(content)
+		if err == nil {
+			return rows, nil
+		}
+		rows, xlsxErr := parseXLSXRows(content)
+		if xlsxErr == nil {
+			return rows, nil
+		}
+		return nil, fmt.Errorf("не удалось разобрать XLS файл: %v", err)
+	}
+
+	if ext == ".xlsx" || ext == ".xlsm" || ext == ".xltx" || ext == ".xltm" {
+		rows, err := parseXLSXRows(content)
+		if err == nil {
+			return rows, nil
+		}
+		rows, xlsErr := parseXLSRows(content)
+		if xlsErr == nil {
+			return rows, nil
+		}
+		return nil, fmt.Errorf("не удалось разобрать XLSX файл: %v", err)
+	}
+
+	rows, err := parseXLSXRows(content)
+	if err == nil {
+		return rows, nil
+	}
+	rows, xlsErr := parseXLSRows(content)
+	if xlsErr == nil {
+		return rows, nil
+	}
+
+	return nil, errors.New("поддерживаются только файлы .xls и .xlsx")
+}
+
+func parseXLSXRows(content []byte) ([][]string, error) {
+	book, err := excelize.OpenReader(bytes.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = book.Close() }()
+
+	sheets := book.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, errors.New("в файле нет листов")
+	}
+
+	rows, err := book.GetRows(sheets[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("в файле нет данных")
+	}
+
+	return rows, nil
+}
+
+func parseXLSRows(content []byte) ([][]string, error) {
+	book, err := xlsreader.OpenReader(bytes.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+
+	sheet, err := book.GetSheet(0)
+	if err != nil || sheet == nil {
+		return nil, errors.New("в файле нет листов")
+	}
+
+	rowCount := sheet.GetNumberRows()
+	if rowCount == 0 {
+		return nil, errors.New("в файле нет данных")
+	}
+
+	maxCols := 0
+	for i := 0; i < rowCount; i++ {
+		row, rowErr := sheet.GetRow(i)
+		if rowErr != nil || row == nil {
+			continue
+		}
+		if len(row.GetCols()) > maxCols {
+			maxCols = len(row.GetCols())
+		}
+	}
+	if maxCols == 0 {
+		maxCols = 1
+	}
+
+	rows := make([][]string, 0, rowCount)
+	for i := 0; i < rowCount; i++ {
+		values := make([]string, maxCols)
+		row, rowErr := sheet.GetRow(i)
+		if rowErr == nil && row != nil {
+			for c := 0; c < maxCols; c++ {
+				cell, cellErr := row.GetCol(c)
+				if cellErr != nil || cell == nil {
+					continue
+				}
+				values[c] = normalizeCell(cell.GetString())
+			}
+		}
+		rows = append(rows, trimRightEmpty(values))
+	}
+
+	return rows, nil
+}
+
+func detectColumns(rows [][]string) (int, []ServicePointImportColumn, error) {
+	if len(rows) == 0 {
+		return 0, nil, errors.New("в файле нет строк")
+	}
+
+	limit := len(rows)
+	if limit > 30 {
+		limit = 30
+	}
+
+	bestRow := -1
+	bestCount := 0
+	for i := 0; i < limit; i++ {
+		count := 0
+		for _, cell := range rows[i] {
+			if normalizeCell(cell) != "" {
+				count++
+			}
+		}
+		if count > bestCount {
+			bestCount = count
+			bestRow = i
+		}
+	}
+
+	if bestRow < 0 || bestCount < 2 {
+		return 0, nil, errors.New("не удалось определить строку заголовков")
+	}
+
+	columns := make([]ServicePointImportColumn, 0, bestCount)
+	for idx, cell := range rows[bestRow] {
+		name := normalizeCell(cell)
+		if name == "" {
+			continue
+		}
+		columns = append(columns, ServicePointImportColumn{Key: indexToExcelColumnKey(idx), Name: name})
+	}
+
+	if len(columns) < 2 {
+		return 0, nil, errors.New("в строке заголовков недостаточно колонок")
+	}
+
+	return bestRow, columns, nil
+}
+
+func validateImportMapping(mapping ServicePointImportMapping) error {
+	code := strings.ToUpper(strings.TrimSpace(mapping.CodeColumn))
+	name := strings.ToUpper(strings.TrimSpace(mapping.NameColumn))
+	contract := strings.ToUpper(strings.TrimSpace(mapping.ContractColumn))
+
+	if code == "" || name == "" || contract == "" {
+		return errors.New("не выбраны все обязательные колонки")
+	}
+	if code == name || code == contract || name == contract {
+		return errors.New("колонки кода, названия и контракта должны быть разными")
+	}
+
+	return nil
+}
+
+func indexToExcelColumnKey(index int) string {
+	if index < 0 {
+		return ""
+	}
+
+	n := index + 1
+	result := ""
+	for n > 0 {
+		remainder := (n - 1) % 26
+		result = string(rune('A'+remainder)) + result
+		n = (n - 1) / 26
+	}
+	return result
+}
+
+func excelColumnKeyToIndex(key string) (int, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(key))
+	if normalized == "" {
+		return 0, errors.New("пустое имя колонки")
+	}
+
+	value := 0
+	for _, ch := range normalized {
+		if ch < 'A' || ch > 'Z' {
+			return 0, fmt.Errorf("неверный формат колонки %q", key)
+		}
+		value = value*26 + int(ch-'A'+1)
+	}
+	return value - 1, nil
+}
+
+func getCellValue(row []string, index int) string {
+	if index < 0 || index >= len(row) {
+		return ""
+	}
+	return row[index]
+}
+
+func trimRightEmpty(values []string) []string {
+	last := len(values)
+	for last > 0 {
+		if normalizeCell(values[last-1]) != "" {
+			break
+		}
+		last--
+	}
+	if last == 0 {
+		return []string{}
+	}
+	return values[:last]
+}
+
+func normalizeCell(value string) string {
+	replacer := strings.NewReplacer("\u00a0", " ", "\t", " ", "\r", " ", "\n", " ", "\x00", "")
+	normalized := replacer.Replace(value)
+	return strings.Join(strings.Fields(strings.TrimSpace(normalized)), " ")
+}
+
+func normalizePointName(name string) string {
+	normalized := strings.ToLower(normalizeCell(name))
+	normalized = strings.ReplaceAll(normalized, "ё", "е")
+	return normalized
+}
+
+func parseContractStatus(raw string) *bool {
+	value := strings.ToLower(normalizeCell(raw))
+	if value == "" {
+		return nil
+	}
+
+	trueWords := map[string]struct{}{
+		"да":            {},
+		"yes":           {},
+		"true":          {},
+		"1":             {},
+		"активный":      {},
+		"активен":       {},
+		"обслуживается": {},
+		"действует":     {},
+	}
+	falseWords := map[string]struct{}{
+		"нет":              {},
+		"no":               {},
+		"false":            {},
+		"0":                {},
+		"не обслуживается": {},
+		"неактивный":       {},
+		"не активен":       {},
+		"закрыт":           {},
+	}
+
+	if _, ok := trueWords[value]; ok {
+		v := true
+		return &v
+	}
+	if _, ok := falseWords[value]; ok {
+		v := false
+		return &v
+	}
+
+	if strings.Contains(value, "нет") || strings.Contains(value, "не обслуж") {
+		v := false
+		return &v
+	}
+	if strings.Contains(value, "да") || strings.Contains(value, "актив") || strings.Contains(value, "обслуж") {
+		v := true
+		return &v
+	}
+
+	return nil
+}
+
+func contractBoolToLabel(v *bool) string {
+	if v == nil {
+		return ""
+	}
+	if *v {
+		return "Да"
+	}
+	return "Нет"
+}
+
+func contractLabelToBool(label string) (bool, bool) {
+	parsed := parseContractStatus(label)
+	if parsed == nil {
+		return false, false
+	}
+	return *parsed, true
+}
+
+func prepareBitrixFieldValue(meta *bitrixListFieldMeta, value string) interface{} {
+	normalized := normalizeCell(value)
+	if meta != nil && meta.Multiple {
+		return []string{normalized}
+	}
+	return normalized
+}
+
+func prepareContractFieldValue(meta *bitrixListFieldMeta, contractOn bool) (interface{}, error) {
+	label := "Нет"
+	if contractOn {
+		label = "Да"
+	}
+
+	if meta != nil && len(meta.ListValueToID) > 0 {
+		id := meta.ListValueToID[strings.ToLower(label)]
+		if id == "" {
+			return nil, fmt.Errorf("в поле %s отсутствует значение %q", bitrixServicePointContractProperty, label)
+		}
+		if meta.Multiple {
+			return []string{id}, nil
+		}
+		return id, nil
+	}
+
+	if meta != nil && meta.Multiple {
+		return []string{label}, nil
+	}
+	return label, nil
+}
+
+func normalizePropertyValueForWrite(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		values := make([]string, 0, len(v))
+		for _, key := range keys {
+			item := normalizeCell(toString(v[key]))
+			if item != "" {
+				values = append(values, item)
+			}
+		}
+		if len(values) == 0 {
+			return ""
+		}
+		if len(values) == 1 {
+			return values[0]
+		}
+		return values
+	case []interface{}:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			normalized := normalizeCell(toString(item))
+			if normalized != "" {
+				values = append(values, normalized)
+			}
+		}
+		if len(values) == 0 {
+			return ""
+		}
+		if len(values) == 1 {
+			return values[0]
+		}
+		return values
+	default:
+		return normalizeCell(toString(v))
+	}
+}
+
+func extractPropertyFirstValue(value interface{}) string {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		if len(v) == 0 {
+			return ""
+		}
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			normalized := normalizeCell(toString(v[key]))
+			if normalized != "" {
+				return normalized
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			normalized := normalizeCell(toString(item))
+			if normalized != "" {
+				return normalized
+			}
+		}
+	default:
+		return normalizeCell(toString(v))
+	}
+
+	return ""
+}
+
+func toString(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatInt(int64(x), 10)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case int:
+		return strconv.Itoa(x)
+	default:
+		return ""
+	}
+}

@@ -24,6 +24,7 @@ import ServersPage from '@/pages/equipment/ServersPage';
 import WorkstationsPage from '@/pages/equipment/WorkstationsPage';
 import FiscalsPage from '@/pages/equipment/FiscalsPage';
 import UsersAdminPage from '@/pages/admin/UsersAdminPage';
+import ServicePointsImportPage from '@/pages/admin/ServicePointsImportPage';
 
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
@@ -145,6 +146,14 @@ const App: React.FC = () => {
                 element={(
                   <AdminRoute>
                     <UsersAdminPage />
+                  </AdminRoute>
+                )}
+              />
+              <Route
+                path="admin/service-points-import"
+                element={(
+                  <AdminRoute>
+                    <ServicePointsImportPage />
                   </AdminRoute>
                 )}
               />

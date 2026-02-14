@@ -6,3 +6,4 @@
 storage/*
 docker/.env
 tools/seeder/*
+*.xls

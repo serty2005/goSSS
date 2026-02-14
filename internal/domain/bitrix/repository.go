@@ -18,6 +18,7 @@ type Repository interface {
 
 	ReplaceServicePoints(ctx context.Context, points []ServicePoint) error
 	ListServicePoints(ctx context.Context) ([]ServicePoint, error)
+	UpdateServicePointOneCData(ctx context.Context, b24ElementID int64, oneCCode string, contractOn *bool) error
 
 	ReplaceUserCache(ctx context.Context, users []UserCache) error
 	ListUserCache(ctx context.Context) ([]UserCache, error)

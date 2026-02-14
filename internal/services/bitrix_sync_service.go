@@ -30,6 +30,9 @@ type BitrixSyncService interface {
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
 	RefreshUsers(ctx context.Context) (int, error)
+	PreviewServicePointsImport(ctx context.Context, fileName string, content []byte) (*ServicePointImportPreview, error)
+	PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error)
+	ImportServicePoints(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping, options ServicePointSyncApplyOptions) (*ServicePointSyncApplyResult, error)
 }
 
 type bitrixSyncService struct {

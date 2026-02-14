@@ -36,6 +36,8 @@ type ServicePoint struct {
 	B24ElementID int64     `json:"b24_element_id" gorm:"primaryKey"`
 	Name         string    `json:"name" gorm:"type:text;not null;index"`
 	Address      string    `json:"address" gorm:"type:text"`
+	OneCCode     *string   `json:"one_c_code,omitempty" gorm:"type:varchar(128);index"`
+	ContractOn   *bool     `json:"contract_on,omitempty" gorm:"column:one_c_contract_on"`
 	RawJSON      string    `json:"raw_json" gorm:"type:text"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
