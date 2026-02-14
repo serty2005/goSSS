@@ -62,7 +62,9 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
         className="glass-panel"
         hoverable
         onClick={handleCardClick}
-        style={data.is_new ? { borderColor: '#91caff', boxShadow: '0 0 0 1px rgba(24, 144, 255, 0.25)' } : undefined}
+        style={data.is_new
+          ? { minWidth: 200, minHeight: 150, borderColor: '#91caff', boxShadow: '0 0 0 1px rgba(24, 144, 255, 0.25)' }
+          : { minWidth: 200, minHeight: 150 }}
         title={(
           <Space>
             {getEntityIcon('Workstation')}

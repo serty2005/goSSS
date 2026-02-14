@@ -30,6 +30,7 @@ func (h *UserHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.GetUsers)
 	r.Post("/", h.CreateUser)
 	r.Put("/{id}", h.UpdateUser)
+	r.Post("/{id}/bitrix/sync-suggestion", h.ApplyUserBitrixSuggestion)
 	r.Patch("/{id}/status", h.UpdateUserStatus)
 	r.Delete("/{id}", h.DeleteUser)
 }
@@ -151,15 +152,13 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	lockedExisting := make([]user.Integration, 0, len(u.Integrations))
-	lockedKeys := make(map[string]struct{}, len(u.Integrations))
+	lockedByKey := make(map[string]user.Integration, len(u.Integrations))
 	for _, existing := range u.Integrations {
 		if !existing.IsLocked {
 			continue
 		}
 		key := buildIntegrationKey(existing.IntegrationType, existing.ExternalID)
-		lockedKeys[key] = struct{}{}
-		lockedExisting = append(lockedExisting, existing)
+		lockedByKey[key] = existing
 	}
 
 	normalized := make([]user.Integration, 0, len(dto.Integrations))
@@ -180,7 +179,9 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		seen[key] = struct{}{}
-		if _, locked := lockedKeys[key]; locked {
+
+		if lockedExisting, isLocked := lockedByKey[key]; isLocked {
+			normalized = append(normalized, lockedExisting)
 			continue
 		}
 
@@ -194,30 +195,23 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		normalized = append(normalized, integration)
 	}
 
-	for key := range lockedKeys {
-		if _, exists := seen[key]; !exists {
-			response.RespondWithError(w, http.StatusBadRequest, "автоматически привязанную интеграцию Bitrix24 нельзя изменять или удалять")
-			return
-		}
-	}
-	normalized = append(normalized, lockedExisting...)
-
 	if err := h.userRepo.ReplaceIntegrations(r.Context(), currentUserID, normalized); err != nil {
 		log.Error("Не удалось обновить интеграции профиля", "id", currentUserID, "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
 		return
 	}
 
-	// Поддержка legacy-полей для совместимости.
+	var legacyType *string
+	var legacyID *string
 	if len(normalized) > 0 {
-		u.ExternalType = &normalized[0].IntegrationType
-		u.ExternalID = &normalized[0].ExternalID
-	} else {
-		u.ExternalType = nil
-		u.ExternalID = nil
+		first := normalized[0]
+		legacyType = &first.IntegrationType
+		legacyID = &first.ExternalID
 	}
-	if err := h.userRepo.Update(r.Context(), u); err != nil {
-		log.Error("Не удалось сохранить legacy-поля интеграций", "id", currentUserID, "error", err)
+	if err := h.userRepo.UpdateExternalFields(r.Context(), currentUserID, legacyType, legacyID); err != nil {
+		log.Error("Не удалось обновить legacy-поля интеграций", "id", currentUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
+		return
 	}
 
 	updated, err := h.userRepo.GetByID(r.Context(), currentUserID)
@@ -225,7 +219,7 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*updated))
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
 }
 
 func (h *UserHandler) GetMyProfileConfig(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +288,7 @@ func (h *UserHandler) UpdateMyProfileConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*u))
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
 }
 
 func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
@@ -306,9 +300,10 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cacheItems, _ := h.getBitrixCache(r.Context())
 	userDTOs := make([]api.UserDTO, len(users))
 	for i, u := range users {
-		userDTOs[i] = toUserDTO(u)
+		userDTOs[i] = h.toUserDTOWithCache(u, cacheItems)
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, userDTOs)
@@ -361,11 +356,18 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		HasLoggedIn:  false,
 	}
 	if externalType != nil && externalID != nil {
+		integration := user.Integration{
+			IntegrationType: *externalType,
+			ExternalID:      *externalID,
+		}
+		if integration.IntegrationType == user.ExternalTypeBitrix24 {
+			integration.IsVerified, integration.VerifiedName = h.verifyBitrixIntegration(r.Context(), newUser, integration.ExternalID)
+			if integration.IsVerified {
+				integration.IsLocked = true
+			}
+		}
 		newUser.Integrations = []user.Integration{
-			{
-				IntegrationType: *externalType,
-				ExternalID:      *externalID,
-			},
+			integration,
 		}
 	}
 
@@ -381,7 +383,20 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusCreated, toUserDTO(*newUser))
+	if len(newUser.Integrations) > 0 &&
+		newUser.Integrations[0].IntegrationType == user.ExternalTypeBitrix24 &&
+		newUser.Integrations[0].IsVerified &&
+		h.bitrixRepo != nil {
+		b24UserID, parseErr := strconv.ParseInt(strings.TrimSpace(newUser.Integrations[0].ExternalID), 10, 64)
+		if parseErr == nil && b24UserID > 0 {
+			_ = h.bitrixRepo.UpsertUserMap(r.Context(), &bitrix.UserMap{
+				EtalonUserID: newUser.ID,
+				B24UserID:    b24UserID,
+			})
+		}
+	}
+
+	response.RespondWithJSON(w, http.StatusCreated, h.toUserDTO(r.Context(), *newUser))
 }
 
 func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +500,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		found := false
 		for i := range u.Integrations {
 			if strings.TrimSpace(strings.ToLower(u.Integrations[i].IntegrationType)) == strings.TrimSpace(strings.ToLower(*normalizedType)) {
-				if u.Integrations[i].IsLocked {
+				if u.Integrations[i].IsLocked && strings.TrimSpace(u.Integrations[i].ExternalID) != strings.TrimSpace(*normalizedID) {
 					response.RespondWithError(w, http.StatusBadRequest, "автоматически привязанную интеграцию нельзя редактировать")
 					return
 				}
@@ -510,7 +525,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*u))
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -566,10 +581,15 @@ func (h *UserHandler) setUserActiveStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, toUserDTO(*u))
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
 }
 
-func toUserDTO(u user.User) api.UserDTO {
+func (h *UserHandler) toUserDTO(ctx context.Context, u user.User) api.UserDTO {
+	cacheItems, _ := h.getBitrixCache(ctx)
+	return h.toUserDTOWithCache(u, cacheItems)
+}
+
+func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCache) api.UserDTO {
 	roles := make([]string, 0, len(u.Roles))
 	for _, role := range u.Roles {
 		roles = append(roles, role.Name)
@@ -600,8 +620,16 @@ func toUserDTO(u user.User) api.UserDTO {
 		IsActive:         u.IsActive,
 		HasLoggedIn:      u.HasLoggedIn,
 		Integrations:     integrations,
+		BitrixSuggestion: findBitrixSuggestionFromCache(&u, cacheItems),
 		ProfileConfig:    parseProfileConfig(u.ProfileConfig),
 	}
+}
+
+func (h *UserHandler) getBitrixCache(ctx context.Context) ([]bitrix.UserCache, error) {
+	if h.bitrixRepo == nil {
+		return nil, nil
+	}
+	return h.bitrixRepo.ListUserCache(ctx)
 }
 
 func parseProfileConfig(raw []byte) map[string]interface{} {
@@ -639,24 +667,220 @@ func (h *UserHandler) verifyBitrixIntegration(ctx context.Context, u *user.User,
 		return false, ""
 	}
 
-	userFirst := strings.ToLower(strings.TrimSpace(u.FirstName))
-	userLast := strings.ToLower(strings.TrimSpace(u.LastName))
-	cacheFirst := strings.ToLower(strings.TrimSpace(matched.FirstName))
-	cacheLast := strings.ToLower(strings.TrimSpace(matched.LastName))
+	userFirst := normalizePersonToken(u.FirstName)
+	userLast := normalizePersonToken(u.LastName)
+	cacheFirst := normalizePersonToken(matched.FirstName)
+	cacheLast := normalizePersonToken(matched.LastName)
 	if userFirst != "" && userLast != "" && userFirst == cacheFirst && userLast == cacheLast {
 		return true, strings.TrimSpace(strings.Join([]string{matched.LastName, matched.FirstName}, " "))
 	}
 
-	userFull := strings.ToLower(strings.TrimSpace(u.FullName))
-	cacheFull := strings.ToLower(strings.TrimSpace(strings.Join([]string{matched.LastName, matched.FirstName, matched.SecondName}, " ")))
+	userFull := normalizePersonToken(u.FullName)
+	cacheFull := normalizePersonToken(strings.Join([]string{matched.LastName, matched.FirstName, matched.SecondName}, " "))
 	if userFull != "" && cacheFull != "" && userFull == cacheFull {
 		return true, strings.TrimSpace(strings.Join([]string{matched.LastName, matched.FirstName, matched.SecondName}, " "))
 	}
 	return false, ""
 }
 
+func findBitrixSuggestionFromCache(u *user.User, cacheItems []bitrix.UserCache) *api.BitrixUserSuggestionDTO {
+	if u == nil || len(cacheItems) == 0 {
+		return nil
+	}
+
+	for _, integration := range u.Integrations {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+			continue
+		}
+		if integration.IsLocked && integration.IsVerified {
+			return nil
+		}
+	}
+
+	userFirst := normalizePersonToken(u.FirstName)
+	userLast := normalizePersonToken(u.LastName)
+	userFull := normalizePersonToken(u.FullName)
+	if userFirst == "" || userLast == "" {
+		if userFull == "" {
+			return nil
+		}
+	}
+
+	matches := make([]bitrix.UserCache, 0, 1)
+	for i := range cacheItems {
+		cache := cacheItems[i]
+		if !cache.Active {
+			continue
+		}
+		cacheFirst := normalizePersonToken(cache.FirstName)
+		cacheLast := normalizePersonToken(cache.LastName)
+		cacheFull := normalizePersonToken(strings.Join([]string{cache.LastName, cache.FirstName, cache.SecondName}, " "))
+
+		if userFirst != "" && userLast != "" && userFirst == cacheFirst && userLast == cacheLast {
+			matches = append(matches, cache)
+			continue
+		}
+		if userFull != "" && userFull == cacheFull {
+			matches = append(matches, cache)
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+
+	found := matches[0]
+	foundID := strconv.FormatInt(found.B24UserID, 10)
+	for _, integration := range u.Integrations {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+			continue
+		}
+		if strings.TrimSpace(integration.ExternalID) == foundID {
+			return nil
+		}
+	}
+
+	name := strings.TrimSpace(strings.Join([]string{found.LastName, found.FirstName, found.SecondName}, " "))
+	return &api.BitrixUserSuggestionDTO{
+		B24UserID: found.B24UserID,
+		Name:      name,
+	}
+}
+
+func (h *UserHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "Пользователь не определён")
+		return
+	}
+
+	u, err := h.userRepo.GetByID(r.Context(), currentUserID)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить профиль")
+		return
+	}
+	if u == nil {
+		response.RespondWithError(w, http.StatusNotFound, "Пользователь не найден")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
+}
+
+func (h *UserHandler) ApplyMyBitrixSuggestion(w http.ResponseWriter, r *http.Request) {
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "Пользователь не определён")
+		return
+	}
+
+	updated, err := h.applyBitrixSuggestion(r.Context(), currentUserID)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
+}
+
+func (h *UserHandler) ApplyUserBitrixSuggestion(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный ID пользователя")
+		return
+	}
+
+	updated, applyErr := h.applyBitrixSuggestion(r.Context(), uint(id))
+	if applyErr != nil {
+		response.RespondWithError(w, http.StatusBadRequest, applyErr.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
+}
+
+func (h *UserHandler) applyBitrixSuggestion(ctx context.Context, userID uint) (*user.User, error) {
+	u, err := h.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить пользователя")
+	}
+	if u == nil {
+		return nil, fmt.Errorf("пользователь не найден")
+	}
+
+	cacheItems, err := h.getBitrixCache(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить кэш пользователей Bitrix24")
+	}
+	suggestion := findBitrixSuggestionFromCache(u, cacheItems)
+	if suggestion == nil {
+		return nil, fmt.Errorf("не найдено однозначное предложение синхронизации")
+	}
+
+	targetID := strconv.FormatInt(suggestion.B24UserID, 10)
+	updatedIntegrations := make([]user.Integration, 0, len(u.Integrations)+1)
+	foundExact := false
+	for i := range u.Integrations {
+		integration := u.Integrations[i]
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+			updatedIntegrations = append(updatedIntegrations, integration)
+			continue
+		}
+
+		if integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
+			return nil, fmt.Errorf("у пользователя уже есть другая автоматическая интеграция Bitrix24")
+		}
+
+		if strings.TrimSpace(integration.ExternalID) == targetID {
+			integration.IsVerified = true
+			integration.IsLocked = true
+			integration.VerifiedName = suggestion.Name
+			foundExact = true
+		}
+		updatedIntegrations = append(updatedIntegrations, integration)
+	}
+
+	if !foundExact {
+		updatedIntegrations = append(updatedIntegrations, user.Integration{
+			UserID:          u.ID,
+			IntegrationType: user.ExternalTypeBitrix24,
+			ExternalID:      targetID,
+			IsVerified:      true,
+			IsLocked:        true,
+			VerifiedName:    suggestion.Name,
+		})
+	}
+
+	if err := h.userRepo.ReplaceIntegrations(ctx, u.ID, updatedIntegrations); err != nil {
+		return nil, fmt.Errorf("не удалось сохранить интеграции пользователя")
+	}
+
+	if h.bitrixRepo != nil {
+		if err := h.bitrixRepo.UpsertUserMap(ctx, &bitrix.UserMap{
+			EtalonUserID: u.ID,
+			B24UserID:    suggestion.B24UserID,
+		}); err != nil {
+			return nil, fmt.Errorf("не удалось сохранить связку с Bitrix24")
+		}
+	}
+
+	extType := user.ExternalTypeBitrix24
+	u.ExternalType = &extType
+	u.ExternalID = &targetID
+	if err := h.userRepo.Update(ctx, u); err != nil {
+		return nil, fmt.Errorf("не удалось обновить legacy-поля пользователя")
+	}
+
+	return h.userRepo.GetByID(ctx, u.ID)
+}
+
 func buildFullName(firstName, lastName string) string {
 	return strings.TrimSpace(fmt.Sprintf("%s %s", strings.TrimSpace(firstName), strings.TrimSpace(lastName)))
+}
+
+func normalizePersonToken(v string) string {
+	out := strings.ToLower(strings.TrimSpace(v))
+	out = strings.ReplaceAll(out, "ё", "е")
+	out = strings.Join(strings.Fields(out), " ")
+	return out
 }
 
 func buildIntegrationKey(integrationType, externalID string) string {

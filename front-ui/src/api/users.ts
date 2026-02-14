@@ -26,5 +26,10 @@ export const usersApi = {
     const response = await apiClient.patch<ApiResponse<UserAdminDTO>>(`/users/${id}/status`, { is_active });
     return response.data;
   },
+
+  applyBitrixSuggestion: async (id: number) => {
+    const response = await apiClient.post<ApiResponse<UserAdminDTO>>(`/users/${id}/bitrix/sync-suggestion`);
+    return response.data;
+  },
 };
 

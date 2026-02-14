@@ -1,6 +1,6 @@
 ﻿import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { UserIntegrationDTO, UserProfileConfigDTO } from '@/types/api';
+import type { BitrixUserSuggestionDTO, UserIntegrationDTO, UserProfileConfigDTO } from '@/types/api';
 
 // Типы согласно API Reference
 export interface User {
@@ -14,6 +14,7 @@ export interface User {
   external_system_id?: string;
   external_type?: string;
   integrations?: UserIntegrationDTO[];
+  bitrix_suggestion?: BitrixUserSuggestionDTO | null;
   profile_config?: UserProfileConfigDTO;
   schedule_type: string;
   is_active: boolean;

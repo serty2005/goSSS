@@ -33,18 +33,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// Regex РґР»СЏ РїРѕРёСЃРєР° UUID С„Р°Р№Р»РѕРІ РІ СЃСЃС‹Р»РєР°С… Naumen (./download?uuid=file$123...)
+// Regex для поиска UUID файлов в ссылках Naumen (./download?uuid=file$123...)
 var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 
 type TicketService interface {
-	// Р§С‚РµРЅРёРµ
+	// Чтение
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
 
-	// Р”РµР№СЃС‚РІРёСЏ
+	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
 	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
@@ -73,7 +73,7 @@ type ticketServiceImpl struct {
 	bitrixRepo      bitrix.Repository
 }
 
-var ErrReporterNotFound = errors.New("РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ-Р°РІС‚РѕСЂ РЅРµ РЅР°Р№РґРµРЅ")
+var ErrReporterNotFound = errors.New("пользователь-автор не найден")
 
 func NewTicketService(
 	logger logger.LoggerInterface,
@@ -103,7 +103,7 @@ func NewTicketService(
 	}
 }
 
-// List РІРѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє Р·Р°СЏРІРѕРє СЃ С„РёР»СЊС‚СЂР°С†РёРµР№.
+// List возвращает список заявок с фильтрацией.
 func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error) {
 	items, err := s.ticketRepo.Find(ctx, filter)
 	if err != nil {
@@ -141,24 +141,24 @@ func (s *ticketServiceImpl) GetDashboardStats(ctx context.Context) (*tickets.Das
 	return stats, nil
 }
 
-// CreateInternal СЃРѕР·РґР°РµС‚ РІРЅСѓС‚СЂРµРЅРЅРёР№ С‚РёРєРµС‚.
+// CreateInternal создает внутренний тикет.
 func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error) {
 	author, err := s.userRepo.GetByID(ctx, authorID)
 	if err != nil {
-		return nil, fmt.Errorf("РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ Р°РІС‚РѕСЂР° С‚РёРєРµС‚Р°: %w", err)
+		return nil, fmt.Errorf("не удалось получить автора тикета: %w", err)
 	}
 	if author == nil {
 		return nil, ErrReporterNotFound
 	}
 	if dto.AssigneeID == nil || *dto.AssigneeID == 0 {
-		return nil, fmt.Errorf("РЅРµ РІС‹Р±СЂР°РЅ РёСЃРїРѕР»РЅРёС‚РµР»СЊ")
+		return nil, fmt.Errorf("не выбран исполнитель")
 	}
 	assignee, err := s.userRepo.GetByID(ctx, *dto.AssigneeID)
 	if err != nil {
-		return nil, fmt.Errorf("РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РёСЃРїРѕР»РЅРёС‚РµР»СЏ: %w", err)
+		return nil, fmt.Errorf("не удалось получить исполнителя: %w", err)
 	}
 	if assignee == nil {
-		return nil, fmt.Errorf("РёСЃРїРѕР»РЅРёС‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ")
+		return nil, fmt.Errorf("исполнитель не найден")
 	}
 
 	ownerCompany, err := s.companyRepo.GetByID(ctx, dto.CompanyID)
@@ -188,7 +188,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 	}
 	if syncWithBitrix && strings.TrimSpace(dto.BitrixDealTitle) == "" {
-		return nil, fmt.Errorf("РЅРµ Р·Р°РїРѕР»РЅРµРЅ Р·Р°РіРѕР»РѕРІРѕРє СЃРґРµР»РєРё Bitrix24")
+		return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
 	}
 
 	ticket := &tickets.Ticket{
@@ -208,7 +208,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	}
 
 	if ownerCompany == nil {
-		return nil, fmt.Errorf("РєРѕРјРїР°РЅРёСЏ РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("компания не найдена")
 	}
 
 	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
@@ -225,7 +225,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		ticket.ContractID = contractID
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
-	// Р’Р°Р»РёРґР°С†РёСЏ РїРѕР»РµР№
+	// Валидация полей
 	if ticket.Priority == "" {
 		ticket.Priority = tickets.PriorityMedium
 	}
@@ -245,7 +245,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		}
 	}
 
-	// Р—Р°РїРёСЃСЊ РІ РёСЃС‚РѕСЂРёСЋ
+	// Запись в историю
 	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, "", tickets.StatusNew)
 
 	return ticket, nil
@@ -278,19 +278,19 @@ func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*con
 	return commonContract, nil
 }
 
-// ChangeStatus РјРµРЅСЏРµС‚ СЃС‚Р°С‚СѓСЃ С‚РёРєРµС‚Р° Рё РїРёС€РµС‚ РёСЃС‚РѕСЂРёСЋ.
+// ChangeStatus меняет статус тикета и пишет историю.
 func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	oldStatus := ticket.Status
 	if oldStatus == status {
-		return ticket, nil // РЎС‚Р°С‚СѓСЃ РЅРµ РёР·РјРµРЅРёР»СЃСЏ
+		return ticket, nil // Статус не изменился
 	}
 
 	comment = strings.TrimSpace(comment)
@@ -307,56 +307,56 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 
-	// Р—Р°РїРёСЃСЊ РІ РёСЃС‚РѕСЂРёСЋ
+	// Запись в историю
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, oldStatus, status)
 
-	// Р•СЃР»Рё РµСЃС‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№, РґРѕР±Р°РІР»СЏРµРј РµРіРѕ РєР°Рє РёСЃС‚РѕСЂРёСЋ РёР»Рё РѕС‚РґРµР»СЊРЅРѕ
+	// Если есть комментарий, добавляем его как историю или отдельно
 	if comment != "" {
-		// Р”Р»СЏ РїСЂРѕСЃС‚РѕС‚С‹ РёСЃРїРѕР»СЊР·СѓРµРј Р»РµРіР°СЃРё СЃС‚СЂСѓРєС‚СѓСЂСѓ Comment, РµСЃР»Рё С„СЂРѕРЅС‚ РµС‘ Р¶РґРµС‚,
-		// РЅРѕ Р»СѓС‡С€Рµ РїРёСЃР°С‚СЊ РІ History СЃ РїРѕР»РµРј "comment"
-		// Р РµР°Р»РёР·СѓРµРј С‡РµСЂРµР· History РєР°Рє "comment_added"
+		// Для простоты используем легаси структуру Comment, если фронт её ждет,
+		// но лучше писать в History с полем "comment"
+		// Р еализуем через History как "comment_added"
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", comment)
 	}
 
-	// Р•СЃР»Рё Р·Р°СЏРІРєР° СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅР° СЃ Naumen, РЅСѓР¶РЅРѕ РѕС‚РїСЂР°РІРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёРµ С‚СѓРґР°
+	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
 	if ticket.ServiceDeskUUID != "" {
-		// s.sdClient.UpdateEntity(...) // TODO: Р РµР°Р»РёР·РѕРІР°С‚СЊ РѕР±СЂР°С‚РЅСѓСЋ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЋ СЃС‚Р°С‚СѓСЃР°
+		// s.sdClient.UpdateEntity(...) // TODO: Р еализовать обратную синхронизацию статуса
 	}
 
 	return ticket, nil
 }
 
-// Assign РЅР°Р·РЅР°С‡Р°РµС‚ РёР»Рё СЃРЅРёРјР°РµС‚ РёСЃРїРѕР»РЅРёС‚РµР»СЏ.
+// Assign назначает или снимает исполнителя.
 func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	var oldAssigneeName, newAssigneeName string
 
-	// РџРѕР»СѓС‡Р°РµРј РёРјРµРЅР° РґР»СЏ РёСЃС‚РѕСЂРёРё
+	// Получаем имена для истории
 	if ticket.Assignee != nil {
 		oldAssigneeName = ticket.Assignee.FullName
 	} else {
-		oldAssigneeName = "РќРµ РЅР°Р·РЅР°С‡РµРЅ"
+		oldAssigneeName = "Не назначен"
 	}
 
 	if assigneeID != nil {
 		newAssignee, err := s.userRepo.GetByID(ctx, *assigneeID)
 		if err != nil || newAssignee == nil {
-			return nil, fmt.Errorf("РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ-РёСЃРїРѕР»РЅРёС‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ")
+			return nil, fmt.Errorf("пользователь-исполнитель не найден")
 		}
 		newAssigneeName = newAssignee.FullName
 	} else {
-		newAssigneeName = "РќРµ РЅР°Р·РЅР°С‡РµРЅ"
+		newAssigneeName = "Не назначен"
 	}
 
 	ticket.AssigneeID = assigneeID
-	// Р•СЃР»Рё РЅР°Р·РЅР°С‡Р°РµРј, РїРµСЂРµРІРѕРґРёРј РІ InProgress, РµСЃР»Рё РѕРЅ Р±С‹Р» New
+	// Если назначаем, переводим в InProgress, если он был New
 	if assigneeID != nil && ticket.Status == tickets.StatusNew {
 		ticket.Status = tickets.StatusInProgress
 	}
@@ -369,14 +369,14 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	return ticket, nil
 }
 
-// ChangeCompany РјРµРЅСЏРµС‚ РєРѕРјРїР°РЅРёСЋ РІ С‚РёРєРµС‚Рµ Рё РїРµСЂРµСЃС‡РёС‚С‹РІР°РµС‚ РґРѕРіРѕРІРѕСЂ.
+// ChangeCompany меняет компанию в тикете и пересчитывает договор.
 func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	targetCompany, err := s.companyRepo.GetByID(ctx, companyID)
@@ -384,7 +384,7 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 		return nil, err
 	}
 	if targetCompany == nil {
-		return nil, fmt.Errorf("РєРѕРјРїР°РЅРёСЏ РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("компания не найдена")
 	}
 
 	if ticket.CompanyID == companyID {
@@ -435,16 +435,16 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	nextTitle := strings.TrimSpace(bitrixDealTitle)
 	if ticket.SyncWithBitrix {
 		if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
-			return nil, fmt.Errorf("РЅРµ РІС‹Р±СЂР°РЅР° С‚РѕС‡РєР° РѕР±СЃР»СѓР¶РёРІР°РЅРёСЏ Bitrix24")
+			return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 		}
 		if nextTitle == "" {
-			return nil, fmt.Errorf("РЅРµ Р·Р°РїРѕР»РЅРµРЅ Р·Р°РіРѕР»РѕРІРѕРє СЃРґРµР»РєРё Bitrix24")
+			return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
 		}
 	}
 
@@ -480,15 +480,15 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	text := strings.TrimSpace(comment)
 	if text == "" {
-		return nil, fmt.Errorf("РєРѕРјРјРµРЅС‚Р°СЂРёР№ РїСѓСЃС‚РѕР№")
+		return nil, fmt.Errorf("комментарий пустой")
 	}
 
-	authorName := "РЎРѕС‚СЂСѓРґРЅРёРє"
+	authorName := "Сотрудник"
 	u, err := s.userRepo.GetByID(ctx, userID)
 	if err == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
 		authorName = strings.TrimSpace(u.FullName)
@@ -531,7 +531,7 @@ func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, thresh
 		}
 		ticket.Status = tickets.StatusClosed
 		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
-			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°РєСЂС‹С‚СЊ Р·Р°СЏРІРєСѓ", "ticket_id", ticket.ID, "error", err)
+			s.logger.Error("Не удалось автоматически закрыть заявку", "ticket_id", ticket.ID, "error", err)
 			continue
 		}
 		s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.StatusResolved, tickets.StatusClosed)
@@ -546,23 +546,23 @@ func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID s
 		return err
 	}
 	if ticket == nil {
-		return fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return fmt.Errorf("заявка не найдена")
 	}
 
 	line := strings.TrimSpace(label)
 	if line == "" {
-		line = "РџРѕРґРєР»СЋС‡РµРЅРёРµ"
+		line = "Подключение"
 	}
 	val := strings.TrimSpace(value)
 	if val == "" {
-		return fmt.Errorf("Р·РЅР°С‡РµРЅРёРµ РїРѕРґРєР»СЋС‡РµРЅРёСЏ РїСѓСЃС‚РѕРµ")
+		return fmt.Errorf("значение подключения пустое")
 	}
 
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, "", line+": "+val)
 	return nil
 }
 
-// GetDetails РІРѕР·РІСЂР°С‰Р°РµС‚ РґРµС‚Р°Р»Рё С‚РёРєРµС‚Р°, РёСЃС‚РѕСЂРёСЋ Рё РІР»РѕР¶РµРЅРёСЏ.
+// GetDetails возвращает детали тикета, историю и вложения.
 func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
@@ -573,21 +573,21 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 
-	// Р—Р°РіСЂСѓР·РєР° РёСЃС‚РѕСЂРёРё
+	// Загрузка истории
 	history, _ := s.ticketRepo.GetHistory(ctx, ticketID)
 
-	// Р—Р°РіСЂСѓР·РєР° РІР»РѕР¶РµРЅРёР№
+	// Загрузка вложений
 	attachments, _ := s.ticketRepo.GetAttachments(ctx, ticketID)
 
 	details := &tickets.TicketDetails{
 		Metadata: *ticket,
-		// CompanyName: ticket.CompanyName, // Р•СЃР»Рё СЌС‚Рѕ РїРѕР»Рµ РµСЃС‚СЊ РІ СЃС‚СЂСѓРєС‚СѓСЂРµ (gorm ->)
+		// CompanyName: ticket.CompanyName, // Если это поле есть в структуре (gorm ->)
 		History:     history,
 		Attachments: attachments,
 		Comments:    make([]tickets.Comment, 0),
 	}
 
-	// РљРѕРјРјРµРЅС‚Р°СЂРёРё РёР· Р»РѕРєР°Р»СЊРЅРѕР№ Р‘Р” (РѕС„Р»Р°Р№РЅ/СЃРёРґРµСЂ)
+	// Комментарии из локальной БД (офлайн/сидер)
 	localComments, _ := s.ticketRepo.GetComments(ctx, ticketID)
 	if len(localComments) > 0 {
 		for _, c := range localComments {
@@ -602,12 +602,12 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		}
 	}
 
-	// РџРѕРїС‹С‚РєР° РїРѕР»СѓС‡РёС‚СЊ РѕРїРёСЃР°РЅРёРµ РёР· SD РґР»СЏ Р»РµРіР°СЃРё С‚РёРєРµС‚РѕРІ
+	// Попытка получить описание из SD для легаси тикетов
 	if s.isServiceDeskEnabledForReads() && ticket.ServiceDeskUUID != "" && len(localComments) == 0 {
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
 			if desc, ok := sdData["descriptionRTF"].(string); ok {
-				// Р’ РёРґРµР°Р»Рµ description РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІ Р‘Р”, РЅРѕ РґР»СЏ Р»РµРіР°СЃРё Р±РµСЂРµРј РёР· SD
+				// В идеале description должен быть в БД, но для легаси берем из SD
 				if ticket.Description == "" {
 					details.Metadata.Description = s.processHtmlContent(ticket.ServiceDeskUUID, desc)
 				}
@@ -618,14 +618,14 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	return details, nil
 }
 
-// UpdateDescription РѕР±РЅРѕРІР»СЏРµС‚ РѕРїРёСЃР°РЅРёРµ С‚РёРєРµС‚Р°.
+// UpdateDescription обновляет описание тикета.
 func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	oldValue := ticket.Description
@@ -649,7 +649,7 @@ func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, 
 		return 0, err
 	}
 	if ticket == nil {
-		return 0, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return 0, fmt.Errorf("заявка не найдена")
 	}
 	if strings.TrimSpace(ticket.ServiceDeskUUID) == "" {
 		return 0, nil
@@ -722,7 +722,7 @@ func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID stri
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 	if len(files) == 0 {
 		return []tickets.Attachment{}, nil
@@ -816,47 +816,47 @@ func (s *ticketServiceImpl) isCommonContractID(contractID *string) bool {
 }
 
 func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error {
-	// 1. РџРѕР»СѓС‡Р°РµРј Р·Р°СЏРІРєСѓ, С‡С‚РѕР±С‹ СѓР·РЅР°С‚СЊ, РєР°РєРѕР№ РєРѕРјРїР°РЅРёРё РѕРЅР° РїСЂРёРЅР°РґР»РµР¶РёС‚
+	// 1. Получаем заявку, чтобы узнать, какой компании она принадлежит
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return fmt.Errorf("failed to get ticket: %w", err)
 	}
 	if ticket == nil {
-		return fmt.Errorf("Р·Р°СЏРІРєР° РЅРµ РЅР°Р№РґРµРЅР°")
+		return fmt.Errorf("заявка не найдена")
 	}
 
-	// 2. РџСЂРѕРІРµСЂСЏРµРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ Р°РєС‚РёРІР° Рё СЃРѕРІРїР°РґРµРЅРёРµ РІР»Р°РґРµР»СЊС†Р°
+	// 2. Проверяем существование актива и совпадение владельца
 	var assetOwnerID string
 
 	switch assetType {
 	case tickets.AssetTypeServer:
 		asset, err := s.serverRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("СЃРµСЂРІРµСЂ РЅРµ РЅР°Р№РґРµРЅ")
+			return fmt.Errorf("сервер не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeFiscalRegister:
 		asset, err := s.frRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("С„РёСЃРєР°Р»СЊРЅС‹Р№ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂ РЅРµ РЅР°Р№РґРµРЅ")
+			return fmt.Errorf("фискальный регистратор не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeWorkstation:
 		asset, err := s.workstationRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("СЂР°Р±РѕС‡Р°СЏ СЃС‚Р°РЅС†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°")
+			return fmt.Errorf("рабочая станция не найдена")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	default:
-		return fmt.Errorf("РЅРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ С‚РёРї РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЏ: %s", assetType)
+		return fmt.Errorf("неподдерживаемый тип оборудования: %s", assetType)
 	}
 
-	// 3. РЎСЂР°РІРЅРёРІР°РµРј РІР»Р°РґРµР»СЊС†РµРІ
-	// Р•СЃР»Рё Сѓ РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЏ РЅРµС‚ РІР»Р°РґРµР»СЊС†Р° (РїСѓСЃС‚Р°СЏ СЃС‚СЂРѕРєР°), СЃС‡РёС‚Р°РµРј СЌС‚Рѕ СЂРёСЃРєРѕРј, РЅРѕ СЂР°Р·СЂРµС€Р°РµРј (РёР»Рё Р·Р°РїСЂРµС‰Р°РµРј, Р·Р°РІРёСЃРёС‚ РѕС‚ Р±РёР·РЅРµСЃ-Р»РѕРіРёРєРё).
-	// Р’ РґР°РЅРЅРѕРј СЃР»СѓС‡Р°Рµ Р·Р°РїСЂРµС‚РёРј РїСЂРёРІСЏР·РєСѓ Рє "С‡СѓР¶РѕРјСѓ" РѕР±РѕСЂСѓРґРѕРІР°РЅРёСЋ.
+	// 3. Сравниваем владельцев
+	// Если у оборудования нет владельца (пустая строка), считаем это риском, но разрешаем (или запрещаем, зависит от бизнес-логики).
+	// В данном случае запретим привязку к "чужому" оборудованию.
 	if assetOwnerID != "" && assetOwnerID != ticket.CompanyID {
 		return fmt.Errorf("conflict: asset belongs to company %s, but ticket belongs to %s", assetOwnerID, ticket.CompanyID)
 	}
@@ -875,7 +875,7 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 	return nil
 }
 
-// recordHistory - РІСЃРїРѕРјРѕРіР°С‚РµР»СЊРЅС‹Р№ РјРµС‚РѕРґ РґР»СЏ Р·Р°РїРёСЃРё Р°СѓРґРёС‚Р°.
+// recordHistory - вспомогательный метод для записи аудита.
 func (s *ticketServiceImpl) recordHistory(ctx context.Context, ticketID string, userID *uint, action, field, oldVal, newVal string) {
 	h := &tickets.TicketHistory{
 		TicketID:  ticketID,
@@ -891,55 +891,55 @@ func (s *ticketServiceImpl) recordHistory(ctx context.Context, ticketID string, 
 	}
 }
 
-// processHtmlContent РёС‰РµС‚ СЃСЃС‹Р»РєРё РЅР° С„Р°Р№Р»С‹ Naumen, СЃРєР°С‡РёРІР°РµС‚ РёС… Рё Р·Р°РјРµРЅСЏРµС‚ РЅР° Р»РѕРєР°Р»СЊРЅС‹Рµ URL.
-// sdUUID - РІРЅРµС€РЅРёР№ UUID Р·Р°СЏРІРєРё (РЅР°РїСЂРёРјРµСЂ, serviceCall$123), РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РіСЂСѓРїРїРёСЂРѕРІРєРё С„Р°Р№Р»РѕРІ РІ РїР°РїРєРµ.
+// processHtmlContent ищет ссылки на файлы Naumen, скачивает их и заменяет на локальные URL.
+// sdUUID - внешний UUID заявки (например, serviceCall$123), используется для группировки файлов в папке.
 func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string) string {
-	// РС‰РµРј РІСЃРµ РІС…РѕР¶РґРµРЅРёСЏ uuid=file$XXXXX
+	// РС‰РµРј все вхождения uuid=file$XXXXX
 	matches := naumenFileRegex.FindAllStringSubmatch(htmlContent, -1)
 	if len(matches) == 0 {
 		return htmlContent
 	}
 
 	processedHtml := htmlContent
-	// РЎРѕР·РґР°РµРј РґРёСЂРµРєС‚РѕСЂРёСЋ РґР»СЏ Р·Р°СЏРІРєРё: ./storage/tickets/serviceCall$123/
+	// Создаем директорию для заявки: ./storage/tickets/serviceCall$123/
 	ticketDir := filepath.Join(s.cfg.TicketStoragePath, sdUUID)
 	if err := os.MkdirAll(ticketDir, 0755); err != nil {
 		s.logger.Error("Failed to create storage dir for ticket", "dir", ticketDir, "error", err)
-		return htmlContent // Р’РѕР·РІСЂР°С‰Р°РµРј РєР°Рє РµСЃС‚СЊ, РµСЃР»Рё РЅРµ РјРѕР¶РµРј СЃРѕС…СЂР°РЅРёС‚СЊ
+		return htmlContent // Возвращаем как есть, если не можем сохранить
 	}
 
 	for _, match := range matches {
 		// match[0] = "uuid=file$12345"
-		// match[1] = "file$12345" (ID С„Р°Р№Р»Р°)
+		// match[1] = "file$12345" (ID файла)
 		fileUUID := match[1]
 
-		// 1. РџСЂРѕРІРµСЂСЏРµРј, СЃРєР°С‡Р°РЅ Р»Рё С„Р°Р№Р»
-		localFilePath := filepath.Join(ticketDir, fileUUID) // РЎРѕС…СЂР°РЅСЏРµРј Р±РµР· СЂР°СЃС€РёСЂРµРЅРёСЏ РёР»Рё РїС‹С‚Р°РµРјСЃСЏ СѓРіР°РґР°С‚СЊ
-		// РџСЂРѕСЃС‚РѕР№ РІР°СЂРёР°РЅС‚: РёРјСЏ С„Р°Р№Р»Р° = UUID. Р‘СЂР°СѓР·РµСЂС‹ С‡Р°СЃС‚Рѕ СѓРјРµСЋС‚ РѕРїСЂРµРґРµР»СЏС‚СЊ С‚РёРї РїРѕ РєРѕРЅС‚РµРЅС‚Сѓ,
-		// РЅРѕ Р»СѓС‡С€Рµ СЃРѕС…СЂР°РЅСЏС‚СЊ СЂР°СЃС€РёСЂРµРЅРёРµ. РџРѕРєР° СЃРѕС…СЂР°РЅСЏРµРј РєР°Рє РµСЃС‚СЊ.
+		// 1. Проверяем, скачан ли файл
+		localFilePath := filepath.Join(ticketDir, fileUUID) // Сохраняем без расширения или пытаемся угадать
+		// Простой вариант: имя файла = UUID. Браузеры часто умеют определять тип по контенту,
+		// но лучше сохранять расширение. Пока сохраняем как есть.
 
 		if _, err := os.Stat(localFilePath); os.IsNotExist(err) {
-			// 2. Р¤Р°Р№Р»Р° РЅРµС‚ - СЃРєР°С‡РёРІР°РµРј
+			// 2. Файла нет - скачиваем
 			err := s.downloadFileFromNaumen(fileUUID, localFilePath)
 			if err != nil {
 				s.logger.Error("Failed to download file from Naumen", "fileUUID", fileUUID, "error", err)
-				continue // РџСЂРѕРїСѓСЃРєР°РµРј Р·Р°РјРµРЅСѓ, РµСЃР»Рё РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРєР°С‡Р°С‚СЊ
+				continue // Пропускаем замену, если не удалось скачать
 			}
 		}
 
-		// 3. Р—Р°РјРµРЅСЏРµРј СЃСЃС‹Р»РєСѓ РІ HTML
+		// 3. Заменяем ссылку в HTML
 		// РСЃС…РѕРґРЅР°СЏ: ... src="./download?uuid=file$13205558" ...
-		// Р¦РµР»РµРІР°СЏ:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
+		// Целевая:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
 
-		// РќР°С…РѕРґРёРј РїРѕР»РЅС‹Р№ РєСѓСЃРѕРє "./download?uuid=file$XXXX" Рё Р·Р°РјРµРЅСЏРµРј РµРіРѕ
-		// Р РµРіСѓР»СЏСЂРєР° РёС‰РµС‚ С‚РѕР»СЊРєРѕ uuid=..., РїРѕСЌС‚РѕРјСѓ Р·Р°РјРµРЅРёРј РіСЂСѓР±Рѕ, РЅРѕ РЅР°РґРµР¶РЅРѕ РґР»СЏ Naumen:
+		// Находим полный кусок "./download?uuid=file$XXXX" и заменяем его
+		// Р егулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
 		// "./download?uuid=" + fileUUID -> "/api/static/tickets/" + sdUUID + "/" + fileUUID
 
 		oldLink := fmt.Sprintf("./download?uuid=%s", fileUUID)
 		newLink := fmt.Sprintf("/api/static/tickets/%s/%s", sdUUID, fileUUID)
 		processedHtml = strings.ReplaceAll(processedHtml, oldLink, newLink)
 
-		// РќР° СЃР»СѓС‡Р°Р№, РµСЃР»Рё СЃСЃС‹Р»РєР° Р±РµР· С‚РѕС‡РєРё РІ РЅР°С‡Р°Р»Рµ (Р±С‹РІР°РµС‚ РїРѕ-СЂР°Р·РЅРѕРјСѓ)
+		// На случай, если ссылка без точки в начале (бывает по-разному)
 		oldLink2 := fmt.Sprintf("/download?uuid=%s", fileUUID)
 		processedHtml = strings.ReplaceAll(processedHtml, oldLink2, newLink)
 	}
@@ -947,15 +947,15 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 	return processedHtml
 }
 
-// downloadFileFromNaumen РІС‹РїРѕР»РЅСЏРµС‚ Р·Р°РїСЂРѕСЃ Рє API Naumen Рё СЃРѕС…СЂР°РЅСЏРµС‚ С„Р°Р№Р».
+// downloadFileFromNaumen выполняет запрос к API Naumen и сохраняет файл.
 func (s *ticketServiceImpl) downloadFileFromNaumen(fileUUID, destPath string) error {
 	// URL: <baseURL>/services/rest/get-file/file$123?accessKey=<accessKey>
-	// Р‘Р°Р·РѕРІС‹Р№ URL РІ РєРѕРЅС„РёРіРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ СЃ /sd РёР»Рё Р±РµР·, РЅСѓР¶РЅРѕ Р°РєРєСѓСЂР°С‚РЅРѕ СЃРѕР±СЂР°С‚СЊ.
-	// РћР±С‹С‡РЅРѕ cfg.ServiceDeskBaseURL = "https://myhoreca.itsm365.com/sd"
+	// Базовый URL в конфиге может быть с /sd или без, нужно аккуратно собрать.
+	// Обычно cfg.ServiceDeskBaseURL = "https://myhoreca.itsm365.com/sd"
 
-	// РЈР±РёСЂР°РµРј trailing slash
+	// Убираем trailing slash
 	baseURL := strings.TrimRight(s.cfg.ServiceDeskBaseURL, "/")
-	// Р¤РѕСЂРјРёСЂСѓРµРј URL РґР»СЏ СЃРєР°С‡РёРІР°РЅРёСЏ
+	// Формируем URL для скачивания
 	url := fmt.Sprintf("%s/services/rest/get-file/%s?accessKey=%s", baseURL, fileUUID, s.cfg.ServiceDeskKey)
 
 	resp, err := http.Get(url)

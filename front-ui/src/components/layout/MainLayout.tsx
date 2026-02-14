@@ -1,5 +1,5 @@
-﻿import React, { useMemo, useRef, useState } from 'react';
-import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented } from 'antd';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
@@ -26,6 +26,7 @@ import { defaultThemePalettes, type ThemeMode, type ThemePalette } from '@/theme
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 type EditableColorKey = 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor';
 
@@ -86,6 +87,7 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = antTheme.useToken();
+  const screens = useBreakpoint();
 
   const themeMode = useUiStore((state) => state.themeMode);
   const setTheme = useUiStore((state) => state.setTheme);
@@ -118,6 +120,11 @@ const MainLayout: React.FC = () => {
   }, [user?.profile_config]);
 
   const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
+  const sidebarCollapsed = !screens.lg || collapsed;
+
+  useEffect(() => {
+    setCollapsed(!screens.lg);
+  }, [screens.lg]);
 
   const updateConfigMutation = useMutation({
     mutationFn: (payload: { profile_config: Record<string, unknown> }) => profileApi.updateConfig(payload),
@@ -337,7 +344,7 @@ const MainLayout: React.FC = () => {
       <Sider
         trigger={null}
         collapsible
-        collapsed={collapsed}
+        collapsed={sidebarCollapsed}
         width={250}
         style={{
           background: token.colorBgContainer,
@@ -389,8 +396,11 @@ const MainLayout: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <Button
               type="text"
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
+              icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => {
+                if (!screens.lg) return;
+                setCollapsed(!collapsed);
+              }}
               style={{ fontSize: '16px', width: 64, height: 64 }}
             />
           </div>
@@ -440,3 +450,4 @@ const MainLayout: React.FC = () => {
 };
 
 export default MainLayout;
+

@@ -16,6 +16,10 @@ const { Text, Paragraph } = Typography;
 const FiscalCard: React.FC<Props> = ({ data }) => {
   const navigate = useNavigate();
   const agentUpdate = getAgentUpdateMeta(data);
+  const organizationName = data.legal_name || data.organization_name;
+  const fnExecution = typeof data.fn_execution === 'string'
+    ? data.fn_execution
+    : (typeof data.fnExecution === 'string' ? data.fnExecution : undefined);
 
   const renderFnInfo = (dateStr?: string) => {
     if (!dateStr) return <Tag>Нет ФН</Tag>;
@@ -52,6 +56,7 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
       size="small"
       className="glass-panel"
       hoverable
+      style={{ minWidth: 300, minHeight: 200 }}
       onClick={handleCardClick}
       title={(
         <Space>
@@ -72,7 +77,7 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
       ) : null}
     >
       <div style={{ marginBottom: 12 }}>
-        <Text strong style={{ display: 'block' }}>{data.legal_name}</Text>
+        {organizationName && <Text strong style={{ display: 'block' }}>{organizationName}</Text>}
         {data.inn && <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>ИНН: {data.inn}</Text>}
         {data.address && <Text type="secondary" style={{ fontSize: 12 }}>| {String(data.address)}</Text>}
       </div>
@@ -96,9 +101,14 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
           {renderFnInfo(data.fn_expire_date)}
         </div>
 
-        {(data.driver_version || data.fr_firmware) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text type="secondary">Исполнение ФН:</Text>
+          <Text>{fnExecution || '-'}</Text>
+        </div>
+
+        {(data.driver_version || data.fr_firmware || data.fr_downloader) && (
           <div style={{ marginTop: 4, fontSize: 11, color: '#8c8c8c', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: 4 }}>
-            FW: {data.fr_firmware} {data.driver_version ? `| Drv: ${data.driver_version}` : ''}
+            FW: {data.fr_firmware || '-'} {data.fr_downloader ? `| FWDownloader: ${data.fr_downloader}` : ''}{data.driver_version ? `| Drv: ${data.driver_version}` : ''}
           </div>
         )}
       </Space>

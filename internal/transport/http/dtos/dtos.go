@@ -339,20 +339,21 @@ type LoginRequestDTO struct {
 
 // UserDTO - DTO для отображения информации о пользователе.
 type UserDTO struct {
-	ID               uint                   `json:"id"`
-	Username         string                 `json:"username"`
-	FullName         string                 `json:"full_name"`
-	FirstName        string                 `json:"first_name"`
-	LastName         string                 `json:"last_name"`
-	Position         string                 `json:"position"`
-	Roles            []string               `json:"roles"`
-	ExternalSystemID *string                `json:"external_system_id,omitempty"`
-	ExternalType     *string                `json:"external_type,omitempty"`
-	ScheduleType     string                 `json:"schedule_type"`
-	IsActive         bool                   `json:"is_active"`
-	HasLoggedIn      bool                   `json:"has_logged_in"`
-	Integrations     []UserIntegrationDTO   `json:"integrations,omitempty"`
-	ProfileConfig    map[string]interface{} `json:"profile_config,omitempty"`
+	ID               uint                     `json:"id"`
+	Username         string                   `json:"username"`
+	FullName         string                   `json:"full_name"`
+	FirstName        string                   `json:"first_name"`
+	LastName         string                   `json:"last_name"`
+	Position         string                   `json:"position"`
+	Roles            []string                 `json:"roles"`
+	ExternalSystemID *string                  `json:"external_system_id,omitempty"`
+	ExternalType     *string                  `json:"external_type,omitempty"`
+	ScheduleType     string                   `json:"schedule_type"`
+	IsActive         bool                     `json:"is_active"`
+	HasLoggedIn      bool                     `json:"has_logged_in"`
+	Integrations     []UserIntegrationDTO     `json:"integrations,omitempty"`
+	BitrixSuggestion *BitrixUserSuggestionDTO `json:"bitrix_suggestion,omitempty"`
+	ProfileConfig    map[string]interface{}   `json:"profile_config,omitempty"`
 }
 
 type UserIntegrationDTO struct {
@@ -362,6 +363,11 @@ type UserIntegrationDTO struct {
 	IsVerified      bool   `json:"is_verified"`
 	IsLocked        bool   `json:"is_locked"`
 	VerifiedName    string `json:"verified_name,omitempty"`
+}
+
+type BitrixUserSuggestionDTO struct {
+	B24UserID int64  `json:"b24_user_id"`
+	Name      string `json:"name"`
 }
 
 // LoginResponseDTO - тело ответа при успешном входе.

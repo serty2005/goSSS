@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,8 @@ func NewBitrixHandler(service services.BitrixSyncService) *BitrixHandler {
 func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/service-points", h.ListServicePoints)
 	r.Post("/service-points/refresh", h.RefreshServicePoints)
+	r.Get("/users/suggest", h.SuggestUser)
+	r.Post("/users/refresh", h.RefreshUsers)
 	r.Post("/service-points/import/preview", h.PreviewServicePointsImport)
 	r.Post("/service-points/import/sync-preview", h.PreviewServicePointsSync)
 	r.Post("/service-points/import/apply", h.ImportServicePoints)
@@ -79,6 +82,55 @@ func (h *BitrixHandler) PullSync(w http.ResponseWriter, r *http.Request) {
 		"status":            "ok",
 		"deals_updated":     deals,
 		"comments_imported": comments,
+	})
+}
+
+func (h *BitrixHandler) RefreshUsers(w http.ResponseWriter, r *http.Request) {
+	count, err := h.service.RefreshUsers(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ok",
+		"count":  count,
+	})
+}
+
+func (h *BitrixHandler) SuggestUser(w http.ResponseWriter, r *http.Request) {
+	firstName := strings.TrimSpace(r.URL.Query().Get("first_name"))
+	lastName := strings.TrimSpace(r.URL.Query().Get("last_name"))
+	fullName := strings.TrimSpace(r.URL.Query().Get("full_name"))
+	if firstName == "" || lastName == "" {
+		response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{"suggestion": nil})
+		return
+	}
+
+	items, err := h.service.SearchBitrixUsersByName(r.Context(), firstName, lastName, fullName)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(items) == 0 {
+		_, _ = h.service.RefreshUsers(r.Context())
+		items, err = h.service.SearchBitrixUsersByName(r.Context(), firstName, lastName, fullName)
+		if err != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if len(items) == 0 {
+		response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{"suggestion": nil})
+		return
+	}
+
+	found := items[0]
+	name := strings.TrimSpace(strings.Join([]string{found.LastName, found.FirstName, found.SecondName}, " "))
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"suggestion": &api.BitrixUserSuggestionDTO{
+			B24UserID: found.B24UserID,
+			Name:      name,
+		},
 	})
 }
 

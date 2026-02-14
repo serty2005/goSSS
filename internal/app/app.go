@@ -499,6 +499,8 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/bitrix", func(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", a.BitrixHandler.ListServicePoints)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", a.BitrixHandler.SuggestUser)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/users/refresh", a.BitrixHandler.RefreshUsers)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/refresh", a.BitrixHandler.RefreshServicePoints)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/preview", a.BitrixHandler.PreviewServicePointsImport)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/sync-preview", a.BitrixHandler.PreviewServicePointsSync)
@@ -508,8 +510,10 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/profile", func(r chi.Router) {
 			r.Get("/assignees", a.UserHandler.ListAssignees)
+			r.Get("/me", a.UserHandler.GetMyProfile)
 			r.Patch("/credentials", a.UserHandler.UpdateMyCredentials)
 			r.Patch("/integrations", a.UserHandler.UpdateMyIntegrations)
+			r.Post("/integrations/bitrix/sync-suggestion", a.UserHandler.ApplyMyBitrixSuggestion)
 			r.Get("/config", a.UserHandler.GetMyProfileConfig)
 			r.Patch("/config", a.UserHandler.UpdateMyProfileConfig)
 		})

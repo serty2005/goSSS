@@ -1,7 +1,8 @@
-﻿import React, { useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
+  App as AntdApp,
   Button,
   Card,
   Col,
@@ -15,10 +16,10 @@ import {
   Table,
   Tag,
   Typography,
-  message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined, StopOutlined, CheckCircleOutlined, EditOutlined } from '@ant-design/icons';
+import { bitrixAdminApi } from '@/api/bitrixAdmin';
 import { usersApi } from '@/api/users';
 import { UserAdminDTO, UserCreatePayload, UserPosition, UserSchedule, UserUpdatePayload } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
@@ -62,9 +63,12 @@ const getExternalPlaceholder = (external_type?: string): string => {
 };
 
 const UsersAdminPage: React.FC = () => {
+  const { message } = AntdApp.useApp();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserAdminDTO | null>(null);
+  const [createSuggestion, setCreateSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
+  const [editSuggestion, setEditSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
   const [createForm] = Form.useForm<UserCreatePayload>();
   const [editForm] = Form.useForm<UserUpdatePayload>();
   const queryClient = useQueryClient();
@@ -73,6 +77,10 @@ const UsersAdminPage: React.FC = () => {
 
   const watchedCreateExternalType = Form.useWatch('external_type', createForm);
   const watchedEditExternalType = Form.useWatch('external_type', editForm);
+  const watchedCreateFirstName = Form.useWatch('first_name', createForm);
+  const watchedCreateLastName = Form.useWatch('last_name', createForm);
+  const watchedEditFirstName = Form.useWatch('first_name', editForm);
+  const watchedEditLastName = Form.useWatch('last_name', editForm);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-users'],
@@ -83,10 +91,16 @@ const UsersAdminPage: React.FC = () => {
 
   const createMutation = useMutation({
     mutationFn: (payload: UserCreatePayload) => usersApi.createUser(payload),
-    onSuccess: () => {
+    onSuccess: async () => {
       message.success('Пользователь создан');
       setIsCreateOpen(false);
+      setCreateSuggestion(null);
       createForm.resetFields();
+      try {
+        await refreshBitrixUsersMutation.mutateAsync();
+      } catch {
+        // Ошибка уже обработана в refreshBitrixUsersMutation.onError
+      }
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
     onError: (error: any) => {
@@ -100,6 +114,7 @@ const UsersAdminPage: React.FC = () => {
       message.success('Пользователь обновлён');
       setIsEditOpen(false);
       setSelectedUser(null);
+      setEditSuggestion(null);
       editForm.resetFields();
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
@@ -119,6 +134,28 @@ const UsersAdminPage: React.FC = () => {
     },
   });
 
+  const refreshBitrixUsersMutation = useMutation({
+    mutationFn: () => bitrixAdminApi.refreshUsers(),
+    onSuccess: (response) => {
+      message.success(`Кэш пользователей Bitrix24 обновлен: ${response?.data?.count ?? 0}`);
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.error?.error || 'Не удалось обновить пользователей Bitrix24');
+    },
+  });
+
+  const applySuggestionMutation = useMutation({
+    mutationFn: (id: number) => usersApi.applyBitrixSuggestion(id),
+    onSuccess: () => {
+      message.success('Интеграция Bitrix24 применена');
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.error?.error || 'Не удалось применить интеграцию Bitrix24');
+    },
+  });
+
   const openEditModal = (user: UserAdminDTO) => {
     setSelectedUser(user);
     editForm.setFieldsValue({
@@ -131,8 +168,47 @@ const UsersAdminPage: React.FC = () => {
       external_system_id: user.external_system_id,
       password: undefined,
     });
+    setEditSuggestion(user.bitrix_suggestion || null);
     setIsEditOpen(true);
   };
+
+  useEffect(() => {
+    const firstName = String(watchedCreateFirstName || '').trim();
+    const lastName = String(watchedCreateLastName || '').trim();
+    if (!firstName || !lastName) {
+      setCreateSuggestion(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await bitrixAdminApi.suggestUserByName({ first_name: firstName, last_name: lastName, full_name: `${firstName} ${lastName}` });
+        setCreateSuggestion(response?.data?.suggestion || null);
+      } catch {
+        setCreateSuggestion(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [watchedCreateFirstName, watchedCreateLastName]);
+
+  useEffect(() => {
+    const firstName = String(watchedEditFirstName || '').trim();
+    const lastName = String(watchedEditLastName || '').trim();
+    if (!firstName || !lastName || !isEditOpen) {
+      if (!isEditOpen) {
+        setEditSuggestion(null);
+      }
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await bitrixAdminApi.suggestUserByName({ first_name: firstName, last_name: lastName, full_name: `${firstName} ${lastName}` });
+        setEditSuggestion(response?.data?.suggestion || null);
+      } catch {
+        setEditSuggestion(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isEditOpen, watchedEditFirstName, watchedEditLastName]);
 
   const columns: ColumnsType<UserAdminDTO> = useMemo(
     () => [
@@ -161,10 +237,17 @@ const UsersAdminPage: React.FC = () => {
         title: 'Внешняя система',
         key: 'external',
         render: (_, record) => {
-          if (!record.external_system_id && !record.external_type) {
-            return <Text type="secondary">Не указано</Text>;
+          const bitrixIntegration = (record.integrations || []).find((item) => item.integration_type === 'bitrix24');
+          if (record.external_system_id && record.external_type) {
+            return <Text>{record.external_type}: {record.external_system_id}</Text>;
           }
-          return <Text>{record.external_type}: {record.external_system_id}</Text>;
+          if (bitrixIntegration?.external_id) {
+            return <Text>bitrix24: {bitrixIntegration.external_id}</Text>;
+          }
+          if (record.integrations && record.integrations.length > 0) {
+            return <Text>{record.integrations.map((item) => `${item.integration_type}: ${item.external_id}`).join(', ')}</Text>;
+          }
+          return <Text type="secondary">Не указано</Text>;
         },
       },
       {
@@ -193,6 +276,15 @@ const UsersAdminPage: React.FC = () => {
               <Button icon={<EditOutlined />} onClick={() => openEditModal(record)}>
                 Редактировать
               </Button>
+              {record.bitrix_suggestion && (
+                <Button
+                  type="primary"
+                  onClick={() => applySuggestionMutation.mutate(record.id)}
+                  loading={applySuggestionMutation.isPending}
+                >
+                  Синхронизировать Битрикс24
+                </Button>
+              )}
               {record.is_active ? (
                 <Popconfirm
                   title="Заблокировать пользователя?"
@@ -221,7 +313,7 @@ const UsersAdminPage: React.FC = () => {
         },
       },
     ],
-    [currentUser?.id, statusMutation]
+    [applySuggestionMutation, currentUser?.id, statusMutation]
   );
 
   const normalizePayload = (values: UserCreatePayload | UserUpdatePayload) => ({
@@ -260,9 +352,14 @@ const UsersAdminPage: React.FC = () => {
             <Title level={4} style={{ marginBottom: 0 }}>Сотрудники</Title>
             <Text type="secondary">Создание, редактирование и блокировка учетных записей сотрудников</Text>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
-            Добавить сотрудника
-          </Button>
+          <Space>
+            <Button onClick={() => refreshBitrixUsersMutation.mutate()} loading={refreshBitrixUsersMutation.isPending}>
+              Обновить пользователей Битрикс24
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
+              Добавить сотрудника
+            </Button>
+          </Space>
         </Space>
       </Card>
 
@@ -290,7 +387,10 @@ const UsersAdminPage: React.FC = () => {
       <Modal
         title="Новый сотрудник"
         open={isCreateOpen}
-        onCancel={() => setIsCreateOpen(false)}
+        onCancel={() => {
+          setIsCreateOpen(false);
+          setCreateSuggestion(null);
+        }}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
         okText="Создать"
@@ -317,6 +417,28 @@ const UsersAdminPage: React.FC = () => {
           <Form.Item name="last_name" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
             <Input placeholder="Фамилия" />
           </Form.Item>
+
+          {createSuggestion && (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть пользователь в Битрикс - Синхронизировать?</Text>
+                  <Text type="secondary">{createSuggestion.name} (ID: {createSuggestion.b24_user_id})</Text>
+                </Space>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    createForm.setFieldsValue({
+                      external_type: 'bitrix24',
+                      external_system_id: String(createSuggestion.b24_user_id),
+                    });
+                  }}
+                >
+                  Синхронизировать
+                </Button>
+              </Space>
+            </Card>
+          )}
 
           <Form.Item name="position" label="Должность" rules={[{ required: true, message: 'Выберите должность' }]}>
             <Select options={positionOptions} />
@@ -347,6 +469,7 @@ const UsersAdminPage: React.FC = () => {
         onCancel={() => {
           setIsEditOpen(false);
           setSelectedUser(null);
+          setEditSuggestion(null);
           editForm.resetFields();
         }}
         onOk={() => editForm.submit()}
@@ -377,6 +500,28 @@ const UsersAdminPage: React.FC = () => {
           <Form.Item name="last_name" label="Фамилия" rules={[{ required: true, message: 'Введите фамилию' }]}>
             <Input placeholder="Фамилия" />
           </Form.Item>
+
+          {editSuggestion && (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть пользователь в Битрикс - Синхронизировать?</Text>
+                  <Text type="secondary">{editSuggestion.name} (ID: {editSuggestion.b24_user_id})</Text>
+                </Space>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    editForm.setFieldsValue({
+                      external_type: 'bitrix24',
+                      external_system_id: String(editSuggestion.b24_user_id),
+                    });
+                  }}
+                >
+                  Синхронизировать
+                </Button>
+              </Space>
+            </Card>
+          )}
 
           <Form.Item name="position" label="Должность" rules={[{ required: true, message: 'Выберите должность' }]}>
             <Select options={positionOptions} />
@@ -409,5 +554,7 @@ const UsersAdminPage: React.FC = () => {
 };
 
 export default UsersAdminPage;
+
+
 
 

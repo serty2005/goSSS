@@ -17,4 +17,5 @@ type Repository interface {
 	GetRoleByName(ctx context.Context, name string) (*Role, error)
 	EnsureRoleExists(ctx context.Context, name, description string) (*Role, error)
 	ReplaceIntegrations(ctx context.Context, userID uint, items []Integration) error
+	UpdateExternalFields(ctx context.Context, userID uint, externalType, externalID *string) error
 }

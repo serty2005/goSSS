@@ -111,6 +111,7 @@ func (r *serverRepo) FindForPolling(ctx context.Context, limit int, interval tim
 
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
 		Where("ip IS NOT NULL AND ip != ''").
+		Where("LOWER(ip) NOT LIKE ? AND LOWER(ip) NOT LIKE ?", "%iikoweb%", "%syrve.app%").
 		Where("status NOT IN (?, ?)", "archived", "locked").
 		Where("last_polled_at IS NULL OR last_polled_at < ?", threshold).
 		Limit(limit).

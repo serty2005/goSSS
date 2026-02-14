@@ -135,6 +135,8 @@ export interface FiscalEntity {
   fn_number?: string;
   fn_registration_date?: string;
   fn_expire_date?: string;
+  fn_execution?: string;
+  fnExecution?: string;
   
   driver_version?: string;
   fr_firmware?: string;
@@ -423,6 +425,7 @@ export interface UserAdminDTO {
   is_active: boolean;
   has_logged_in: boolean;
   integrations?: UserIntegrationDTO[];
+  bitrix_suggestion?: BitrixUserSuggestionDTO | null;
 }
 
 export interface UserIntegrationDTO {
@@ -432,6 +435,11 @@ export interface UserIntegrationDTO {
   is_verified: boolean;
   is_locked?: boolean;
   verified_name?: string;
+}
+
+export interface BitrixUserSuggestionDTO {
+  b24_user_id: number;
+  name: string;
 }
 
 export interface ThemePaletteConfigDTO {
@@ -446,6 +454,9 @@ export interface UserInterfaceConfigDTO {
   theme_palettes?: {
     light?: ThemePaletteConfigDTO;
     dark?: ThemePaletteConfigDTO;
+  };
+  search?: {
+    cards_columns?: number;
   };
 }
 

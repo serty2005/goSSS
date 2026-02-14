@@ -1,4 +1,3 @@
-// internal/handlers/server_actions_handler.go
 package handlers
 
 import (
@@ -27,7 +26,6 @@ func NewServerActionsHandler(actionsSvc services.ServerActionsService) *ServerAc
 }
 
 // RegisterRoutes регистрирует роуты для действий с серверами.
-// ИЗМЕНЕНИЕ: В URL теперь ожидается внутренний ID, а не UUID.
 func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/servers/{id}/license", h.installLicense)
 	r.Post("/servers/{id}/poll", h.pollServerStatus)
@@ -59,7 +57,6 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 
 	err := h.actionsSvc.InstallLicense(r.Context(), serverID, dto.UniqueID)
 	if err != nil {
-		// Обработка специфичных ошибок
 		var httpErr *iiko.HttpError
 		if errors.As(err, &httpErr) {
 			if httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden {
@@ -94,6 +91,8 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 		switch {
 		case errors.Is(err, services.ErrRateLimitExceeded):
 			response.RespondWithError(w, http.StatusTooManyRequests, "Превышен лимит запросов на опрос статуса для этого сервера (не более 3 раз в 2 минуты)")
+		case errors.Is(err, services.ErrCloudPollingSkipped):
+			response.RespondWithError(w, http.StatusBadRequest, "Для cloud-адресов iikoWeb/syrve.app опрос отключен")
 		case errors.Is(err, domain.ErrNotFound):
 			response.RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
 		default:
@@ -106,7 +105,7 @@ func (h *ServerActionsHandler) pollServerStatus(w http.ResponseWriter, r *http.R
 }
 
 type additionalOwnerRequestDTO struct {
-	CompanyID string `json:"company_id"` // ИЗМЕНЕНИЕ: Поле переименовано
+	CompanyID string `json:"company_id"`
 }
 
 // addAdditionalOwner обрабатывает запрос на добавление дополнительного владельца.

@@ -309,7 +309,7 @@ func (c *Client) UserGet(ctx context.Context, start int) ([]User, int, error) {
 		out = append(out, User{
 			ID:         id,
 			Name:       strings.TrimSpace(toString(m["NAME"])),
-			Active:     strings.EqualFold(toString(m["ACTIVE"]), "Y"),
+			Active:     parseBitrixActive(m["ACTIVE"]),
 			LastName:   strings.TrimSpace(toString(m["LAST_NAME"])),
 			FirstName:  strings.TrimSpace(toString(m["NAME"])),
 			SecondName: strings.TrimSpace(toString(m["SECOND_NAME"])),
@@ -467,6 +467,24 @@ func toInt64(v interface{}) int64 {
 
 func toInt(v interface{}) int {
 	return int(toInt64(v))
+}
+
+func parseBitrixActive(v interface{}) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		val := strings.ToLower(strings.TrimSpace(x))
+		return val == "y" || val == "yes" || val == "true" || val == "1"
+	case float64:
+		return int64(x) != 0
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	default:
+		return false
+	}
 }
 
 func clonePropertyMap(src map[string]interface{}) map[string]interface{} {

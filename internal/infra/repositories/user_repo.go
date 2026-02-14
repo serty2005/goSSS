@@ -61,6 +61,16 @@ func (r *userRepo) ReplaceIntegrations(ctx context.Context, userID uint, items [
 	})
 }
 
+func (r *userRepo) UpdateExternalFields(ctx context.Context, userID uint, externalType, externalID *string) error {
+	return r.db.WithContext(ctx).
+		Model(&user.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"external_type": externalType,
+			"external_id":   externalID,
+		}).Error
+}
+
 func (r *userRepo) Delete(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&user.User{}, id).Error
 }

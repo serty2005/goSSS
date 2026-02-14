@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { ConfigProvider } from 'antd';
+import { App as AntdApp, ConfigProvider } from 'antd';
 import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ruRU from 'antd/locale/ru_RU';
@@ -87,81 +87,83 @@ const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode, paletteByMode)}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-
-            <Route
-              path="/"
-              element={(
-                <ProtectedRoute>
-                  <MainLayout />
-                </ProtectedRoute>
-              )}
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="search" element={<SearchPage />} />
-              <Route
-                path="tasks"
-                element={(
-                  <AdminRoute>
-                    <TasksPage />
-                  </AdminRoute>
-                )}
-              />
-              <Route path="tickets" element={<TicketsPage />} />
-              <Route path="tickets/:id" element={<TicketDetailsPage />} />
-              <Route path="profile" element={<ProfilePage />} />
-
-              <Route path="companies" element={<CompaniesListPage />} />
-              <Route path="companies/:id" element={<CompanyPage />} />
-              <Route
-                path="acceptance"
-                element={(
-                  <SupportOrAdminRoute>
-                    <AcceptancePage />
-                  </SupportOrAdminRoute>
-                )}
-              />
-              <Route
-                path="network-acceptance"
-                element={(
-                  <SupportOrAdminRoute>
-                    <NetworkAcceptancePage />
-                  </SupportOrAdminRoute>
-                )}
-              />
-
-              <Route path="servers" element={<ServersPage />} />
-              <Route path="servers/:id" element={<ServerDetails />} />
-
-              <Route path="workstations" element={<WorkstationsPage />} />
-              <Route path="workstations/:id" element={<WorkstationDetails />} />
-
-              <Route path="fiscals" element={<FiscalsPage />} />
-              <Route path="fiscals/:id" element={<FiscalDetails />} />
+        <AntdApp>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
 
               <Route
-                path="admin"
+                path="/"
                 element={(
-                  <AdminRoute>
-                    <UsersAdminPage />
-                  </AdminRoute>
+                  <ProtectedRoute>
+                    <MainLayout />
+                  </ProtectedRoute>
                 )}
-              />
-              <Route
-                path="admin/service-points-import"
-                element={(
-                  <AdminRoute>
-                    <ServicePointsImportPage />
-                  </AdminRoute>
-                )}
-              />
-            </Route>
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="search" element={<SearchPage />} />
+                <Route
+                  path="tasks"
+                  element={(
+                    <AdminRoute>
+                      <TasksPage />
+                    </AdminRoute>
+                  )}
+                />
+                <Route path="tickets" element={<TicketsPage />} />
+                <Route path="tickets/:id" element={<TicketDetailsPage />} />
+                <Route path="profile" element={<ProfilePage />} />
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
+                <Route path="companies" element={<CompaniesListPage />} />
+                <Route path="companies/:id" element={<CompanyPage />} />
+                <Route
+                  path="acceptance"
+                  element={(
+                    <SupportOrAdminRoute>
+                      <AcceptancePage />
+                    </SupportOrAdminRoute>
+                  )}
+                />
+                <Route
+                  path="network-acceptance"
+                  element={(
+                    <SupportOrAdminRoute>
+                      <NetworkAcceptancePage />
+                    </SupportOrAdminRoute>
+                  )}
+                />
+
+                <Route path="servers" element={<ServersPage />} />
+                <Route path="servers/:id" element={<ServerDetails />} />
+
+                <Route path="workstations" element={<WorkstationsPage />} />
+                <Route path="workstations/:id" element={<WorkstationDetails />} />
+
+                <Route path="fiscals" element={<FiscalsPage />} />
+                <Route path="fiscals/:id" element={<FiscalDetails />} />
+
+                <Route
+                  path="admin"
+                  element={(
+                    <AdminRoute>
+                      <UsersAdminPage />
+                    </AdminRoute>
+                  )}
+                />
+                <Route
+                  path="admin/service-points-import"
+                  element={(
+                    <AdminRoute>
+                      <ServicePointsImportPage />
+                    </AdminRoute>
+                  )}
+                />
+              </Route>
+
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AntdApp>
       </ConfigProvider>
     </QueryClientProvider>
   );

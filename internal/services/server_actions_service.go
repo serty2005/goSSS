@@ -19,7 +19,8 @@ import (
 )
 
 var (
-	ErrRateLimitExceeded = errors.New("слишком много запросов на опрос сервера")
+	ErrRateLimitExceeded   = errors.New("слишком много запросов на опрос сервера")
+	ErrCloudPollingSkipped = errors.New("для cloud-адресов опрос не поддерживается")
 )
 
 const (
@@ -63,12 +64,15 @@ func (s *serverActionsServiceImpl) PollSingleServer(ctx context.Context, serverI
 		return ErrRateLimitExceeded
 	}
 
-	server, err := s.serverRepo.GetByID(ctx, serverID)
+	serverModel, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера из БД: %w", err)
 	}
-	if server == nil {
+	if serverModel == nil {
 		return gorm.ErrRecordNotFound
+	}
+	if isCloudPollingAddress(serverModel.IP) {
+		return ErrCloudPollingSkipped
 	}
 
 	s.logger.Info("Получен ручной запрос на опрос сервера. Публикация события...", "serverID", serverID)
@@ -105,22 +109,33 @@ func (s *serverActionsServiceImpl) checkRateLimit(serverID string) bool {
 	return true
 }
 
+func isCloudPollingAddress(ip *string) bool {
+	if ip == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(*ip))
+	if value == "" {
+		return false
+	}
+	return strings.Contains(value, "iikoweb") || strings.Contains(value, "syrve.app")
+}
+
 // InstallLicense выполняет установку лицензии на iiko-сервер.
 func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID, uniqueID string) error {
-	server, err := s.serverRepo.GetByID(ctx, serverID)
+	serverModel, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
-	if server == nil {
+	if serverModel == nil {
 		return gorm.ErrRecordNotFound
 	}
-	if server.IP == nil || *server.IP == "" {
+	if serverModel.IP == nil || *serverModel.IP == "" {
 		return fmt.Errorf("у сервера отсутствует IP-адрес для подключения")
 	}
 
-	serverURL := fmt.Sprintf("http://%s", *server.IP)
-	if strings.Contains(*server.IP, ":443") {
-		serverURL = fmt.Sprintf("https://%s", strings.Split(*server.IP, ":")[0])
+	serverURL := fmt.Sprintf("http://%s", *serverModel.IP)
+	if strings.Contains(*serverModel.IP, ":443") {
+		serverURL = fmt.Sprintf("https://%s", strings.Split(*serverModel.IP, ":")[0])
 	}
 
 	log := s.logger.With("server_id", serverID, "server_url", serverURL, "uid", uniqueID)
@@ -141,11 +156,11 @@ func (s *serverActionsServiceImpl) InstallLicense(ctx context.Context, serverID,
 }
 
 func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serverID, companyID string) error {
-	server, err := s.serverRepo.GetByID(ctx, serverID)
+	serverModel, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
-	if server == nil {
+	if serverModel == nil {
 		return gorm.ErrRecordNotFound
 	}
 
@@ -167,11 +182,11 @@ func (s *serverActionsServiceImpl) AddAdditionalOwner(ctx context.Context, serve
 }
 
 func (s *serverActionsServiceImpl) RemoveAdditionalOwner(ctx context.Context, serverID, companyID string) error {
-	server, err := s.serverRepo.GetByID(ctx, serverID)
+	serverModel, err := s.serverRepo.GetByID(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения сервера: %w", err)
 	}
-	if server == nil {
+	if serverModel == nil {
 		return gorm.ErrRecordNotFound
 	}
 

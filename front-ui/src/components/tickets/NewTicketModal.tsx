@@ -6,6 +6,7 @@ import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import { normalizeServerAddress } from '@/utils/formatters';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 
@@ -231,14 +232,18 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       return null;
     }
 
+    const formattedServerIp = item.entity_type === 'Server'
+      ? normalizeServerAddress(data.ip as string | undefined, { dropPort443: true })
+      : '';
+
     const items = [
-      ...(item.entity_type === 'Server' ? [{ label: 'IP', value: data.ip as string | undefined }] : []),
+      ...(item.entity_type === 'Server' ? [{ label: 'IP', value: formattedServerIp || undefined }] : []),
       { label: 'AnyDesk', value: data.anydesk as string | undefined },
       { label: 'TeamViewer', value: data.teamviewer as string | undefined },
       { label: 'rdp', value: data.rdp as string | undefined },
       { label: 'LM', value: data.litemanager as string | undefined },
       ...(item.entity_type === 'Server'
-        ? [{ label: 'Партнёрский портал', value: data.partners_link as string | undefined, isLink: true }]
+        ? [{ label: 'Partners', value: data.partners_link as string | undefined, isLink: true }]
         : []),
     ];
 
@@ -539,9 +544,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                             {group.connections.map((entry) => (
                               entry.isLink ? (
                                 <Paragraph key={`${group.title}-${entry.label}-${entry.value}`} style={{ margin: 0 }}>
-                                  <Text type="secondary">{entry.label}:</Text>{' '}
                                   <a href={entry.value} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                                    {entry.value}
+                                    {entry.label}
                                   </a>
                                 </Paragraph>
                               ) : (

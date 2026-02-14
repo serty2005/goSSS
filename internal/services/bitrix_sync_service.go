@@ -30,6 +30,7 @@ type BitrixSyncService interface {
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
 	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error)
+	SearchBitrixUsersByName(ctx context.Context, firstName, lastName, fullName string) ([]bitrix.UserCache, error)
 	RefreshUsers(ctx context.Context) (int, error)
 	PreviewServicePointsImport(ctx context.Context, fileName string, content []byte) (*ServicePointImportPreview, error)
 	PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error)
@@ -82,28 +83,40 @@ func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string)
 		return fmt.Errorf("для синхронизации с Bitrix24 не выбрана точка обслуживания")
 	}
 
-	deals, err := s.client.DealListByOrigin(ctx, s.cfg.BitrixOriginatorID, ticket.ID)
+	dealID, err := s.upsertDealAndLink(ctx, ticket)
 	if err != nil {
 		return err
 	}
+	return s.syncPendingComments(ctx, ticket, dealID)
+}
+
+func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *tickets.Ticket) (int64, error) {
+	if ticket == nil {
+		return 0, fmt.Errorf("тикет не найден")
+	}
+
+	deals, err := s.client.DealListByOrigin(ctx, s.cfg.BitrixOriginatorID, ticket.ID)
+	if err != nil {
+		return 0, err
+	}
 	if len(deals) > 1 {
-		return fmt.Errorf("обнаружено более одной сделки Bitrix24 для тикета %s", ticket.ID)
+		return 0, fmt.Errorf("обнаружено более одной сделки Bitrix24 для тикета %s", ticket.ID)
 	}
 
 	fields, err := s.buildDealFields(ctx, ticket)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var dealID int64
 	if len(deals) == 0 {
 		dealID, err = s.client.DealAdd(ctx, fields)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	} else {
 		dealID = deals[0].ID
 		if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -112,10 +125,9 @@ func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string)
 		B24DealID:  dealID,
 		LastSyncAt: time.Now(),
 	}); err != nil {
-		return err
+		return 0, err
 	}
-
-	return s.syncPendingComments(ctx, ticket, dealID)
+	return dealID, nil
 }
 
 func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error {
@@ -135,12 +147,13 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 		return err
 	}
 	if link == nil {
-		if err := s.SyncTicketByID(ctx, ticketID); err != nil {
-			return err
+		dealID, ensureErr := s.upsertDealAndLink(ctx, ticket)
+		if ensureErr != nil {
+			return ensureErr
 		}
-		link, err = s.repo.GetDealLinkByTicketID(ctx, ticketID)
-		if err != nil || link == nil {
-			return fmt.Errorf("не удалось получить связку сделки Bitrix24 для тикета %s", ticketID)
+		link = &bitrix.DealLink{
+			TicketID:  ticketID,
+			B24DealID: dealID,
 		}
 	}
 
@@ -273,6 +286,40 @@ func (s *bitrixSyncService) ListServicePoints(ctx context.Context) ([]bitrix.Ser
 
 func (s *bitrixSyncService) SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error) {
 	return s.repo.SearchServicePoints(ctx, term, limit, offset, randomWhenEmpty)
+}
+
+func (s *bitrixSyncService) SearchBitrixUsersByName(ctx context.Context, firstName, lastName, fullName string) ([]bitrix.UserCache, error) {
+	items, err := s.repo.ListUserCache(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return []bitrix.UserCache{}, nil
+	}
+
+	userFirst := normalizePersonToken(firstName)
+	userLast := normalizePersonToken(lastName)
+	userFull := normalizePersonToken(fullName)
+
+	result := make([]bitrix.UserCache, 0, 1)
+	for i := range items {
+		item := items[i]
+		if !item.Active {
+			continue
+		}
+		cacheFirst := normalizePersonToken(item.FirstName)
+		cacheLast := normalizePersonToken(item.LastName)
+		cacheFull := normalizePersonToken(strings.Join([]string{item.LastName, item.FirstName, item.SecondName}, " "))
+
+		if userFirst != "" && userLast != "" && userFirst == cacheFirst && userLast == cacheLast {
+			result = append(result, item)
+			continue
+		}
+		if userFull != "" && userFull == cacheFull {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }
 
 func (s *bitrixSyncService) RefreshUsers(ctx context.Context) (int, error) {
@@ -590,7 +637,12 @@ func (s *bitrixSyncService) rebuildUserMapFromExternalIDs(ctx context.Context) e
 				})
 				s.log.Info("Bitrix24: создана автоматическая интеграция пользователя", "etalon_user_id", u.ID, "b24_user_id", id, "verified_name", verifiedName)
 			}
+			externalType := user.ExternalTypeBitrix24
+			externalID := strconv.FormatInt(id, 10)
+			u.ExternalType = &externalType
+			u.ExternalID = &externalID
 			_ = s.userRepo.ReplaceIntegrations(ctx, u.ID, u.Integrations)
+			_ = s.userRepo.Update(ctx, &u)
 			break
 		}
 	}
@@ -617,15 +669,15 @@ func findBitrixUserIDsByName(u *user.User, cacheItems []bitrix.UserCache) []int6
 	if u == nil || len(cacheItems) == 0 {
 		return nil
 	}
-	userFirst := strings.ToLower(strings.TrimSpace(u.FirstName))
-	userLast := strings.ToLower(strings.TrimSpace(u.LastName))
-	userFull := strings.ToLower(strings.TrimSpace(u.FullName))
+	userFirst := normalizePersonToken(u.FirstName)
+	userLast := normalizePersonToken(u.LastName)
+	userFull := normalizePersonToken(u.FullName)
 
 	matches := make([]int64, 0, 1)
 	for i := range cacheItems {
-		cacheFirst := strings.ToLower(strings.TrimSpace(cacheItems[i].FirstName))
-		cacheLast := strings.ToLower(strings.TrimSpace(cacheItems[i].LastName))
-		cacheFull := strings.ToLower(strings.TrimSpace(strings.Join([]string{cacheItems[i].LastName, cacheItems[i].FirstName, cacheItems[i].SecondName}, " ")))
+		cacheFirst := normalizePersonToken(cacheItems[i].FirstName)
+		cacheLast := normalizePersonToken(cacheItems[i].LastName)
+		cacheFull := normalizePersonToken(strings.Join([]string{cacheItems[i].LastName, cacheItems[i].FirstName, cacheItems[i].SecondName}, " "))
 		if userFirst != "" && userLast != "" && userFirst == cacheFirst && userLast == cacheLast {
 			matches = append(matches, cacheItems[i].B24UserID)
 			continue
@@ -634,10 +686,10 @@ func findBitrixUserIDsByName(u *user.User, cacheItems []bitrix.UserCache) []int6
 			matches = append(matches, cacheItems[i].B24UserID)
 		}
 	}
-	if len(matches) == 1 {
-		return matches
+	if len(matches) == 0 {
+		return nil
 	}
-	return nil
+	return []int64{matches[0]}
 }
 
 func collectBitrixCandidateIDs(u *user.User) []int64 {
@@ -693,16 +745,16 @@ func (s *bitrixSyncService) verifyBitrixUserMatch(ctx context.Context, u *user.U
 		return false, ""
 	}
 
-	userFirst := strings.ToLower(strings.TrimSpace(u.FirstName))
-	userLast := strings.ToLower(strings.TrimSpace(u.LastName))
-	cacheFirst := strings.ToLower(strings.TrimSpace(target.FirstName))
-	cacheLast := strings.ToLower(strings.TrimSpace(target.LastName))
+	userFirst := normalizePersonToken(u.FirstName)
+	userLast := normalizePersonToken(u.LastName)
+	cacheFirst := normalizePersonToken(target.FirstName)
+	cacheLast := normalizePersonToken(target.LastName)
 	if userFirst != "" && userLast != "" && userFirst == cacheFirst && userLast == cacheLast {
 		return true, strings.TrimSpace(strings.Join([]string{target.LastName, target.FirstName, target.SecondName}, " "))
 	}
 
-	userFull := strings.ToLower(strings.TrimSpace(u.FullName))
-	cacheFull := strings.ToLower(strings.TrimSpace(strings.Join([]string{target.LastName, target.FirstName, target.SecondName}, " ")))
+	userFull := normalizePersonToken(u.FullName)
+	cacheFull := normalizePersonToken(strings.Join([]string{target.LastName, target.FirstName, target.SecondName}, " "))
 	if userFull != "" && cacheFull != "" && userFull == cacheFull {
 		return true, strings.TrimSpace(strings.Join([]string{target.LastName, target.FirstName, target.SecondName}, " "))
 	}
@@ -803,6 +855,13 @@ func toPlainText(v string) string {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func normalizePersonToken(v string) string {
+	out := strings.ToLower(strings.TrimSpace(v))
+	out = strings.ReplaceAll(out, "ё", "е")
+	out = strings.Join(strings.Fields(out), " ")
+	return out
 }
 
 func (s *bitrixSyncService) closeResolvedTickets(ctx context.Context, threshold time.Duration) (int, error) {

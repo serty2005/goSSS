@@ -1,6 +1,6 @@
-﻿import React, { useMemo } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Button, Card, Form, Input, Space, Typography, message, Select } from 'antd';
+import React, { useEffect, useMemo } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { App as AntdApp, Button, Card, Form, Input, Select, Space, Typography } from 'antd';
 import { profileApi } from '@/api/profile';
 import { useAuthStore } from '@/store/authStore';
 
@@ -10,6 +10,7 @@ type CredentialsForm = {
   username: string;
   password?: string;
   confirmPassword?: string;
+  cards_columns?: number;
   integrations?: Array<{ integration_type?: string; external_id?: string; is_locked?: boolean; is_verified?: boolean; verified_name?: string }>;
 };
 
@@ -20,9 +21,23 @@ const integrationOptions = [
 ];
 
 const ProfilePage: React.FC = () => {
+  const { message } = AntdApp.useApp();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const [form] = Form.useForm<CredentialsForm>();
+
+  const profileQuery = useQuery({
+    queryKey: ['profile-me'],
+    queryFn: () => profileApi.getMyProfile(),
+  });
+
+  useEffect(() => {
+    const dtoUser = profileQuery.data?.data;
+    if (!dtoUser) {
+      return;
+    }
+    setUser(dtoUser as any);
+  }, [profileQuery.data?.data, setUser]);
 
   const initialIntegrations = useMemo(() => {
     return (user?.integrations || []).map((item) => ({
@@ -34,12 +49,40 @@ const ProfilePage: React.FC = () => {
     }));
   }, [user?.integrations]);
 
+  useEffect(() => {
+    form.setFieldsValue({
+      username: user?.username || '',
+      integrations: initialIntegrations,
+      cards_columns: Number(user?.profile_config?.interface?.search?.cards_columns ?? 5),
+    });
+  }, [form, initialIntegrations, user?.profile_config?.interface?.search?.cards_columns, user?.username]);
+
   const updateCredentialsMutation = useMutation({
     mutationFn: (payload: { username?: string; password?: string }) => profileApi.updateCredentials(payload),
   });
 
   const updateIntegrationsMutation = useMutation({
     mutationFn: (payload: { integrations: Array<{ integration_type: string; external_id: string }> }) => profileApi.updateIntegrations(payload),
+  });
+
+  const updateConfigMutation = useMutation({
+    mutationFn: (payload: { profile_config: Record<string, unknown> }) => profileApi.updateConfig(payload as any),
+  });
+
+  const applySuggestionMutation = useMutation({
+    mutationFn: () => profileApi.applyBitrixSuggestion(),
+    onSuccess: (response) => {
+      const dtoUser = response?.data;
+      if (!dtoUser) {
+        message.error('Не удалось применить интеграцию Bitrix24');
+        return;
+      }
+      setUser(dtoUser as any);
+      message.success('Интеграция Bitrix24 добавлена');
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.error?.error || 'Не удалось применить интеграцию Bitrix24');
+    },
   });
 
   const onFinish = async (values: CredentialsForm) => {
@@ -70,7 +113,17 @@ const ProfilePage: React.FC = () => {
       .sort();
     const integrationsChanged = currentIntegrations.join('|') !== nextIntegrations.join('|');
 
-    if (!credentialsPayload.username && !credentialsPayload.password && !integrationsChanged) {
+    const currentColumnsRaw = Number(user.profile_config?.interface?.search?.cards_columns ?? 5);
+    const currentColumns = Number.isFinite(currentColumnsRaw)
+      ? Math.max(1, Math.min(5, Math.round(currentColumnsRaw)))
+      : 5;
+    const nextColumnsRaw = Number(values.cards_columns ?? currentColumns);
+    const nextColumns = Number.isFinite(nextColumnsRaw)
+      ? Math.max(1, Math.min(5, Math.round(nextColumnsRaw)))
+      : currentColumns;
+    const columnsChanged = nextColumns !== currentColumns;
+
+    if (!credentialsPayload.username && !credentialsPayload.password && !integrationsChanged && !columnsChanged) {
       message.info('Нет изменений для сохранения');
       return;
     }
@@ -85,13 +138,7 @@ const ProfilePage: React.FC = () => {
         const response = await updateIntegrationsMutation.mutateAsync({ integrations: normalizedIntegrations });
         const dtoUser = (response as any)?.data;
         if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
-          updatedUser = {
-            ...updatedUser,
-            integrations: dtoUser.integrations || [],
-            external_type: dtoUser.external_type,
-            external_system_id: dtoUser.external_system_id,
-            profile_config: dtoUser.profile_config || updatedUser.profile_config,
-          };
+          updatedUser = { ...updatedUser, ...dtoUser };
         } else {
           updatedUser = {
             ...updatedUser,
@@ -102,6 +149,26 @@ const ProfilePage: React.FC = () => {
               is_verified: false,
             })),
           };
+        }
+      }
+
+      if (columnsChanged) {
+        const nextConfig = {
+          ...(updatedUser.profile_config || {}),
+          interface: {
+            ...((updatedUser.profile_config || {}).interface || {}),
+            search: {
+              ...((updatedUser.profile_config || {}).interface?.search || {}),
+              cards_columns: nextColumns,
+            },
+          },
+        };
+        const configResponse = await updateConfigMutation.mutateAsync({ profile_config: nextConfig });
+        const dtoUser = (configResponse as any)?.data;
+        if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
+          updatedUser = { ...updatedUser, ...dtoUser };
+        } else {
+          updatedUser = { ...updatedUser, profile_config: nextConfig };
         }
       }
 
@@ -125,11 +192,29 @@ const ProfilePage: React.FC = () => {
         <Text type="secondary">Логин, пароль и внешние интеграции</Text>
       </Card>
 
-      <Card className="glass-panel" title="Учётные данные и интеграции">
+      {user?.bitrix_suggestion && (
+        <Card className="glass-panel">
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space direction="vertical" size={0}>
+              <Text strong>Есть пользователь в Битрикс - Синхронизировать?</Text>
+              <Text type="secondary">{user.bitrix_suggestion.name} (ID: {user.bitrix_suggestion.b24_user_id})</Text>
+            </Space>
+            <Button type="primary" onClick={() => applySuggestionMutation.mutate()} loading={applySuggestionMutation.isPending}>
+              Синхронизировать
+            </Button>
+          </Space>
+        </Card>
+      )}
+
+      <Card className="glass-panel" title="Учётные данные и интеграции" loading={profileQuery.isLoading}>
         <Form<CredentialsForm>
           form={form}
           layout="vertical"
-          initialValues={{ username: user?.username || '', integrations: initialIntegrations }}
+          initialValues={{
+            username: user?.username || '',
+            integrations: initialIntegrations,
+            cards_columns: Number(user?.profile_config?.interface?.search?.cards_columns ?? 5),
+          }}
           onFinish={onFinish}
         >
           <Form.Item name="username" label="Логин" rules={[{ required: true, message: 'Введите логин' }]}>
@@ -165,7 +250,6 @@ const ProfilePage: React.FC = () => {
                 {fields.map((field) => (
                   <Space key={field.key} style={{ display: 'flex', width: '100%' }} align="start">
                     <Form.Item
-                      {...field}
                       name={[field.name, 'integration_type']}
                       label="Система"
                       rules={[{ required: true, message: 'Выберите систему' }]}
@@ -174,7 +258,6 @@ const ProfilePage: React.FC = () => {
                       <Select options={integrationOptions} placeholder="Система" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
                     </Form.Item>
                     <Form.Item
-                      {...field}
                       name={[field.name, 'external_id']}
                       label="ID"
                       rules={[{ required: true, message: 'Введите ID' }]}
@@ -182,13 +265,9 @@ const ProfilePage: React.FC = () => {
                     >
                       <Input placeholder="ID во внешней системе" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
                     </Form.Item>
-                    {!form.getFieldValue(['integrations', field.name, 'is_locked']) ? (
-                      <Button onClick={() => remove(field.name)} danger style={{ marginTop: 30 }}>
-                        Удалить
-                      </Button>
-                    ) : (
-                      <Text type="secondary" style={{ marginTop: 34 }}>Автопривязка</Text>
-                    )}
+                    <Button onClick={() => remove(field.name)} danger style={{ marginTop: 30 }}>
+                      Удалить
+                    </Button>
                   </Space>
                 ))}
                 <Button onClick={() => add()} type="dashed" block>
@@ -198,10 +277,23 @@ const ProfilePage: React.FC = () => {
             )}
           </Form.List>
 
+          <Form.Item name="cards_columns" label="Количество колонок карточек в поиске">
+            <Select
+              options={[
+                { value: 1, label: '1 колонка' },
+                { value: 2, label: '2 колонки' },
+                { value: 3, label: '3 колонки' },
+                { value: 4, label: '4 колонки' },
+                { value: 5, label: '5 колонок' },
+              ]}
+              style={{ maxWidth: 220 }}
+            />
+          </Form.Item>
+
           <Button
             type="primary"
             htmlType="submit"
-            loading={updateCredentialsMutation.isPending || updateIntegrationsMutation.isPending}
+            loading={updateCredentialsMutation.isPending || updateIntegrationsMutation.isPending || updateConfigMutation.isPending}
             style={{ marginTop: 16 }}
           >
             Сохранить

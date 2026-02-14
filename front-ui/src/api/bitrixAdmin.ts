@@ -1,12 +1,25 @@
 import apiClient from './axios';
 import {
   ApiResponse,
+  BitrixUserSuggestionDTO,
   ServicePointImportPreviewDTO,
   ServicePointSyncApplyResultDTO,
   ServicePointSyncPreviewDTO,
 } from '@/types/api';
 
 export const bitrixAdminApi = {
+  refreshUsers: async () => {
+    const response = await apiClient.post<ApiResponse<{ status: string; count: number }>>('/bitrix/users/refresh');
+    return response.data;
+  },
+
+  suggestUserByName: async (params: { first_name: string; last_name: string; full_name?: string }) => {
+    const response = await apiClient.get<ApiResponse<{ suggestion?: BitrixUserSuggestionDTO | null }>>('/bitrix/users/suggest', {
+      params,
+    });
+    return response.data;
+  },
+
   previewServicePointsImport: async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);

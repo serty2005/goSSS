@@ -66,6 +66,10 @@ func (g *serverPollingGatewayImpl) handlePollingRequest(ctx context.Context, eve
 		log.Error("Не удалось найти сервер для ручного опроса", "error", err)
 		return
 	}
+	if isCloudPollingAddress(server.IP) {
+		log.Info("Опрос cloud-сервера пропущен")
+		return
+	}
 	go g.processServer(context.Background(), *server)
 }
 
@@ -95,6 +99,11 @@ func (g *serverPollingGatewayImpl) runCycle(ctx context.Context) {
 
 // processServer обрабатывает один сервер и публикует событие.
 func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server server.Server) {
+	if isCloudPollingAddress(server.IP) {
+		g.logger.Info("Опрос cloud-сервера пропущен", "server_id", server.ID)
+		return
+	}
+
 	serverIP := utils.SafeStringDereference(server.IP)
 	requestID := server.ID
 	if serverIP != "" {
@@ -218,4 +227,15 @@ func shortenVersion(fullVersion string) string {
 		return matches[1]
 	}
 	return fullVersion
+}
+
+func isCloudPollingAddress(ip *string) bool {
+	if ip == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(*ip))
+	if value == "" {
+		return false
+	}
+	return strings.Contains(value, "iikoweb") || strings.Contains(value, "syrve.app")
 }
