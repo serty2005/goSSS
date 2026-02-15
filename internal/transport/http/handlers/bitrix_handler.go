@@ -31,7 +31,6 @@ func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/service-points/import/preview", h.PreviewServicePointsImport)
 	r.Post("/service-points/import/sync-preview", h.PreviewServicePointsSync)
 	r.Post("/service-points/import/apply", h.ImportServicePoints)
-	r.Post("/sync/pull", h.PullSync)
 }
 
 func (h *BitrixHandler) ListServicePoints(w http.ResponseWriter, r *http.Request) {
@@ -72,19 +71,6 @@ func (h *BitrixHandler) RefreshServicePoints(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (h *BitrixHandler) PullSync(w http.ResponseWriter, r *http.Request) {
-	deals, comments, err := h.service.PullFromBitrix(r.Context())
-	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"status":            "ok",
-		"deals_updated":     deals,
-		"comments_imported": comments,
-	})
-}
-
 func (h *BitrixHandler) RefreshUsers(w http.ResponseWriter, r *http.Request) {
 	count, err := h.service.RefreshUsers(r.Context())
 	if err != nil {
@@ -110,14 +96,6 @@ func (h *BitrixHandler) SuggestUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if len(items) == 0 {
-		_, _ = h.service.RefreshUsers(r.Context())
-		items, err = h.service.SearchBitrixUsersByName(r.Context(), firstName, lastName, fullName)
-		if err != nil {
-			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
 	}
 	if len(items) == 0 {
 		response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{"suggestion": nil})

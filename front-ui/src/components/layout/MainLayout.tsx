@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid } from 'antd';
+import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Badge, Drawer, List, notification } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
@@ -15,8 +15,9 @@ import {
   MenuUnfoldOutlined,
   SunOutlined,
   MoonOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import HeaderSearch from '@/components/common/HeaderSearch';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
@@ -29,6 +30,23 @@ const { Text } = Typography;
 const { useBreakpoint } = Grid;
 
 type EditableColorKey = 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor';
+
+type TicketRealtimePayload = {
+  ticket_id?: string;
+  action?: string;
+  source?: string;
+  message?: string;
+  occurred_at?: string;
+};
+
+type TicketNotificationItem = {
+  id: string;
+  ticketID: string;
+  action: string;
+  source: string;
+  message: string;
+  occurredAt: string;
+};
 
 const colorLabels: Record<EditableColorKey, string> = {
   primary: 'Акцент',
@@ -74,9 +92,22 @@ const normalizeColor = (value: string | undefined, fallback: string) => {
   return /^#[\da-f]{6}$/.test(candidate) ? candidate : fallback;
 };
 
+const MAX_TICKET_NOTIFICATIONS = 50;
+
+const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
+  if (item.message.trim()) {
+    return item.message.trim();
+  }
+  return 'Событие по тикету';
+};
+
 const MainLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const notificationsOpenRef = useRef(false);
   const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
     primary: null,
     bgLayout: null,
@@ -86,6 +117,7 @@ const MainLayout: React.FC = () => {
 
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
   const { token } = antTheme.useToken();
   const screens = useBreakpoint();
 
@@ -93,6 +125,7 @@ const MainLayout: React.FC = () => {
   const setTheme = useUiStore((state) => state.setTheme);
 
   const user = useAuthStore((state) => state.user);
+  const authToken = useAuthStore((state) => state.token);
   const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
 
@@ -125,6 +158,153 @@ const MainLayout: React.FC = () => {
   useEffect(() => {
     setCollapsed(!screens.lg);
   }, [screens.lg]);
+
+  useEffect(() => {
+    if (!notificationsOpen) {
+      return;
+    }
+    setUnreadNotifications(0);
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    notificationsOpenRef.current = notificationsOpen;
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (!authToken) {
+      return undefined;
+    }
+
+    let stopped = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const decoder = new TextDecoder();
+
+    const pushNotification = (payload: TicketRealtimePayload) => {
+      const ticketID = String(payload.ticket_id || '').trim();
+      if (!ticketID) {
+        return;
+      }
+
+      const item: TicketNotificationItem = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        ticketID,
+        action: String(payload.action || '').trim(),
+        source: String(payload.source || '').trim() || 'system',
+        message: String(payload.message || '').trim(),
+        occurredAt: String(payload.occurred_at || new Date().toISOString()),
+      };
+
+      setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
+      if (!notificationsOpenRef.current) {
+        setUnreadNotifications((value) => value + 1);
+      }
+
+      notification.info({
+        message: `Тикет #${ticketID}`,
+        description: renderTicketNotificationTitle(item),
+        placement: 'topRight',
+        duration: 3,
+      });
+
+      void queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
+    };
+
+    const handleSSEEvent = (eventType: string, rawData: string) => {
+      if (eventType !== 'ticket.updated') {
+        return;
+      }
+      try {
+        const payload = JSON.parse(rawData) as TicketRealtimePayload;
+        pushNotification(payload);
+      } catch {
+        // Пропускаем некорректные сообщения, соединение оставляем активным.
+      }
+    };
+
+    const connect = async () => {
+      while (!stopped) {
+        controller = new AbortController();
+        try {
+          const response = await fetch('/api/events', {
+            method: 'GET',
+            headers: {
+              Accept: 'text/event-stream',
+              Authorization: `Bearer ${authToken}`,
+            },
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) {
+            throw new Error(`sse status ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          let buffer = '';
+          let eventType = '';
+          let dataLines: string[] = [];
+
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+
+            for (;;) {
+              const newLineIdx = buffer.indexOf('\n');
+              if (newLineIdx < 0) {
+                break;
+              }
+              const lineRaw = buffer.slice(0, newLineIdx);
+              buffer = buffer.slice(newLineIdx + 1);
+              const line = lineRaw.replace(/\r$/, '');
+
+              if (line === '') {
+                if (dataLines.length > 0) {
+                  handleSSEEvent(eventType.trim(), dataLines.join('\n'));
+                }
+                eventType = '';
+                dataLines = [];
+                continue;
+              }
+              if (line.startsWith(':')) {
+                continue;
+              }
+              if (line.startsWith('event:')) {
+                eventType = line.slice('event:'.length).trim();
+                continue;
+              }
+              if (line.startsWith('data:')) {
+                dataLines.push(line.slice('data:'.length).trimStart());
+              }
+            }
+          }
+        } catch {
+          // При разрыве соединения пробуем переподключиться.
+        }
+
+        if (stopped) {
+          break;
+        }
+        await new Promise<void>((resolve) => {
+          reconnectTimer = setTimeout(() => resolve(), 2000);
+        });
+      }
+    };
+
+    void connect();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (controller) {
+        controller.abort();
+      }
+    };
+  }, [authToken, queryClient]);
 
   const updateConfigMutation = useMutation({
     mutationFn: (payload: { profile_config: Record<string, unknown> }) => profileApi.updateConfig(payload),
@@ -410,6 +590,16 @@ const MainLayout: React.FC = () => {
           </div>
 
           <Space size="middle">
+            <Button
+              shape="circle"
+              icon={(
+                <Badge count={unreadNotifications} size="small" offset={[2, -2]}>
+                  <BellOutlined />
+                </Badge>
+              )}
+              onClick={() => setNotificationsOpen(true)}
+            />
+
             <Popover
               trigger="click"
               placement="leftTop"
@@ -434,6 +624,40 @@ const MainLayout: React.FC = () => {
             </Dropdown>
           </Space>
         </Header>
+        <Drawer
+          title="Последние уведомления"
+          placement="right"
+          width={420}
+          onClose={() => setNotificationsOpen(false)}
+          open={notificationsOpen}
+        >
+          <List
+            dataSource={ticketNotifications}
+            locale={{ emptyText: 'Уведомлений пока нет' }}
+            renderItem={(item) => (
+              <List.Item
+                key={item.id}
+                style={{ cursor: 'pointer' }}
+                onClick={() => {
+                  setNotificationsOpen(false);
+                  navigate(`/tickets/${item.ticketID}`);
+                }}
+              >
+                <List.Item.Meta
+                  title={`Тикет ${item.ticketID}`}
+                  description={(
+                    <Space direction="vertical" size={0}>
+                      <Text>{renderTicketNotificationTitle(item)}</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {new Date(item.occurredAt).toLocaleString()} • {item.source || 'system'}
+                      </Text>
+                    </Space>
+                  )}
+                />
+              </List.Item>
+            )}
+          />
+        </Drawer>
         <Content
           style={{
             margin: '24px 16px',

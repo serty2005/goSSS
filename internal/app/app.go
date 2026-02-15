@@ -47,6 +47,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chi_middleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/redis/go-redis/v9"
 	httpSwagger "github.com/swaggo/http-swagger"
 	"gorm.io/gorm"
 )
@@ -72,7 +73,7 @@ type Application struct {
 	StatusActualityWorker workers.StatusActualityWorker
 	TicketGateway         gateways.TicketGateway
 	ContractGateway       gateways.ContractGateway
-	BitrixGateway         gateways.BitrixGateway
+	BitrixModule          *bitrixModule
 
 	// Handlers
 	CompanyHandler          *handlers.CompanyHandler
@@ -91,6 +92,7 @@ type Application struct {
 	WorkstationHandler      *handlers.WSHandler
 	FiscalHandler           *handlers.FiscalHandler
 	BitrixHandler           *handlers.BitrixHandler
+	BitrixWebhookHandler    *handlers.BitrixWebhookHandler
 	CandidateHandler        *handlers.CandidateHandler
 	NetworkCandidateHandler *handlers.NetworkCandidateHandler
 }
@@ -102,7 +104,7 @@ func New() (*Application, error) {
 
 	app.Config = config.New()
 	app.Logger = logger.NewSlogLogger(app.Config.LogDir, "app", app.Config.LogLevel, app.Config.DisableFileLogging)
-	app.Logger.Info("Инициализация приложения etalon-server...")
+	app.Logger.Info("Запуск приложения etalon-server...")
 
 	if err = os.MkdirAll(app.Config.FTPCachePath, 0755); err != nil {
 		app.Logger.Fatal("Не удалось создать директорию для кэша FTP", "error", err)
@@ -115,7 +117,7 @@ func New() (*Application, error) {
 
 	app.EventBus = eventbus.NewInMemoryEventBus(10000)
 
-	// Инициализация слоев
+	// Запуск слоев
 	repos := setupRepositories(app.DB)
 	clients := setupExternalClients(app.Config, app.Logger, app.DB, repos.LinkRepo)
 
@@ -124,6 +126,7 @@ func New() (*Application, error) {
 	services := setupServices(app, repos, clients)
 	setupBackgroundServices(app, repos, clients, services)
 	setupHandlers(app, repos, services)
+	setupIntegrationModules(app, services)
 
 	return app, nil
 }
@@ -180,13 +183,13 @@ func (a *Application) SeedDBAndExit() {
 }
 
 // SeedFromFTPCacheAndExit инициализирует БД из локального кэша FTP и загружает данные агентов.
-// Используется при запуске с флагом --seed-ftp-cache для обработки ранее скачанных файлов
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ при запуске с флагом --seed-ftp-cache для обработки ранее скачанных файлов
 // без обращения к FTP-серверу.
 func (a *Application) SeedFromFTPCacheAndExit() {
 	a.Logger.Info("Запуск в режиме инициализации из FTP-кэша...")
 	ctx := context.Background()
 
-	// 1. Инициализируем записи в БД из существующих файлов кэша
+	// 1. РРЅРёС†РёР°Р»РёР·РёСЂСѓРµРј записи в БД из существующих файлов кэша
 	if err := a.AgentFTPGateway.InitializeDBFromCache(ctx); err != nil {
 		a.Logger.Warn("Ошибка инициализации БД из кэша", "error", err)
 	}
@@ -197,7 +200,7 @@ func (a *Application) SeedFromFTPCacheAndExit() {
 		a.Logger.Warn("Ошибка загрузки данных из кэша", "error", err)
 	}
 
-	a.Logger.Info("Инициализация из FTP-кэша завершена", "processed_files", processedCount)
+	a.Logger.Info("РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ из FTP-кэша завершена", "processed_files", processedCount)
 	a.Logger.Info("Программа завершает работу.")
 	os.Exit(0)
 }
@@ -216,7 +219,7 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 	log.Info("Миграции базы данных успешно завершены.")
 
 	if err := services.EnsureFiscalSerialUniqueness(context.Background(), database); err != nil {
-		log.Fatal("Не удалось выполнить нормализацию и дедупликацию ФР", "error", err)
+		log.Fatal("Не удалось выполнить нормализацию и дедупликацию Р¤Р ", "error", err)
 	}
 	if err := db.SeedAdminUser(cfg, database, log); err != nil {
 		log.Fatal("Не удалось создать пользователя-администратора", "error", err)
@@ -266,14 +269,24 @@ type ExternalClients struct {
 	FTPClient    services.FTPClient
 	IikoClient   iiko.IikoClient
 	BitrixClient *bitrixplugin.Client
+	RedisClient  *redis.Client
 }
 
 func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) ExternalClients {
+	var redisClient *redis.Client
+	if strings.TrimSpace(cfg.RedisAddr) != "" {
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:     cfg.RedisAddr,
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
+		})
+	}
 	return ExternalClients{
 		SDClient:     naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
 		FTPClient:    services.NewFTPClient(cfg, log.With("component", "ftp_client")),
 		IikoClient:   iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
 		BitrixClient: bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
+		RedisClient:  redisClient,
 	}
 }
 
@@ -292,6 +305,7 @@ type Services struct {
 	WorkstationService      workstation.Service
 	FiscalService           fiscal.Service
 	BitrixSyncService       services.BitrixSyncService
+	BitrixIncomingService   services.BitrixIncomingService
 	NetworkCandidateService services.NetworkCandidateService
 }
 
@@ -334,13 +348,14 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
 		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
 		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
-		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
+		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
+		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 	}
 }
 
 func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
-	// --- 1. Инициализация Менеджера Интеграций ---
+	// --- 1. РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ Менеджера РРЅС‚РµРіСЂР°С†РёР№ ---
 	app.IntegrationManager = integrations.NewManager(app.Logger.With("component", "integration_manager"))
 
 	// --- 2. Настройка Адаптера Naumen ---
@@ -349,10 +364,10 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 		LinkRepo: repos.LinkRepo,
 		Logger:   app.Logger,
 	}
-	// Используем существующий клиент, оборачивая его в адаптер
+	// РСЃРїРѕР»СЊР·СѓРµРј существующий клиент, оборачивая его в адаптер
 	naumenAdapter := naumen.NewNaumenAdapter(clients.SDClient, app.Logger.With("component", "naumen_adapter"), mapperCtx)
 
-	// --- 3. Регистрация Провайдеров ---
+	// --- 3. Р егистрация Провайдеров ---
 	app.IntegrationManager.RegisterInventoryProvider(naumenAdapter)
 	app.IntegrationManager.RegisterContractProvider(naumenAdapter)
 	app.IntegrationManager.RegisterTicketProvider(naumenAdapter)
@@ -374,7 +389,6 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
 	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
-	app.BitrixGateway = gateways.NewBitrixGateway(app.Config, app.Logger.With("component", "bitrix_gateway"), srvs.BitrixSyncService)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
@@ -392,10 +406,24 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
-	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, srvs.BitrixSyncService)
+	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
+	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation)
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
+}
+
+func setupIntegrationModules(app *Application, srvs Services) {
+	app.BitrixModule = newBitrixModule(
+		app.Config,
+		app.Logger.With("component", "bitrix_module"),
+		app.EventBus,
+		srvs.BitrixSyncService,
+		srvs.BitrixIncomingService,
+		app.BitrixHandler,
+		app.BitrixWebhookHandler,
+	)
+	app.BitrixModule.registerEventHandlers()
 }
 
 func (a *Application) setupRouter() *chi.Mux {
@@ -420,6 +448,9 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Route("/api/auth", func(r chi.Router) {
 		a.AuthHandler.RegisterRoutes(r)
 	})
+	if a.BitrixModule != nil {
+		a.BitrixModule.registerPublicRoutes(r)
+	}
 
 	r.Route("/api/agents", func(r chi.Router) {
 		// r.Use(middleware.AgentAuthMiddleware(a.Config.AgentAPIKey))
@@ -431,9 +462,9 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/companies", func(r chi.Router) {
 			r.Get("/", a.CompanyHandler.Search)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/bitrix-service-point-mappings", a.CompanyHandler.ListBitrixMappings)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/bitrix-service-point-mappings", a.CompanyHandler.UpdateBitrixMapping)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/bitrix-service-point-mappings", a.CompanyHandler.ClearBitrixMapping)
+			if a.BitrixModule != nil {
+				a.BitrixModule.registerCompanyRoutes(r, a.CompanyHandler)
+			}
 			r.Get("/{id}", a.CompanyHandler.Get)
 			r.Get("/{id}/infrastructure", a.CompanyHandler.GetInfrastructure)
 			r.Get("/{id}/children", a.CompanyHandler.GetChildren)
@@ -497,23 +528,18 @@ func (a *Application) setupRouter() *chi.Mux {
 			a.TicketHandler.RegisterRoutes(r)
 		})
 
-		r.Route("/bitrix", func(r chi.Router) {
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", a.BitrixHandler.ListServicePoints)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", a.BitrixHandler.SuggestUser)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/users/refresh", a.BitrixHandler.RefreshUsers)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/refresh", a.BitrixHandler.RefreshServicePoints)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/preview", a.BitrixHandler.PreviewServicePointsImport)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/sync-preview", a.BitrixHandler.PreviewServicePointsSync)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/import/apply", a.BitrixHandler.ImportServicePoints)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/sync/pull", a.BitrixHandler.PullSync)
-		})
+		if a.BitrixModule != nil {
+			a.BitrixModule.registerProtectedRoutes(r)
+		}
 
 		r.Route("/profile", func(r chi.Router) {
 			r.Get("/assignees", a.UserHandler.ListAssignees)
 			r.Get("/me", a.UserHandler.GetMyProfile)
 			r.Patch("/credentials", a.UserHandler.UpdateMyCredentials)
 			r.Patch("/integrations", a.UserHandler.UpdateMyIntegrations)
-			r.Post("/integrations/bitrix/sync-suggestion", a.UserHandler.ApplyMyBitrixSuggestion)
+			if a.BitrixModule != nil {
+				a.BitrixModule.registerProfileRoutes(r, a.UserHandler)
+			}
 			r.Get("/config", a.UserHandler.GetMyProfileConfig)
 			r.Patch("/config", a.UserHandler.UpdateMyProfileConfig)
 		})
@@ -535,7 +561,7 @@ func (a *Application) setupRouter() *chi.Mux {
 		w.Write([]byte("Welcome to XenionDesk"))
 	})
 
-	// Роут для Swagger документации
+	// Р оут для Swagger документации
 	r.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL("/swagger/doc.json"),
 	))
@@ -563,7 +589,7 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.FRUpdateFounder.Start(ctx) }()
 	} else {
-		a.Logger.Info("Воркер поиска обновлений для ФР отключен.")
+		a.Logger.Info("Воркер поиска обновлений для Р¤Р  отключен.")
 	}
 
 	if a.Config.EnableAgentFTPGateway {
@@ -598,9 +624,8 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	} else {
 		a.Logger.Info("Проверка актуальности статусов отключена.")
 	}
-	if a.Config.EnableBitrixGateway && a.BitrixGateway != nil {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.BitrixGateway.Start(ctx) }()
+	if a.BitrixModule != nil {
+		a.BitrixModule.start(ctx, wg)
 	}
 }
 

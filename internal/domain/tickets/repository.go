@@ -62,6 +62,8 @@ type TicketRepository interface {
 
 	AddComments(ctx context.Context, comments []TicketComment) error
 	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)
+	UpdateCommentFromBitrix(ctx context.Context, commentID string, text string, authorName string) error
+	MarkCommentDeletedInBitrix(ctx context.Context, commentID string, deletedAt time.Time) error
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)

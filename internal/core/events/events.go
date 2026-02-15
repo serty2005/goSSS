@@ -10,6 +10,7 @@
 package events
 
 import (
+	"etalon-server/internal/domain/tickets"
 	api "etalon-server/internal/transport/http/dtos"
 	"time"
 )
@@ -94,7 +95,33 @@ const (
 	// Подписчики: UI через WebSocket для обновления в реальном времени.
 	// Payload: ID тикета.
 	TicketUpdated = "ticket.updated"
+	// BitrixTicketSyncRequested публикуется при изменении тикета, требующем синхронизации в Bitrix24.
+	// Payload: BitrixSyncEntityPayload.
+	BitrixTicketSyncRequested = "bitrix.ticket.sync.requested"
+	// BitrixCommentSyncRequested публикуется при добавлении публичного комментария в тикет.
+	// Payload: BitrixSyncEntityPayload.
+	BitrixCommentSyncRequested = "bitrix.comment.sync.requested"
 )
+
+// BitrixSyncEntityPayload — унифицированная сущность для событий исходящей синхронизации Bitrix24.
+// Для событий тикета заполняются TicketID и Reason.
+// Для событий комментария дополнительно заполняются Comment и EtalonUserID.
+type BitrixSyncEntityPayload struct {
+	TicketID     string
+	Reason       string
+	Comment      *tickets.TicketComment
+	EtalonUserID *uint
+}
+
+// TicketUpdatedPayload — полезная нагрузка события TicketUpdated.
+// Используется фронтендом для реактивного обновления карточек тикетов и уведомлений.
+type TicketUpdatedPayload struct {
+	TicketID   string    `json:"ticket_id"`
+	Action     string    `json:"action"`
+	Source     string    `json:"source"`
+	Message    string    `json:"message,omitempty"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
 
 // ServiceDeskEntityPayload — полезная нагрузка для события ServiceDeskEntityUpdated.
 // Содержит полные данные сущности, полученные из ServiceDesk (Naumen).

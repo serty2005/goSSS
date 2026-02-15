@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"etalon-server/pkg/eventbus"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -20,12 +22,12 @@ import (
 )
 
 type TicketHandler struct {
-	service       services.TicketService
-	bitrixService services.BitrixSyncService
+	service  services.TicketService
+	eventBus eventbus.EventBus
 }
 
-func NewTicketHandler(service services.TicketService, bitrixService services.BitrixSyncService) *TicketHandler {
-	return &TicketHandler{service: service, bitrixService: bitrixService}
+func NewTicketHandler(service services.TicketService, eventBus eventbus.EventBus) *TicketHandler {
+	return &TicketHandler{service: service, eventBus: eventBus}
 }
 
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
@@ -80,16 +82,12 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create ticket")
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать тикет с Bitrix24", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_created")
+	h.publishTicketUpdated(ticket.ID, "ticket_created", "ui", "Создан новый тикет")
 	response.RespondWithJSON(w, http.StatusCreated, ticket)
 }
 
 func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketStatusChangeDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -103,16 +101,12 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать статус тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_status_changed")
+	h.publishTicketUpdated(ticket.ID, "ticket_status_changed", "ui", "Изменён статус тикета")
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAddCommentDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -135,11 +129,8 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncComment(r.Context(), id, comment, userID); err != nil {
-			log.Error("Не удалось синхронизировать комментарий с Bitrix24", "ticket_id", id, "comment_id", comment.ID, "error", err)
-		}
-	}
+	h.publishBitrixCommentSync(id, *comment, userID)
+	h.publishTicketUpdated(id, "ticket_comment_added", "ui", "Добавлен комментарий")
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
@@ -187,6 +178,9 @@ func (h *TicketHandler) RefreshCommentsFromServiceDesk(w http.ResponseWriter, r 
 		"status": "ok",
 		"added":  added,
 	})
+	if added > 0 {
+		h.publishTicketUpdated(id, "ticket_comments_refreshed", "servicedesk", "Обновлены комментарии тикета")
+	}
 }
 
 func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Request) {
@@ -214,12 +208,12 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.publishTicketUpdated(id, "ticket_connection_copied", "ui", "Скопированы данные подключения")
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
 // UpdateDescription обновляет описание тикета.
 func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto struct {
 		Description string `json:"description"`
@@ -244,16 +238,12 @@ func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать описание тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_description_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_description_updated", "ui", "Обновлено описание тикета")
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketAssignDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -267,16 +257,12 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать назначение исполнителя в Bitrix24", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_assignee_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_assignee_updated", "ui", "Изменён исполнитель тикета")
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketChangeCompanyDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -305,16 +291,12 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать тикет с Bitrix24 после смены компании", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_company_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_company_updated", "ui", "Изменена компания тикета")
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
 func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
 	id := chi.URLParam(r, "id")
 	var dto api.TicketBitrixFieldsUpdateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -337,13 +319,53 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if h.bitrixService != nil && h.bitrixService.IsEnabled() {
-		if err := h.bitrixService.SyncTicketByID(r.Context(), ticket.ID); err != nil {
-			log.Error("Не удалось синхронизировать B24-поля тикета с Bitrix24", "ticket_id", ticket.ID, "error", err)
-		}
-	}
+	h.publishBitrixTicketSync(ticket.ID, "ticket_bitrix_fields_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_bitrix_fields_updated", "ui", "Обновлены поля интеграции Bitrix24")
 
 	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+func (h *TicketHandler) publishBitrixTicketSync(ticketID string, reason string) {
+	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.BitrixTicketSyncRequested,
+		Payload: events.BitrixSyncEntityPayload{
+			TicketID: ticketID,
+			Reason:   reason,
+		},
+	})
+}
+
+func (h *TicketHandler) publishBitrixCommentSync(ticketID string, comment tickets.TicketComment, etalonUserID uint) {
+	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" || strings.TrimSpace(comment.ID) == "" {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.BitrixCommentSyncRequested,
+		Payload: events.BitrixSyncEntityPayload{
+			TicketID:     ticketID,
+			Comment:      &comment,
+			EtalonUserID: &etalonUserID,
+		},
+	})
+}
+
+func (h *TicketHandler) publishTicketUpdated(ticketID, action, source, message string) {
+	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.TicketUpdated,
+		Payload: events.TicketUpdatedPayload{
+			TicketID:   ticketID,
+			Action:     strings.TrimSpace(action),
+			Source:     strings.TrimSpace(source),
+			Message:    strings.TrimSpace(message),
+			OccurredAt: time.Now(),
+		},
+	})
 }
 
 // List возвращает список заявок с фильтрацией.

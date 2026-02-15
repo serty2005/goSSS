@@ -8,8 +8,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    volumes:
-      - pg_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
@@ -17,21 +15,39 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # 2. Инициализатор (Сидер)
-  init-seeder:
-    container_name: seeder
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    env_file:
-      - .env
-    command: ["./etalon-server", "--seed"]
-    depends_on:
-      db:
-        condition: service_healthy
     networks:
       - etalon-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - etalon-net
+
+  # # 2. Инициализатор (Сидер)
+  # init-seeder:
+  #   container_name: seeder
+  #   build:
+  #     context: ..
+  #     dockerfile: docker/Dockerfile
+  #   env_file:
+  #     - .env
+  #   command: ["./etalon-server", "--seed"]
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   networks:
+  #     - etalon-net
 
   # 3. Основной сервер
   server:
@@ -47,8 +63,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      init-seeder:
-        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      # init-seeder:
+      #   condition: service_completed_successfully
     volumes:
       # Монтируем папку из корня проекта внутрь контейнера
       - ${HOST_PROJECT_PATH}/ftp_cache:/app/ftp_cache
@@ -71,27 +89,8 @@ services:
     networks:
       - etalon-net
 
-  mcp:
-    build:
-      context: ../etalon-mcp
-      dockerfile: Dockerfile
-    container_name: mcp
-    restart: unless-stopped
-    ports:
-      - "8081:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      - DATABASE_URL=postgres://${MCP_DB_USER}:${MCP_DB_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
-      - CODEBASE_PATH=/app/codebase
-    volumes:
-      - ${HOST_PROJECT_PATH}:/app/codebase:ro
-    networks:
-      - etalon-net
-
 volumes:
-  pg_data:
+  redis_data:
 
 networks:
   etalon-net:

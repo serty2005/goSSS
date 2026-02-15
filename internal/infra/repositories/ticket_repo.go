@@ -146,7 +146,7 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 			"CAST(tickets.number AS TEXT) ILIKE ?",
 			"tickets.subject ILIKE ?",
 			"tickets.description ILIKE ?",
-			"EXISTS (SELECT 1 FROM ticket_comments tc WHERE tc.ticket_id = tickets.id AND tc.text ILIKE ?)",
+			"EXISTS (SELECT 1 FROM ticket_comments tc WHERE tc.ticket_id = tickets.id AND tc.deleted_in_bitrix = false AND tc.text ILIKE ?)",
 		}
 		args := []interface{}{q, q, q, q}
 		query = query.Where("("+strings.Join(clauses, " OR ")+")", args...)
@@ -264,9 +264,33 @@ func (r *ticketRepo) GetComments(ctx context.Context, ticketID string) ([]ticket
 	var comments []tickets.TicketComment
 	err := r.db.WithContext(ctx).
 		Where("ticket_id = ?", ticketID).
+		Where("deleted_in_bitrix = false").
 		Order("creation_date asc").
 		Find(&comments).Error
 	return comments, err
+}
+
+func (r *ticketRepo) UpdateCommentFromBitrix(ctx context.Context, commentID string, text string, authorName string) error {
+	updates := map[string]interface{}{
+		"text":                 text,
+		"author_name":          authorName,
+		"deleted_in_bitrix":    false,
+		"deleted_in_bitrix_at": nil,
+	}
+	return r.db.WithContext(ctx).
+		Model(&tickets.TicketComment{}).
+		Where("id = ?", commentID).
+		Updates(updates).Error
+}
+
+func (r *ticketRepo) MarkCommentDeletedInBitrix(ctx context.Context, commentID string, deletedAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&tickets.TicketComment{}).
+		Where("id = ?", commentID).
+		Updates(map[string]interface{}{
+			"deleted_in_bitrix":    true,
+			"deleted_in_bitrix_at": deletedAt,
+		}).Error
 }
 
 func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error) {
@@ -287,6 +311,7 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 		`SELECT tc.ticket_id, tc.text, tc.author_name, tc.is_private
 		 FROM ticket_comments tc
 		 WHERE tc.ticket_id IN ?
+		   AND tc.deleted_in_bitrix = false
 		 ORDER BY tc.ticket_id, tc.creation_date DESC`,
 		ticketIDs,
 	).Scan(&rows).Error

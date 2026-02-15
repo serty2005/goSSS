@@ -80,6 +80,20 @@ type Config struct {
 	BitrixDictionarySyncEvery   time.Duration
 	BitrixServicePointsIBlockID int
 	EtalonTicketBaseURL         string
+	BitrixWebhookEnabled        bool
+	BitrixWebhookAppToken       string
+	BitrixEventsStreamName      string
+	BitrixEventsConsumerGroup   string
+	BitrixIncomingParallelism   int
+	BitrixIncomingRetryBase     time.Duration
+	BitrixIncomingRetryMax      time.Duration
+	BitrixIncomingMaxAttempts   int
+	BitrixSuppressTTL           time.Duration
+	BitrixIntegrationUserID     int64
+
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
 }
 
 func New() *Config {
@@ -88,6 +102,11 @@ func New() *Config {
 	}
 
 	allowedOriginsStr := getEnv("ALLOWED_ORIGINS", "http://localhost:5173")
+	bitrixBaseURL := strings.TrimSpace(getEnv("BITRIX_BASE_URL", ""))
+	bitrixIntegrationUserID := int64(getEnvAsInt("BITRIX_INTEGRATION_USER_ID", 0))
+	if bitrixIntegrationUserID <= 0 {
+		bitrixIntegrationUserID = detectBitrixIntegrationUserID(bitrixBaseURL)
+	}
 
 	return &Config{
 		ServerPort:         getEnv("PORT", "8080"),
@@ -148,13 +167,27 @@ func New() *Config {
 		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
 
 		EnableBitrixGateway:         getEnvAsBool("ENABLE_BITRIX_GATEWAY", false),
-		BitrixBaseURL:               strings.TrimSpace(getEnv("BITRIX_BASE_URL", "")),
+		BitrixBaseURL:               bitrixBaseURL,
 		BitrixOriginatorID:          getEnv("BITRIX_ORIGINATOR_ID", "ETALON_SD"),
 		BitrixCategoryID:            getEnvAsInt("BITRIX_CATEGORY_ID", 17),
 		BitrixSyncInterval:          time.Duration(getEnvAsInt("BITRIX_SYNC_INTERVAL_MIN", 5)) * time.Minute,
 		BitrixDictionarySyncEvery:   time.Duration(getEnvAsInt("BITRIX_DICTIONARY_SYNC_INTERVAL_HOURS", 24)) * time.Hour,
 		BitrixServicePointsIBlockID: getEnvAsInt("BITRIX_SERVICE_POINT_IBLOCK_ID", 101),
 		EtalonTicketBaseURL:         strings.TrimSpace(getEnv("ETALON_TICKET_BASE_URL", "")),
+		BitrixWebhookEnabled:        getEnvAsBool("BITRIX_WEBHOOK_ENABLED", false),
+		BitrixWebhookAppToken:       strings.TrimSpace(getEnv("BITRIX_WEBHOOK_APPLICATION_TOKEN", "")),
+		BitrixEventsStreamName:      strings.TrimSpace(getEnv("BITRIX_EVENTS_STREAM_NAME", "b24:events")),
+		BitrixEventsConsumerGroup:   strings.TrimSpace(getEnv("BITRIX_EVENTS_CONSUMER_GROUP", "b24-workers")),
+		BitrixIncomingParallelism:   getEnvAsInt("BITRIX_INCOMING_PARALLELISM", 8),
+		BitrixIncomingRetryBase:     time.Duration(getEnvAsInt("BITRIX_INCOMING_RETRY_BASE_MS", 500)) * time.Millisecond,
+		BitrixIncomingRetryMax:      time.Duration(getEnvAsInt("BITRIX_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
+		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
+		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
+		BitrixIntegrationUserID:     bitrixIntegrationUserID,
+
+		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisDB:       getEnvAsInt("REDIS_DB", 0),
 	}
 }
 
@@ -233,4 +266,23 @@ func getEnvAsBool(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func detectBitrixIntegrationUserID(bitrixBaseURL string) int64 {
+	base := strings.TrimSpace(bitrixBaseURL)
+	if base == "" {
+		return 0
+	}
+	parts := strings.Split(base, "/")
+	for i := 0; i < len(parts)-1; i++ {
+		if strings.TrimSpace(parts[i]) != "rest" {
+			continue
+		}
+		id, err := strconv.ParseInt(strings.TrimSpace(parts[i+1]), 10, 64)
+		if err != nil || id <= 0 {
+			return 0
+		}
+		return id
+	}
+	return 0
 }

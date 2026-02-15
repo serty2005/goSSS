@@ -27,10 +27,12 @@ type Deal struct {
 }
 
 type TimelineComment struct {
-	ID       int64
-	Comment  string
-	AuthorID *int64
-	Raw      map[string]interface{}
+	ID         int64
+	Comment    string
+	AuthorID   *int64
+	EntityType string
+	EntityID   int64
+	Raw        map[string]interface{}
 }
 
 type ListElement struct {
@@ -110,6 +112,18 @@ func (c *Client) DealAdd(ctx context.Context, fields map[string]interface{}) (in
 	return toInt64(raw), nil
 }
 
+func (c *Client) DealGet(ctx context.Context, dealID int64) (*Deal, error) {
+	raw, _, err := c.call(ctx, "crm.deal.get", map[string]interface{}{"id": dealID})
+	if err != nil {
+		return nil, err
+	}
+	item := parseDeal(raw)
+	if item == nil {
+		return nil, nil
+	}
+	return item, nil
+}
+
 func (c *Client) DealUpdate(ctx context.Context, dealID int64, fields map[string]interface{}) error {
 	_, _, err := c.call(ctx, "crm.deal.update", map[string]interface{}{
 		"id":     dealID,
@@ -128,7 +142,7 @@ func (c *Client) TimelineCommentAdd(ctx context.Context, dealID int64, comment s
 	}
 	if authorID != nil && *authorID > 0 {
 		bodyFields := body["fields"].(map[string]interface{})
-		bodyFields["AUTHOR_ID"] = *authorID
+		bodyFields["AUTHOR_ID"] = strconv.FormatInt(*authorID, 10)
 	}
 	raw, _, err := c.call(ctx, "crm.timeline.comment.add", body)
 	if err != nil {
@@ -169,13 +183,47 @@ func (c *Client) TimelineCommentList(ctx context.Context, dealID int64, start in
 			authorPtr = &author
 		}
 		out = append(out, TimelineComment{
-			ID:       id,
-			Comment:  comment,
-			AuthorID: authorPtr,
-			Raw:      m,
+			ID:         id,
+			Comment:    comment,
+			AuthorID:   authorPtr,
+			EntityType: strings.TrimSpace(strings.ToLower(toString(m["ENTITY_TYPE"]))),
+			EntityID:   toInt64(m["ENTITY_ID"]),
+			Raw:        m,
 		})
 	}
 	return out, next, nil
+}
+
+func (c *Client) TimelineCommentGet(ctx context.Context, commentID int64) (*TimelineComment, error) {
+	raw, _, err := c.call(ctx, "crm.timeline.comment.get", map[string]interface{}{"id": commentID})
+	if err != nil {
+		return nil, err
+	}
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+	id := toInt64(m["ID"])
+	author := toInt64(m["AUTHOR_ID"])
+	var authorPtr *int64
+	if author > 0 {
+		authorPtr = &author
+	}
+	item := &TimelineComment{
+		ID:         id,
+		Comment:    strings.TrimSpace(toString(m["COMMENT"])),
+		AuthorID:   authorPtr,
+		EntityType: strings.TrimSpace(strings.ToLower(toString(m["ENTITY_TYPE"]))),
+		EntityID:   toInt64(m["ENTITY_ID"]),
+		Raw:        m,
+	}
+	if item.EntityType == "" {
+		item.EntityType = strings.TrimSpace(strings.ToLower(toString(m["BINDINGS_ENTITY_TYPE"])))
+	}
+	if item.EntityID == 0 {
+		item.EntityID = toInt64(m["BINDINGS_ENTITY_ID"])
+	}
+	return item, nil
 }
 
 func (c *Client) ListsGetIblockTypeID(ctx context.Context, iblockID int) (string, error) {
@@ -429,6 +477,22 @@ func parseDeals(raw interface{}) []Deal {
 		})
 	}
 	return result
+}
+
+func parseDeal(raw interface{}) *Deal {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return &Deal{
+		ID:         toInt64(m["ID"]),
+		OriginID:   strings.TrimSpace(toString(m["ORIGIN_ID"])),
+		Originator: strings.TrimSpace(toString(m["ORIGINATOR_ID"])),
+		StageID:    strings.TrimSpace(toString(m["STAGE_ID"])),
+		CategoryID: toInt(m["CATEGORY_ID"]),
+		Title:      strings.TrimSpace(toString(m["TITLE"])),
+		Raw:        m,
+	}
 }
 
 func toString(v interface{}) string {

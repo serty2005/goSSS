@@ -4,6 +4,7 @@ import (
 	"context"
 	"etalon-server/internal/domain/bitrix"
 	infraDB "etalon-server/internal/infra/db"
+	"fmt"
 	"strings"
 	"time"
 
@@ -256,4 +257,99 @@ func (r *bitrixRepo) DeleteCompanyServicePointMappingByCompanyID(ctx context.Con
 
 func (r *bitrixRepo) DeleteCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) error {
 	return r.getDB(ctx).WithContext(ctx).Where("bitrix_service_point_id = ?", bitrixServicePointID).Delete(&bitrix.CompanyServicePointMapping{}).Error
+}
+
+func (r *bitrixRepo) InsertIfNotExistsByHash(ctx context.Context, event *bitrix.IncomingEvent) (bool, error) {
+	if event == nil {
+		return false, fmt.Errorf("event is nil")
+	}
+	tx := r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "payload_hash"}},
+		DoNothing: true,
+	}).Create(event)
+	if tx.Error != nil {
+		return false, tx.Error
+	}
+	return tx.RowsAffected > 0, nil
+}
+
+func (r *bitrixRepo) MarkQueued(ctx context.Context, id string) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&bitrix.IncomingEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{"status": bitrix.IncomingEventStatusQueued, "updated_at": time.Now()}).Error
+}
+
+func (r *bitrixRepo) MarkProcessing(ctx context.Context, id string) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&bitrix.IncomingEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":     bitrix.IncomingEventStatusProcessing,
+			"attempts":   gorm.Expr("attempts + 1"),
+			"last_error": nil,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *bitrixRepo) MarkDone(ctx context.Context, id string) error {
+	now := time.Now()
+	return r.getDB(ctx).WithContext(ctx).Model(&bitrix.IncomingEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":       bitrix.IncomingEventStatusDone,
+			"last_error":   nil,
+			"processed_at": &now,
+			"updated_at":   now,
+		}).Error
+}
+
+func (r *bitrixRepo) MarkFailed(ctx context.Context, id string, errText string) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&bitrix.IncomingEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":     bitrix.IncomingEventStatusFailed,
+			"last_error": strings.TrimSpace(errText),
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *bitrixRepo) MarkIgnored(ctx context.Context, id string, reason string) error {
+	now := time.Now()
+	return r.getDB(ctx).WithContext(ctx).Model(&bitrix.IncomingEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":       bitrix.IncomingEventStatusIgnored,
+			"last_error":   strings.TrimSpace(reason),
+			"processed_at": &now,
+			"updated_at":   now,
+		}).Error
+}
+
+func (r *bitrixRepo) ListNewOrFailedForEnqueue(ctx context.Context, limit int, maxAttempts int) ([]bitrix.IncomingEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 10
+	}
+	items := make([]bitrix.IncomingEvent, 0, limit)
+	err := r.getDB(ctx).WithContext(ctx).
+		Where(
+			"(status = ?) OR (status = ? AND attempts < ?)",
+			bitrix.IncomingEventStatusNew,
+			bitrix.IncomingEventStatusFailed,
+			maxAttempts,
+		).
+		Order("received_at asc").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+func (r *bitrixRepo) GetByID(ctx context.Context, id string) (*bitrix.IncomingEvent, error) {
+	var item bitrix.IncomingEvent
+	err := r.getDB(ctx).WithContext(ctx).Where("id = ?", id).First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
 }

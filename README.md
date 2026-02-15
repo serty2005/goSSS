@@ -118,3 +118,27 @@ go run ./cmd/etalon-server/main.go --seed
 -   `POST /api/agents/{uuid}/data`: Отправка данных от агента.
 
 **Примечание:** Все эндпоинты в группе `/api`, кроме `/api/auth`, требуют `Authorization: Bearer <token>` заголовка. Эндпоинты в `/api/agents` требуют собственного ключа авторизации.
+## 7. Интеграция Bitrix24 (Event-Driven)
+
+- Включение интеграции: `ENABLE_BITRIX_GATEWAY=true`.
+- Входящий поток из Bitrix24 работает только через webhook:
+  - `POST /api/integrations/bitrix/webhook`
+  - `Content-Type: application/x-www-form-urlencoded`
+  - проверка `auth[application_token]` по `BITRIX_WEBHOOK_APPLICATION_TOKEN`
+- Ручной pull-эндпоинт удалён: `/api/v1/bitrix/sync/pull` больше не используется.
+- Входящие события сначала сохраняются в Postgres (`bitrix_incoming_events`), затем диспетчеризуются через Redis Streams.
+- Поддерживаемые события:
+  - `ONCRMDEALADD`
+  - `ONCRMDEALUPDATE`
+  - `ONCRMDEALDELETE`
+  - `ONCRMTIMELINECOMMENTADD`
+  - `ONCRMTIMELINECOMMENTUPDATE`
+  - `ONCRMTIMELINECOMMENTDELETE`
+- Очередь и обработка настраиваются переменными:
+  - `BITRIX_EVENTS_STREAM_NAME`
+  - `BITRIX_EVENTS_CONSUMER_GROUP`
+  - `BITRIX_INCOMING_PARALLELISM`
+  - `BITRIX_INCOMING_RETRY_BASE_MS`
+  - `BITRIX_INCOMING_RETRY_MAX_MS`
+  - `BITRIX_INCOMING_MAX_ATTEMPTS`
+  - `BITRIX_SUPPRESS_TTL_SEC`

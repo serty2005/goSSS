@@ -119,14 +119,16 @@ type Comment struct {
 
 // TicketComment хранит комментарии в БД (офлайн-режим/сидер).
 type TicketComment struct {
-	ID              string    `json:"id" gorm:"primaryKey;type:text"`
-	TicketID        string    `json:"ticket_id" gorm:"type:text;index;not null"`
-	ServiceDeskUUID string    `json:"service_desk_uuid" gorm:"type:text;index"`
-	Text            string    `json:"text" gorm:"type:text"`
-	AuthorName      string    `json:"author_name" gorm:"type:varchar(255)"`
-	CreationDate    time.Time `json:"creation_date" gorm:"index"`
-	IsInternal      bool      `json:"is_internal"`
-	IsPrivate       bool      `json:"is_private" gorm:"not null;default:false;index"`
+	ID                string     `json:"id" gorm:"primaryKey;type:text"`
+	TicketID          string     `json:"ticket_id" gorm:"type:text;index;not null"`
+	ServiceDeskUUID   string     `json:"service_desk_uuid" gorm:"type:text;index"`
+	Text              string     `json:"text" gorm:"type:text"`
+	AuthorName        string     `json:"author_name" gorm:"type:varchar(255)"`
+	CreationDate      time.Time  `json:"creation_date" gorm:"index"`
+	IsInternal        bool       `json:"is_internal"`
+	IsPrivate         bool       `json:"is_private" gorm:"not null;default:false;index"`
+	DeletedInBitrix   bool       `json:"deleted_in_bitrix" gorm:"not null;default:false;index"`
+	DeletedInBitrixAt *time.Time `json:"deleted_in_bitrix_at"`
 }
 
 // LastCommentInfo содержит данные о последнем комментарии.

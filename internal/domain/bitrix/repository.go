@@ -33,4 +33,13 @@ type Repository interface {
 	ListCompanyServicePointMappingsByCompanyIDs(ctx context.Context, companyIDs []string) ([]CompanyServicePointMapping, error)
 	DeleteCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) error
 	DeleteCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) error
+
+	InsertIfNotExistsByHash(ctx context.Context, event *IncomingEvent) (bool, error)
+	MarkQueued(ctx context.Context, id string) error
+	MarkProcessing(ctx context.Context, id string) error
+	MarkDone(ctx context.Context, id string) error
+	MarkFailed(ctx context.Context, id string, errText string) error
+	MarkIgnored(ctx context.Context, id string, reason string) error
+	ListNewOrFailedForEnqueue(ctx context.Context, limit int, maxAttempts int) ([]IncomingEvent, error)
+	GetByID(ctx context.Context, id string) (*IncomingEvent, error)
 }

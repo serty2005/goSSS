@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
@@ -40,6 +40,13 @@ const sanitizeRichHtml = (value?: string) => {
     .replace(/(src|href)=["']static\//gi, '$1="/api/static/');
 };
 const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
+const FIELD_HIGHLIGHT_MS = 2600;
+const fieldHighlightStyle: React.CSSProperties = {
+  background: 'rgba(250, 173, 20, 0.22)',
+  transition: 'background-color 0.35s ease',
+  borderRadius: 6,
+  padding: '2px 6px',
+};
 
 const historyLabel = (entry: TicketHistoryDTO) => {
   switch (entry.action) {
@@ -99,6 +106,12 @@ const TicketDetailsPage: React.FC = () => {
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
+  const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
+  const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
+  const previousCommentsRef = useRef<Array<{ uuid: string; text: string; creation_date: string }>>([]);
+  const clearFieldTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const clearCommentTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const createParam = searchParams.get('create') || '';
 
   useEffect(() => {
@@ -115,6 +128,82 @@ const TicketDetailsPage: React.FC = () => {
 
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
+
+  const markFieldChanged = (field: string) => {
+    setHighlightedFields((prev) => ({ ...prev, [field]: true }));
+    const existingTimer = clearFieldTimersRef.current[field];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    clearFieldTimersRef.current[field] = setTimeout(() => {
+      setHighlightedFields((prev) => {
+        if (!prev[field]) return prev;
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      delete clearFieldTimersRef.current[field];
+    }, FIELD_HIGHLIGHT_MS);
+  };
+
+  const markCommentChanged = (commentID: string) => {
+    if (!commentID) return;
+    setHighlightedComments((prev) => ({ ...prev, [commentID]: true }));
+    const existingTimer = clearCommentTimersRef.current[commentID];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    clearCommentTimersRef.current[commentID] = setTimeout(() => {
+      setHighlightedComments((prev) => {
+        if (!prev[commentID]) return prev;
+        const next = { ...prev };
+        delete next[commentID];
+        return next;
+      });
+      delete clearCommentTimersRef.current[commentID];
+    }, FIELD_HIGHLIGHT_MS);
+  };
+
+  useEffect(() => {
+    if (!metadata) {
+      return;
+    }
+    const previous = previousMetadataRef.current;
+    if (previous) {
+      if (previous.status !== metadata.status) markFieldChanged('status');
+      if ((previous.description || '') !== (metadata.description || '')) markFieldChanged('description');
+      if ((previous.result || '') !== (metadata.result || '')) markFieldChanged('result');
+      if ((previous.company_id || '') !== (metadata.company_id || '')) markFieldChanged('company');
+      if ((previous.assignee?.id || 0) !== (metadata.assignee?.id || 0)) markFieldChanged('assignee');
+      if ((previous.bitrix_deal_title || '') !== (metadata.bitrix_deal_title || '')) markFieldChanged('bitrix_deal_title');
+      if ((previous.bitrix_service_point_id || 0) !== (metadata.bitrix_service_point_id || 0)) markFieldChanged('bitrix_service_point');
+    }
+    previousMetadataRef.current = metadata;
+  }, [metadata]);
+
+  useEffect(() => {
+    const comments = (details?.comments || []).map((item) => ({
+      uuid: item.uuid,
+      text: item.text || '',
+      creation_date: item.creation_date,
+    }));
+    const previous = previousCommentsRef.current;
+    if (previous.length > 0 && comments.length > 0) {
+      const previousMap = new Map(previous.map((item) => [item.uuid, item]));
+      comments.forEach((item) => {
+        const old = previousMap.get(item.uuid);
+        if (!old || old.text !== item.text || old.creation_date !== item.creation_date) {
+          markCommentChanged(item.uuid);
+        }
+      });
+    }
+    previousCommentsRef.current = comments;
+  }, [details?.comments]);
+
+  useEffect(() => () => {
+    Object.values(clearFieldTimersRef.current).forEach((timer) => clearTimeout(timer));
+    Object.values(clearCommentTimersRef.current).forEach((timer) => clearTimeout(timer));
+  }, []);
 
   const { data: infraResponse, isLoading: isInfraLoading } = useQuery({
     queryKey: ['company-infra', metadata?.company_id],
@@ -388,6 +477,20 @@ const TicketDetailsPage: React.FC = () => {
     },
   });
 
+  const handleDescriptionClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const link = target.closest('a.etalon-user-link[data-etalon-user-id]') as HTMLAnchorElement | null;
+    if (!link) return;
+    event.preventDefault();
+    const userID = String(link.dataset.etalonUserId || '').trim();
+    const userName = String(link.dataset.etalonUserName || '').trim();
+    Modal.info({
+      title: userName || `Пользователь #${userID}`,
+      content: 'Информация о пользователе будет доступна в следующем обновлении.',
+    });
+  };
+
   if (isLoading || !details || !metadata) {
     return <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>;
   }
@@ -433,26 +536,29 @@ const TicketDetailsPage: React.FC = () => {
 
           <Space>
             {metadata.is_common_contract && <Tag color="gold">Платный</Tag>}
-            <Select
-              value={metadata.status}
-              options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
-              style={{ width: 180 }}
-              onChange={(nextStatus: TicketStatus) => {
-                if (!id || nextStatus === metadata.status) return;
-                if (nextStatus === 'resolved') {
-                  setPendingStatus(nextStatus);
-                  return;
-                }
-                changeStatusMutation.mutate({ id, status: nextStatus });
-              }}
-            />
+            <div style={highlightedFields.status ? fieldHighlightStyle : undefined}>
+              <Select
+                value={metadata.status}
+                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                style={{ width: 180 }}
+                onChange={(nextStatus: TicketStatus) => {
+                  if (!id || nextStatus === metadata.status) return;
+                  if (nextStatus === 'resolved') {
+                    setPendingStatus(nextStatus);
+                    return;
+                  }
+                  changeStatusMutation.mutate({ id, status: nextStatus });
+                }}
+              />
+            </div>
             <Button onClick={() => navigate('/tickets')}>К списку</Button>
           </Space>
         </Space>
 
         <Descriptions style={{ marginTop: 16 }} column={2} bordered size="small">
           <Descriptions.Item label="Компания">
-            {!isCompanyEditMode ? (
+            <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
+              {!isCompanyEditMode ? (
               <Space>
                 {metadata.company_id ? (
                   <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
@@ -470,7 +576,7 @@ const TicketDetailsPage: React.FC = () => {
                   }}
                 />
               </Space>
-            ) : (
+              ) : (
               <Space>
                 <Select
                   showSearch
@@ -509,7 +615,8 @@ const TicketDetailsPage: React.FC = () => {
                   }}
                 />
               </Space>
-            )}
+              )}
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="Контракт">
             <Space direction="vertical" size={0}>
@@ -518,21 +625,24 @@ const TicketDetailsPage: React.FC = () => {
             </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Исполнитель">
-            <Select
-              allowClear
-              placeholder="Не назначен"
-              style={{ width: 260, maxWidth: '100%' }}
-              options={assigneeOptions}
-              value={metadata.assignee?.id}
-              loading={assignMutation.isPending}
-              onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
-            />
+            <div style={highlightedFields.assignee ? fieldHighlightStyle : undefined}>
+              <Select
+                allowClear
+                placeholder="Не назначен"
+                style={{ width: 260, maxWidth: '100%' }}
+                options={assigneeOptions}
+                value={metadata.assignee?.id}
+                loading={assignMutation.isPending}
+                onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
+              />
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="Обновлена">
             {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
           </Descriptions.Item>
           <Descriptions.Item label="Заголовок сделки B24">
-            {!isBitrixEditMode ? (
+            <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
+              {!isBitrixEditMode ? (
               <Space>
                 <Text>{metadata.bitrix_deal_title || '-'}</Text>
                 <Button
@@ -546,18 +656,20 @@ const TicketDetailsPage: React.FC = () => {
                   }}
                 />
               </Space>
-            ) : (
+              ) : (
               <Input
                 value={draftBitrixDealTitle}
                 placeholder="Заголовок сделки в Bitrix24"
                 onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
               />
-            )}
+              )}
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="Точка обслуживания B24">
-            {!isBitrixEditMode ? (
+            <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
+              {!isBitrixEditMode ? (
               bitrixPointName
-            ) : (
+              ) : (
               <Space>
                 <Select
                   showSearch
@@ -590,7 +702,8 @@ const TicketDetailsPage: React.FC = () => {
                   }}
                 />
               </Space>
-            )}
+              )}
+            </div>
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -603,12 +716,20 @@ const TicketDetailsPage: React.FC = () => {
             children: (
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                 <Card size="small" title="Описание">
-                  <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
+                  <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
+                    <div
+                      style={{ whiteSpace: 'pre-wrap' }}
+                      onClick={handleDescriptionClick}
+                      dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }}
+                    />
+                  </div>
                 </Card>
 
                 {isClosedLikeStatus(metadata.status) && (
                   <Card size="small" title="Результат">
-                    <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                    <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
+                      <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                    </div>
                   </Card>
                 )}
 
@@ -620,7 +741,7 @@ const TicketDetailsPage: React.FC = () => {
                     <List
                       dataSource={details.comments}
                       renderItem={(item) => (
-                        <List.Item key={item.uuid}>
+                        <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
                           <Space direction="vertical" size={2} style={{ width: '100%' }}>
                             <Space size={8}>
                               <Text type="secondary">{item.author_name || 'Сотрудник'} • {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
@@ -928,4 +1049,5 @@ const TicketDetailsPage: React.FC = () => {
 };
 
 export default TicketDetailsPage;
+
 

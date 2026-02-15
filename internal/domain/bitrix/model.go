@@ -69,3 +69,31 @@ type CompanyServicePointMapping struct {
 func (CompanyServicePointMapping) TableName() string {
 	return "bitrix_company_service_point_mappings"
 }
+
+const (
+	IncomingEventStatusNew        = "new"
+	IncomingEventStatusQueued     = "queued"
+	IncomingEventStatusProcessing = "processing"
+	IncomingEventStatusDone       = "done"
+	IncomingEventStatusFailed     = "failed"
+	IncomingEventStatusIgnored    = "ignored"
+)
+
+type IncomingEvent struct {
+	ID             string     `json:"id" gorm:"primaryKey;type:uuid"`
+	EventName      string     `json:"event_name" gorm:"type:text;not null;index:idx_b24_incoming_event_lookup"`
+	EntityID       *string    `json:"entity_id" gorm:"type:text;index:idx_b24_incoming_event_lookup"`
+	EventTS        *int64     `json:"event_ts" gorm:"index:idx_b24_incoming_event_lookup"`
+	EventHandlerID *int64     `json:"event_handler_id"`
+	PayloadRaw     string     `json:"payload_raw" gorm:"type:text;not null"`
+	PayloadHash    string     `json:"payload_hash" gorm:"type:char(64);uniqueIndex;not null"`
+	Status         string     `json:"status" gorm:"type:varchar(20);not null;default:'new';index:idx_b24_incoming_status_received"`
+	Attempts       int        `json:"attempts" gorm:"not null;default:0"`
+	LastError      *string    `json:"last_error" gorm:"type:text"`
+	ReceivedAt     time.Time  `json:"received_at" gorm:"not null;autoCreateTime;index:idx_b24_incoming_status_received"`
+	ProcessedAt    *time.Time `json:"processed_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (IncomingEvent) TableName() string { return "bitrix_incoming_events" }
