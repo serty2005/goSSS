@@ -23,6 +23,8 @@ type Deal struct {
 	StageID    string
 	CategoryID int
 	Title      string
+	AssignedBy *int64
+	ModifiedBy *int64
 	Raw        map[string]interface{}
 }
 
@@ -113,7 +115,21 @@ func (c *Client) DealAdd(ctx context.Context, fields map[string]interface{}) (in
 }
 
 func (c *Client) DealGet(ctx context.Context, dealID int64) (*Deal, error) {
-	raw, _, err := c.call(ctx, "crm.deal.get", map[string]interface{}{"id": dealID})
+	raw, _, err := c.call(ctx, "crm.deal.get", map[string]interface{}{
+		"id": dealID,
+		"select": []string{
+			"ID",
+			"ORIGINATOR_ID",
+			"ORIGIN_ID",
+			"STAGE_ID",
+			"CATEGORY_ID",
+			"TITLE",
+			"ASSIGNED_BY_ID",
+			"MODIFY_BY_ID",
+			"UF_CRM_1766060620",
+			"UF_CRM_1766062398",
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +173,8 @@ func (c *Client) TimelineCommentList(ctx context.Context, dealID int64, start in
 			"ENTITY_TYPE": "deal",
 			"ENTITY_ID":   dealID,
 		},
-		"start": start,
+		"select": []string{"ID", "COMMENT", "AUTHOR_ID", "ENTITY_TYPE", "ENTITY_ID"},
+		"start":  start,
 	}
 	raw, next, err := c.call(ctx, "crm.timeline.comment.list", body)
 	if err != nil {
@@ -241,12 +258,16 @@ func (c *Client) ListsGetIblockTypeID(ctx context.Context, iblockID int) (string
 	}
 }
 
-func (c *Client) ListsElementGet(ctx context.Context, iblockTypeID string, iblockID int, start int) ([]ListElement, int, error) {
-	raw, next, err := c.call(ctx, "lists.element.get", map[string]interface{}{
+func (c *Client) ListsElementGet(ctx context.Context, iblockTypeID string, iblockID int, start int, selectFields []string) ([]ListElement, int, error) {
+	body := map[string]interface{}{
 		"IBLOCK_TYPE_ID": iblockTypeID,
 		"IBLOCK_ID":      iblockID,
 		"start":          start,
-	})
+	}
+	if len(selectFields) > 0 {
+		body["SELECT"] = selectFields
+	}
+	raw, next, err := c.call(ctx, "lists.element.get", body)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -335,7 +356,9 @@ func (c *Client) ListsFieldGet(ctx context.Context, iblockTypeID string, iblockI
 
 func (c *Client) UserGet(ctx context.Context, start int) ([]User, int, error) {
 	raw, next, err := c.call(ctx, "user.get", map[string]interface{}{
-		"start": start,
+		"start":  start,
+		"filter": []map[string]interface{}{{"ACTIVE": "true"}},
+		"select": []string{"ID", "NAME", "LAST_NAME", "SECOND_NAME", "EMAIL", "PERSONAL_MOBILE", "ACTIVE"},
 	})
 	if err != nil {
 		return nil, 0, err
@@ -466,6 +489,16 @@ func parseDeals(raw interface{}) []Deal {
 		if !ok {
 			continue
 		}
+		assignedBy := toInt64(m["ASSIGNED_BY_ID"])
+		var assignedByPtr *int64
+		if assignedBy > 0 {
+			assignedByPtr = &assignedBy
+		}
+		modifiedBy := toInt64(m["MODIFY_BY_ID"])
+		var modifiedByPtr *int64
+		if modifiedBy > 0 {
+			modifiedByPtr = &modifiedBy
+		}
 		result = append(result, Deal{
 			ID:         toInt64(m["ID"]),
 			OriginID:   strings.TrimSpace(toString(m["ORIGIN_ID"])),
@@ -473,6 +506,8 @@ func parseDeals(raw interface{}) []Deal {
 			StageID:    strings.TrimSpace(toString(m["STAGE_ID"])),
 			CategoryID: toInt(m["CATEGORY_ID"]),
 			Title:      strings.TrimSpace(toString(m["TITLE"])),
+			AssignedBy: assignedByPtr,
+			ModifiedBy: modifiedByPtr,
 			Raw:        m,
 		})
 	}
@@ -484,6 +519,16 @@ func parseDeal(raw interface{}) *Deal {
 	if !ok {
 		return nil
 	}
+	assignedBy := toInt64(m["ASSIGNED_BY_ID"])
+	var assignedByPtr *int64
+	if assignedBy > 0 {
+		assignedByPtr = &assignedBy
+	}
+	modifiedBy := toInt64(m["MODIFY_BY_ID"])
+	var modifiedByPtr *int64
+	if modifiedBy > 0 {
+		modifiedByPtr = &modifiedBy
+	}
 	return &Deal{
 		ID:         toInt64(m["ID"]),
 		OriginID:   strings.TrimSpace(toString(m["ORIGIN_ID"])),
@@ -491,6 +536,8 @@ func parseDeal(raw interface{}) *Deal {
 		StageID:    strings.TrimSpace(toString(m["STAGE_ID"])),
 		CategoryID: toInt(m["CATEGORY_ID"]),
 		Title:      strings.TrimSpace(toString(m["TITLE"])),
+		AssignedBy: assignedByPtr,
+		ModifiedBy: modifiedByPtr,
 		Raw:        m,
 	}
 }

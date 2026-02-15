@@ -60,7 +60,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	// Создаем канал через EventBus. Он закроется автоматически при r.Context().Done()
 	eventChan := h.bus.SubscribeChannel(r.Context(), 10, relevantEvents...)
 
-	log.Info("SSE клиент подключен", "remote", r.RemoteAddr)
+	log.Debug("SSE клиент подключен", "remote", r.RemoteAddr)
 
 	// Отправляем комментарий для инициализации соединения (некоторые прокси требуют данных)
 	fmt.Fprintf(w, ": connected\n\n")
@@ -74,7 +74,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-			log.Info("SSE клиент отключился", "remote", r.RemoteAddr)
+			log.Debug("SSE клиент отключился", "remote", r.RemoteAddr)
 			return
 
 		case <-pingTicker.C:

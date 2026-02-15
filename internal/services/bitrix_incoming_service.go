@@ -745,6 +745,24 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 			changed = true
 		}
 	}
+	if deal.AssignedBy != nil && *deal.AssignedBy > 0 {
+		userMap, err := s.repo.GetUserMapByB24ID(ctx, *deal.AssignedBy)
+		if err != nil {
+			return err
+		}
+		if userMap != nil {
+			if ticket.AssigneeID == nil || *ticket.AssigneeID != userMap.EtalonUserID {
+				assigneeID := userMap.EtalonUserID
+				ticket.AssigneeID = &assigneeID
+				changed = true
+			}
+		} else {
+			s.log.Warn("Bitrix24: сопоставление ASSIGNED_BY_ID не найдено, исполнитель не изменен", "ticket_id", ticket.ID, "b24_user_id", *deal.AssignedBy)
+		}
+	} else if ticket.AssigneeID != nil {
+		ticket.AssigneeID = nil
+		changed = true
+	}
 	if !changed {
 		return nil
 	}
@@ -808,7 +826,17 @@ func (s *bitrixIncomingService) isSuppressedDeal(ctx context.Context, dealID int
 		return false
 	}
 	ok, err := s.redis.Exists(ctx, fmt.Sprintf("b24:suppress:deal:%d", dealID)).Result()
-	return err == nil && ok > 0
+	if err != nil || ok == 0 {
+		return false
+	}
+	if s.cfg.BitrixIntegrationUserID <= 0 || s.client == nil {
+		return true
+	}
+	deal, dealErr := s.client.DealGet(ctx, dealID)
+	if dealErr != nil || deal == nil || deal.ModifiedBy == nil {
+		return true
+	}
+	return *deal.ModifiedBy == s.cfg.BitrixIntegrationUserID
 }
 
 func (s *bitrixIncomingService) isSuppressedComment(ctx context.Context, commentID int64) bool {

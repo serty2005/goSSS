@@ -24,6 +24,14 @@ const (
 	bitrixPointField       = "UF_CRM_1766062398"
 )
 
+var bitrixServicePointSelectFields = []string{
+	"ID",
+	"NAME",
+	"CODE",
+	"PROPERTY_361",
+	"PROPERTY_681",
+}
+
 type BitrixSyncService interface {
 	IsEnabled() bool
 	SyncTicketByID(ctx context.Context, ticketID string) error
@@ -209,7 +217,7 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 	all := make([]bitrix.ServicePoint, 0, 512)
 	start := 0
 	for {
-		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start)
+		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start, bitrixServicePointSelectFields)
 		if err != nil {
 			return 0, err
 		}
@@ -444,7 +452,7 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		"ORIGINATOR_ID":        s.cfg.BitrixOriginatorID,
 		"ORIGIN_ID":            ticket.ID,
 		"STAGE_ID":             "C17:" + stageCode,
-		bitrixDescriptionField: toPlainText(ticket.Description),
+		bitrixDescriptionField: s.buildDealDescription(ticket),
 		bitrixTypeField:        mapTicketTypeToBitrixID(ticket.Type),
 		bitrixPointField:       ticket.BitrixServicePointID,
 	}
@@ -505,6 +513,35 @@ func (s *bitrixSyncService) buildCommentBody(ctx context.Context, ticketID strin
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string {
+	if ticket == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("Тикет Etalon #%d", ticket.Number),
+	}
+	if strings.TrimSpace(ticket.Subject) != "" {
+		lines = append(lines, strings.TrimSpace(ticket.Subject))
+	}
+	lines = append(lines, s.buildTicketURL(ticket.ID))
+
+	header := strings.Join(lines, "\n")
+	body := toPlainText(ticket.Description)
+	if body == "" {
+		return header
+	}
+	return header + "\n\n" + body
+}
+
+func (s *bitrixSyncService) buildTicketURL(ticketID string) string {
+	path := "/tickets/" + strings.TrimSpace(ticketID)
+	base := strings.TrimRight(strings.TrimSpace(s.cfg.EtalonTicketBaseURL), "/")
+	if base == "" {
+		return path
+	}
+	return base + path
 }
 
 func (s *bitrixSyncService) withBitrixAuthorMention(message string, authorID *int64, authorName string) string {

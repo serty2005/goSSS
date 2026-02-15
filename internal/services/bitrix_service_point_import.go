@@ -420,7 +420,7 @@ func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, ib
 	statesByName := make(map[string][]bitrixServicePointState)
 	start := 0
 	for {
-		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start)
+		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start, bitrixServicePointSelectFields)
 		if err != nil {
 			return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
 		}
