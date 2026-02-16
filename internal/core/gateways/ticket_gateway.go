@@ -87,6 +87,9 @@ func (g *ticketGatewayImpl) Start(ctx context.Context) {
 
 func (g *ticketGatewayImpl) syncTickets(ctx context.Context) {
 	g.logger.Info("Начало синхронизации заявок...")
+	if _, err := g.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour); err != nil {
+		g.logger.Warn("Не удалось обновить архивный статус тикетов", "error", err)
+	}
 
 	targetStatuses := []string{
 		"registered", "inprogress", "waitClientAnswer", "resumed", "resolved",
@@ -182,6 +185,9 @@ func (g *ticketGatewayImpl) upsertTicket(
 	if link != nil {
 		ticket.ID = link.InternalID
 		before, _ := g.ticketRepo.GetByID(ctx, ticket.ID)
+		if before != nil && before.IsArchived {
+			return before, false, nil
+		}
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Error("Ошибка обновления заявки", "id", ticket.ID, "error", err)
 			return nil, false, err
@@ -192,6 +198,9 @@ func (g *ticketGatewayImpl) upsertTicket(
 
 	existingTicket, err := g.ticketRepo.GetByNumber(ctx, ticket.Number)
 	if err == nil && existingTicket != nil {
+		if existingTicket.IsArchived {
+			return existingTicket, false, nil
+		}
 		log.Info("Найден существующий тикет без связи. Восстановление...", "number", ticket.Number)
 		ticket.ID = existingTicket.ID
 

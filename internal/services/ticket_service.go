@@ -1,4 +1,4 @@
-package services
+﻿package services
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -107,11 +108,13 @@ func NewTicketService(
 
 // List возвращает список заявок с фильтрацией.
 func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error) {
+	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	items, err := s.ticketRepo.Find(ctx, filter)
 	if err != nil {
 		return nil, 0, fmt.Errorf("service: list tickets: %w", err)
 	}
 	s.applyCommonContractFlag(items)
+	s.enrichBitrixDealLinks(ctx, items)
 	count, err := s.ticketRepo.Count(ctx, filter)
 	if err != nil {
 		return nil, 0, fmt.Errorf("service: count tickets: %w", err)
@@ -128,6 +131,7 @@ func (s *ticketServiceImpl) GetLastComments(ctx context.Context, ticketIDs []str
 }
 
 func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error) {
+	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	items, err := s.ticketRepo.GetCompanyFilters(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("service: get company filters: %w", err)
@@ -282,12 +286,16 @@ func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*con
 
 // ChangeStatus меняет статус тикета и пишет историю.
 func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error) {
+	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if ticket.IsArchived && status != tickets.StatusInProgress {
+		return nil, fmt.Errorf("архивный тикет можно вернуть только в статус \"В работе\"")
 	}
 
 	oldStatus := ticket.Status
@@ -305,6 +313,11 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	ticket.Status = status
+	if ticket.IsArchived && status == tickets.StatusInProgress {
+		ticket.IsArchived = false
+		ticket.ArchivedAt = nil
+		ticket.SyncWithBitrix = true
+	}
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
@@ -316,13 +329,13 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	if comment != "" {
 		// Для простоты используем легаси структуру Comment, если фронт её ждет,
 		// но лучше писать в History с полем "comment"
-		// Р еализуем через History как "comment_added"
+		// Р В еализуем через History как "comment_added"
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
 
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
 	if ticket.ServiceDeskUUID != "" {
-		// s.sdClient.UpdateEntity(...) // TODO: Р еализовать обратную синхронизацию статуса
+		// s.sdClient.UpdateEntity(...) // TODO: Р В еализовать обратную синхронизацию статуса
 	}
 
 	return ticket, nil
@@ -441,13 +454,11 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	}
 
 	nextTitle := strings.TrimSpace(bitrixDealTitle)
-	if ticket.SyncWithBitrix {
-		if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
-			return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
-		}
-		if nextTitle == "" {
-			return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
-		}
+	if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
+		return nil, fmt.Errorf("Не выбрана точка обслуживания Bitrix24")
+	}
+	if nextTitle == "" {
+		return nil, fmt.Errorf("Не заполнен заголовок сделки Bitrix24")
 	}
 
 	oldPoint := ""
@@ -459,9 +470,11 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 		nextPoint = fmt.Sprintf("%d", *bitrixServicePointID)
 	}
 	oldTitle := strings.TrimSpace(ticket.BitrixDealTitle)
+	oldSync := ticket.SyncWithBitrix
 
 	ticket.BitrixServicePointID = bitrixServicePointID
 	ticket.BitrixDealTitle = nextTitle
+	ticket.SyncWithBitrix = true
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
@@ -471,6 +484,9 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	}
 	if oldTitle != nextTitle {
 		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_deal_title", tickets.HistorySourceUI, oldTitle, nextTitle, nil)
+	}
+	if !oldSync {
+		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "sync_with_bitrix", tickets.HistorySourceUI, "false", "true", nil)
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
@@ -574,6 +590,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		return nil, nil
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+	s.enrichBitrixDealLink(ctx, ticket)
 
 	// Загрузка истории
 	history, _ := s.ticketRepo.GetHistory(ctx, ticketID)
@@ -618,6 +635,54 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 
 	return details, nil
+}
+
+func (s *ticketServiceImpl) enrichBitrixDealLinks(ctx context.Context, items []tickets.Ticket) {
+	for i := range items {
+		s.enrichBitrixDealLink(ctx, &items[i])
+	}
+}
+
+func (s *ticketServiceImpl) enrichBitrixDealLink(ctx context.Context, ticket *tickets.Ticket) {
+	if ticket == nil || !ticket.SyncWithBitrix || s.bitrixRepo == nil {
+		return
+	}
+	link, err := s.bitrixRepo.GetDealLinkByTicketID(ctx, ticket.ID)
+	if err != nil || link == nil || link.B24DealID <= 0 {
+		return
+	}
+	dealID := link.B24DealID
+	ticket.BitrixDealID = &dealID
+	ticket.BitrixDealURL = s.buildBitrixDealURL(dealID)
+}
+
+func (s *ticketServiceImpl) buildBitrixDealURL(dealID int64) string {
+	if dealID <= 0 {
+		return ""
+	}
+	base := s.bitrixPortalBaseURL()
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/crm/deal/details/%d/", base, dealID)
+}
+
+func (s *ticketServiceImpl) bitrixPortalBaseURL() string {
+	if s.cfg == nil {
+		return ""
+	}
+	base := strings.TrimSpace(s.cfg.BitrixBaseURL)
+	if base == "" {
+		return ""
+	}
+	parsed, err := url.Parse(base)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return strings.TrimRight(parsed.Scheme+"://"+parsed.Host, "/")
+	}
+	if index := strings.Index(base, "/rest/"); index >= 0 {
+		base = base[:index]
+	}
+	return strings.TrimRight(base, "/")
 }
 
 // UpdateDescription обновляет описание тикета.
@@ -903,7 +968,7 @@ func (s *ticketServiceImpl) recordHistory(
 // processHtmlContent ищет ссылки на файлы Naumen, скачивает их и заменяет на локальные URL.
 // sdUUID - внешний UUID заявки (например, serviceCall$123), используется для группировки файлов в папке.
 func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string) string {
-	// РС‰РµРј все вхождения uuid=file$XXXXX
+	// Р ВРЎвЂ°Р ВµР С все вхождения uuid=file$XXXXX
 	matches := naumenFileRegex.FindAllStringSubmatch(htmlContent, -1)
 	if len(matches) == 0 {
 		return htmlContent
@@ -937,11 +1002,11 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 		}
 
 		// 3. Заменяем ссылку в HTML
-		// РСЃС…РѕРґРЅР°СЏ: ... src="./download?uuid=file$13205558" ...
+		// Р ВРЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р °СЏ: ... src="./download?uuid=file$13205558" ...
 		// Целевая:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
 
 		// Находим полный кусок "./download?uuid=file$XXXX" и заменяем его
-		// Р егулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
+		// Р В егулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
 		// "./download?uuid=" + fileUUID -> "/api/static/tickets/" + sdUUID + "/" + fileUUID
 
 		oldLink := fmt.Sprintf("./download?uuid=%s", fileUUID)
@@ -1071,3 +1136,4 @@ func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, compan
 	}
 	return &contractID, nil
 }
+

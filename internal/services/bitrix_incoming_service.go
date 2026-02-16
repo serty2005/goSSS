@@ -411,6 +411,9 @@ func (s *bitrixIncomingService) handleDealAddOrUpdate(ctx context.Context, dealI
 	if ticket == nil {
 		return bitrix.IncomingEventStatusIgnored, "локальный тикет для сделки не определен", nil
 	}
+	if ticket.IsArchived {
+		return bitrix.IncomingEventStatusIgnored, "тикет находится в архиве", nil
+	}
 
 	if err = s.repo.UpsertDealLink(ctx, &bitrix.DealLink{TicketID: ticket.ID, B24DealID: deal.ID, LastSyncAt: time.Now()}); err != nil {
 		return "", "", err
@@ -457,6 +460,9 @@ func (s *bitrixIncomingService) handleTimelineCommentAdd(ctx context.Context, co
 	if comment == nil || ticket == nil {
 		return bitrix.IncomingEventStatusIgnored, reason, nil
 	}
+	if ticket.IsArchived {
+		return bitrix.IncomingEventStatusIgnored, "тикет находится в архиве", nil
+	}
 	if isClosedTicketStatus(ticket.Status) {
 		return bitrix.IncomingEventStatusIgnored, "тикет закрыт/решён, импорт комментария пропущен", nil
 	}
@@ -477,6 +483,9 @@ func (s *bitrixIncomingService) handleTimelineCommentUpdate(ctx context.Context,
 	}
 	if comment == nil || ticket == nil {
 		return bitrix.IncomingEventStatusIgnored, reason, nil
+	}
+	if ticket.IsArchived {
+		return bitrix.IncomingEventStatusIgnored, "тикет находится в архиве", nil
 	}
 	if isClosedTicketStatus(ticket.Status) {
 		return bitrix.IncomingEventStatusIgnored, "тикет закрыт/решён, обновление комментария пропущено", nil

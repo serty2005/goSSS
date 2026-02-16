@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -53,12 +53,12 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       return 'Скопировано подключение';
     case 'field_changed':
     default:
-      if (entry.field === 'status') return 'Изменён статус';
-      if (entry.field === 'description') return 'Изменено описание';
-      if (entry.field === 'assignee') return 'Изменён исполнитель';
-      if (entry.field === 'company') return 'Изменена компания';
-      if (entry.field === 'asset') return 'Изменено оборудование';
-      return 'Изменение заявки';
+      if (entry.field === 'status') return 'РР·РјРµРЅС‘РЅ статус';
+      if (entry.field === 'description') return 'РР·РјРµРЅРµРЅРѕ описание';
+      if (entry.field === 'assignee') return 'РР·РјРµРЅС‘РЅ исполнитель';
+      if (entry.field === 'company') return 'РР·РјРµРЅРµРЅР° компания';
+      if (entry.field === 'asset') return 'РР·РјРµРЅРµРЅРѕ оборудование';
+      return 'РР·РјРµРЅРµРЅРёРµ заявки';
   }
 };
 
@@ -92,6 +92,23 @@ const resolveEntityPath = (item: InfrastructureItem) => {
   return '';
 };
 
+const BitrixSyncIndicator: React.FC<{ sync?: boolean; dealURL?: string }> = ({ sync, dealURL }) => {
+  if (!sync) {
+    return null;
+  }
+  if (!dealURL) {
+    return <Tag color="processing">B24</Tag>;
+  }
+  return (
+    <Tooltip title="Открыть сделку в Bitrix24">
+      <a href={dealURL} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Tag color="success" style={{ marginInlineEnd: 0 }}>Синхронизировано B24</Tag>
+        <LinkOutlined />
+      </a>
+    </Tooltip>
+  );
+};
+
 const TicketDetailsPage: React.FC = () => {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -107,6 +124,7 @@ const TicketDetailsPage: React.FC = () => {
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
   const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
+  const [isBitrixSyncModalOpen, setIsBitrixSyncModalOpen] = useState(false);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
   const [isDescriptionEditMode, setIsDescriptionEditMode] = useState(false);
@@ -285,6 +303,15 @@ const TicketDetailsPage: React.FC = () => {
     const point = bitrixServicePoints.find((item) => item.b24_element_id === metadata.bitrix_service_point_id);
     return point?.name || String(metadata.bitrix_service_point_id);
   }, [bitrixServicePoints, metadata?.bitrix_service_point_id]);
+
+  const openBitrixSyncModal = () => {
+    if (!metadata) {
+      return;
+    }
+    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+    setIsBitrixSyncModalOpen(true);
+  };
 
   useEffect(() => {
     if (!metadata || isBitrixEditMode) {
@@ -495,6 +522,7 @@ const TicketDetailsPage: React.FC = () => {
     onSuccess: () => {
       message.success('Поля Bitrix24 обновлены');
       setIsBitrixEditMode(false);
+      setIsBitrixSyncModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
@@ -518,7 +546,7 @@ const TicketDetailsPage: React.FC = () => {
     const userName = String(link.dataset.etalonUserName || '').trim();
     Modal.info({
       title: userName || `Пользователь #${userID}`,
-      content: 'Информация о пользователе будет доступна в следующем обновлении.',
+      content: 'РРЅС„РѕСЂРјР°С†РёСЏ о пользователе будет доступна в следующем обновлении.',
     });
   };
 
@@ -557,27 +585,48 @@ const TicketDetailsPage: React.FC = () => {
       <Card>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Space direction="vertical" size={0}>
-            <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
+            <Space align="center" size={8}>
+              <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
+              <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
+            </Space>
             <Text type="secondary">Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}</Text>
           </Space>
 
           <Space>
             {metadata.is_common_contract && <Tag color="gold">Платный</Tag>}
             <div style={highlightedFields.status ? fieldHighlightStyle : undefined}>
-              <Select
-                value={metadata.status}
-                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
-                style={{ width: 180 }}
-                onChange={(nextStatus: TicketStatus) => {
-                  if (!id || nextStatus === metadata.status) return;
-                  if (nextStatus === 'resolved') {
-                    setPendingStatus(nextStatus);
-                    return;
-                  }
-                  changeStatusMutation.mutate({ id, status: nextStatus });
-                }}
-              />
+              {metadata.is_archived ? (
+                <Button
+                  type="primary"
+                  loading={changeStatusMutation.isPending}
+                  onClick={() => {
+                    if (!id) return;
+                    changeStatusMutation.mutate({ id, status: 'in_progress' });
+                  }}
+                >
+                  Вернуть в работу
+                </Button>
+              ) : (
+                <Select
+                  value={metadata.status}
+                  options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                  style={{ width: 180 }}
+                  onChange={(nextStatus: TicketStatus) => {
+                    if (!id || nextStatus === metadata.status) return;
+                    if (nextStatus === 'resolved') {
+                      setPendingStatus(nextStatus);
+                      return;
+                    }
+                    changeStatusMutation.mutate({ id, status: nextStatus });
+                  }}
+                />
+              )}
             </div>
+            {!metadata.sync_with_bitrix && (
+              <Button onClick={openBitrixSyncModal}>
+                Синхронизировать с Битрикс24
+              </Button>
+            )}
             <Button onClick={() => navigate('/tickets')}>К списку</Button>
           </Space>
         </Space>
@@ -667,6 +716,7 @@ const TicketDetailsPage: React.FC = () => {
           <Descriptions.Item label="Обновлена">
             {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
           </Descriptions.Item>
+          {metadata.sync_with_bitrix && (
           <Descriptions.Item label="Заголовок сделки B24">
             <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
               {!isBitrixEditMode ? (
@@ -692,6 +742,8 @@ const TicketDetailsPage: React.FC = () => {
               )}
             </div>
           </Descriptions.Item>
+          )}
+          {metadata.sync_with_bitrix && (
           <Descriptions.Item label="Точка обслуживания B24">
             <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
               {!isBitrixEditMode ? (
@@ -732,6 +784,7 @@ const TicketDetailsPage: React.FC = () => {
               )}
             </div>
           </Descriptions.Item>
+          )}
         </Descriptions>
       </Card>
 
@@ -759,7 +812,7 @@ const TicketDetailsPage: React.FC = () => {
                             setIsDescriptionEditMode(true);
                           }}
                         >
-                          Редактировать описание
+                          Р едактировать описание
                         </Button>
                       </Space>
                     ) : (
@@ -812,7 +865,7 @@ const TicketDetailsPage: React.FC = () => {
                         <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
                           <Space direction="vertical" size={2} style={{ width: '100%' }}>
                             <Space size={8}>
-                              <Text type="secondary">{item.author_name || 'Сотрудник'} • {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
+                              <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
                               {item.is_private && <Tag color="orange">Приватный</Tag>}
                             </Space>
                             <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
@@ -865,7 +918,7 @@ const TicketDetailsPage: React.FC = () => {
                       <List.Item key={`${item.id}-${item.created_at}`}>
                         <Space direction="vertical" size={2} style={{ width: '100%' }}>
                           <Text strong>{historyLabel(item)}</Text>
-                          <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} • {historySourceLabel(item.source)}</Text>
+                          <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} в {historySourceLabel(item.source)}</Text>
                           {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
                           {item.new_value && (
                             item.action === 'connection_copied' ?
@@ -1047,7 +1100,7 @@ const TicketDetailsPage: React.FC = () => {
                           >
                             <Space direction="vertical" size={2} style={{ width: '100%' }}>
                               <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
-                              <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
+                              <Text type="secondary">Р НМ: {dataRow.rn_kkt || '-'}</Text>
                               <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
                               <Text type="secondary">
                                 ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
@@ -1064,6 +1117,37 @@ const TicketDetailsPage: React.FC = () => {
           },
         ]}
       />
+
+      <Modal
+        open={isBitrixSyncModalOpen}
+        title="Синхронизация с Битрикс24"
+        okText="Сохранить и синхронизировать"
+        cancelText="Отмена"
+        onCancel={() => setIsBitrixSyncModalOpen(false)}
+        confirmLoading={updateBitrixMutation.isPending}
+        okButtonProps={{ disabled: !draftBitrixPointID || !draftBitrixDealTitle.trim() }}
+        onOk={() => updateBitrixMutation.mutate()}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Select
+            showSearch
+            value={draftBitrixPointID}
+            placeholder="Выберите точку обслуживания"
+            style={{ width: '100%' }}
+            options={bitrixServicePoints.map((item) => ({
+              value: item.b24_element_id,
+              label: item.name,
+            }))}
+            optionFilterProp="label"
+            onChange={(value) => setDraftBitrixPointID(value)}
+          />
+          <Input
+            value={draftBitrixDealTitle}
+            placeholder="Заголовок сделки в Bitrix24"
+            onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
+          />
+        </Space>
+      </Modal>
 
       <Modal
         open={Boolean(pendingStatus)}
@@ -1109,5 +1193,3 @@ const TicketDetailsPage: React.FC = () => {
 };
 
 export default TicketDetailsPage;
-
-

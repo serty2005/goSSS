@@ -596,65 +596,78 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 //   - *models.Candidate: обновленный кандидат
 //   - error: ошибка валидации или БД
 func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error) {
-	if in.CandidateID == 0 {
-		return nil, errors.New("candidate_id обязателен")
-	}
+	isManual := in.CandidateID == 0
 	s.logger.Info("Начато подтверждение кандидата",
 		"candidate_id", in.CandidateID,
 		"company_id", strings.TrimSpace(in.CompanyID),
 		"server_id", ptrValue(in.ServerID),
+		"is_manual", isManual,
 	)
 
 	var out models.Candidate
+	var approvedServerID string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
-			return err
+		if !isManual {
+			if err := tx.Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
+				return err
+			}
 		}
 		companyID, err := s.ensureCompany(tx, in)
 		if err != nil {
 			return err
 		}
 		in.CompanyID = companyID
-		s.logger.Info("Подтверждение кандидата: компания подготовлена: операция выполнена",
+		s.logger.Info("Подтверждение кандидата: компания подготовлена",
 			"candidate_id", in.CandidateID,
 			"company_id", companyID,
 		)
 
-		srv, err := s.ensureServer(tx, &out, in)
-		if err != nil {
-			return err
+		serverProvided := !isManual || hasServerInput(in)
+		var srv *server.Server
+		if serverProvided {
+			srv, err = s.ensureServer(tx, &out, in)
+			if err != nil {
+				return err
+			}
+			approvedServerID = srv.ID
+			serverUpdates := map[string]interface{}{
+				"owner_id": in.CompanyID,
+			}
+			if out.ServerKey != nil && strings.TrimSpace(*out.ServerKey) != "" {
+				serverUpdates["server_key"] = valOrNil(out.ServerKey)
+			}
+			if v := valOrNil(in.ServerCRMID); v != nil {
+				serverUpdates["crm_id"] = v
+			}
+			if v := valOrNil(in.ServerURL); v != nil {
+				serverUpdates["ip"] = v
+			}
+			if v := valOrNil(in.ServerName); v != nil {
+				serverUpdates["device_name"] = v
+			}
+			if v := valOrNil(in.ServerDesc); v != nil {
+				serverUpdates["description"] = v
+			}
+			if v := valOrNil(in.ServerUniqueID); v != nil {
+				serverUpdates["unique_id"] = v
+			}
+			if cabinetID := extractCabinetClientID(ptrValue(in.ServerCabinetLink)); cabinetID != "" {
+				serverUpdates["cabinet_link"] = cabinetID
+			}
+			if err := tx.Model(&server.Server{}).Where("id = ?", srv.ID).Updates(serverUpdates).Error; err != nil {
+				return err
+			}
+			s.logger.Info("Подтверждение кандидата: сервер подготовлен",
+				"candidate_id", in.CandidateID,
+				"server_id", srv.ID,
+				"server_crm_id", ptrValue(in.ServerCRMID),
+				"server_url", ptrValue(in.ServerURL),
+			)
 		}
-		serverUpdates := map[string]interface{}{
-			"owner_id":   in.CompanyID,
-			"server_key": valOrNil(out.ServerKey),
+
+		if isManual {
+			return nil
 		}
-		if v := valOrNil(in.ServerCRMID); v != nil {
-			serverUpdates["crm_id"] = v
-		}
-		if v := valOrNil(in.ServerURL); v != nil {
-			serverUpdates["ip"] = v
-		}
-		if v := valOrNil(in.ServerName); v != nil {
-			serverUpdates["device_name"] = v
-		}
-		if v := valOrNil(in.ServerDesc); v != nil {
-			serverUpdates["description"] = v
-		}
-		if v := valOrNil(in.ServerUniqueID); v != nil {
-			serverUpdates["unique_id"] = v
-		}
-		if cabinetID := extractCabinetClientID(ptrValue(in.ServerCabinetLink)); cabinetID != "" {
-			serverUpdates["cabinet_link"] = cabinetID
-		}
-		if err := tx.Model(&server.Server{}).Where("id = ?", srv.ID).Updates(serverUpdates).Error; err != nil {
-			return err
-		}
-		s.logger.Info("Подтверждение кандидата: сервер подготовлен",
-			"candidate_id", in.CandidateID,
-			"server_id", srv.ID,
-			"server_crm_id", ptrValue(in.ServerCRMID),
-			"server_url", ptrValue(in.ServerURL),
-		)
 
 		var staged []models.AgentObservation
 		if err := tx.Where("candidate_id = ?", out.ID).Order("observed_at asc").Find(&staged).Error; err != nil {
@@ -751,6 +764,16 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 	})
 	if err != nil {
 		return nil, err
+	}
+	if isManual {
+		out.Status = models.CandidateStatusApproved
+		out.ApprovedCompanyID = strPtr(in.CompanyID)
+		out.ApprovedServerID = strPtr(approvedServerID)
+		s.logger.Info("Ручное подтверждение завершено",
+			"company_id", in.CompanyID,
+			"server_id", approvedServerID,
+		)
+		return &out, nil
 	}
 	if err := s.db.WithContext(ctx).Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
 		return nil, err
@@ -2464,6 +2487,31 @@ func ptrValue(v *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*v)
+}
+
+func hasServerInput(in CandidateApproveInput) bool {
+	if strings.TrimSpace(ptrValue(in.ServerID)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerCRMID)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerURL)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerUniqueID)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerCabinetLink)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerName)) != "" {
+		return true
+	}
+	if strings.TrimSpace(ptrValue(in.ServerDesc)) != "" {
+		return true
+	}
+	return false
 }
 
 var cabinetIDRegex = regexp.MustCompile(`\d+`)

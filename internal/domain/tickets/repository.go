@@ -19,15 +19,21 @@ type DashboardStats struct {
 
 // TicketFilter содержит параметры для поиска заявок.
 type TicketFilter struct {
-	CompanyID   string
-	AssetID     *string
-	Statuses    []string
-	AssigneeID  *uint
-	ReporterID  *uint
-	SearchQuery string
-	Limit       int
-	Offset      int
-	SortBy      string
+	CompanyID       string
+	CompanyIDs      []string
+	AssetID         *string
+	Statuses        []string
+	ExcludeStatuses []string
+	ArchiveMode     string
+	UpdatedFrom     *time.Time
+	UpdatedTo       *time.Time
+	AssigneeIDs     []uint
+	AssigneeID      *uint
+	ReporterID      *uint
+	SearchQuery     string
+	Limit           int
+	Offset          int
+	SortBy          string
 }
 
 // CompanyFilterItem описывает агрегированные данные по компаниям для фильтра.
@@ -68,6 +74,7 @@ type TicketRepository interface {
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
 	ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]Ticket, error)
+	ArchiveStale(ctx context.Context, threshold time.Duration) (int64, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

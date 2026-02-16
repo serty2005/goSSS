@@ -441,6 +441,9 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			Priority:        tickets.PriorityMedium,
 			Type:            tickets.TypeIncident,
 			ServiceDeskUUID: raw.UUID,
+			IsArchived:      true,
+			ArchivedAt:      utils.ParseServiceDeskTime(raw.LastModifiedDate),
+			SyncWithBitrix:  false,
 		}
 
 		if raw.RequestDate != "" {

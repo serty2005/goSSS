@@ -23,6 +23,7 @@ import {
 import dayjs from 'dayjs';
 import { candidatesApi } from '@/api/candidates';
 import { companiesApi } from '@/api/companies';
+import { equipmentApi } from '@/api/equipment';
 import { ticketsApi } from '@/api/tickets';
 import {
   CandidateApprovePayload,
@@ -184,6 +185,8 @@ const AcceptancePage: React.FC = () => {
 
   const [status, setStatus] = useState<CandidateFilter>('ACTIVE');
   const [selectedCandidateID, setSelectedCandidateID] = useState<number | null>(null);
+  const [isManualMode, setIsManualMode] = useState(false);
+  const [isManualServerEnabled, setIsManualServerEnabled] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState('');
   const [workstationDrafts, setWorkstationDrafts] = useState<CandidateWorkstationDraft[]>([]);
@@ -193,6 +196,18 @@ const AcceptancePage: React.FC = () => {
 
   const [form] = Form.useForm();
   const formValues = Form.useWatch([], form);
+  const manualUniqueID = String(formValues?.server_unique_id || '').trim();
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setSelectedCandidateID(null);
+    setIsManualMode(false);
+    setIsManualServerEnabled(false);
+    setWorkstationDrafts([]);
+    setAgentDataOpen(false);
+    setAgentObservations([]);
+    form.resetFields();
+  };
 
   const {
     data: candidatesData,
@@ -212,7 +227,7 @@ const AcceptancePage: React.FC = () => {
   } = useQuery({
     queryKey: ['candidate', selectedCandidateID],
     queryFn: () => candidatesApi.getCandidate(selectedCandidateID as number),
-    enabled: Boolean(selectedCandidateID),
+    enabled: Boolean(selectedCandidateID) && !isManualMode,
     staleTime: 5_000,
   });
 
@@ -230,19 +245,37 @@ const AcceptancePage: React.FC = () => {
     staleTime: 30_000,
   });
 
+  const { data: duplicateServerByUniqueID, isFetching: isDuplicateServerLookupLoading } = useQuery({
+    queryKey: ['acceptance', 'manual-unique-id', manualUniqueID],
+    enabled: isManualMode && isManualServerEnabled && manualUniqueID.length > 0,
+    staleTime: 10_000,
+    queryFn: async () => {
+      const response = await equipmentApi.listServers(manualUniqueID, 20, 0);
+      const rows = (response?.data || []) as Array<Record<string, unknown>>;
+      const target = manualUniqueID.toLowerCase();
+      const matched = rows.find((row) => String(row.unique_id || '').trim().toLowerCase() === target);
+      if (!matched) {
+        return null;
+      }
+      return {
+        id: String(matched.id || ''),
+        uniqueID: String(matched.unique_id || ''),
+        name: String(matched.device_name || matched.server_name || ''),
+      };
+    },
+  });
+
   const approveMutation = useMutation({
     mutationFn: async (payload: CandidateApprovePayload) => {
+      if (isManualMode) {
+        return candidatesApi.approveManualCandidate(payload);
+      }
       if (!selectedCandidateID) throw new Error('Кандидат не выбран');
       return candidatesApi.approveCandidate(selectedCandidateID, payload);
     },
     onSuccess: () => {
-      message.success('Кандидат успешно принят на АО');
-      setDrawerOpen(false);
-      setSelectedCandidateID(null);
-      setWorkstationDrafts([]);
-      setAgentDataOpen(false);
-      setAgentObservations([]);
-      form.resetFields();
+      message.success(isManualMode ? 'Компания и сервер успешно добавлены в АО' : 'Кандидат успешно принят на АО');
+      closeDrawer();
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
     onError: () => {
@@ -278,6 +311,9 @@ const AcceptancePage: React.FC = () => {
   }, [candidateDetails?.data]);
 
   useEffect(() => {
+    if (isManualMode) {
+      return;
+    }
     if (!selectedCandidate) {
       return;
     }
@@ -304,10 +340,12 @@ const AcceptancePage: React.FC = () => {
       server_device_name: '',
       server_unique_id: '',
       server_cabinet_link: '',
+      server_crm_id: selectedCandidate.server_crm_id || '',
+      server_url: selectedCandidate.server_url || '',
       workstations: wsDefaults.length ? wsDefaults : [{ name: '' }],
     });
     setWorkstationDrafts(wsDefaults.length ? wsDefaults : []);
-  }, [form, selectedCandidate]);
+  }, [form, isManualMode, selectedCandidate]);
 
   const companyOptions = useMemo(() => {
     const list = companiesData?.data || [];
@@ -360,22 +398,46 @@ const AcceptancePage: React.FC = () => {
       message.error('Не удалось открыть кандидата: отсутствует идентификатор');
       return;
     }
+    setIsManualMode(false);
     setSelectedCandidateID(candidateID);
     setDrawerOpen(true);
   };
 
-  const onSubmit = async () => {
-    const values = await form.validateFields();
+  const openManualAcceptance = () => {
+    setIsManualMode(true);
+    setIsManualServerEnabled(false);
+    setSelectedCandidateID(null);
+    setWorkstationDrafts([]);
+    setAgentDataOpen(false);
+    setAgentObservations([]);
+    form.setFieldsValue({
+      company_mode: 'new',
+      contract_mode: 'inherit_parent',
+      contract_type: CONTRACT_TYPE_OPTIONS[0],
+      server_device_name: '',
+      server_unique_id: '',
+      server_cabinet_link: '',
+      server_crm_id: '',
+      server_url: '',
+      bitrix_service_point_id: undefined,
+      workstations: [],
+    });
+    setDrawerOpen(true);
+  };
 
-    const payload: CandidateApprovePayload = {
-      workstations: workstationDrafts
+  const onSubmit = async () => {
+    const values = form.getFieldsValue(true);
+
+    const payload: CandidateApprovePayload = {};
+    if (!isManualMode) {
+      payload.workstations = workstationDrafts
         .map((item: { staging_id?: number; workstation_uuid?: string; name?: string }) => ({
           staging_id: item.staging_id,
           workstation_uuid: item.workstation_uuid,
           name: (item.name || '').trim(),
         }))
-        .filter((item: { name: string }) => item.name !== ''),
-    };
+        .filter((item: { name: string }) => item.name !== '');
+    }
 
     if (values.company_mode === 'existing') {
       payload.company_id = values.company_id;
@@ -390,14 +452,18 @@ const AcceptancePage: React.FC = () => {
       };
     }
 
-    payload.server = {
-      mode: 'new',
-      crm_id: selectedCandidate?.server_crm_id || '',
-      url_rms: selectedCandidate?.server_url || '',
-      unique_id: values.server_unique_id || '',
-      cabinet_link: values.server_cabinet_link || '',
-      device_name: values.server_device_name || '',
-    };
+    const shouldSendServer = !isManualMode || isManualServerEnabled;
+    if (shouldSendServer) {
+      payload.server = {
+        mode: 'new',
+        crm_id: values.server_crm_id || selectedCandidate?.server_crm_id || '',
+        url_rms: values.server_url || selectedCandidate?.server_url || '',
+        unique_id: values.server_unique_id || '',
+        cabinet_link: values.server_cabinet_link || '',
+        device_name: values.server_device_name || '',
+      };
+    }
+    payload.bitrix_service_point_id = values.bitrix_service_point_id || undefined;
 
     approveMutation.mutate(payload);
   };
@@ -522,7 +588,7 @@ const AcceptancePage: React.FC = () => {
   const approvalBlockReasons = useMemo(() => {
     const reasons: string[] = [];
 
-    if (!selectedCandidate) {
+    if (!isManualMode && !selectedCandidate) {
       reasons.push('Кандидат не загружен');
       return reasons;
     }
@@ -554,25 +620,32 @@ const AcceptancePage: React.FC = () => {
       }
     }
 
-    if (!String(formValues?.server_device_name || '').trim()) {
-      reasons.push('Не указано имя сервера');
-    }
-    if (!String(formValues?.server_unique_id || '').trim()) {
-      reasons.push('Не указан UniqueID');
-    }
-    if (!String(formValues?.server_cabinet_link || '').trim()) {
-      reasons.push('Не указана ссылка на партнёрский кабинет');
-    }
-    if (isBitrixEnabled && !formValues?.bitrix_service_point_id) {
-      reasons.push('Не выбрана точка обслуживания Bitrix24');
-    }
-
-    const workstationRows = workstationDrafts as Array<{ name?: string }>;
-    workstationRows.forEach((item, index) => {
-      if (!String(item?.name || '').trim()) {
-        reasons.push(`Не указано имя станции #${index + 1}`);
+    const shouldValidateServer = !isManualMode || isManualServerEnabled;
+    if (shouldValidateServer) {
+      if (!String(formValues?.server_device_name || '').trim()) {
+        reasons.push('Не указано имя сервера');
       }
-    });
+      if (!String(formValues?.server_unique_id || '').trim()) {
+        reasons.push('Не указан UniqueID');
+      }
+      if (isManualMode && !String(formValues?.server_url || '').trim()) {
+        reasons.push('Не указан адрес сервера');
+      }
+      if (!String(formValues?.server_cabinet_link || '').trim()) {
+        reasons.push('Не указана ссылка на партнёрский кабинет');
+      }
+      if (isManualMode && duplicateServerByUniqueID?.id) {
+        reasons.push(`Сервер с таким UniqueID уже существует: ${duplicateServerByUniqueID.id}`);
+      }
+    }
+    if (!isManualMode) {
+      const workstationRows = workstationDrafts as Array<{ name?: string }>;
+      workstationRows.forEach((item, index) => {
+        if (!String(item?.name || '').trim()) {
+          reasons.push(`Не указано имя станции #${index + 1}`);
+        }
+      });
+    }
 
     return reasons;
   }, [
@@ -583,7 +656,9 @@ const AcceptancePage: React.FC = () => {
     selectedContractMode,
     selectedParentCompany,
     selectedParentCompanyID,
-    isBitrixEnabled,
+    isManualMode,
+    isManualServerEnabled,
+    duplicateServerByUniqueID?.id,
     workstationDrafts,
   ]);
 
@@ -609,6 +684,7 @@ const AcceptancePage: React.FC = () => {
             ]}
           />
           <Button onClick={() => void refetchCandidates()}>Обновить</Button>
+          <Button type="primary" onClick={openManualAcceptance}>Добавить компанию и сервер</Button>
         </Space>
       </Space>
 
@@ -637,26 +713,13 @@ const AcceptancePage: React.FC = () => {
       </Card>
 
       <Drawer
-        title={selectedCandidate ? `Кандидат #${selectedCandidate.id}` : 'Кандидат'}
+        title={isManualMode ? 'Ручное принятие на АО' : (selectedCandidate ? `Кандидат #${selectedCandidate.id}` : 'Кандидат')}
         size="large"
         open={drawerOpen}
-        onClose={() => {
-          setDrawerOpen(false);
-          setSelectedCandidateID(null);
-          setWorkstationDrafts([]);
-          setAgentDataOpen(false);
-          setAgentObservations([]);
-        }}
+        onClose={closeDrawer}
         extra={(
           <Space>
-            <Button onClick={() => {
-              setDrawerOpen(false);
-              setSelectedCandidateID(null);
-              setWorkstationDrafts([]);
-              setAgentDataOpen(false);
-              setAgentObservations([]);
-            }}
-            >
+            <Button onClick={closeDrawer}>
               Отмена
             </Button>
             <AcceptanceButton
@@ -668,7 +731,7 @@ const AcceptancePage: React.FC = () => {
           </Space>
         )}
       >
-        {candidateError && (
+        {!isManualMode && candidateError && (
           <Alert
             type="error"
             showIcon
@@ -676,78 +739,206 @@ const AcceptancePage: React.FC = () => {
           />
         )}
 
-        {isCandidateLoading || !selectedCandidate ? (
+        {!isManualMode && (isCandidateLoading || !selectedCandidate) ? (
           <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Card size="small" title="Обнаруженные данные">
-              <Descriptions column={2} bordered size="small">
-                <Descriptions.Item label="Статус">{selectedCandidate.status}</Descriptions.Item>
-                <Descriptions.Item label="CRM ID">{selectedCandidate.server_crm_id || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Server Key">{selectedCandidate.server_key || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Адрес сервера">{selectedCandidate.server_url || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Распознанный сервер">{selectedCandidate.existing_server_id || 'нет'}</Descriptions.Item>
-                <Descriptions.Item label="Последнее наблюдение">
-                  {candidateLastObservedAt ? dayjs(candidateLastObservedAt).format('DD.MM.YYYY HH:mm:ss') : '-'}
-                </Descriptions.Item>
-              </Descriptions>
-            </Card>
-
-            <Row gutter={12}>
-              <Col span={12}>
-                <StagedAgentEntities
-                  workstations={workstationDrafts}
-                  fiscals={stagedFiscals}
-                  observationAgents={observationAgents}
-                  onWorkstationNameChange={handleWorkstationNameChange}
-                  onGroupClick={handleAgentGroupClick}
+            {isManualMode ? (
+              <>
+                <AcceptanceForm
+                  form={form}
+                  companyMode={companyMode}
+                  selectedContractMode={selectedContractMode}
+                  selectedParentCompany={selectedParentCompany}
+                  selectedExistingCompany={selectedExistingCompany}
+                  companyOptions={companyOptions}
+                  isCompaniesLoading={isCompaniesLoading}
+                  isBitrixEnabled={isBitrixEnabled}
+                  bitrixServicePointOptions={bitrixServicePointOptions}
+                  isBitrixServicePointsLoading={isBitrixServicePointsLoading}
+                  onCompanySearch={setCompanySearch}
                 />
-              </Col>
-              <Col span={12}>
-                <Card size="small" title="Параметры сервера">
-                  <Form form={form} layout="vertical">
-                    <Form.Item
-                      name="server_device_name"
-                      label="Имя сервера"
-                      style={{ marginBottom: 10 }}
-                      rules={[{ required: true, message: 'Укажите имя сервера' }]}
-                    >
-                      <Input />
-                    </Form.Item>
-                    <Form.Item
-                      name="server_unique_id"
-                      label="UniqueID"
-                      style={{ marginBottom: 10 }}
-                      rules={[{ required: true, message: 'Укажите UniqueID' }]}
-                    >
-                      <Input placeholder="например: 123-456-789" />
-                    </Form.Item>
-                    <Form.Item
-                      name="server_cabinet_link"
-                      label="Ссылка на партнёрский кабинет"
-                      style={{ marginBottom: 0 }}
-                      rules={[{ required: true, message: 'Укажите ссылку на кабинет' }]}
-                    >
-                      <Input placeholder="https://...clientid=12345" />
-                    </Form.Item>
-                  </Form>
-                </Card>
-              </Col>
-            </Row>
 
-            <AcceptanceForm
-              form={form}
-              companyMode={companyMode}
-              selectedContractMode={selectedContractMode}
-              selectedParentCompany={selectedParentCompany}
-              selectedExistingCompany={selectedExistingCompany}
-              companyOptions={companyOptions}
-              isCompaniesLoading={isCompaniesLoading}
-              isBitrixEnabled={isBitrixEnabled}
-              bitrixServicePointOptions={bitrixServicePointOptions}
-              isBitrixServicePointsLoading={isBitrixServicePointsLoading}
-              onCompanySearch={setCompanySearch}
-            />
+                <Card
+                  size="small"
+                  title="Сервер"
+                  extra={(
+                    <Space>
+                      {isManualServerEnabled ? (
+                        <Button onClick={() => setIsManualServerEnabled(false)}>Убрать сервер</Button>
+                      ) : (
+                        <Button type="dashed" onClick={() => setIsManualServerEnabled(true)}>+ Сервер</Button>
+                      )}
+                    </Space>
+                  )}
+                >
+                  {!isManualServerEnabled ? (
+                    <Typography.Text type="secondary">
+                      Блок сервера не добавлен. Для сохранения будут обязательны только поля компании и контракта.
+                    </Typography.Text>
+                  ) : (
+                    <Form form={form} layout="vertical">
+                      <Row gutter={12}>
+                        <Col span={12}>
+                          <Form.Item
+                            name="server_crm_id"
+                            label="CRM ID"
+                            style={{ marginBottom: 10 }}
+                          >
+                            <Input placeholder="Например: 12345" />
+                          </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                          <Form.Item
+                            name="server_unique_id"
+                            label="UniqueID"
+                            style={{ marginBottom: 10 }}
+                          >
+                            <Input placeholder="например: 123-456-789" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      {duplicateServerByUniqueID?.id && (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          style={{ marginBottom: 10 }}
+                          message="Сервер с таким UniqueID уже существует"
+                          description={(
+                            <a href={`/servers/${duplicateServerByUniqueID.id}`} target="_blank" rel="noreferrer">
+                              Перейти к серверу #{duplicateServerByUniqueID.id}
+                              {duplicateServerByUniqueID.name ? ` (${duplicateServerByUniqueID.name})` : ''}
+                            </a>
+                          )}
+                        />
+                      )}
+                      {isDuplicateServerLookupLoading && (
+                        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
+                          Проверка UniqueID...
+                        </Typography.Text>
+                      )}
+                      <Form.Item
+                        name="server_url"
+                        label="Адрес сервера"
+                        style={{ marginBottom: 10 }}
+                        rules={[{ required: true, message: 'Укажите адрес сервера' }]}
+                      >
+                        <Input placeholder="Например: my-rms.example.ru:8080" />
+                      </Form.Item>
+                      <Form.Item
+                        name="server_device_name"
+                        label="Имя сервера"
+                        style={{ marginBottom: 10 }}
+                        rules={[{ required: true, message: 'Укажите имя сервера' }]}
+                      >
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        name="server_cabinet_link"
+                        label="Ссылка на партнёрский кабинет"
+                        style={{ marginBottom: 0 }}
+                        rules={[{ required: true, message: 'Укажите ссылку на кабинет' }]}
+                      >
+                        <Input placeholder="https://...clientid=12345" />
+                      </Form.Item>
+                    </Form>
+                  )}
+                </Card>
+              </>
+            ) : (
+              <>
+                {selectedCandidate && (
+                  <Card size="small" title="Обнаруженные данные">
+                    <Descriptions column={2} bordered size="small">
+                      <Descriptions.Item label="Статус">{selectedCandidate.status}</Descriptions.Item>
+                      <Descriptions.Item label="CRM ID">{selectedCandidate.server_crm_id || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="Server Key">{selectedCandidate.server_key || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="Адрес сервера">{selectedCandidate.server_url || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="Распознанный сервер">{selectedCandidate.existing_server_id || 'нет'}</Descriptions.Item>
+                      <Descriptions.Item label="Последнее наблюдение">
+                        {candidateLastObservedAt ? dayjs(candidateLastObservedAt).format('DD.MM.YYYY HH:mm:ss') : '-'}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                )}
+
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <StagedAgentEntities
+                      workstations={workstationDrafts}
+                      fiscals={stagedFiscals}
+                      observationAgents={observationAgents}
+                      onWorkstationNameChange={handleWorkstationNameChange}
+                      onGroupClick={handleAgentGroupClick}
+                    />
+                  </Col>
+                  <Col span={12}>
+                    <Card size="small" title="Параметры сервера">
+                      <Form form={form} layout="vertical">
+                        <Row gutter={12}>
+                          <Col span={12}>
+                            <Form.Item
+                              name="server_crm_id"
+                              label="CRM ID"
+                              style={{ marginBottom: 10 }}
+                            >
+                              <Input placeholder="Например: 12345" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={12}>
+                            <Form.Item
+                              name="server_unique_id"
+                              label="UniqueID"
+                              style={{ marginBottom: 10 }}
+                              rules={[{ required: true, message: 'Укажите UniqueID' }]}
+                            >
+                              <Input placeholder="например: 123-456-789" />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+                        <Form.Item
+                          name="server_url"
+                          label="Адрес сервера"
+                          style={{ marginBottom: 10 }}
+                        >
+                          <Input placeholder="Например: my-rms.example.ru:8080" />
+                        </Form.Item>
+                        <Form.Item
+                          name="server_device_name"
+                          label="Имя сервера"
+                          style={{ marginBottom: 10 }}
+                          rules={[{ required: true, message: 'Укажите имя сервера' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name="server_cabinet_link"
+                          label="Ссылка на партнёрский кабинет"
+                          style={{ marginBottom: 0 }}
+                          rules={[{ required: true, message: 'Укажите ссылку на кабинет' }]}
+                        >
+                          <Input placeholder="https://...clientid=12345" />
+                        </Form.Item>
+                      </Form>
+                    </Card>
+                  </Col>
+                </Row>
+
+                <AcceptanceForm
+                  form={form}
+                  companyMode={companyMode}
+                  selectedContractMode={selectedContractMode}
+                  selectedParentCompany={selectedParentCompany}
+                  selectedExistingCompany={selectedExistingCompany}
+                  companyOptions={companyOptions}
+                  isCompaniesLoading={isCompaniesLoading}
+                  isBitrixEnabled={isBitrixEnabled}
+                  bitrixServicePointOptions={bitrixServicePointOptions}
+                  isBitrixServicePointsLoading={isBitrixServicePointsLoading}
+                  onCompanySearch={setCompanySearch}
+                />
+              </>
+            )}
           </Space>
         )}
       </Drawer>

@@ -90,7 +90,7 @@ func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string)
 	if err != nil {
 		return err
 	}
-	if ticket == nil || !ticket.SyncWithBitrix {
+	if ticket == nil || ticket.IsArchived || !ticket.SyncWithBitrix {
 		return nil
 	}
 	if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID <= 0 {
@@ -153,7 +153,7 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 	if err != nil {
 		return err
 	}
-	if ticket == nil || !ticket.SyncWithBitrix {
+	if ticket == nil || ticket.IsArchived || !ticket.SyncWithBitrix {
 		return nil
 	}
 

@@ -35,4 +35,9 @@ export const candidatesApi = {
     const response = await apiClient.post<ApiResponse<CandidateDTO>>(`/candidates/${id}/approve`, payload);
     return response.data;
   },
+
+  approveManualCandidate: async (payload: CandidateApprovePayload) => {
+    const response = await apiClient.post<ApiResponse<CandidateDTO>>('/candidates/approve-manual', payload);
+    return response.data;
+  },
 };

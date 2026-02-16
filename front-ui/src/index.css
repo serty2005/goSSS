@@ -109,6 +109,66 @@ body {
   pointer-events: none;
 }
 
+.ticket-list-item-wrap {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.ticket-list-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ticket-list-side {
+  min-width: 200px;
+  margin-left: auto;
+  align-items: flex-end;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.ticket-company-centered {
+  width: 100%;
+  text-align: center;
+}
+
+.ticket-card-b24-row {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.ticket-card-top {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ticket-card-left {
+  width: 70px;
+  min-width: 70px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.ticket-card-number {
+  width: 70px;
+  min-width: 70px;
+  display: inline-block;
+}
+
+.ticket-card-assignee-wrap {
+  flex: 1;
+  text-align: center;
+  align-self: center;
+}
+
 .compact-descriptions.ant-descriptions-bordered .ant-descriptions-item-label,
 .compact-descriptions.ant-descriptions-bordered .ant-descriptions-item-content {
   padding: 7px 10px;
@@ -153,6 +213,33 @@ body {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+  }
+
+  .ticket-list-item-wrap {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ticket-list-side {
+    width: 100%;
+    min-width: 0;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .ticket-card-top {
+    flex-wrap: wrap;
+  }
+
+  .ticket-card-left,
+  .ticket-card-number {
+    width: 56px;
+    min-width: 56px;
+  }
+
+  .ticket-card-assignee-wrap {
+    order: 3;
+    flex-basis: 100%;
   }
 }
 

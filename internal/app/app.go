@@ -367,7 +367,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	// РСЃРїРѕР»СЊР·СѓРµРј существующий клиент, оборачивая его в адаптер
 	naumenAdapter := naumen.NewNaumenAdapter(clients.SDClient, app.Logger.With("component", "naumen_adapter"), mapperCtx)
 
-	// --- 3. Р егистрация Провайдеров ---
+	// --- 3. Регистрация Провайдеров ---
 	app.IntegrationManager.RegisterInventoryProvider(naumenAdapter)
 	app.IntegrationManager.RegisterContractProvider(naumenAdapter)
 	app.IntegrationManager.RegisterTicketProvider(naumenAdapter)
@@ -409,7 +409,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
-	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation)
+	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation, srvs.CompanyService)
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 }
 
@@ -510,6 +510,7 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.CandidateHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}/observations", a.CandidateHandler.GetObservations)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.CandidateHandler.Approve)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/approve-manual", a.CandidateHandler.ApproveManual)
 		})
 
 		r.Route("/network-candidates", func(r chi.Router) {

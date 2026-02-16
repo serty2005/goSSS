@@ -44,7 +44,7 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 	bitrixRepo := repositories.NewBitrixRepo(db)
 
 	author := &user.User{Username: "author", PasswordHash: "hash", FullName: "Автор"}
-	assignee := &user.User{Username: "assignee", PasswordHash: "hash", FullName: "РСЃРїРѕР»РЅРёС‚РµР»СЊ"}
+	assignee := &user.User{Username: "assignee", PasswordHash: "hash", FullName: "Исполнитель"}
 	if err := userRepo.Create(context.Background(), author); err != nil {
 		t.Fatalf("не удалось создать автора: %v", err)
 	}

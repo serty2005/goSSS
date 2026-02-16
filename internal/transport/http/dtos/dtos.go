@@ -136,24 +136,28 @@ type AgentHeartbeatResponseDTO struct {
 
 // TicketListDTO - DTO для списка заявок (для таблицы на UI).
 type TicketListDTO struct {
-	ID                   string    `json:"id"`                // Внутренний ID
-	Number               int       `json:"number"`            // Номер заявки
-	ServiceDeskUUID      string    `json:"service_desk_uuid"` // Внешний UUID
-	Status               string    `json:"status"`            // Статус
-	Subject              string    `json:"subject"`           // Описание/Тема
-	Description          string    `json:"description"`       // ?Описание (HTML/Markdown)
-	LastComment          string    `json:"last_comment"`      // Последний комментарий
-	LastCommentAuthor    string    `json:"last_comment_author,omitempty"`
-	LastCommentIsPrivate bool      `json:"last_comment_is_private"`
-	LastActivityDate     time.Time `json:"last_activity"` // Дата последнего изменения
-	CreatedAt            time.Time `json:"created_at"`    // Дата создания
-	CompanyID            string    `json:"company_id"`
-	CompanyName          string    `json:"company_name"`
-	ContractID           *string   `json:"contract_id,omitempty"`
-	IsCommonContract     bool      `json:"is_common_contract,omitempty"`
-	SyncWithBitrix       bool      `json:"sync_with_bitrix"`
-	BitrixPointID        *int64    `json:"bitrix_service_point_id,omitempty"`
-	BitrixDealTitle      string    `json:"bitrix_deal_title"`
+	ID                   string     `json:"id"`                // Внутренний ID
+	Number               int        `json:"number"`            // Номер заявки
+	ServiceDeskUUID      string     `json:"service_desk_uuid"` // Внешний UUID
+	Status               string     `json:"status"`            // Статус
+	Subject              string     `json:"subject"`           // Описание/Тема
+	Description          string     `json:"description"`       // Описание (HTML/Markdown)
+	LastComment          string     `json:"last_comment"`      // Последний комментарий
+	LastCommentAuthor    string     `json:"last_comment_author,omitempty"`
+	LastCommentIsPrivate bool       `json:"last_comment_is_private"`
+	LastActivityDate     time.Time  `json:"last_activity"` // Дата последнего изменения
+	CreatedAt            time.Time  `json:"created_at"`    // Дата создания
+	CompanyID            string     `json:"company_id"`
+	CompanyName          string     `json:"company_name"`
+	ContractID           *string    `json:"contract_id,omitempty"`
+	IsCommonContract     bool       `json:"is_common_contract,omitempty"`
+	SyncWithBitrix       bool       `json:"sync_with_bitrix"`
+	IsArchived           bool       `json:"is_archived"`
+	ArchivedAt           *time.Time `json:"archived_at,omitempty"`
+	BitrixPointID        *int64     `json:"bitrix_service_point_id,omitempty"`
+	BitrixDealTitle      string     `json:"bitrix_deal_title"`
+	BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
+	BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
 	Assignee             *struct {
 		ID       uint   `json:"id"`
 		FullName string `json:"full_name"`

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
   Card,
@@ -7,18 +7,19 @@ import {
   Drawer,
   Input,
   List,
-  Pagination,
+  Popover,
   Row,
   Select,
   Space,
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
   theme as antTheme,
 } from 'antd';
-import { MenuOutlined } from '@ant-design/icons';
+import { LinkOutlined, MenuOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { DndContext, DragEndEvent, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -42,9 +43,9 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
   { value: 'deferred', label: 'Отложено', color: 'orange' },
   { value: 'onsite', label: 'На выезд', color: 'cyan' },
   { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
-  { value: 'resolved', label: 'Решена', color: 'green' },
+  { value: 'resolved', label: 'Р ешена', color: 'green' },
   { value: 'spam', label: 'Спам', color: 'red' },
-  { value: 'execution', label: 'Реализация', color: 'magenta' },
+  { value: 'execution', label: 'Р еализация', color: 'magenta' },
   { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
@@ -83,6 +84,51 @@ const sanitizeRichHtml = (value?: string) => {
 
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
 const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
+const ACTIVE_STATUS_VALUES: TicketStatus[] = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
+const DATE_STAMP_MIN_WIDTH = '10ch';
+const TIME_STAMP_MIN_WIDTH = '5ch';
+
+const formatDateStamp = (value?: string) => ({
+  date: value ? dayjs(value).format('DD.MM.YYYY') : '-',
+  time: value ? dayjs(value).format('HH:mm') : '--:--',
+});
+
+const TicketDateStamp: React.FC<{ label: string; value?: string }> = ({ label, value }) => {
+  const stamp = formatDateStamp(value);
+  return (
+    <div className="ticket-date-stamp">
+      <Text type="secondary" className="ticket-date-stamp-label">{label}</Text>
+      <Text className="ticket-date-stamp-value">
+        <span>{stamp.date}</span>
+        <span>{stamp.time}</span>
+      </Text>
+    </div>
+  );
+};
+
+const BitrixSyncIndicator: React.FC<{
+  sync?: boolean;
+  dealURL?: string;
+  compact?: boolean;
+  onClick?: (event: React.MouseEvent) => void;
+}> = ({ sync, dealURL, compact, onClick }) => {
+  if (!sync) {
+    return null;
+  }
+  if (!dealURL) {
+    return <Tag color="processing">B24</Tag>;
+  }
+  return (
+    <Tooltip title="Открыть сделку в Bitrix24">
+      <a href={dealURL} target="_blank" rel="noreferrer" onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Tag color="success" style={{ marginInlineEnd: 0 }}>
+          {compact ? 'B24' : 'Синхронизировано B24'}
+        </Tag>
+        <LinkOutlined />
+      </a>
+    </Tooltip>
+  );
+};
 
 const estimateHeaderMinWidth = (title: string) => {
   // Базовая оценка: ширина текста заголовка + отступы + иконка drag-handle.
@@ -186,28 +232,85 @@ const TicketsPage: React.FC = () => {
 
   const q = searchParams.get('q') || '';
   const status = searchParams.get('status') || '';
-  const company = searchParams.get('company') || '';
+  const onlyActiveStatuses = searchParams.get('only_active_statuses') === '1';
+  const assigneeIDs = searchParams.get('assignee_ids') || '';
+  const archiveMode = searchParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
+  const activeCompany = searchParams.get('company') || '';
+  const archiveCompany = searchParams.get('archive_company') || '';
+  const company = archiveMode === 'archive' ? archiveCompany : activeCompany;
+  const activePeriodFrom = searchParams.get('period_from') || '';
+  const activePeriodTo = searchParams.get('period_to') || '';
+  const archivePeriodFrom = searchParams.get('archive_period_from') || '';
+  const archivePeriodTo = searchParams.get('archive_period_to') || '';
+  const periodFrom = archiveMode === 'archive' ? archivePeriodFrom : activePeriodFrom;
+  const periodTo = archiveMode === 'archive' ? archivePeriodTo : activePeriodTo;
   const viewMode = (searchParams.get('view') as ViewMode) || 'list';
   const createParam = searchParams.get('create') || '';
-  const pageParam = Number(searchParams.get('page') || 1);
-  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
   const limit = 20;
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const statusValues = useMemo(
+    () => status.split(',').filter((value): value is TicketStatus => Boolean(value)),
+    [status],
+  );
+  const effectiveStatusValues = useMemo(() => {
+    if (archiveMode === 'archive') {
+      return [];
+    }
+    if (!onlyActiveStatuses) {
+      return statusValues;
+    }
+    const filtered = statusValues.filter((value) => ACTIVE_STATUS_VALUES.includes(value));
+    return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
+  }, [archiveMode, onlyActiveStatuses, statusValues]);
+  const effectiveStatus = effectiveStatusValues.join(',');
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['tickets', { q, status, company, page }],
-    queryFn: () =>
+  const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
+    queryKey: ['tickets', {
+      q,
+      status,
+      onlyActiveStatuses,
+      effectiveStatus,
+      company,
+      assigneeIDs,
+      periodFrom,
+      periodTo,
+      archiveMode,
+      activeCompany,
+      archiveCompany,
+      activePeriodFrom,
+      activePeriodTo,
+      archivePeriodFrom,
+      archivePeriodTo,
+    }],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
       ticketsApi.getTickets({
         search: q || undefined,
-        status: status || undefined,
+        status: archiveMode === 'archive' ? undefined : (effectiveStatus || undefined),
         company_id: company || undefined,
+        assignee_ids: assigneeIDs || undefined,
+        period_from: periodFrom || undefined,
+        period_to: periodTo || undefined,
+        archive_mode: archiveMode,
         limit,
-        offset: (page - 1) * limit,
+        offset: Number(pageParam) || 0,
       }),
+    getNextPageParam: (lastPage) => {
+      const meta = lastPage.meta;
+      if (!meta?.has_next) {
+        return undefined;
+      }
+      return (meta.offset || 0) + (meta.limit || limit);
+    },
     staleTime: 20_000,
   });
 
-  const tickets = data?.data || [];
-  const total = data?.meta?.total || 0;
+  const tickets = useMemo(
+    () => (data?.pages || []).flatMap((pageData) => pageData.data || []),
+    [data?.pages],
+  );
+  const visibleTickets = tickets;
+  const total = data?.pages?.[0]?.meta?.total || 0;
 
   const { data: detailsResponse, isLoading: isDetailsLoading } = useQuery({
     queryKey: ['ticket', selectedTicketId],
@@ -324,14 +427,35 @@ const TicketsPage: React.FC = () => {
     }
   }, [createParam]);
 
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node || !hasNextPage) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting || isFetchingNextPage) {
+          return;
+        }
+        void fetchNextPage();
+      },
+      { rootMargin: '240px 0px' },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, tickets.length]);
+
   const tableData = useMemo(
     () =>
-      tickets.map((ticket) => ({
+      visibleTickets.map((ticket) => ({
         ...ticket,
         company_display: ticket.company_name || ticket.company_id || 'Компания не указана',
         last_comment_display: normalizeDescription(ticket.last_comment),
+        assignee_display: ticket.assignee?.full_name || 'Не назначен',
       })),
-    [tickets],
+    [visibleTickets],
   );
 
   type TableRow = (typeof tableData)[number];
@@ -376,6 +500,14 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
+        title: 'Исполнитель',
+        dataIndex: 'assignee_display',
+        key: 'assignee_display',
+        width: 170,
+        minWidth: estimateHeaderMinWidth('Исполнитель'),
+        ellipsis: true,
+      },
+      {
         title: 'Тема',
         dataIndex: 'subject',
         key: 'subject',
@@ -397,12 +529,51 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
+        title: 'Создано',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        width: 110,
+        minWidth: estimateHeaderMinWidth('Создано'),
+        render: (value?: string) => {
+          const stamp = formatDateStamp(value);
+          return (
+            <Space direction="vertical" size={0}>
+              <Text style={{ minWidth: DATE_STAMP_MIN_WIDTH }}>{stamp.date}</Text>
+              <Text type="secondary" style={{ minWidth: TIME_STAMP_MIN_WIDTH }}>{stamp.time}</Text>
+            </Space>
+          );
+        },
+      },
+      {
         title: 'Обновлено',
         dataIndex: 'last_activity',
         key: 'last_activity',
-        width: 170,
+        width: 110,
         minWidth: estimateHeaderMinWidth('Обновлено'),
-        render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm'),
+        render: (value: string) => {
+          const stamp = formatDateStamp(value);
+          return (
+            <Space direction="vertical" size={0}>
+              <Text style={{ minWidth: DATE_STAMP_MIN_WIDTH }}>{stamp.date}</Text>
+              <Text type="secondary" style={{ minWidth: TIME_STAMP_MIN_WIDTH }}>{stamp.time}</Text>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'B24',
+        dataIndex: 'sync_with_bitrix',
+        key: 'sync_with_bitrix',
+        width: 120,
+        minWidth: estimateHeaderMinWidth('B24'),
+        render: (_value: boolean, row) => (
+          <BitrixSyncIndicator
+            sync={row.sync_with_bitrix}
+            dealURL={row.bitrix_deal_url}
+            compact
+            onClick={(event) => event.stopPropagation()}
+          />
+        ),
       },
     ],
     [],
@@ -494,29 +665,51 @@ const TicketsPage: React.FC = () => {
     }),
   }));
 
+  const applyAssigneeFilter = (assigneeID?: number) => {
+    if (!assigneeID) return;
+    const params = new URLSearchParams(searchParams);
+    params.set('assignee_ids', String(assigneeID));
+    params.set('page', '1');
+    setSearchParams(params);
+  };
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card>
         {viewMode === 'list' && (
           <List
             loading={isLoading}
-            dataSource={tickets}
+            dataSource={visibleTickets}
             renderItem={(item) => {
               const meta = statusMeta(item.status);
               return (
                 <List.Item key={item.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedTicketId(item.id)}>
-                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <Space direction="vertical" size={0}>
+                  <Space className="ticket-list-item-wrap">
+                    <Space direction="vertical" size={0} className="ticket-list-main">
+                      <Text className="ticket-company-centered" strong>{item.company_name || item.company_id}</Text>
                       <Space size={8}>
                         <Text strong>#{item.number}</Text>
                         <Tag color={meta.color}>{meta.label}</Tag>
                         {item.is_common_contract && <Tag color="gold">Платный</Tag>}
+                        <BitrixSyncIndicator
+                          sync={item.sync_with_bitrix}
+                          dealURL={item.bitrix_deal_url}
+                          compact
+                          onClick={(event) => event.stopPropagation()}
+                        />
                       </Space>
                       <Text>{item.subject || 'Без темы'}</Text>
-                      <Text type="secondary">{item.company_name || item.company_id}</Text>
-                      {item.last_comment && <Text type="secondary">Комментарий: {normalizeDescription(item.last_comment)}</Text>}
+                      {item.last_comment && (
+                        <Paragraph className="ticket-description-paragraph" type="secondary" ellipsis={{ rows: 3 }}>
+                          {normalizeDescription(item.last_comment)}
+                        </Paragraph>
+                      )}
                     </Space>
-                    <Text type="secondary">{dayjs(item.last_activity).format('DD.MM.YYYY HH:mm')}</Text>
+                    <Space direction="vertical" size={6} className="ticket-list-side">
+                      <Text className="ticket-assignee-linklike">{item.assignee?.full_name || 'Не назначен'}</Text>
+                      <TicketDateStamp label="Создано" value={item.created_at} />
+                      <TicketDateStamp label="Обновлено" value={item.last_activity} />
+                    </Space>
                   </Space>
                 </List.Item>
               );
@@ -526,29 +719,68 @@ const TicketsPage: React.FC = () => {
 
         {viewMode === 'cards' && (
           <Row gutter={[12, 12]}>
-            {tickets.map((item) => {
+            {visibleTickets.map((item) => {
               const meta = statusMeta(item.status);
               return (
                 <Col key={item.id} xs={24} md={12} xl={8}>
                   <Card hoverable className="glass-panel" onClick={() => setSelectedTicketId(item.id)}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                        <Text strong>#{item.number}</Text>
+                      <div className="ticket-card-top">
+                        <div className="ticket-card-left">
+                          <Text strong className="ticket-card-number">#{item.number}</Text>
+                          <BitrixSyncIndicator
+                            sync={item.sync_with_bitrix}
+                            dealURL={item.bitrix_deal_url}
+                            compact
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        </div>
+                        <div className="ticket-card-assignee-wrap">
+                          <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
+                            <a
+                              className="ticket-assignee-linklike"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                applyAssigneeFilter(item.assignee?.id);
+                              }}
+                            >
+                              {item.assignee?.full_name || 'Не назначен'}
+                            </a>
+                          </Popover>
+                        </div>
                         <Space size={4}>
                           <Tag color={meta.color}>{meta.label}</Tag>
                           {item.is_common_contract && <Tag color="gold">Платный</Tag>}
                         </Space>
-                      </Space>
-                      <Text strong>{item.company_name || item.company_id}</Text>
+                      </div>
+                      <div className="ticket-company-centered">
+                        {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
+                        <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
+                          <a
+                            className="ticket-assignee-linklike"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                          >
+                            {item.company_name || item.company_id}
+                          </a>
+                        </Popover>
+                      </div>
+
                       <Paragraph style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
                         {item.subject || 'Без темы'}
                       </Paragraph>
                       {item.last_comment && (
-                        <Paragraph type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
+                        <Paragraph className="ticket-description-paragraph" type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 3 }}>
                           {normalizeDescription(item.last_comment)}
                         </Paragraph>
                       )}
-                      <Text type="secondary">{dayjs(item.last_activity).format('DD.MM.YYYY HH:mm')}</Text>
+                      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                        <TicketDateStamp label="Создано" value={item.created_at} />
+                        <TicketDateStamp label="Обновлено" value={item.last_activity} />
+                      </Space>
                     </Space>
                   </Card>
                 </Col>
@@ -556,8 +788,7 @@ const TicketsPage: React.FC = () => {
             })}
           </Row>
         )}
-
-        {viewMode === 'table' && (
+	        {viewMode === 'table' && (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -589,18 +820,11 @@ const TicketsPage: React.FC = () => {
           </DndContext>
         )}
 
-        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
-          <Pagination
-            current={page}
-            pageSize={limit}
-            total={total}
-            showSizeChanger={false}
-            onChange={(nextPage) => {
-              const next = new URLSearchParams(searchParams);
-              next.set('page', String(nextPage));
-              setSearchParams(next);
-            }}
-          />
+        <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
+          {(isFetchingNextPage || (hasNextPage && visibleTickets.length > 0)) && <Spin size="small" />}
+          {!hasNextPage && visibleTickets.length > 0 && (
+            <Text type="secondary">Показано: {visibleTickets.length} из {total}</Text>
+          )}
         </div>
       </Card>
 
@@ -635,21 +859,36 @@ const TicketsPage: React.FC = () => {
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Space wrap>
-              <Select
-                value={metadata.status}
-                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
-                style={{ width: 220 }}
-                onChange={(nextStatus: TicketStatus) => {
-                  if (!selectedTicketId || nextStatus === metadata.status) {
-                    return;
-                  }
-                  if (nextStatus === 'resolved') {
-                    setPendingStatus(nextStatus);
-                    return;
-                  }
-                  changeStatusMutation.mutate({ id: selectedTicketId, status: nextStatus });
-                }}
-              />
+              {metadata.is_archived ? (
+                <Button
+                  type="primary"
+                  loading={changeStatusMutation.isPending}
+                  onClick={() => {
+                    if (!selectedTicketId) return;
+                    changeStatusMutation.mutate({ id: selectedTicketId, status: 'in_progress' });
+                  }}
+                >
+                  Вернуть в работу
+                </Button>
+              ) : (
+                <Select
+                  value={metadata.status}
+                  options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                  style={{ width: 220 }}
+                  onChange={(nextStatus: TicketStatus) => {
+                    if (!selectedTicketId || nextStatus === metadata.status) {
+                      return;
+                    }
+                    if (nextStatus === 'resolved') {
+                      setPendingStatus(nextStatus);
+                      return;
+                    }
+                    changeStatusMutation.mutate({ id: selectedTicketId, status: nextStatus });
+                  }}
+                />
+              )}
+              <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
+              <Text type="secondary">Исполнитель: {metadata.assignee?.full_name || 'Не назначен'}</Text>
               <Button
                 onClick={() => {
                   if (!selectedTicketId) return;
@@ -666,8 +905,8 @@ const TicketsPage: React.FC = () => {
             </Card>
 
             {isClosedLikeStatus(metadata.status) && (
-              <Card size="small" title="Результат">
-                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+              <Card size="small" title="Р езультат">
+                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Р езультат не заполнен</span>') }} />
               </Card>
             )}
 
@@ -723,7 +962,7 @@ const TicketsPage: React.FC = () => {
                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
                         <Space size={8}>
                           <Text type="secondary">
-                            {item.author} • {item.date}
+                            {item.author} вЂў {item.date}
                           </Text>
                           {item.isPrivate && <Tag color="orange">Приватный</Tag>}
                         </Space>

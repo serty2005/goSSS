@@ -1,13 +1,44 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Dropdown, Grid, Input, Select, Space, Switch, Typography } from 'antd';
-import { FilterOutlined, PlusOutlined } from '@ant-design/icons';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import dayjs, { Dayjs } from 'dayjs';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import { ticketsApi } from '@/api/tickets';
+import { usersApi } from '@/api/users';
+import { profileApi } from '@/api/profile';
+import { useAuthStore } from '@/store/authStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 
 const { useBreakpoint } = Grid;
 const { Text } = Typography;
+
+const TICKET_STATUS_OPTIONS = [
+  { value: 'new', label: 'Новая' },
+  { value: 'in_progress', label: 'В работе' },
+  { value: 'pending', label: 'Ожидание' },
+  { value: 'deferred', label: 'Отложено' },
+  { value: 'onsite', label: 'На выезд' },
+  { value: 'to_manager', label: 'Передать менеджеру' },
+  { value: 'resolved', label: 'Решена' },
+  { value: 'spam', label: 'Спам' },
+  { value: 'execution', label: 'Реализация' },
+  { value: 'closed', label: 'Закрыта' },
+];
+const ACTIVE_STATUS_VALUES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
+const LONGEST_STATUS_LABEL_WIDTH = 260;
+
+type TicketPreset = {
+  id: string;
+  name: string;
+  values: {
+    status?: string;
+    company?: string;
+    assignee_ids?: string;
+    period_from?: string;
+    period_to?: string;
+  };
+};
 
 const HeaderSearch: React.FC = () => {
   const navigate = useNavigate();
@@ -16,6 +47,8 @@ const HeaderSearch: React.FC = () => {
   const currentTerm = searchParams.get('term') || '';
   const showInactive = ['1', 'true', 'yes', 'on'].includes((searchParams.get('show_inactive') || '').toLowerCase());
   const [searchTerm, setSearchTerm] = useState(currentTerm);
+  const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
 
   useEffect(() => {
     setSearchTerm(currentTerm);
@@ -59,25 +92,66 @@ const HeaderSearch: React.FC = () => {
 
   const [ticketParams, setTicketParams] = useSearchParams();
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
+  const [presetName, setPresetName] = useState('');
   const appliedSearch = ticketParams.get('q') || '';
   const ticketStatus = ticketParams.get('status') || '';
-  const ticketCompany = ticketParams.get('company') || undefined;
+  const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
   const ticketView = ticketParams.get('view') || 'list';
+  const ticketAssigneeIDs = ticketParams.get('assignee_ids') || '';
+  const archiveMode = ticketParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
+  const activeCompany = ticketParams.get('company') || undefined;
+  const archiveCompany = ticketParams.get('archive_company') || undefined;
+  const ticketCompany = archiveMode === 'archive' ? archiveCompany : activeCompany;
+  const activePeriodFrom = ticketParams.get('period_from') || '';
+  const activePeriodTo = ticketParams.get('period_to') || '';
+  const archivePeriodFrom = ticketParams.get('archive_period_from') || '';
+  const archivePeriodTo = ticketParams.get('archive_period_to') || '';
+  const periodFrom = archiveMode === 'archive' ? archivePeriodFrom : activePeriodFrom;
+  const periodTo = archiveMode === 'archive' ? archivePeriodTo : activePeriodTo;
+  const companyParamKey = archiveMode === 'archive' ? 'archive_company' : 'company';
+  const periodFromParamKey = archiveMode === 'archive' ? 'archive_period_from' : 'period_from';
+  const periodToParamKey = archiveMode === 'archive' ? 'archive_period_to' : 'period_to';
 
   useEffect(() => {
     setTicketTerm(ticketParams.get('q') || '');
   }, [ticketParams]);
 
   const statusValues = useMemo(() => (ticketStatus ? ticketStatus.split(',').filter(Boolean) : []), [ticketStatus]);
+  const effectiveStatusValues = useMemo(() => {
+    if (archiveMode === 'archive') {
+      return [];
+    }
+    if (!onlyActiveStatuses) {
+      return statusValues;
+    }
+    const filtered = statusValues.filter((value) => ACTIVE_STATUS_VALUES.includes(value));
+    return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
+  }, [archiveMode, onlyActiveStatuses, statusValues]);
+  const assigneeValues = useMemo(() => (ticketAssigneeIDs ? ticketAssigneeIDs.split(',').filter(Boolean) : []), [ticketAssigneeIDs]);
 
   const { data: filterRes, isFetching: isFiltersLoading } = useQuery({
-    queryKey: ['ticket-filters', appliedSearch, statusValues],
+    queryKey: ['ticket-filters', archiveMode, appliedSearch, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
     queryFn: () =>
       ticketsApi.getTicketFilters({
+        archive_mode: archiveMode,
         search: appliedSearch || undefined,
-        status: statusValues.length ? statusValues : undefined,
+        status: archiveMode === 'archive' ? undefined : (effectiveStatusValues.length ? effectiveStatusValues : undefined),
+        period_from: periodFrom || undefined,
+        period_to: periodTo || undefined,
       }),
     staleTime: 30_000,
+    enabled: isTicketsPage,
+  });
+
+  const { data: assigneesRes } = useQuery({
+    queryKey: ['ticket-assignees'],
+    queryFn: () => usersApi.getAssignees(),
+    enabled: isTicketsPage && archiveMode !== 'archive',
+    staleTime: 60_000,
+  });
+
+  const updateProfileMutation = useMutation({
+    mutationFn: async (config: Record<string, unknown>) => profileApi.updateConfig({ profile_config: config }),
   });
 
   const companyOptions = useMemo(() => {
@@ -107,6 +181,22 @@ const HeaderSearch: React.FC = () => {
     }));
   }, [filterRes]);
 
+  const assigneeOptions = useMemo(
+    () => (assigneesRes?.data || []).map((item) => ({
+      value: String(item.id),
+      label: item.full_name || item.username || `ID ${item.id}`,
+    })),
+    [assigneesRes],
+  );
+
+  const presets = useMemo<TicketPreset[]>(() => {
+    const raw = (user?.profile_config as { tickets?: { filters?: { presets?: TicketPreset[] } } } | undefined)?.tickets?.filters?.presets;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string');
+  }, [user?.profile_config]);
+
   const updateTicketParams = (next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(ticketParams);
     Object.entries(next).forEach(([key, value]) => {
@@ -118,6 +208,66 @@ const HeaderSearch: React.FC = () => {
     });
     params.set('page', '1');
     setTicketParams(params);
+  };
+
+  const applyPreset = (presetID: string) => {
+    const preset = presets.find((item) => item.id === presetID);
+    if (!preset) {
+      return;
+    }
+    updateTicketParams({
+      status: preset.values.status || undefined,
+      company: preset.values.company || undefined,
+      assignee_ids: preset.values.assignee_ids || undefined,
+      period_from: preset.values.period_from || undefined,
+      period_to: preset.values.period_to || undefined,
+    });
+  };
+
+  const saveCurrentPreset = async () => {
+    const name = presetName.trim();
+    if (!name) {
+      message.warning('Введите имя фильтра');
+      return;
+    }
+    if (!user) {
+      return;
+    }
+
+    const nextPreset: TicketPreset = {
+      id: `preset_${Date.now()}`,
+      name,
+      values: {
+        status: ticketStatus || undefined,
+        company: activeCompany || undefined,
+        assignee_ids: ticketAssigneeIDs || undefined,
+        period_from: activePeriodFrom || undefined,
+        period_to: activePeriodTo || undefined,
+      },
+    };
+
+    const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
+    const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
+    const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
+    const nextConfig: Record<string, unknown> = {
+      ...currentConfig,
+      tickets: {
+        ...ticketsConfig,
+        filters: {
+          ...filtersConfig,
+          presets: [...presets, nextPreset],
+        },
+      },
+    };
+
+    try {
+      await updateProfileMutation.mutateAsync(nextConfig);
+      setUser({ ...user, profile_config: nextConfig as any });
+      setPresetName('');
+      message.success('Фильтр сохранён');
+    } catch {
+      message.error('Не удалось сохранить фильтр');
+    }
   };
 
   const [sectionParams] = useSearchParams();
@@ -132,7 +282,7 @@ const HeaderSearch: React.FC = () => {
   const sectionPlaceholder = (() => {
     if (isCompaniesPage) return 'Поиск компаний: название, адрес, юр. название';
     if (isServersPage) return 'Поиск серверов: id, ip, название';
-    if (isWorkstationsPage) return 'Поиск РС: id, название';
+    if (isWorkstationsPage) return 'Поиск станций: id, название';
     if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
     return 'Поиск...';
   })();
@@ -151,17 +301,136 @@ const HeaderSearch: React.FC = () => {
   };
 
   if (isTicketsPage) {
-    const controls = (
-      <Space size="small" wrap style={{ justifyContent: 'center' }}>
+    const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
+    const filterContent = (
+      <Space direction="vertical" size="small" style={{ width: 420 }}>
         <Select
           value={ticketView}
           onChange={(value) => updateTicketParams({ view: value })}
-          style={{ width: 130 }}
           options={[
             { value: 'list', label: 'Список' },
             { value: 'cards', label: 'Карточки' },
             { value: 'table', label: 'Таблица' },
           ]}
+          style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
+        />
+
+        {archiveMode !== 'archive' && (
+          <>
+            <Space style={{ width: LONGEST_STATUS_LABEL_WIDTH, justifyContent: 'space-between' }} align="start">
+              <Select
+                mode="multiple"
+                placeholder="Статусы"
+                value={statusValues}
+                onChange={(values) => updateTicketParams({ status: values.length ? values.join(',') : undefined })}
+                options={TICKET_STATUS_OPTIONS}
+                style={{ width: 182 }}
+              />
+              <Checkbox
+                checked={onlyActiveStatuses}
+                onChange={(event) => updateTicketParams({ only_active_statuses: event.target.checked ? '1' : undefined })}
+              >
+                Активные
+              </Checkbox>
+            </Space>
+            <Select
+              mode="multiple"
+              placeholder="Сотрудники"
+              value={assigneeValues}
+              onChange={(values) => updateTicketParams({ assignee_ids: values.length ? values.join(',') : undefined })}
+              options={assigneeOptions}
+              loading={!assigneesRes}
+              style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
+            />
+          </>
+        )}
+
+        <DatePicker.RangePicker
+          value={periodValue}
+          onChange={(dates) => {
+            const from = dates?.[0] ? dates[0].startOf('day').format('YYYY-MM-DD') : undefined;
+            const to = dates?.[1] ? dates[1].endOf('day').format('YYYY-MM-DD') : undefined;
+            updateTicketParams({ [periodFromParamKey]: from, [periodToParamKey]: to });
+          }}
+          style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
+          allowClear
+          format="DD.MM.YYYY"
+        />
+
+        <Select
+          showSearch
+          allowClear
+          placeholder="Компания"
+          value={ticketCompany}
+          onChange={(value) => updateTicketParams({ [companyParamKey]: value || undefined })}
+          filterOption={(input, option) =>
+            String((option as { searchText?: string } | undefined)?.searchText || '').includes(input.toLowerCase())
+          }
+          options={companyOptions}
+          loading={isFiltersLoading}
+          optionLabelProp="selectedLabel"
+          style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
+        />
+
+        {archiveMode !== 'archive' && (
+          <>
+            <Select
+              allowClear
+              placeholder="Выбрать сохранённый фильтр"
+              options={presets.map((item) => ({ value: item.id, label: item.name }))}
+              onChange={(value) => {
+                if (!value) return;
+                applyPreset(value);
+              }}
+            />
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                placeholder="Имя фильтра"
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+              />
+              <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
+                Сохранить
+              </Button>
+            </Space.Compact>
+          </>
+        )}
+
+        <Button
+          onClick={() => updateTicketParams(
+            archiveMode === 'archive'
+              ? {
+                  archive_company: undefined,
+                  archive_period_from: undefined,
+                  archive_period_to: undefined,
+                }
+              : {
+                  status: undefined,
+                  only_active_statuses: undefined,
+                  assignee_ids: undefined,
+                  company: undefined,
+                  period_from: undefined,
+                  period_to: undefined,
+                },
+          )}
+        >
+          Сбросить фильтры
+        </Button>
+      </Space>
+    );
+
+    return (
+      <Space size="small" wrap style={{ justifyContent: 'center' }}>
+        <Segmented
+          value={archiveMode}
+          options={[
+            { value: 'active', label: 'В работе' },
+            { value: 'archive', label: 'Архив' },
+          ]}
+          onChange={(value) => {
+            const nextMode = value as 'active' | 'archive';
+            updateTicketParams({ archive_mode: nextMode });
+          }}
         />
         <Input.Search
           placeholder="Поиск по заявкам..."
@@ -169,40 +438,11 @@ const HeaderSearch: React.FC = () => {
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
-          style={{ width: 260 }}
+          style={{ width: isCompact ? 240 : 320 }}
         />
-        <Select
-          mode="multiple"
-          placeholder="Статусы"
-          value={statusValues}
-          onChange={(values) => updateTicketParams({ status: values.length ? values.join(',') : undefined })}
-          style={{ width: 220 }}
-          options={[
-            { value: 'new', label: 'Новая' },
-            { value: 'in_progress', label: 'В работе' },
-            { value: 'pending', label: 'Ожидание' },
-            { value: 'deferred', label: 'Отложено' },
-            { value: 'onsite', label: 'На выезд' },
-            { value: 'to_manager', label: 'Передать менеджеру' },
-            { value: 'resolved', label: 'Решена' },
-            { value: 'spam', label: 'Спам' },
-            { value: 'execution', label: 'Реализация' },
-          ]}
-        />
-        <Select
-          showSearch
-          allowClear
-          placeholder="Компания-владелец"
-          value={ticketCompany}
-          onChange={(value) => updateTicketParams({ company: value || undefined })}
-          filterOption={(input, option) =>
-            String((option as { searchText?: string } | undefined)?.searchText || '').includes(input.toLowerCase())
-          }
-          options={companyOptions}
-          loading={isFiltersLoading}
-          style={{ width: 260 }}
-          optionLabelProp="selectedLabel"
-        />
+        <Popover trigger="click" placement="bottomRight" content={filterContent}>
+          <Button shape="circle" icon={<SettingOutlined />} />
+        </Popover>
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -218,26 +458,6 @@ const HeaderSearch: React.FC = () => {
         </Button>
       </Space>
     );
-
-    if (isCompact) {
-      return (
-        <Dropdown
-          trigger={['click']}
-          placement="bottom"
-          popupRender={() => (
-            <div style={{ padding: 12, width: 320 }}>
-              <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                {controls}
-              </Space>
-            </div>
-          )}
-        >
-          <Button icon={<FilterOutlined />}>Поиск и фильтры</Button>
-        </Dropdown>
-      );
-    }
-
-    return controls;
   }
 
   if (isSectionSearchPage) {
@@ -273,3 +493,4 @@ const HeaderSearch: React.FC = () => {
 };
 
 export default HeaderSearch;
+

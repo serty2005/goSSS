@@ -90,12 +90,16 @@ type Ticket struct {
 	AssetType *string `json:"asset_type,omitempty" gorm:"type:varchar(50)"`
 
 	// Внешние системы (для обратной совместимости и миграции)
-	ServiceDeskUUID string `json:"service_desk_uuid" gorm:"index"`
-	SyncWithBitrix  bool   `json:"sync_with_bitrix" gorm:"not null;default:true;index"`
+	ServiceDeskUUID string     `json:"service_desk_uuid" gorm:"index"`
+	SyncWithBitrix  bool       `json:"sync_with_bitrix" gorm:"not null;default:true;index"`
+	IsArchived      bool       `json:"is_archived" gorm:"not null;default:false;index"`
+	ArchivedAt      *time.Time `json:"archived_at,omitempty" gorm:"index"`
 
 	// Точка обслуживания в Bitrix24 (ID элемента списка IBLOCK_ID=101).
 	BitrixServicePointID *int64 `json:"bitrix_service_point_id,omitempty" gorm:"index"`
 	BitrixDealTitle      string `json:"bitrix_deal_title" gorm:"type:text"`
+	BitrixDealID         *int64 `json:"bitrix_deal_id,omitempty" gorm:"-"`
+	BitrixDealURL        string `json:"bitrix_deal_url,omitempty" gorm:"-"`
 }
 
 // TicketDetails — составная структура для отображения на UI.

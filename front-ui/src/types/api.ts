@@ -230,8 +230,12 @@ export interface TicketListItemDTO {
   contract_id?: string;
   is_common_contract?: boolean;
   sync_with_bitrix?: boolean;
+  is_archived?: boolean;
+  archived_at?: string;
   bitrix_service_point_id?: number;
   bitrix_deal_title?: string;
+  bitrix_deal_id?: number;
+  bitrix_deal_url?: string;
   assignee?: {
     id: number;
     full_name: string;
@@ -258,8 +262,12 @@ export interface TicketDTO {
   contract_id?: string;
   is_common_contract?: boolean;
   sync_with_bitrix?: boolean;
+  is_archived?: boolean;
+  archived_at?: string;
   bitrix_service_point_id?: number;
   bitrix_deal_title?: string;
+  bitrix_deal_id?: number;
+  bitrix_deal_url?: string;
 }
 
 export interface TicketCreatePayload {
@@ -397,6 +405,10 @@ export interface TicketListParams {
   offset?: number;
   status?: string | string[];
   search?: string;
+  archive_mode?: 'active' | 'archive' | 'all';
+  period_from?: string;
+  period_to?: string;
+  assignee_ids?: string | string[];
 }
 
 export interface TicketCompanyFilterItem {
@@ -740,6 +752,7 @@ export interface CandidateApprovePayload {
 		workstation_uuid?: string;
 	}>;
 	comment?: string;
+	bitrix_service_point_id?: number;
 	// Ручной ввод remote IDs (опционально).
 	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
 	teamviewer_id?: string;

@@ -125,14 +125,37 @@ func (r *ticketRepo) buildQuery(ctx context.Context, filter tickets.TicketFilter
 }
 
 func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *gorm.DB {
+	switch strings.TrimSpace(filter.ArchiveMode) {
+	case "archive":
+		query = query.Where("is_archived = ?", true)
+	case "all":
+		// Без ограничений.
+	default:
+		query = query.Where("is_archived = ?", false)
+	}
 	if filter.CompanyID != "" {
 		query = query.Where("company_id = ?", filter.CompanyID)
+	}
+	if len(filter.CompanyIDs) > 0 {
+		query = query.Where("company_id IN ?", filter.CompanyIDs)
 	}
 	if filter.AssetID != nil {
 		query = query.Where("asset_id = ?", *filter.AssetID)
 	}
 	if len(filter.Statuses) > 0 {
 		query = query.Where("status IN ?", filter.Statuses)
+	}
+	if len(filter.ExcludeStatuses) > 0 {
+		query = query.Where("status NOT IN ?", filter.ExcludeStatuses)
+	}
+	if filter.UpdatedFrom != nil {
+		query = query.Where("updated_at >= ?", *filter.UpdatedFrom)
+	}
+	if filter.UpdatedTo != nil {
+		query = query.Where("updated_at <= ?", *filter.UpdatedTo)
+	}
+	if len(filter.AssigneeIDs) > 0 {
+		query = query.Where("assignee_id IN ?", filter.AssigneeIDs)
 	}
 	if filter.AssigneeID != nil {
 		query = query.Where("assignee_id = ?", *filter.AssigneeID)
@@ -153,6 +176,27 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	}
 
 	return query
+}
+
+func (r *ticketRepo) ArchiveStale(ctx context.Context, threshold time.Duration) (int64, error) {
+	if threshold <= 0 {
+		threshold = 14 * 24 * time.Hour
+	}
+	before := time.Now().Add(-threshold)
+	updates := map[string]interface{}{
+		"is_archived":      true,
+		"archived_at":      time.Now(),
+		"sync_with_bitrix": false,
+	}
+	result := r.db.WithContext(ctx).
+		Model(&tickets.Ticket{}).
+		Where("is_archived = ?", false).
+		Where("updated_at <= ?", before).
+		Updates(updates)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
 
 func (r *ticketRepo) AddHistory(ctx context.Context, history *tickets.TicketHistory) error {

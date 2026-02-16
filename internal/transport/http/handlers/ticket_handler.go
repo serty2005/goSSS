@@ -30,6 +30,12 @@ func NewTicketHandler(service services.TicketService, eventBus eventbus.EventBus
 	return &TicketHandler{service: service, eventBus: eventBus}
 }
 
+var archivedStatusesForCompanyFilter = []string{
+	tickets.StatusResolved,
+	tickets.StatusSpam,
+	tickets.StatusExecution,
+}
+
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Get("/filters", h.Filters)
@@ -389,11 +395,24 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		CompanyID:   r.URL.Query().Get("company_id"),
 		SearchQuery: r.URL.Query().Get("search"),
 		SortBy:      r.URL.Query().Get("sort_by"),
+		ArchiveMode: strings.TrimSpace(r.URL.Query().Get("archive_mode")),
+	}
+	if filter.ArchiveMode == "" {
+		filter.ArchiveMode = "active"
 	}
 
 	// Фильтр по статусам.
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
+	}
+	if assigneeIDs := parseUintCSV(r.URL.Query().Get("assignee_ids")); len(assigneeIDs) > 0 {
+		filter.AssigneeIDs = assigneeIDs
+	}
+	if periodFrom := parseDateTimeParam(r.URL.Query().Get("period_from"), false); periodFrom != nil {
+		filter.UpdatedFrom = periodFrom
+	}
+	if periodTo := parseDateTimeParam(r.URL.Query().Get("period_to"), true); periodTo != nil {
+		filter.UpdatedTo = periodTo
 	}
 	if assetID := r.URL.Query().Get("asset_id"); assetID != "" {
 		filter.AssetID = &assetID
@@ -448,8 +467,12 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			ContractID:           item.ContractID,
 			IsCommonContract:     item.IsCommonContract,
 			SyncWithBitrix:       item.SyncWithBitrix,
+			IsArchived:           item.IsArchived,
+			ArchivedAt:           item.ArchivedAt,
 			BitrixPointID:        item.BitrixServicePointID,
 			BitrixDealTitle:      item.BitrixDealTitle,
+			BitrixDealID:         item.BitrixDealID,
+			BitrixDealURL:        item.BitrixDealURL,
 			Assignee:             assignee,
 			// LastActivityDate is basically UpdatedAt or CreatedAt
 			LastActivityDate: item.UpdatedAt,
@@ -475,9 +498,22 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *TicketHandler) Filters(w http.ResponseWriter, r *http.Request) {
 	filter := tickets.TicketFilter{
 		SearchQuery: r.URL.Query().Get("search"),
+		ArchiveMode: strings.TrimSpace(r.URL.Query().Get("archive_mode")),
+	}
+	if filter.ArchiveMode == "" {
+		filter.ArchiveMode = "active"
 	}
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
+	}
+	if periodFrom := parseDateTimeParam(r.URL.Query().Get("period_from"), false); periodFrom != nil {
+		filter.UpdatedFrom = periodFrom
+	}
+	if periodTo := parseDateTimeParam(r.URL.Query().Get("period_to"), true); periodTo != nil {
+		filter.UpdatedTo = periodTo
+	}
+	if filter.ArchiveMode != "archive" {
+		filter.ExcludeStatuses = archivedStatusesForCompanyFilter
 	}
 
 	items, err := h.service.GetCompanyFilters(r.Context(), filter)
@@ -568,17 +604,21 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			ID       uint   `json:"id"`
 			FullName string `json:"full_name"`
 		} `json:"assignee,omitempty"`
-		ReporterID           *uint   `json:"reporter_id"`
-		ReporterName         string  `json:"reporter_name"`
-		ReporterEmail        string  `json:"reporter_email"`
-		CompanyID            string  `json:"company_id"`
-		CompanyName          string  `json:"company_name,omitempty"`
-		ContractID           *string `json:"contract_id,omitempty"`
-		IsCommonContract     bool    `json:"is_common_contract,omitempty"`
-		ServiceDeskUUID      string  `json:"service_desk_uuid"`
-		SyncWithBitrix       bool    `json:"sync_with_bitrix"`
-		BitrixServicePointID *int64  `json:"bitrix_service_point_id,omitempty"`
-		BitrixDealTitle      string  `json:"bitrix_deal_title"`
+		ReporterID           *uint      `json:"reporter_id"`
+		ReporterName         string     `json:"reporter_name"`
+		ReporterEmail        string     `json:"reporter_email"`
+		CompanyID            string     `json:"company_id"`
+		CompanyName          string     `json:"company_name,omitempty"`
+		ContractID           *string    `json:"contract_id,omitempty"`
+		IsCommonContract     bool       `json:"is_common_contract,omitempty"`
+		ServiceDeskUUID      string     `json:"service_desk_uuid"`
+		SyncWithBitrix       bool       `json:"sync_with_bitrix"`
+		IsArchived           bool       `json:"is_archived"`
+		ArchivedAt           *time.Time `json:"archived_at,omitempty"`
+		BitrixServicePointID *int64     `json:"bitrix_service_point_id,omitempty"`
+		BitrixDealTitle      string     `json:"bitrix_deal_title"`
+		BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
+		BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
 	}
 
 	type safeCommentDTO struct {
@@ -626,8 +666,12 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			IsCommonContract:     details.Metadata.IsCommonContract,
 			ServiceDeskUUID:      details.Metadata.ServiceDeskUUID,
 			SyncWithBitrix:       details.Metadata.SyncWithBitrix,
+			IsArchived:           details.Metadata.IsArchived,
+			ArchivedAt:           details.Metadata.ArchivedAt,
 			BitrixServicePointID: details.Metadata.BitrixServicePointID,
 			BitrixDealTitle:      details.Metadata.BitrixDealTitle,
+			BitrixDealID:         details.Metadata.BitrixDealID,
+			BitrixDealURL:        details.Metadata.BitrixDealURL,
 		},
 		"company_name": details.CompanyName,
 		"history":      details.History,
@@ -659,6 +703,56 @@ func (h *TicketHandler) LinkAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "linked"})
+}
+
+func parseUintCSV(raw string) []uint {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]uint, 0, len(parts))
+	seen := make(map[uint]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		value, err := strconv.ParseUint(part, 10, 64)
+		if err != nil || value == 0 {
+			continue
+		}
+		item := uint(value)
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func parseDateTimeParam(raw string, endOfDay bool) *time.Time {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err != nil {
+			continue
+		}
+		if layout == "2006-01-02" && endOfDay {
+			parsed = parsed.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		}
+		return &parsed
+	}
+	return nil
 }
 
 func getUserIDFromContext(r *http.Request) uint {

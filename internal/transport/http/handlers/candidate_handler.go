@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"etalon-server/internal/domain/company"
 	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
@@ -19,11 +20,12 @@ import (
 type CandidateHandler struct {
 	candidateRepo domainrepos.CandidateRepo
 	obsSrv        services.AgentObservationService
+	companySrv    company.Service
 }
 
 // NewCandidateHandler создает обработчик для операций с кандидатами.
-func NewCandidateHandler(candidateRepo domainrepos.CandidateRepo, obsSrv services.AgentObservationService) *CandidateHandler {
-	return &CandidateHandler{candidateRepo: candidateRepo, obsSrv: obsSrv}
+func NewCandidateHandler(candidateRepo domainrepos.CandidateRepo, obsSrv services.AgentObservationService, companySrv company.Service) *CandidateHandler {
+	return &CandidateHandler{candidateRepo: candidateRepo, obsSrv: obsSrv, companySrv: companySrv}
 }
 
 // List возвращает список кандидатов с фильтром по статусу.
@@ -192,6 +194,62 @@ func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	approvedCompanyID := strings.TrimSpace(input.CompanyID)
+	if approvedCompanyID == "" && updated != nil && updated.ApprovedCompanyID != nil {
+		approvedCompanyID = strings.TrimSpace(*updated.ApprovedCompanyID)
+	}
+	if err := h.applyBitrixMapping(r, approvedCompanyID, req.BitrixServicePointID); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, updated)
+}
+
+func (h *CandidateHandler) ApproveManual(w http.ResponseWriter, r *http.Request) {
+	var req candidateApproveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		return
+	}
+
+	input := services.CandidateApproveInput{Comment: strPtrOrNil(req.Comment)}
+	if req.CompanyID != nil {
+		input.CompanyID = strings.TrimSpace(*req.CompanyID)
+	}
+	if req.Company != nil {
+		input.CompanyTitle = strFromValue(req.Company.Title)
+		input.CompanyAddress = strPtrOrNil(req.Company.Address)
+		input.CompanyAdditionalName = strPtrOrNil(req.Company.AdditionalName)
+		input.CompanyParentID = strPtrOrNil(req.Company.ParentID)
+		input.ContractMode = strPtrOrNil(req.Company.ContractMode)
+		input.ContractType = strPtrOrNil(req.Company.ContractType)
+	}
+	if req.Server != nil {
+		input.ServerID = strPtrOrNil(req.Server.ServerID)
+		input.ServerCRMID = strPtrOrNil(req.Server.CRMID)
+		input.ServerURL = strPtrOrNil(req.Server.URLRms)
+		input.ServerUniqueID = strPtrOrNil(req.Server.UniqueID)
+		input.ServerCabinetLink = strPtrOrNil(req.Server.CabinetLink)
+		input.ServerName = strPtrOrNil(req.Server.DeviceName)
+		input.ServerDesc = strPtrOrNil(req.Server.Description)
+	}
+
+	updated, err := h.obsSrv.ApproveCandidate(r.Context(), input)
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось выполнить ручное принятие на АО", "error", err)
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	approvedCompanyID := strings.TrimSpace(input.CompanyID)
+	if approvedCompanyID == "" && updated != nil && updated.ApprovedCompanyID != nil {
+		approvedCompanyID = strings.TrimSpace(*updated.ApprovedCompanyID)
+	}
+	if err := h.applyBitrixMapping(r, approvedCompanyID, req.BitrixServicePointID); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	response.RespondWithJSON(w, http.StatusOK, updated)
 }
 
@@ -226,9 +284,32 @@ type candidateApproveRequest struct {
 	// Ручной ввод remote IDs (опционально).
 	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
 	// Приоритет: ручной ввод > значения из staging.
-	TeamviewerID  *string `json:"teamviewer_id,omitempty"`
-	LitemanagerID *string `json:"litemanager_id,omitempty"`
-	AnydeskID     *string `json:"anydesk_id,omitempty"`
+	TeamviewerID         *string `json:"teamviewer_id,omitempty"`
+	LitemanagerID        *string `json:"litemanager_id,omitempty"`
+	AnydeskID            *string `json:"anydesk_id,omitempty"`
+	BitrixServicePointID *int64  `json:"bitrix_service_point_id,omitempty"`
+}
+
+func (h *CandidateHandler) applyBitrixMapping(r *http.Request, companyID string, pointID *int64) error {
+	if pointID == nil {
+		return nil
+	}
+	normalizedCompanyID := strings.TrimSpace(companyID)
+	if normalizedCompanyID == "" {
+		return errors.New("company_id обязателен для привязки точки обслуживания Bitrix24")
+	}
+	if h.companySrv == nil {
+		return errors.New("сервис компаний недоступен для привязки точки обслуживания Bitrix24")
+	}
+	if err := h.companySrv.UpdateBitrixMapping(r.Context(), &normalizedCompanyID, pointID); err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось сохранить привязку компании к точке обслуживания Bitrix24",
+			"company_id", normalizedCompanyID,
+			"bitrix_service_point_id", *pointID,
+			"error", err,
+		)
+		return err
+	}
+	return nil
 }
 
 // parseCandidateID извлекает ID кандидата из URL.
