@@ -48,6 +48,12 @@ func (r *statusRecorder) Write(p []byte) (int, error) {
 	return n, err
 }
 
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // DebugHTTPIOMiddleware логирует входящие/исходящие HTTP-данные на уровне debug.
 // Логи записываются только если в конфигурации включен debug-уровень логгера.
 func DebugHTTPIOMiddleware() func(http.Handler) http.Handler {
