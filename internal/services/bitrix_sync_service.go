@@ -52,6 +52,7 @@ type bitrixSyncService struct {
 	client     *b24.Client
 	redis      *redis.Client
 	ticketRepo tickets.TicketRepository
+	history    TicketHistoryWriter
 	userRepo   user.Repository
 	repo       bitrix.Repository
 }
@@ -71,6 +72,7 @@ func NewBitrixSyncService(
 		client:     client,
 		redis:      redisClient,
 		ticketRepo: ticketRepo,
+		history:    NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
 		userRepo:   userRepo,
 		repo:       repo,
 	}
@@ -92,7 +94,7 @@ func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string)
 		return nil
 	}
 	if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID <= 0 {
-		return fmt.Errorf("РґР»СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё СЃ Bitrix24 РЅРµ РІС‹Р±СЂР°РЅР° С‚РѕС‡РєР° РѕР±СЃР»СѓР¶РёРІР°РЅРёСЏ")
+		return fmt.Errorf("для синхронизации с Bitrix24 не выбрана точка обслуживания")
 	}
 
 	dealID, err := s.upsertDealAndLink(ctx, ticket)
@@ -104,7 +106,7 @@ func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string)
 
 func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *tickets.Ticket) (int64, error) {
 	if ticket == nil {
-		return 0, fmt.Errorf("С‚РёРєРµС‚ РЅРµ РЅР°Р№РґРµРЅ")
+		return 0, fmt.Errorf("тикет не найден")
 	}
 
 	deals, err := s.client.DealListByOrigin(ctx, s.cfg.BitrixOriginatorID, ticket.ID)
@@ -112,7 +114,7 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		return 0, err
 	}
 	if len(deals) > 1 {
-		return 0, fmt.Errorf("РѕР±РЅР°СЂСѓР¶РµРЅРѕ Р±РѕР»РµРµ РѕРґРЅРѕР№ СЃРґРµР»РєРё Bitrix24 РґР»СЏ С‚РёРєРµС‚Р° %s", ticket.ID)
+		return 0, fmt.Errorf("обнаружено более одной сделки Bitrix24 для тикета %s", ticket.ID)
 	}
 
 	fields, err := s.buildDealFields(ctx, ticket)
@@ -364,7 +366,7 @@ func (s *bitrixSyncService) setDealSuppress(ctx context.Context, dealID int64) {
 		ttl = 20 * time.Second
 	}
 	if err := s.redis.Set(ctx, fmt.Sprintf("b24:suppress:deal:%d", dealID), "1", ttl).Err(); err != nil {
-		s.log.Warn("Bitrix24: РЅРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ suppress РєР»СЋС‡ СЃРґРµР»РєРё", "deal_id", dealID, "error", err)
+		s.log.Warn("Bitrix24: не удалось установить suppress ключ сделки", "deal_id", dealID, "error", err)
 	}
 }
 
@@ -377,7 +379,7 @@ func (s *bitrixSyncService) setCommentSuppress(ctx context.Context, commentID in
 		ttl = 20 * time.Second
 	}
 	if err := s.redis.Set(ctx, fmt.Sprintf("b24:suppress:comment:%d", commentID), "1", ttl).Err(); err != nil {
-		s.log.Warn("Bitrix24: РЅРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ suppress РєР»СЋС‡ РєРѕРјРјРµРЅС‚Р°СЂРёСЏ", "comment_id", commentID, "error", err)
+		s.log.Warn("Bitrix24: не удалось установить suppress ключ комментария", "comment_id", commentID, "error", err)
 	}
 }
 
@@ -398,7 +400,7 @@ func (s *bitrixSyncService) pullCommentsForDeal(ctx context.Context, ticket *tic
 				continue
 			}
 
-			authorName := "РЎРѕС‚СЂСѓРґРЅРёРє Bitrix24"
+			authorName := "Сотрудник Bitrix24"
 			if item.AuthorID != nil {
 				if userMap, _ := s.repo.GetUserMapByB24ID(ctx, *item.AuthorID); userMap != nil {
 					if u, _ := s.userRepo.GetByID(ctx, userMap.EtalonUserID); u != nil && strings.TrimSpace(u.FullName) != "" {
@@ -467,9 +469,9 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		}
 		if assignedID != nil && *assignedID > 0 {
 			fields["ASSIGNED_BY_ID"] = *assignedID
-			s.log.Info("Bitrix24: РѕРїСЂРµРґРµР»РµРЅ ASSIGNED_BY_ID РїРѕ РёСЃРїРѕР»РЅРёС‚РµР»СЋ", "ticket_id", ticket.ID, "etalon_user_id", *ticket.AssigneeID, "b24_user_id", *assignedID)
+			s.log.Info("Bitrix24: определен ASSIGNED_BY_ID по исполнителю", "ticket_id", ticket.ID, "etalon_user_id", *ticket.AssigneeID, "b24_user_id", *assignedID)
 		} else {
-			s.log.Warn("Bitrix24: ASSIGNED_BY_ID РЅРµ РЅР°Р№РґРµРЅ РїРѕ РёСЃРїРѕР»РЅРёС‚РµР»СЋ", "ticket_id", ticket.ID, "etalon_user_id", *ticket.AssigneeID)
+			s.log.Warn("Bitrix24: ASSIGNED_BY_ID не найден по исполнителю", "ticket_id", ticket.ID, "etalon_user_id", *ticket.AssigneeID)
 		}
 	} else if ticket.ReporterID != nil {
 		assignedID, err := s.resolveBitrixUserID(ctx, *ticket.ReporterID)
@@ -478,9 +480,9 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		}
 		if assignedID != nil && *assignedID > 0 {
 			fields["ASSIGNED_BY_ID"] = *assignedID
-			s.log.Info("Bitrix24: РѕРїСЂРµРґРµР»РµРЅ ASSIGNED_BY_ID РїРѕ Р°РІС‚РѕСЂСѓ", "ticket_id", ticket.ID, "etalon_user_id", *ticket.ReporterID, "b24_user_id", *assignedID)
+			s.log.Info("Bitrix24: определен ASSIGNED_BY_ID по автору", "ticket_id", ticket.ID, "etalon_user_id", *ticket.ReporterID, "b24_user_id", *assignedID)
 		} else {
-			s.log.Warn("Bitrix24: ASSIGNED_BY_ID РЅРµ РЅР°Р№РґРµРЅ РїРѕ Р°РІС‚РѕСЂСѓ", "ticket_id", ticket.ID, "etalon_user_id", *ticket.ReporterID)
+			s.log.Warn("Bitrix24: ASSIGNED_BY_ID не найден по автору", "ticket_id", ticket.ID, "etalon_user_id", *ticket.ReporterID)
 		}
 	}
 	return fields, nil
@@ -490,7 +492,14 @@ func (s *bitrixSyncService) buildCommentBody(ctx context.Context, ticketID strin
 	if comment == nil {
 		return ""
 	}
-	lines := []string{s.withBitrixAuthorMention(toPlainText(comment.Text), authorID, authorName)}
+	commentBody := convertEtalonHTMLToBitrix(comment.Text, func(etalonUserID uint) (*int64, bool) {
+		bitrixUserID, err := s.resolveBitrixUserID(ctx, etalonUserID)
+		if err != nil || bitrixUserID == nil || *bitrixUserID <= 0 {
+			return nil, false
+		}
+		return bitrixUserID, true
+	})
+	lines := []string{s.withBitrixAuthorMention(commentBody, authorID, authorName)}
 
 	links, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, []string{tickets.RelationTypeInlineComment})
 	if err != nil || len(links) == 0 {
@@ -528,7 +537,14 @@ func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string 
 	lines = append(lines, s.buildTicketURL(ticket.ID))
 
 	header := strings.Join(lines, "\n")
-	body := toPlainText(ticket.Description)
+	body := convertEtalonHTMLToBitrix(ticket.Description, func(etalonUserID uint) (*int64, bool) {
+		bitrixUserID, err := s.resolveBitrixUserID(context.Background(), etalonUserID)
+		if err != nil || bitrixUserID == nil || *bitrixUserID <= 0 {
+			return nil, false
+		}
+		return bitrixUserID, true
+	})
+	body = stripBitrixServiceDescriptionPrefix(body, ticket.ID)
 	if body == "" {
 		return header
 	}
@@ -544,6 +560,54 @@ func (s *bitrixSyncService) buildTicketURL(ticketID string) string {
 	return base + path
 }
 
+func stripBitrixServiceDescriptionPrefix(body string, ticketID string) string {
+	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n"))
+	if text == "" {
+		return ""
+	}
+	ticketPath := "/tickets/" + strings.TrimSpace(ticketID)
+	if ticketPath == "/tickets/" {
+		return text
+	}
+	for {
+		next, removed := consumeBitrixServiceBlock(text, ticketPath)
+		if !removed {
+			break
+		}
+		text = strings.TrimSpace(next)
+	}
+	return text
+}
+
+func consumeBitrixServiceBlock(text, ticketPath string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	if len(lines) < 2 {
+		return text, false
+	}
+	first := strings.TrimSpace(lines[0])
+	if !strings.HasPrefix(first, "Тикет Etalon #") {
+		return text, false
+	}
+
+	restIndex := -1
+	if len(lines) >= 2 && strings.Contains(strings.TrimSpace(lines[1]), ticketPath) {
+		restIndex = 2
+	}
+	if restIndex < 0 && len(lines) >= 3 && strings.Contains(strings.TrimSpace(lines[2]), ticketPath) {
+		restIndex = 3
+	}
+	if restIndex < 0 {
+		return text, false
+	}
+	for restIndex < len(lines) && strings.TrimSpace(lines[restIndex]) == "" {
+		restIndex++
+	}
+	if restIndex >= len(lines) {
+		return "", true
+	}
+	return strings.Join(lines[restIndex:], "\n"), true
+}
+
 func (s *bitrixSyncService) withBitrixAuthorMention(message string, authorID *int64, authorName string) string {
 	body := strings.TrimSpace(message)
 	if body == "" {
@@ -554,7 +618,7 @@ func (s *bitrixSyncService) withBitrixAuthorMention(message string, authorID *in
 	}
 	name := sanitizeBitrixMentionName(authorName)
 	if name == "" {
-		name = "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ Etalon"
+		name = "Пользователь Etalon"
 	}
 	return fmt.Sprintf("[USER=%d]%s[/USER] %s", *authorID, name, body)
 }
@@ -676,7 +740,7 @@ func (s *bitrixSyncService) rebuildUserMapFromExternalIDs(ctx context.Context) e
 					IsLocked:        true,
 					VerifiedName:    verifiedName,
 				})
-				s.log.Info("Bitrix24: СЃРѕР·РґР°РЅР° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєР°СЏ РёРЅС‚РµРіСЂР°С†РёСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ", "etalon_user_id", u.ID, "b24_user_id", id, "verified_name", verifiedName)
+				s.log.Info("Bitrix24: создана автоматическая интеграция пользователя", "etalon_user_id", u.ID, "b24_user_id", id, "verified_name", verifiedName)
 			}
 			externalType := user.ExternalTypeBitrix24
 			externalID := strconv.FormatInt(id, 10)
@@ -805,7 +869,7 @@ func (s *bitrixSyncService) verifyBitrixUserMatch(ctx context.Context, u *user.U
 func buildTicketTitle(ticket *tickets.Ticket) string {
 	subj := strings.TrimSpace(ticket.Subject)
 	if subj == "" {
-		subj = "Р—Р°СЏРІРєР°"
+		subj = "Заявка"
 	}
 	return fmt.Sprintf("#%d %s", ticket.Number, subj)
 }
@@ -900,7 +964,7 @@ func toPlainText(v string) string {
 
 func normalizePersonToken(v string) string {
 	out := strings.ToLower(strings.TrimSpace(v))
-	out = strings.ReplaceAll(out, "С‘", "Рµ")
+	out = strings.ReplaceAll(out, "ё", "е")
 	out = strings.Join(strings.Fields(out), " ")
 	return out
 }
@@ -918,18 +982,19 @@ func (s *bitrixSyncService) closeResolvedTickets(ctx context.Context, threshold 
 		}
 		ticket.Status = tickets.StatusClosed
 		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
-			s.log.Error("Bitrix24: РЅРµ СѓРґР°Р»РѕСЃСЊ Р°РІС‚РѕР·Р°РєСЂС‹С‚СЊ Р·Р°СЏРІРєСѓ", "ticket_id", ticket.ID, "error", err)
+			s.log.Error("Bitrix24: не удалось автозакрыть заявку", "ticket_id", ticket.ID, "error", err)
 			continue
 		}
-		_ = s.ticketRepo.AddHistory(ctx, &tickets.TicketHistory{
-			TicketID:  ticket.ID,
-			UserID:    nil,
-			Action:    tickets.HistoryActionFieldChanged,
-			Field:     tickets.HistoryFieldStatus,
-			OldValue:  tickets.StatusResolved,
-			NewValue:  tickets.StatusClosed,
-			CreatedAt: time.Now(),
-		})
+		if s.history != nil {
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionFieldChanged,
+				Field:    tickets.HistoryFieldStatus,
+				Source:   tickets.HistorySourceSystem,
+				OldValue: tickets.StatusResolved,
+				NewValue: tickets.StatusClosed,
+			})
+		}
 		closed++
 	}
 	return closed, nil

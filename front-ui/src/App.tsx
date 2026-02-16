@@ -30,6 +30,7 @@ import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { getThemeConfig, getThemeCssVariables, resolveThemePalette } from '@/theme/themeConfig';
 import { paletteFromProfileConfig } from '@/theme/profileConfig';
+import { SSEProvider } from '@/features/realtime/SSEProvider';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -89,8 +90,9 @@ const App: React.FC = () => {
       <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode, paletteByMode)}>
         <AntdApp>
           <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
+            <SSEProvider>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
 
               <Route
                 path="/"
@@ -160,8 +162,9 @@ const App: React.FC = () => {
                 />
               </Route>
 
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </SSEProvider>
           </BrowserRouter>
         </AntdApp>
       </ConfigProvider>

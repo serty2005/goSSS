@@ -36,7 +36,7 @@ func (r *ticketRepo) Create(ctx context.Context, ticket *tickets.Ticket) error {
 }
 
 func (r *ticketRepo) Update(ctx context.Context, ticket *tickets.Ticket) error {
-	return r.db.WithContext(ctx).Save(ticket).Error
+	return r.db.WithContext(ctx).Omit(clause.Associations).Save(ticket).Error
 }
 
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {

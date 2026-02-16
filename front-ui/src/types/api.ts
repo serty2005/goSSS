@@ -347,8 +347,10 @@ export interface TicketHistoryDTO {
   user_id?: number;
   action: string;
   field: string;
+  source?: 'ui' | 'bitrix' | 'servicedesk' | 'system' | string;
   old_value: string;
   new_value: string;
+  meta?: Record<string, unknown>;
   created_at: string;
 }
 

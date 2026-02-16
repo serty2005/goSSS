@@ -13,6 +13,7 @@ import (
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/services"
 	"etalon-server/pkg/eventbus"
 
 	"gorm.io/gorm"
@@ -36,6 +37,7 @@ type ticketGatewayImpl struct {
 	db              *gorm.DB
 	linkRepo        repositories.LinkRepo
 	fileSyncService *ticketFileSyncService
+	historyWriter   services.TicketHistoryWriter
 }
 
 func NewTicketGateway(
@@ -56,6 +58,7 @@ func NewTicketGateway(
 		db:              db,
 		linkRepo:        linkRepo,
 		fileSyncService: newTicketFileSyncService(cfg, logger.With("component", "ticket_file_sync_service"), ticketRepo, linkRepo),
+		historyWriter:   services.NewTicketHistoryWriter(ticketRepo, logger.With("component", "ticket_history_writer")),
 	}
 }
 
@@ -214,7 +217,7 @@ func (g *ticketGatewayImpl) upsertTicket(
 		log.Error("Ошибка создания заявки", "uuid", extUUID, "error", err)
 		return nil, false, err
 	}
-	g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, "", ticket.Status)
+	g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceServiceDesk, "", ticket.Status, nil)
 
 	newLink := &models.ExternalSystemLink{
 		InternalID:      ticket.ID,
@@ -256,7 +259,7 @@ func (g *ticketGatewayImpl) syncTicketContent(
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Warn("Ошибка обновления описания тикета с обработанными ссылками", "ticket_id", ticket.ID, "error", err)
 		} else if isMeaningfulDescriptionChange(oldDescription, processedDescription) {
-			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, oldDescription, processedDescription)
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, tickets.HistorySourceServiceDesk, oldDescription, processedDescription, nil)
 		}
 	}
 
@@ -275,7 +278,7 @@ func (g *ticketGatewayImpl) syncTicketContent(
 		if err := g.ticketRepo.Update(ctx, ticket); err != nil {
 			log.Warn("Ошибка обновления результата тикета с обработанными ссылками", "ticket_id", ticket.ID, "error", err)
 		} else if isMeaningfulDescriptionChange(oldResult, processedResult) {
-			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, oldResult, processedResult)
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, tickets.HistorySourceServiceDesk, oldResult, processedResult, nil)
 		}
 	}
 
@@ -343,6 +346,7 @@ func (g *ticketGatewayImpl) syncTicketComments(
 		existing, exists := existingMap[c.UUID]
 		if exists {
 			if existing.Text != processedText || existing.AuthorName != c.AuthorName || existing.IsInternal != c.IsInternal {
+				oldText := existing.Text
 				if err := g.db.WithContext(ctx).
 					Model(&tickets.TicketComment{}).
 					Where("id = ?", existing.ID).
@@ -352,6 +356,10 @@ func (g *ticketGatewayImpl) syncTicketComments(
 						"is_internal": c.IsInternal,
 					}).Error; err != nil {
 					log.Warn("Ошибка обновления комментария", "ticket_id", ticket.ID, "comment_uuid", c.UUID, "error", err)
+				} else if oldText != processedText {
+					g.addHistory(ctx, ticket.ID, tickets.HistoryActionCommentUpdated, tickets.HistoryFieldComment, tickets.HistorySourceServiceDesk, oldText, processedText, map[string]interface{}{
+						"comment_uuid": c.UUID,
+					})
 				}
 			}
 		} else {
@@ -367,7 +375,9 @@ func (g *ticketGatewayImpl) syncTicketComments(
 				log.Warn("Ошибка сохранения комментария", "ticket_id", ticket.ID, "comment_uuid", c.UUID, "error", err)
 				continue
 			}
-			g.addHistory(ctx, ticket.ID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", processedText)
+			g.addHistory(ctx, ticket.ID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceServiceDesk, "", processedText, map[string]interface{}{
+				"comment_uuid": c.UUID,
+			})
 		}
 	}
 
@@ -395,13 +405,13 @@ func (g *ticketGatewayImpl) recordSyncFieldHistory(ctx context.Context, ticketID
 	}
 
 	if before.Status != after.Status {
-		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, before.Status, after.Status)
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceServiceDesk, before.Status, after.Status, nil)
 	}
 	if isMeaningfulDescriptionChange(before.Description, after.Description) {
-		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, before.Description, after.Description)
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, tickets.HistorySourceServiceDesk, before.Description, after.Description, nil)
 	}
 	if isMeaningfulDescriptionChange(before.Result, after.Result) {
-		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, before.Result, after.Result)
+		g.addHistory(ctx, ticketID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, tickets.HistorySourceServiceDesk, before.Result, after.Result, nil)
 	}
 }
 
@@ -415,13 +425,21 @@ func normalizeDescriptionForHistory(value string) string {
 	return normalized
 }
 
-func (g *ticketGatewayImpl) addHistory(ctx context.Context, ticketID, action, field, oldVal, newVal string) {
-	_ = g.ticketRepo.AddHistory(ctx, &tickets.TicketHistory{
-		TicketID:  ticketID,
-		Action:    action,
-		Field:     field,
-		OldValue:  oldVal,
-		NewValue:  newVal,
-		CreatedAt: time.Now(),
+func (g *ticketGatewayImpl) addHistory(
+	ctx context.Context,
+	ticketID, action, field, source, oldVal, newVal string,
+	meta map[string]interface{},
+) {
+	if g.historyWriter == nil {
+		return
+	}
+	g.historyWriter.Write(ctx, services.TicketHistoryWriteRequest{
+		TicketID: ticketID,
+		Action:   action,
+		Field:    field,
+		Source:   source,
+		OldValue: oldVal,
+		NewValue: newVal,
+		Meta:     meta,
 	})
 }

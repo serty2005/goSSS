@@ -51,6 +51,7 @@ type bitrixIncomingService struct {
 	client     *b24.Client
 	redis      *redis.Client
 	ticketRepo tickets.TicketRepository
+	history    TicketHistoryWriter
 	userRepo   user.Repository
 	repo       bitrix.Repository
 	eventBus   eventbus.EventBus
@@ -76,6 +77,7 @@ func NewBitrixIncomingService(
 		client:       client,
 		redis:        redisClient,
 		ticketRepo:   ticketRepo,
+		history:      NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
 		userRepo:     userRepo,
 		repo:         repo,
 		eventBus:     eventBus,
@@ -500,6 +502,18 @@ func (s *bitrixIncomingService) handleTimelineCommentDelete(ctx context.Context,
 	if err := s.ticketRepo.MarkCommentDeletedInBitrix(ctx, link.EtalonCommentID, time.Now()); err != nil {
 		return "", "", err
 	}
+	if s.history != nil {
+		s.history.Write(ctx, TicketHistoryWriteRequest{
+			TicketID: link.TicketID,
+			Action:   tickets.HistoryActionCommentDeleted,
+			Field:    tickets.HistoryFieldComment,
+			Source:   tickets.HistorySourceBitrix,
+			Meta: map[string]interface{}{
+				"comment_id":        link.EtalonCommentID,
+				"bitrix_comment_id": commentID,
+			},
+		})
+	}
 	s.publishTicketUpdated(link.TicketID, "ticket_comment_deleted", "bitrix", "Комментарий удалён в Bitrix24")
 	return bitrix.IncomingEventStatusDone, "", nil
 }
@@ -543,8 +557,30 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 	if link != nil {
 		commentLocalID = link.EtalonCommentID
 	}
+	oldText := ""
+	existingComments, _ := s.ticketRepo.GetComments(ctx, ticket.ID)
+	for i := range existingComments {
+		if strings.TrimSpace(existingComments[i].ID) == commentLocalID {
+			oldText = existingComments[i].Text
+			break
+		}
+	}
 	if link != nil || forceUpdate {
 		if err := s.ticketRepo.UpdateCommentFromBitrix(ctx, commentLocalID, commentText, authorName); err == nil {
+			if s.history != nil && oldText != commentText {
+				s.history.Write(ctx, TicketHistoryWriteRequest{
+					TicketID: ticket.ID,
+					Action:   tickets.HistoryActionCommentUpdated,
+					Field:    tickets.HistoryFieldComment,
+					Source:   tickets.HistorySourceBitrix,
+					OldValue: oldText,
+					NewValue: commentText,
+					Meta: map[string]interface{}{
+						"comment_id":        commentLocalID,
+						"bitrix_comment_id": comment.ID,
+					},
+				})
+			}
 			return nil
 		}
 	}
@@ -563,6 +599,19 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
 			return err
 		}
+		if s.history != nil {
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionCommentAdded,
+				Field:    tickets.HistoryFieldComment,
+				Source:   tickets.HistorySourceBitrix,
+				NewValue: commentText,
+				Meta: map[string]interface{}{
+					"comment_id":        commentLocalID,
+					"bitrix_comment_id": comment.ID,
+				},
+			})
+		}
 		return s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
 			EtalonCommentID: commentLocalID,
 			B24CommentID:    comment.ID,
@@ -571,7 +620,24 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 		})
 	}
 
-	return s.ticketRepo.UpdateCommentFromBitrix(ctx, commentLocalID, commentText, authorName)
+	if err := s.ticketRepo.UpdateCommentFromBitrix(ctx, commentLocalID, commentText, authorName); err != nil {
+		return err
+	}
+	if s.history != nil && oldText != commentText {
+		s.history.Write(ctx, TicketHistoryWriteRequest{
+			TicketID: ticket.ID,
+			Action:   tickets.HistoryActionCommentUpdated,
+			Field:    tickets.HistoryFieldComment,
+			Source:   tickets.HistorySourceBitrix,
+			OldValue: oldText,
+			NewValue: commentText,
+			Meta: map[string]interface{}{
+				"comment_id":        commentLocalID,
+				"bitrix_comment_id": comment.ID,
+			},
+		})
+	}
+	return nil
 }
 
 func (s *bitrixIncomingService) resolveTicketByDealID(ctx context.Context, dealID int64) (*tickets.Ticket, error) {
@@ -722,6 +788,12 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		return nil
 	}
 	changed := false
+	oldStatus := strings.TrimSpace(ticket.Status)
+	oldDescription := strings.TrimSpace(ticket.Description)
+	oldAssigneeID := uint(0)
+	if ticket.AssigneeID != nil {
+		oldAssigneeID = *ticket.AssigneeID
+	}
 
 	subject := strings.TrimSpace(deal.Title)
 	if subject != "" && strings.TrimSpace(ticket.Subject) != subject {
@@ -746,18 +818,19 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		}
 	}
 	if deal.AssignedBy != nil && *deal.AssignedBy > 0 {
-		userMap, err := s.repo.GetUserMapByB24ID(ctx, *deal.AssignedBy)
+		etalonAssigneeID, resolved, err := s.resolveEtalonUserIDByBitrixUserID(ctx, *deal.AssignedBy)
 		if err != nil {
 			return err
 		}
-		if userMap != nil {
-			if ticket.AssigneeID == nil || *ticket.AssigneeID != userMap.EtalonUserID {
-				assigneeID := userMap.EtalonUserID
+		if resolved {
+			if ticket.AssigneeID == nil || *ticket.AssigneeID != etalonAssigneeID {
+				assigneeID := etalonAssigneeID
 				ticket.AssigneeID = &assigneeID
 				changed = true
 			}
+			s.log.Info("Bitrix24: исполнитель сопоставлен и применён к тикету", "ticket_id", ticket.ID, "b24_user_id", *deal.AssignedBy, "etalon_user_id", etalonAssigneeID)
 		} else {
-			s.log.Warn("Bitrix24: сопоставление ASSIGNED_BY_ID не найдено, исполнитель не изменен", "ticket_id", ticket.ID, "b24_user_id", *deal.AssignedBy)
+			s.log.Warn("Bitrix24: сопоставление ASSIGNED_BY_ID не найдено, исполнитель не изменён", "ticket_id", ticket.ID, "b24_user_id", *deal.AssignedBy)
 		}
 	} else if ticket.AssigneeID != nil {
 		ticket.AssigneeID = nil
@@ -767,7 +840,165 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		return nil
 	}
 	ticket.LastUpdatedBy = "bitrix_webhook"
-	return s.ticketRepo.Update(ctx, ticket)
+	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+		return err
+	}
+	if s.history != nil {
+		if oldStatus != strings.TrimSpace(ticket.Status) {
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionFieldChanged,
+				Field:    tickets.HistoryFieldStatus,
+				Source:   tickets.HistorySourceBitrix,
+				OldValue: oldStatus,
+				NewValue: strings.TrimSpace(ticket.Status),
+			})
+		}
+		if oldDescription != strings.TrimSpace(ticket.Description) {
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionFieldChanged,
+				Field:    tickets.HistoryFieldDescription,
+				Source:   tickets.HistorySourceBitrix,
+				OldValue: oldDescription,
+				NewValue: strings.TrimSpace(ticket.Description),
+			})
+		}
+		newAssigneeID := uint(0)
+		if ticket.AssigneeID != nil {
+			newAssigneeID = *ticket.AssigneeID
+		}
+		if oldAssigneeID != newAssigneeID {
+			oldAssigneeName := s.resolveEtalonAssigneeName(ctx, oldAssigneeID)
+			newAssigneeName := s.resolveEtalonAssigneeName(ctx, newAssigneeID)
+			meta := map[string]interface{}{}
+			if deal.AssignedBy != nil {
+				meta["bitrix_user_id"] = *deal.AssignedBy
+			}
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionFieldChanged,
+				Field:    tickets.HistoryFieldAssignee,
+				Source:   tickets.HistorySourceBitrix,
+				OldValue: oldAssigneeName,
+				NewValue: newAssigneeName,
+				Meta:     meta,
+			})
+		}
+	}
+	return nil
+}
+
+func (s *bitrixIncomingService) resolveEtalonUserIDByBitrixUserID(ctx context.Context, b24UserID int64) (uint, bool, error) {
+	if b24UserID <= 0 {
+		return 0, false, nil
+	}
+
+	userMap, err := s.repo.GetUserMapByB24ID(ctx, b24UserID)
+	if err != nil {
+		return 0, false, err
+	}
+	if userMap != nil {
+		return userMap.EtalonUserID, true, nil
+	}
+
+	targetExternalID := strconv.FormatInt(b24UserID, 10)
+	users, err := s.userRepo.GetAll(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+
+	matchedIDs := make([]uint, 0, 1)
+	addMatch := func(userID uint) {
+		for _, existing := range matchedIDs {
+			if existing == userID {
+				return
+			}
+		}
+		matchedIDs = append(matchedIDs, userID)
+	}
+
+	for i := range users {
+		u := users[i]
+		if u.ExternalType != nil && u.ExternalID != nil &&
+			strings.TrimSpace(strings.ToLower(*u.ExternalType)) == user.ExternalTypeBitrix24 &&
+			strings.TrimSpace(*u.ExternalID) == targetExternalID {
+			addMatch(u.ID)
+		}
+		for j := range u.Integrations {
+			integration := u.Integrations[j]
+			if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+				continue
+			}
+			if strings.TrimSpace(integration.ExternalID) != targetExternalID {
+				continue
+			}
+			if !integration.IsVerified && !integration.IsLocked {
+				continue
+			}
+			addMatch(u.ID)
+		}
+	}
+
+	if len(matchedIDs) == 0 {
+		cacheItems, cacheErr := s.repo.ListUserCache(ctx)
+		if cacheErr == nil {
+			var targetCache *bitrix.UserCache
+			for i := range cacheItems {
+				if cacheItems[i].B24UserID == b24UserID {
+					targetCache = &cacheItems[i]
+					break
+				}
+			}
+			if targetCache != nil {
+				targetFirst := normalizePersonToken(targetCache.FirstName)
+				targetLast := normalizePersonToken(targetCache.LastName)
+				targetFull := normalizePersonToken(strings.TrimSpace(strings.Join([]string{targetCache.LastName, targetCache.FirstName, targetCache.SecondName}, " ")))
+				for i := range users {
+					userFirst := normalizePersonToken(users[i].FirstName)
+					userLast := normalizePersonToken(users[i].LastName)
+					userFull := normalizePersonToken(users[i].FullName)
+					if targetFirst != "" && targetLast != "" && userFirst == targetFirst && userLast == targetLast {
+						addMatch(users[i].ID)
+						continue
+					}
+					if targetFull != "" && userFull == targetFull {
+						addMatch(users[i].ID)
+					}
+				}
+			}
+		}
+	}
+
+	if len(matchedIDs) == 0 {
+		return 0, false, nil
+	}
+	if len(matchedIDs) > 1 {
+		s.log.Warn("Bitrix24: найдено несколько кандидатов для ASSIGNED_BY_ID, сопоставление не выполнено", "b24_user_id", b24UserID, "candidate_count", len(matchedIDs))
+		return 0, false, nil
+	}
+
+	resolvedUserID := matchedIDs[0]
+	if upsertErr := s.repo.UpsertUserMap(ctx, &bitrix.UserMap{
+		EtalonUserID: resolvedUserID,
+		B24UserID:    b24UserID,
+	}); upsertErr != nil {
+		s.log.Warn("Bitrix24: не удалось сохранить auto-mapping пользователя", "b24_user_id", b24UserID, "etalon_user_id", resolvedUserID, "error", upsertErr)
+	}
+	return resolvedUserID, true, nil
+}
+func (s *bitrixIncomingService) resolveEtalonAssigneeName(ctx context.Context, userID uint) string {
+	if userID == 0 {
+		return "Не назначен"
+	}
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || u == nil {
+		return fmt.Sprintf("#%d", userID)
+	}
+	if strings.TrimSpace(u.FullName) != "" {
+		return strings.TrimSpace(u.FullName)
+	}
+	return strings.TrimSpace(strings.Join([]string{u.LastName, u.FirstName}, " "))
 }
 
 func (s *bitrixIncomingService) syncAllTimelineCommentsForDeal(ctx context.Context, ticket *tickets.Ticket) error {

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Badge, Drawer, List, notification } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -24,20 +24,13 @@ import { useAuthStore } from '@/store/authStore';
 import { profileApi } from '@/api/profile';
 import { buildProfileConfigWithPalettes, paletteFromProfileConfig } from '@/theme/profileConfig';
 import { defaultThemePalettes, type ThemeMode, type ThemePalette } from '@/theme/themeConfig';
+import { useTicketRealtime, type TicketRealtimePayload } from '@/features/realtime/useTicketRealtime';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
 
 type EditableColorKey = 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor';
-
-type TicketRealtimePayload = {
-  ticket_id?: string;
-  action?: string;
-  source?: string;
-  message?: string;
-  occurred_at?: string;
-};
 
 type TicketNotificationItem = {
   id: string;
@@ -125,7 +118,6 @@ const MainLayout: React.FC = () => {
   const setTheme = useUiStore((state) => state.setTheme);
 
   const user = useAuthStore((state) => state.user);
-  const authToken = useAuthStore((state) => state.token);
   const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
 
@@ -170,141 +162,38 @@ const MainLayout: React.FC = () => {
     notificationsOpenRef.current = notificationsOpen;
   }, [notificationsOpen]);
 
-  useEffect(() => {
-    if (!authToken) {
-      return undefined;
+  const pushNotification = useCallback((payload: TicketRealtimePayload) => {
+    const ticketID = String(payload.ticket_id || '').trim();
+    if (!ticketID) {
+      return;
     }
 
-    let stopped = false;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let controller: AbortController | null = null;
-    const decoder = new TextDecoder();
-
-    const pushNotification = (payload: TicketRealtimePayload) => {
-      const ticketID = String(payload.ticket_id || '').trim();
-      if (!ticketID) {
-        return;
-      }
-
-      const item: TicketNotificationItem = {
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        ticketID,
-        action: String(payload.action || '').trim(),
-        source: String(payload.source || '').trim() || 'system',
-        message: String(payload.message || '').trim(),
-        occurredAt: String(payload.occurred_at || new Date().toISOString()),
-      };
-
-      setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
-      if (!notificationsOpenRef.current) {
-        setUnreadNotifications((value) => value + 1);
-      }
-
-      notification.info({
-        message: `Тикет #${ticketID}`,
-        description: renderTicketNotificationTitle(item),
-        placement: 'topRight',
-        duration: 3,
-      });
-
-      void queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
+    const item: TicketNotificationItem = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ticketID,
+      action: String(payload.action || '').trim(),
+      source: String(payload.source || '').trim() || 'system',
+      message: String(payload.message || '').trim(),
+      occurredAt: String(payload.occurred_at || new Date().toISOString()),
     };
 
-    const handleSSEEvent = (eventType: string, rawData: string) => {
-      if (eventType !== 'ticket.updated') {
-        return;
-      }
-      try {
-        const payload = JSON.parse(rawData) as TicketRealtimePayload;
-        pushNotification(payload);
-      } catch {
-        // Пропускаем некорректные сообщения, соединение оставляем активным.
-      }
-    };
+    setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
+    if (!notificationsOpenRef.current) {
+      setUnreadNotifications((value) => value + 1);
+    }
 
-    const connect = async () => {
-      while (!stopped) {
-        controller = new AbortController();
-        try {
-          const response = await fetch('/api/events', {
-            method: 'GET',
-            headers: {
-              Accept: 'text/event-stream',
-              Authorization: `Bearer ${authToken}`,
-            },
-            signal: controller.signal,
-          });
-          if (!response.ok || !response.body) {
-            throw new Error(`sse status ${response.status}`);
-          }
+    notification.info({
+      message: `Тикет #${ticketID}`,
+      description: renderTicketNotificationTitle(item),
+      placement: 'topRight',
+      duration: 3,
+    });
 
-          const reader = response.body.getReader();
-          let buffer = '';
-          let eventType = '';
-          let dataLines: string[] = [];
+    void queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
+  }, [queryClient]);
 
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-
-            for (;;) {
-              const newLineIdx = buffer.indexOf('\n');
-              if (newLineIdx < 0) {
-                break;
-              }
-              const lineRaw = buffer.slice(0, newLineIdx);
-              buffer = buffer.slice(newLineIdx + 1);
-              const line = lineRaw.replace(/\r$/, '');
-
-              if (line === '') {
-                if (dataLines.length > 0) {
-                  handleSSEEvent(eventType.trim(), dataLines.join('\n'));
-                }
-                eventType = '';
-                dataLines = [];
-                continue;
-              }
-              if (line.startsWith(':')) {
-                continue;
-              }
-              if (line.startsWith('event:')) {
-                eventType = line.slice('event:'.length).trim();
-                continue;
-              }
-              if (line.startsWith('data:')) {
-                dataLines.push(line.slice('data:'.length).trimStart());
-              }
-            }
-          }
-        } catch {
-          // При разрыве соединения пробуем переподключиться.
-        }
-
-        if (stopped) {
-          break;
-        }
-        await new Promise<void>((resolve) => {
-          reconnectTimer = setTimeout(() => resolve(), 2000);
-        });
-      }
-    };
-
-    void connect();
-
-    return () => {
-      stopped = true;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-      }
-      if (controller) {
-        controller.abort();
-      }
-    };
-  }, [authToken, queryClient]);
+  useTicketRealtime(pushNotification);
 
   const updateConfigMutation = useMutation({
     mutationFn: (payload: { profile_config: Record<string, unknown> }) => profileApi.updateConfig(payload),

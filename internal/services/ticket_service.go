@@ -62,6 +62,7 @@ type TicketService interface {
 type ticketServiceImpl struct {
 	logger          logger.LoggerInterface
 	ticketRepo      tickets.TicketRepository
+	historyWriter   TicketHistoryWriter
 	userRepo        user.Repository
 	companyRepo     company.Repository
 	contractRepo    contract.Repository
@@ -91,6 +92,7 @@ func NewTicketService(
 	return &ticketServiceImpl{
 		logger:          logger,
 		ticketRepo:      ticketRepo,
+		historyWriter:   NewTicketHistoryWriter(ticketRepo, logger),
 		userRepo:        userRepo,
 		companyRepo:     companyRepo,
 		contractRepo:    contractRepo,
@@ -246,7 +248,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	}
 
 	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, "", tickets.StatusNew)
+	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, "", tickets.StatusNew, nil)
 
 	return ticket, nil
 }
@@ -298,7 +300,7 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		oldResult := ticket.Result
 		ticket.Result = comment
 		if oldResult != ticket.Result {
-			s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, oldResult, ticket.Result)
+			s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, tickets.HistorySourceUI, oldResult, ticket.Result, nil)
 		}
 	}
 
@@ -308,14 +310,14 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, oldStatus, status)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
 
 	// Если есть комментарий, добавляем его как историю или отдельно
 	if comment != "" {
 		// Для простоты используем легаси структуру Comment, если фронт её ждет,
 		// но лучше писать в History с полем "comment"
 		// Р еализуем через History как "comment_added"
-		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", comment)
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
 
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
@@ -365,7 +367,7 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAssignee, oldAssigneeName, newAssigneeName)
+	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAssignee, tickets.HistorySourceUI, oldAssigneeName, newAssigneeName, nil)
 	return ticket, nil
 }
 
@@ -423,7 +425,7 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldCompany, oldCompanyName, newCompanyName)
+	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldCompany, tickets.HistorySourceUI, oldCompanyName, newCompanyName, nil)
 	ticket.CompanyName = newCompanyName
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
@@ -465,10 +467,10 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	}
 
 	if oldPoint != nextPoint {
-		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_service_point_id", oldPoint, nextPoint)
+		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_service_point_id", tickets.HistorySourceUI, oldPoint, nextPoint, nil)
 	}
 	if oldTitle != nextTitle {
-		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_deal_title", oldTitle, nextTitle)
+		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_deal_title", tickets.HistorySourceUI, oldTitle, nextTitle, nil)
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
@@ -507,7 +509,7 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, "", text)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", text, nil)
 	return newComment, nil
 }
 
@@ -534,7 +536,7 @@ func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, thresh
 			s.logger.Error("Не удалось автоматически закрыть заявку", "ticket_id", ticket.ID, "error", err)
 			continue
 		}
-		s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.StatusResolved, tickets.StatusClosed)
+		s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceSystem, tickets.StatusResolved, tickets.StatusClosed, nil)
 		closed++
 	}
 	return closed, nil
@@ -558,7 +560,7 @@ func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID s
 		return fmt.Errorf("значение подключения пустое")
 	}
 
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, "", line+": "+val)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, tickets.HistorySourceUI, "", line+": "+val, nil)
 	return nil
 }
 
@@ -634,7 +636,7 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 		return nil, err
 	}
 
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, oldValue, description)
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, tickets.HistorySourceUI, oldValue, description, nil)
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
 }
@@ -871,24 +873,31 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 		return err
 	}
 
-	s.recordHistory(ctx, ticketID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAsset, oldAsset, newAsset)
+	s.recordHistory(ctx, ticketID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAsset, tickets.HistorySourceUI, oldAsset, newAsset, nil)
 	return nil
 }
 
 // recordHistory - вспомогательный метод для записи аудита.
-func (s *ticketServiceImpl) recordHistory(ctx context.Context, ticketID string, userID *uint, action, field, oldVal, newVal string) {
-	h := &tickets.TicketHistory{
-		TicketID:  ticketID,
-		UserID:    userID,
-		Action:    action,
-		Field:     field,
-		OldValue:  oldVal,
-		NewValue:  newVal,
-		CreatedAt: time.Now(),
+func (s *ticketServiceImpl) recordHistory(
+	ctx context.Context,
+	ticketID string,
+	userID *uint,
+	action, field, source, oldVal, newVal string,
+	meta map[string]interface{},
+) {
+	if s.historyWriter == nil {
+		return
 	}
-	if err := s.ticketRepo.AddHistory(ctx, h); err != nil {
-		s.logger.Error("Failed to record ticket history", "ticket_id", ticketID, "error", err)
-	}
+	s.historyWriter.Write(ctx, TicketHistoryWriteRequest{
+		TicketID: ticketID,
+		UserID:   userID,
+		Action:   action,
+		Field:    field,
+		Source:   source,
+		OldValue: oldVal,
+		NewValue: newVal,
+		Meta:     meta,
+	})
 }
 
 // processHtmlContent ищет ссылки на файлы Naumen, скачивает их и заменяет на локальные URL.

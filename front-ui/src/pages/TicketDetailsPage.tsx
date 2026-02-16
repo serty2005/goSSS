@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, PaperClipOutlined } from '@ant-design/icons';
@@ -12,6 +12,9 @@ import { usersApi } from '@/api/users';
 import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
+import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
+import type { MentionOption } from '@/features/tickets/editor/mentions';
+import { SafeHtmlContent } from '@/utils/safeHtml';
 
 const { Title, Text, Paragraph } = Typography;
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -29,16 +32,6 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
   { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
-const sanitizeRichHtml = (value?: string) => {
-  if (!value) return '';
-  return value
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '')
-    .replace(/javascript:/gi, '')
-    .replace(/(src|href)=["']\/static\//gi, '$1="/api/static/')
-    .replace(/(src|href)=["']static\//gi, '$1="/api/static/');
-};
 const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
 const FIELD_HIGHLIGHT_MS = 2600;
 const fieldHighlightStyle: React.CSSProperties = {
@@ -52,6 +45,10 @@ const historyLabel = (entry: TicketHistoryDTO) => {
   switch (entry.action) {
     case 'comment_added':
       return 'Комментарий добавлен';
+    case 'comment_updated':
+      return 'Комментарий изменён';
+    case 'comment_deleted':
+      return 'Комментарий удалён';
     case 'connection_copied':
       return 'Скопировано подключение';
     case 'field_changed':
@@ -63,6 +60,13 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       if (entry.field === 'asset') return 'Изменено оборудование';
       return 'Изменение заявки';
   }
+};
+
+const historySourceLabel = (source?: string) => {
+  if (source === 'ui') return 'UI';
+  if (source === 'bitrix') return 'Bitrix24';
+  if (source === 'servicedesk') return 'ServiceDesk';
+  return 'System';
 };
 
 const resolveEntityTitle = (item: InfrastructureItem) => {
@@ -105,6 +109,8 @@ const TicketDetailsPage: React.FC = () => {
   const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
+  const [isDescriptionEditMode, setIsDescriptionEditMode] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
@@ -263,6 +269,10 @@ const TicketDetailsPage: React.FC = () => {
         .map((item) => ({ value: item.id, label: item.full_name || item.username })),
     [usersResponse?.data],
   );
+  const mentionOptions = useMemo<MentionOption[]>(
+    () => assigneeOptions.map((item) => ({ id: Number(item.value), label: String(item.label) })),
+    [assigneeOptions],
+  );
 
   const { data: bitrixServicePoints = [] } = useQuery({
     queryKey: ['bitrix-service-points'],
@@ -283,6 +293,13 @@ const TicketDetailsPage: React.FC = () => {
     setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
     setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
   }, [isBitrixEditMode, metadata]);
+
+  useEffect(() => {
+    if (!metadata || isDescriptionEditMode) {
+      return;
+    }
+    setDescriptionDraft(metadata.description || '');
+  }, [isDescriptionEditMode, metadata]);
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
     queryKey: ['ticket-companies', companySearch],
@@ -392,6 +409,20 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
     onError: () => message.error('Не удалось добавить комментарий'),
+  });
+
+  const updateDescriptionMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) return;
+      return ticketsApi.updateDescription(id, descriptionDraft);
+    },
+    onSuccess: () => {
+      message.success('Описание обновлено');
+      setIsDescriptionEditMode(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось обновить описание'),
   });
 
   const uploadAttachmentsMutation = useMutation({
@@ -510,19 +541,15 @@ const TicketDetailsPage: React.FC = () => {
     }
   };
 
-  const insertImageRequest = async (options: UploadRequestOption) => {
-    const source = options.file as File;
-    try {
-      const response = await uploadAttachmentsMutation.mutateAsync([source]);
-      const uploaded = response.data?.items?.[0];
-      if (uploaded?.file_path) {
-        const imageTag = `<p><img src="${uploaded.file_path}" alt="${uploaded.file_name}" /></p>`;
-        setCommentDraft((prev) => `${prev.trim()}\n${imageTag}`.trim());
-      }
-      options.onSuccess?.(uploaded || {});
-    } catch (error) {
-      options.onError?.(error as Error);
+  const uploadInlineImage = async (source: File): Promise<string | null> => {
+    const response = await uploadAttachmentsMutation.mutateAsync([source]);
+    const uploaded = response.data?.items?.[0];
+    if (!uploaded?.file_path) {
+      return null;
     }
+    return String(uploaded.file_path)
+      .replace(/^\/static\//, '/api/static/')
+      .replace(/^static\//, '/api/static/');
   };
 
   return (
@@ -717,18 +744,59 @@ const TicketDetailsPage: React.FC = () => {
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                 <Card size="small" title="Описание">
                   <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
-                    <div
-                      style={{ whiteSpace: 'pre-wrap' }}
-                      onClick={handleDescriptionClick}
-                      dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }}
-                    />
+                    {!isDescriptionEditMode ? (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <SafeHtmlContent
+                          html={metadata.description || '<span>Нет описания</span>'}
+                          onClick={handleDescriptionClick}
+                          style={{ whiteSpace: 'pre-wrap' }}
+                        />
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={() => {
+                            setDescriptionDraft(metadata.description || '');
+                            setIsDescriptionEditMode(true);
+                          }}
+                        >
+                          Редактировать описание
+                        </Button>
+                      </Space>
+                    ) : (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <SmartTicketEditor
+                          value={descriptionDraft}
+                          onChange={setDescriptionDraft}
+                          placeholder="Введите описание тикета"
+                          mentions={mentionOptions}
+                          onImageUpload={uploadInlineImage}
+                        />
+                        <Space>
+                          <Button
+                            type="primary"
+                            loading={updateDescriptionMutation.isPending}
+                            onClick={() => updateDescriptionMutation.mutate()}
+                          >
+                            Сохранить
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setDescriptionDraft(metadata.description || '');
+                              setIsDescriptionEditMode(false);
+                            }}
+                          >
+                            Отмена
+                          </Button>
+                        </Space>
+                      </Space>
+                    )}
                   </div>
                 </Card>
 
                 {isClosedLikeStatus(metadata.status) && (
                   <Card size="small" title="Результат">
                     <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
-                      <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                      <SafeHtmlContent html={metadata.result || '<span>Результат не заполнен</span>'} style={{ whiteSpace: 'pre-wrap' }} />
                     </div>
                   </Card>
                 )}
@@ -747,7 +815,7 @@ const TicketDetailsPage: React.FC = () => {
                               <Text type="secondary">{item.author_name || 'Сотрудник'} • {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
                               {item.is_private && <Tag color="orange">Приватный</Tag>}
                             </Space>
-                            <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.text) }} />
+                            <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
                           </Space>
                         </List.Item>
                       )}
@@ -757,26 +825,18 @@ const TicketDetailsPage: React.FC = () => {
                   )}
 
                   <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
-                    <Input.TextArea
-                      rows={3}
+                    <SmartTicketEditor
                       value={commentDraft}
-                      onChange={(event) => setCommentDraft(event.target.value)}
+                      onChange={setCommentDraft}
                       placeholder="Добавьте комментарий"
+                      mentions={mentionOptions}
+                      onImageUpload={uploadInlineImage}
+                      minHeight={100}
                     />
                     <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
                       Приватный комментарий (не синхронизировать во внешние системы)
                     </Checkbox>
                     <Space>
-                      <Upload
-                        showUploadList={false}
-                        customRequest={insertImageRequest}
-                        accept="image/*"
-                        multiple
-                      >
-                        <Button icon={<PaperClipOutlined />}>
-                          Вставить изображение
-                        </Button>
-                      </Upload>
                       <Button
                         type="primary"
                         loading={addCommentMutation.isPending}
@@ -805,7 +865,7 @@ const TicketDetailsPage: React.FC = () => {
                       <List.Item key={`${item.id}-${item.created_at}`}>
                         <Space direction="vertical" size={2} style={{ width: '100%' }}>
                           <Text strong>{historyLabel(item)}</Text>
-                          <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')}</Text>
+                          <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} • {historySourceLabel(item.source)}</Text>
                           {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
                           {item.new_value && (
                             item.action === 'connection_copied' ?

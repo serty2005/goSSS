@@ -31,6 +31,7 @@ import { companiesApi } from '@/api/companies';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import { useAuthStore } from '@/store/authStore';
+import { sanitizeRichHtml as sanitizeSafeHtml } from '@/utils/safeHtml';
 
 const { Text, Paragraph } = Typography;
 
@@ -77,14 +78,7 @@ const normalizeDescription = (value?: string) => {
 };
 
 const sanitizeRichHtml = (value?: string) => {
-  if (!value) return '';
-  return value
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '')
-    .replace(/javascript:/gi, '')
-    .replace(/(src|href)=["']\/static\//gi, '$1="/api/static/')
-    .replace(/(src|href)=["']static\//gi, '$1="/api/static/');
+  return sanitizeSafeHtml(value);
 };
 
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
