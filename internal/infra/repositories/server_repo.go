@@ -105,6 +105,51 @@ func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int)
 	return servers, err
 }
 
+func (r *serverRepo) List(ctx context.Context, limit, offset int) ([]server.Server, int64, error) {
+	var total int64
+	query := r.dbOrTx(ctx, nil).WithContext(ctx).Model(&server.Server{})
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var servers []server.Server
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&servers).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return servers, total, nil
+}
+
+func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]server.Server, int64, error) {
+	pattern := "%" + term + "%"
+	base := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Model(&server.Server{}).
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var servers []server.Server
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&servers).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return servers, total, nil
+}
+
 func (r *serverRepo) FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]server.Server, error) {
 	var servers []server.Server
 	threshold := time.Now().Add(-interval)

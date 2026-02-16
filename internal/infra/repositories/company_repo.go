@@ -179,3 +179,51 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 	err := query.Limit(limit).Offset(offset).Find(&entities).Error
 	return entities, err
 }
+
+func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, int64, error) {
+	pattern := "%" + term + "%"
+	base := r.getDB(ctx).WithContext(ctx).
+		Model(&company.Company{}).
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
+		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", pattern, pattern, pattern, pattern)
+	if !showInactive {
+		base = base.Where("companies.active_contract = ?", true)
+	}
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var entities []company.Company
+	query := r.getDB(ctx).WithContext(ctx).
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
+		Select(`
+			companies.*,
+			parent.title AS parent_title,
+			(
+				SELECT c.id
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_id,
+			(
+				SELECT c.services->>0
+				FROM contracts c
+				JOIN company_contracts cc ON cc.contract_id = c.id
+				WHERE cc.company_id = companies.id
+				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				LIMIT 1
+			) AS contract_type
+		`).
+		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", pattern, pattern, pattern, pattern)
+	if !showInactive {
+		query = query.Where("companies.active_contract = ?", true)
+	}
+	if err := query.Limit(limit).Offset(offset).Find(&entities).Error; err != nil {
+		return nil, 0, err
+	}
+	return entities, total, nil
+}

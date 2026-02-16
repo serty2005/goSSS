@@ -16,7 +16,9 @@ type Repository interface {
 	GetByIDUnscoped(ctx context.Context, internalID string) (*FiscalRegister, error)
 
 	GetAllIDsAndDates(ctx context.Context) (map[string]*FiscalRegister, error)
+	List(ctx context.Context, limit, offset int) ([]FiscalRegister, int64, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]FiscalRegister, error)
+	SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]FiscalRegister, int64, error)
 
 	FindBySerialNumber(ctx context.Context, sn string) (*FiscalRegister, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]FiscalRegister, error)

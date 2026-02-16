@@ -16,4 +16,5 @@ type Repository interface {
 	GetAllParentIDs(ctx context.Context, childID string) ([]string, error)
 	GetAllIDsAndDates(ctx context.Context) (map[string]*Company, error)
 	Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]Company, error)
+	SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int) ([]Company, int64, error)
 }

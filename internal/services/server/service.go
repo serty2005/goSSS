@@ -166,19 +166,11 @@ func (s *serviceImpl) Get(ctx context.Context, id string) (*server.Server, error
 }
 
 func (s *serviceImpl) List(ctx context.Context, limit, offset int) ([]server.Server, int64, error) {
-	// В репозитории РїРѕРєР° нет метода Count Рё List без фильтров, используем FindForPolling как аналог или добавим РїРѕР·Р¶Рµ.
-	// Для простоты РїРѕРєР° используем Search с пустой строкой, если нужно.
-	// Но лучше реализовать полноценный List РІ репо.
-	// Т.к. РјС‹ рефакторим CrudHandler, там использовался db.Find.
-	// Давай РїРѕРєР° вернем Search с пустой строкой, это сработает.
-	list, err := s.repo.Search(ctx, "", limit, offset)
-	// Count РїРѕРєР° заглушка 0, так как РІ Search нет count.
-	// Если критично, нужно расширить репозиторий.
-	return list, 0, err
+	return s.repo.List(ctx, limit, offset)
 }
 
-func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]server.Server, error) {
-	return s.repo.Search(ctx, term, limit, offset)
+func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]server.Server, int64, error) {
+	return s.repo.SearchWithTotal(ctx, term, limit, offset)
 }
 
 func cleanData(data map[string]interface{}) {

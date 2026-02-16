@@ -16,7 +16,9 @@ type Repository interface {
 	GetByIDUnscoped(ctx context.Context, internalID string) (*Workstation, error)
 
 	GetAllIDsAndDates(ctx context.Context) (map[string]*Workstation, error)
+	List(ctx context.Context, limit, offset int) ([]Workstation, int64, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]Workstation, error)
+	SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]Workstation, int64, error)
 
 	FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*Workstation, error)
 	// FindAllByRemoteIDs ищет ВСЕ рабочие станции, совпадающие по идентификаторам (для поиска дублей).

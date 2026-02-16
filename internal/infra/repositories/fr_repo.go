@@ -102,6 +102,50 @@ func (r *frRepo) Search(ctx context.Context, term string, limit, offset int) ([]
 	return frs, err
 }
 
+func (r *frRepo) List(ctx context.Context, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
+	var total int64
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).Model(&fiscal.FiscalRegister{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var frs []fiscal.FiscalRegister
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&frs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return frs, total, nil
+}
+
+func (r *frRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
+	pattern := "%" + term + "%"
+	base := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Model(&fiscal.FiscalRegister{}).
+		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern)
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var frs []fiscal.FiscalRegister
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&frs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return frs, total, nil
+}
+
 func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*fiscal.FiscalRegister, error) {
 	if sn == "" {
 		return nil, nil

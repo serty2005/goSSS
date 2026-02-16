@@ -139,12 +139,11 @@ func (s *serviceImpl) Get(ctx context.Context, id string) (*fiscal.FiscalRegiste
 }
 
 func (s *serviceImpl) List(ctx context.Context, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
-	list, err := s.repo.Search(ctx, "", limit, offset)
-	return list, 0, err
+	return s.repo.List(ctx, limit, offset)
 }
 
-func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, error) {
-	return s.repo.Search(ctx, term, limit, offset)
+func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
+	return s.repo.SearchWithTotal(ctx, term, limit, offset)
 }
 
 func cleanData(data map[string]interface{}) {

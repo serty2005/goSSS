@@ -1,6 +1,6 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, List, message, Select, Space, Spin, Table, Tag, Tabs, Tooltip, Typography } from 'antd';
 import { BankOutlined, CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
@@ -25,10 +25,20 @@ const CompaniesListPage: React.FC = () => {
   const [companyLookupTerm, setCompanyLookupTerm] = useState('');
   const [servicePointLookupTerm, setServicePointLookupTerm] = useState('');
   const [drafts, setDrafts] = useState<Record<string, MappingDraft>>({});
+  const companiesLimit = 20;
+  const companiesLoadMoreRef = useRef<HTMLDivElement | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
     queryKey: ['companies', 'list', term],
-    queryFn: () => companiesApi.searchCompanies(term, 100, 0),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => companiesApi.searchCompanies(term, companiesLimit, Number(pageParam) || 0),
+    getNextPageParam: (lastPage) => {
+      const meta = lastPage.meta;
+      if (!meta?.has_next) {
+        return undefined;
+      }
+      return (meta.offset || 0) + (meta.limit || companiesLimit);
+    },
     staleTime: 30_000,
   });
 
@@ -126,7 +136,28 @@ const CompaniesListPage: React.FC = () => {
   };
 
   const mappings = mappingsData?.data || [];
-  const companies = data?.data || [];
+  const companies = useMemo(() => (data?.pages || []).flatMap((pageData) => pageData.data || []), [data?.pages]);
+  const companiesTotal = data?.pages?.[0]?.meta?.total || 0;
+
+  useEffect(() => {
+    const node = companiesLoadMoreRef.current;
+    if (!node || !hasNextPage) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting || isFetchingNextPage) {
+          return;
+        }
+        void fetchNextPage();
+      },
+      { rootMargin: '240px 0px' },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, companies.length]);
 
   const columns = [
     {
@@ -283,33 +314,41 @@ const CompaniesListPage: React.FC = () => {
       {companies.length === 0 ? (
         <Empty description="Компании не найдены" />
       ) : (
-        <List
-          dataSource={companies}
-          renderItem={(item) => {
-            const company = item as CompanyModel;
-            const id = resolveCompanyID(company);
-            const title = resolveCompanyTitle(company) || id;
-            const parentTitle = resolveCompanyParentTitle(company);
-            const address = company.address;
-            const additional = company.additional_name;
-            const is_active = company.active_contract === true;
+        <>
+          <List
+            dataSource={companies}
+            renderItem={(item) => {
+              const company = item as CompanyModel;
+              const id = resolveCompanyID(company);
+              const title = resolveCompanyTitle(company) || id;
+              const parentTitle = resolveCompanyParentTitle(company);
+              const address = company.address;
+              const additional = company.additional_name;
+              const is_active = company.active_contract === true;
 
-            return (
-              <List.Item key={id || title}>
-                <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                  <Space size={8}>
-                    <BankOutlined />
-                    {id ? <Link to={`/companies/${id}`}>{title}</Link> : <Text strong>{title}</Text>}
-                    <Tag color={is_active ? 'success' : 'default'}>{is_active ? 'Активен' : 'Завершён'}</Tag>
+              return (
+                <List.Item key={id || title}>
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space size={8}>
+                      <BankOutlined />
+                      {id ? <Link to={`/companies/${id}`}>{title}</Link> : <Text strong>{title}</Text>}
+                      <Tag color={is_active ? 'success' : 'default'}>{is_active ? 'Активен' : 'Завершён'}</Tag>
+                    </Space>
+                    {parentTitle && <Text type="secondary">Группа: {parentTitle}</Text>}
+                    {additional && <Text type="secondary">Юр. название: {additional}</Text>}
+                    {address && <Text type="secondary">{address}</Text>}
                   </Space>
-                  {parentTitle && <Text type="secondary">Группа: {parentTitle}</Text>}
-                  {additional && <Text type="secondary">Юр. название: {additional}</Text>}
-                  {address && <Text type="secondary">{address}</Text>}
-                </Space>
-              </List.Item>
-            );
-          }}
-        />
+                </List.Item>
+              );
+            }}
+          />
+          <div ref={companiesLoadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
+            {(isFetchingNextPage || (hasNextPage && companies.length > 0)) && <Spin size="small" />}
+            {!hasNextPage && companies.length > 0 && (
+              <Text type="secondary">Показано: {companies.length} из {companiesTotal}</Text>
+            )}
+          </div>
+        </>
       )}
     </Card>
   );

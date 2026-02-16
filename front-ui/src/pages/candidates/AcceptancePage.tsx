@@ -553,7 +553,7 @@ const AcceptancePage: React.FC = () => {
     },
   ];
 
-  const stagedFiscals = selectedCandidate?.staged_fiscals || [];
+  const stagedFiscals = useMemo(() => selectedCandidate?.staged_fiscals || [], [selectedCandidate?.staged_fiscals]);
   const observationAgents = useMemo(() => {
     const map: Record<number, { agent_uuid: string; observed_at?: string }> = {};
     (selectedCandidate?.staged_workstations || []).forEach((item) => {

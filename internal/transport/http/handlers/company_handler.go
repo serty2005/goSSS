@@ -66,7 +66,7 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	comps, err := h.service.SearchCompanies(r.Context(), term, limit, offset)
+	comps, total, err := h.service.SearchCompanies(r.Context(), term, limit, offset)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("failed to search companies", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
@@ -76,7 +76,16 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	for _, comp := range comps {
 		items = append(items, toCompanyResponseDTO(comp))
 	}
-	response.RespondWithJSON(w, http.StatusOK, items)
+	hasPrev := offset > 0
+	hasNext := int64(offset+len(items)) < total
+	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{
+		Data:    items,
+		Total:   total,
+		Limit:   limit,
+		Offset:  offset,
+		HasNext: hasNext,
+		HasPrev: hasPrev,
+	})
 }
 
 func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Request) {

@@ -32,7 +32,7 @@ import { companiesApi } from '@/api/companies';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import { useAuthStore } from '@/store/authStore';
-import { sanitizeRichHtml as sanitizeSafeHtml } from '@/utils/safeHtml';
+import { sanitizeRichHtml } from '@/utils/sanitizeRichHtml';
 
 const { Text, Paragraph } = Typography;
 
@@ -76,10 +76,6 @@ const normalizeDescription = (value?: string) => {
     .replace(/&#39;/gi, "'")
     .replace(/\s+/g, ' ')
     .trim();
-};
-
-const sanitizeRichHtml = (value?: string) => {
-  return sanitizeSafeHtml(value);
 };
 
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
@@ -356,7 +352,7 @@ const TicketsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const infrastructure = infraResponse?.data || [];
+  const infrastructure = useMemo(() => infraResponse?.data || [], [infraResponse?.data]);
 
   const { data: companyResponse } = useQuery({
     queryKey: ['company-profile', metadata?.company_id],

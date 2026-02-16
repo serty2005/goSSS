@@ -102,6 +102,50 @@ func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset
 	return workstations, err
 }
 
+func (r *workstationRepo) List(ctx context.Context, limit, offset int) ([]workstation.Workstation, int64, error) {
+	var total int64
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).Model(&workstation.Workstation{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var workstations []workstation.Workstation
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&workstations).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return workstations, total, nil
+}
+
+func (r *workstationRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]workstation.Workstation, int64, error) {
+	pattern := "%" + term + "%"
+	base := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Model(&workstation.Workstation{}).
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern)
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var workstations []workstation.Workstation
+	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern).
+		Limit(limit).
+		Offset(offset).
+		Order("updated_at DESC").
+		Find(&workstations).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return workstations, total, nil
+}
+
 func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*workstation.Workstation, error) {
 	var ws workstation.Workstation
 	// Используем dbOrTx без транзакции

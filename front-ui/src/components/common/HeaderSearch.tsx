@@ -219,6 +219,16 @@ const HeaderSearch: React.FC = () => {
     }
     return raw.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string');
   }, [user?.profile_config]);
+  const nextPresetID = useMemo(() => {
+    const maxIndex = presets.reduce((maxValue, item) => {
+      const match = item.id.match(/^preset_(\d+)$/);
+      if (!match) return maxValue;
+      const parsed = Number(match[1]);
+      if (!Number.isFinite(parsed)) return maxValue;
+      return Math.max(maxValue, parsed);
+    }, 0);
+    return `preset_${maxIndex + 1}`;
+  }, [presets]);
 
   const updateTicketParams = (next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(ticketParams);
@@ -259,7 +269,7 @@ const HeaderSearch: React.FC = () => {
     }
 
     const nextPreset: TicketPreset = {
-      id: `preset_${Date.now()}`,
+      id: nextPresetID,
       name,
       values: {
         status: ticketStatus || undefined,
@@ -331,19 +341,19 @@ const HeaderSearch: React.FC = () => {
   const frFilter = (agentObservationParams.get('fr_id') || '').trim();
   const pausedFilter = agentObservationParams.get('paused') === '1';
 
-  const buildAgentFilterTokens = () => {
+  const agentFilterTokensFromParams = useMemo(() => {
     const tokens: string[] = [];
     if (agentUUIDFilter) tokens.push(`agent:${agentUUIDFilter}`);
     if (workstationFilter) tokens.push(`ws:${workstationFilter}`);
     if (frFilter) tokens.push(`fr:${frFilter}`);
     return tokens;
-  };
-  const [agentFilterTokens, setAgentFilterTokens] = useState<string[]>(buildAgentFilterTokens());
+  }, [agentUUIDFilter, frFilter, workstationFilter]);
+  const [agentFilterTokens, setAgentFilterTokens] = useState<string[]>(agentFilterTokensFromParams);
 
   useEffect(() => {
     if (!isAgentObservationsPage) return;
-    setAgentFilterTokens(buildAgentFilterTokens());
-  }, [isAgentObservationsPage, agentUUIDFilter, workstationFilter, frFilter]);
+    setAgentFilterTokens(agentFilterTokensFromParams);
+  }, [agentFilterTokensFromParams, isAgentObservationsPage]);
 
   const updateAgentObservationParams = (next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(agentObservationParams);

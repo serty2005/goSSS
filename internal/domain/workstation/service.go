@@ -11,5 +11,5 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (*Workstation, error)
 	List(ctx context.Context, limit, offset int) ([]Workstation, int64, error)
-	Search(ctx context.Context, term string, limit, offset int) ([]Workstation, error)
+	Search(ctx context.Context, term string, limit, offset int) ([]Workstation, int64, error)
 }

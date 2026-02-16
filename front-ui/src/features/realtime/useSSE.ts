@@ -1,5 +1,5 @@
 import { useContext } from 'react';
-import { SSEContext } from '@/features/realtime/SSEProvider';
+import { SSEContext } from '@/features/realtime/SSEContext';
 
 export const useSSE = () => {
   const value = useContext(SSEContext);
@@ -8,4 +8,3 @@ export const useSSE = () => {
   }
   return value;
 };
-

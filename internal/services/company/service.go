@@ -110,8 +110,8 @@ func (s *serviceImpl) GetCompany(ctx context.Context, id string) (*company.Compa
 	return s.companyRepo.GetByID(ctx, id)
 }
 
-func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int) ([]company.Company, error) {
-	return s.companyRepo.Search(ctx, term, true, limit, offset)
+func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int) ([]company.Company, int64, error) {
+	return s.companyRepo.SearchWithTotal(ctx, term, true, limit, offset)
 }
 
 // GetChildren возвращает список дочерних компаний для указанной hub-компании.

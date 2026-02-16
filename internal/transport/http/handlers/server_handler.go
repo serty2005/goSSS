@@ -56,12 +56,13 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		items []server.Server
+		total int64
 		err   error
 	)
 	if term != "" {
-		items, err = h.service.Search(r.Context(), term, limit, offset)
+		items, total, err = h.service.Search(r.Context(), term, limit, offset)
 	} else {
-		items, _, err = h.service.List(r.Context(), limit, offset)
+		items, total, err = h.service.List(r.Context(), limit, offset)
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -77,7 +78,16 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, item := range items {
 		dtos = append(dtos, toServerResponse(item))
 	}
-	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{Data: dtos, Limit: limit, Offset: offset})
+	hasPrev := offset > 0
+	hasNext := int64(offset+len(items)) < total
+	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{
+		Data:    dtos,
+		Total:   total,
+		Limit:   limit,
+		Offset:  offset,
+		HasNext: hasNext,
+		HasPrev: hasPrev,
+	})
 }
 
 func (h *ServerHandler) Get(w http.ResponseWriter, r *http.Request) {

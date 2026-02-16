@@ -1,13 +1,6 @@
-import React, { createContext, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAuthStore } from '@/store/authStore';
-
-type SSECallback = (eventType: string, rawData: string) => void;
-
-type SSEContextValue = {
-  subscribe: (eventType: string, callback: SSECallback) => () => void;
-};
-
-export const SSEContext = createContext<SSEContextValue | null>(null);
+import { SSECallback, SSEContext, SSEContextValue } from '@/features/realtime/SSEContext';
 
 export const SSEProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const authToken = useAuthStore((state) => state.token);
@@ -143,4 +136,3 @@ export const SSEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     </SSEContext.Provider>
   );
 };
-

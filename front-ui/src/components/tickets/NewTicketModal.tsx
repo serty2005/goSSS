@@ -204,8 +204,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     }
   }, [companyDetailData, selectedCompanyId]);
 
-  const infrastructure = infrastructureData?.data || [];
-  const parentInfrastructure = parentInfrastructureData?.data || [];
+  const infrastructure = useMemo(() => infrastructureData?.data || [], [infrastructureData?.data]);
+  const parentInfrastructure = useMemo(() => parentInfrastructureData?.data || [], [parentInfrastructureData?.data]);
 
   const selectedCompanyMeta = useMemo(() => {
     if (!selectedCompanyId) return null;

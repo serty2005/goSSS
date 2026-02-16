@@ -236,7 +236,7 @@ const TicketDetailsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const infrastructure = infraResponse?.data || [];
+  const infrastructure = useMemo(() => infraResponse?.data || [], [infraResponse?.data]);
 
   const { data: companyResponse } = useQuery({
     queryKey: ['company-profile', metadata?.company_id],

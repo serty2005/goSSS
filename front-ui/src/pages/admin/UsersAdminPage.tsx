@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -156,7 +156,7 @@ const UsersAdminPage: React.FC = () => {
     },
   });
 
-  const openEditModal = (user: UserAdminDTO) => {
+  const openEditModal = useCallback((user: UserAdminDTO) => {
     setSelectedUser(user);
     editForm.setFieldsValue({
       username: user.username,
@@ -170,7 +170,7 @@ const UsersAdminPage: React.FC = () => {
     });
     setEditSuggestion(user.bitrix_suggestion || null);
     setIsEditOpen(true);
-  };
+  }, [editForm]);
 
   useEffect(() => {
     const firstName = String(watchedCreateFirstName || '').trim();
@@ -313,7 +313,7 @@ const UsersAdminPage: React.FC = () => {
         },
       },
     ],
-    [applySuggestionMutation, currentUser?.id, statusMutation]
+    [applySuggestionMutation, currentUser?.id, openEditModal, statusMutation]
   );
 
   const normalizePayload = (values: UserCreatePayload | UserUpdatePayload) => ({
@@ -554,6 +554,7 @@ const UsersAdminPage: React.FC = () => {
 };
 
 export default UsersAdminPage;
+
 
 
 
