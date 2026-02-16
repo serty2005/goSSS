@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
@@ -23,6 +24,63 @@ func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.H
 			ctxLogger := baseLogger.With("request_id", requestID)
 			ctx := context.WithValue(r.Context(), contextkeys.LoggerContextKey, ctxLogger)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.status = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
+}
+
+// DebugHTTPIOMiddleware логирует входящие/исходящие HTTP-данные на уровне debug.
+// Логи записываются только если в конфигурации включен debug-уровень логгера.
+func DebugHTTPIOMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log := GetLogger(r.Context())
+			startedAt := time.Now()
+			rec := &statusRecorder{ResponseWriter: w}
+
+			log.Debug("HTTP входящий запрос",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"query", r.URL.RawQuery,
+				"remote_addr", r.RemoteAddr,
+				"user_agent", r.UserAgent(),
+				"content_length", r.ContentLength,
+			)
+
+			next.ServeHTTP(rec, r)
+
+			duration := time.Since(startedAt)
+			status := rec.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+
+			log.Debug("HTTP исходящий ответ",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", status,
+				"response_bytes", rec.bytes,
+				"duration_ms", duration.Milliseconds(),
+			)
 		})
 	}
 }

@@ -18,15 +18,15 @@ const { Title, Text } = Typography;
 
 const sourceLabelMap: Record<string, string> = {
   created: 'Создание',
-  manual_update: 'Р СѓС‡РЅРѕРµ РёР·РјРµРЅРµРЅРёРµ',
-  agent_data_update: 'РћР±РЅРѕРІР»РµРЅРёРµ РѕС‚ Р°РіРµРЅС‚Р°',
-  candidate_approve: 'РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєР°РЅРґРёРґР°С‚Р°',
-  network_auto: 'РђРІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёРµ СЃРµС‚Рё',
-  network_auto_ws: 'РђРІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёРµ СЃРµС‚Рё (Р РЎ)',
-  network_auto_fr: 'РђРІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёРµ СЃРµС‚Рё (Р¤Р )',
-  network_auto_both: 'РђРІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёРµ СЃРµС‚Рё (Р РЎ+Р¤Р )',
-  network_conflict: 'РљРѕРЅС„Р»РёРєС‚ СЃРµС‚Рё',
-  manual_resolution: 'Р СѓС‡РЅРѕРµ СЂР°Р·СЂРµС€РµРЅРёРµ',
+  manual_update: 'Ручное изменение',
+  agent_data_update: 'Обновление из агента',
+  candidate_approve: 'Подтверждение кандидата',
+  network_auto: 'Автоопределение сети',
+  network_auto_ws: 'Автоопределение сети (РС)',
+  network_auto_fr: 'Автоопределение сети (ФР)',
+  network_auto_both: 'Автоопределение сети (РС+ФР)',
+  network_conflict: 'Конфликт сети',
+  manual_resolution: 'Ручное разрешение',
 };
 
 const ServerDetails: React.FC = () => {
@@ -61,18 +61,18 @@ const ServerDetails: React.FC = () => {
   const updateMutation = useMutation({
     mutationFn: (values: UpdateServerPayload) => equipmentApi.updateServer(id!, values),
     onSuccess: () => {
-      message.success('Р”Р°РЅРЅС‹Рµ СЃРµСЂРІРµСЂР° РѕР±РЅРѕРІР»РµРЅС‹');
+      message.success('Данные сервера обновлены');
       queryClient.invalidateQueries({ queryKey: ['server', id] });
       queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
       setActiveField(null);
     },
-    onError: () => message.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ'),
+    onError: () => message.error('Ошибка обновления'),
   });
 
   const pollMutation = useMutation({
     mutationFn: () => equipmentApi.pollServer(id!),
-    onSuccess: () => message.success('Р—Р°РїСЂРѕСЃ РЅР° РѕРїСЂРѕСЃ РѕС‚РїСЂР°РІР»РµРЅ'),
-    onError: () => message.error('РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ Р·Р°РїСЂРѕСЃ РЅР° РѕРїСЂРѕСЃ'),
+    onSuccess: () => message.success('Запрос на опрос отправлен'),
+    onError: () => message.error('Не удалось отправить запрос на опрос'),
   });
 
   const server = serverRes?.data;
@@ -83,7 +83,7 @@ const ServerDetails: React.FC = () => {
   })).filter((item) => item.value && item.title), [companiesRes?.data]);
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
-  if (!server) return <div>РЎРµСЂРІРµСЂ РЅРµ РЅР°Р№РґРµРЅ</div>;
+  if (!server) return <div>Сервер РЅРµ найден</div>;
 
   const saveField = (field: keyof UpdateServerPayload, value: string) => {
     if (!canEdit) return;
@@ -108,7 +108,7 @@ const ServerDetails: React.FC = () => {
           <Space>
             <div style={{ fontSize: 24, color: token.colorPrimary }}>{getEntityIcon('Server')}</div>
             <div>
-              <Title level={4} style={{ margin: 0 }}>{server.device_name || server.server_name || 'РЎРµСЂРІРµСЂ'}</Title>
+              <Title level={4} style={{ margin: 0 }}>{server.device_name || server.server_name || 'Сервер'}</Title>
               <Text type="secondary">{server.id}</Text>
             </div>
           </Space>
@@ -118,39 +118,39 @@ const ServerDetails: React.FC = () => {
         {canEdit && (
           <Space>
             <Button icon={<SyncOutlined spin={pollMutation.isPending} />} onClick={() => pollMutation.mutate()}>
-              РћРїСЂРѕСЃРёС‚СЊ
+              Опросить
             </Button>
-            <Button danger icon={<DeleteOutlined />}>РЈРґР°Р»РёС‚СЊ</Button>
+            <Button danger icon={<DeleteOutlined />}>Удалить</Button>
           </Space>
         )}
       </div>
 
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Card title="РћСЃРЅРѕРІРЅР°СЏ РёРЅС„РѕСЂРјР°С†РёСЏ" className="glass-panel" size="small">
+        <Card title="Основная информация" className="glass-panel" size="small">
           <Descriptions bordered column={2} className="compact-descriptions">
-            <Descriptions.Item label="Р’Р»Р°РґРµР»РµС†" span={2}>
+            <Descriptions.Item label="Владелец" span={2}>
               <Space direction="vertical" style={{ width: '100%' }}>
                 <CompanySearchSelect
                   value={server.owner_id}
                   options={companyOptions}
                   loading={updateMutation.isPending && activeField === 'owner_id'}
-                  placeholder="Р’С‹Р±РµСЂРёС‚Рµ РєРѕРјРїР°РЅРёСЋ-РІР»Р°РґРµР»СЊС†Р°"
+                  placeholder="Выберите компанию-владельца"
                   onSearch={setCompanySearch}
                   onChange={(value) => {
                     if (!canEdit || !value) return;
                     saveField('owner_id', value);
                   }}
                 />
-                <Text type="secondary">Р РµР¶РёРј РїСЂРёРІСЏР·РєРё: {server.owner_binding_mode || 'auto'}</Text>
+                <Text type="secondary">Режим назначения: {server.owner_binding_mode || 'auto'}</Text>
               </Space>
             </Descriptions.Item>
-            <Descriptions.Item label="РќР°Р·РІР°РЅРёРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°">
+            <Descriptions.Item label="Название устройства">
               <InlineFieldEditor value={server.device_name} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
             </Descriptions.Item>
-            <Descriptions.Item label="РРјСЏ СЃРµСЂРІРµСЂР°">
+            <Descriptions.Item label="Имя сервера">
               <InlineFieldEditor value={server.server_name} editable={canEdit} onSave={(v) => saveField('server_name', v)} saving={updateMutation.isPending && activeField === 'server_name'} />
             </Descriptions.Item>
-            <Descriptions.Item label="IP Р°РґСЂРµСЃ">
+            <Descriptions.Item label="URL">
               <InlineFieldEditor value={server.ip} editable={canEdit} onSave={(v) => saveField('ip', v)} saving={updateMutation.isPending && activeField === 'ip'} />
             </Descriptions.Item>
             <Descriptions.Item label="Health Status">
@@ -162,10 +162,10 @@ const ServerDetails: React.FC = () => {
             <Descriptions.Item label="CRM ID">
               <InlineFieldEditor value={server.crm_id} editable={canEdit} onSave={(v) => saveField('crm_id', v)} saving={updateMutation.isPending && activeField === 'crm_id'} />
             </Descriptions.Item>
-            <Descriptions.Item label="Р’РµСЂСЃРёСЏ СЃРµСЂРІРµСЂР°">
+            <Descriptions.Item label="Версия сервера">
               <InlineFieldEditor value={server.server_version} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />
             </Descriptions.Item>
-            <Descriptions.Item label="РџРѕСЃР». РѕРїСЂРѕСЃ">{formatDate(server.last_polled_at)}</Descriptions.Item>
+            <Descriptions.Item label="Посл. опрос">{formatDate(server.last_polled_at)}</Descriptions.Item>
           </Descriptions>
         </Card>
 

@@ -53,12 +53,12 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       return 'Скопировано подключение';
     case 'field_changed':
     default:
-      if (entry.field === 'status') return 'РР·РјРµРЅС‘РЅ статус';
-      if (entry.field === 'description') return 'РР·РјРµРЅРµРЅРѕ описание';
-      if (entry.field === 'assignee') return 'РР·РјРµРЅС‘РЅ исполнитель';
-      if (entry.field === 'company') return 'РР·РјРµРЅРµРЅР° компания';
-      if (entry.field === 'asset') return 'РР·РјРµРЅРµРЅРѕ оборудование';
-      return 'РР·РјРµРЅРµРЅРёРµ заявки';
+      if (entry.field === 'status') return 'Изменён статус';
+      if (entry.field === 'description') return 'Изменено описание';
+      if (entry.field === 'assignee') return 'Изменён исполнитель';
+      if (entry.field === 'company') return 'Изменена компания';
+      if (entry.field === 'asset') return 'Изменено оборудование';
+      return 'Изменение заявки';
   }
 };
 
@@ -546,7 +546,7 @@ const TicketDetailsPage: React.FC = () => {
     const userName = String(link.dataset.etalonUserName || '').trim();
     Modal.info({
       title: userName || `Пользователь #${userID}`,
-      content: 'РРЅС„РѕСЂРјР°С†РёСЏ о пользователе будет доступна в следующем обновлении.',
+      content: 'Тут будет шорт-инфа про сотрудника',
     });
   };
 
@@ -812,7 +812,7 @@ const TicketDetailsPage: React.FC = () => {
                             setIsDescriptionEditMode(true);
                           }}
                         >
-                          Р едактировать описание
+                          Редактировать описание
                         </Button>
                       </Space>
                     ) : (
@@ -1100,7 +1100,7 @@ const TicketDetailsPage: React.FC = () => {
                           >
                             <Space direction="vertical" size={2} style={{ width: '100%' }}>
                               <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
-                              <Text type="secondary">Р НМ: {dataRow.rn_kkt || '-'}</Text>
+                              <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
                               <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
                               <Text type="secondary">
                                 ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}

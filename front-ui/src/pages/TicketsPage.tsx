@@ -43,9 +43,9 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
   { value: 'deferred', label: 'Отложено', color: 'orange' },
   { value: 'onsite', label: 'На выезд', color: 'cyan' },
   { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
-  { value: 'resolved', label: 'Р ешена', color: 'green' },
+  { value: 'resolved', label: 'Решена', color: 'green' },
   { value: 'spam', label: 'Спам', color: 'red' },
-  { value: 'execution', label: 'Р еализация', color: 'magenta' },
+  { value: 'execution', label: 'Реализация', color: 'magenta' },
   { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
@@ -1017,8 +1017,8 @@ const TicketsPage: React.FC = () => {
             </Card>
 
             {isClosedLikeStatus(metadata.status) && (
-              <Card size="small" title="Р езультат">
-                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Р езультат не заполнен</span>') }} />
+              <Card size="small" title="Результат">
+                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
               </Card>
             )}
 
@@ -1074,7 +1074,7 @@ const TicketsPage: React.FC = () => {
                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
                         <Space size={8}>
                           <Text type="secondary">
-                            {item.author} вЂў {item.date}
+                            {item.author} • {item.date}
                           </Text>
                           {item.isPrivate && <Tag color="orange">Приватный</Tag>}
                         </Space>

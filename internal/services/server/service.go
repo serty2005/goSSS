@@ -113,7 +113,7 @@ func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]int
 					ToOwnerID:       requestedOwner,
 					ChangeSource:    models.OwnerChangeSourceManualUpdate,
 					ChangedByUserID: stringPtrOrNil(changedBy),
-					Comment:         stringPtrOrNil("Р СѓС‡РЅР°СЏ СЃРјРµРЅР° РІР»Р°РґРµР»СЊС†Р°"),
+					Comment:         stringPtrOrNil("Ручная смена владельца"),
 				}
 				if err := s.ownerHistoryRepo.Create(txCtx, history); err != nil {
 					return err
@@ -137,7 +137,7 @@ func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]int
 					ToOwnerID:       strings.TrimSpace(ptrString(after.OwnerID)),
 					ChangeSource:    models.OwnerChangeSourceManualUpdate,
 					ChangedByUserID: stringPtrOrNil(changedBy),
-					Comment:         stringPtrOrNil("РР·РјРµРЅРµРЅС‹ РїРѕР»СЏ СЃРµСЂРІРµСЂР°: " + strings.Join(changes, "; ")),
+					Comment:         stringPtrOrNil("Изменены поля сервера: " + strings.Join(changes, "; ")),
 				}
 				if err := s.ownerHistoryRepo.Create(txCtx, history); err != nil {
 					return err
@@ -166,14 +166,14 @@ func (s *serviceImpl) Get(ctx context.Context, id string) (*server.Server, error
 }
 
 func (s *serviceImpl) List(ctx context.Context, limit, offset int) ([]server.Server, int64, error) {
-	// Р’ СЂРµРїРѕР·РёС‚РѕСЂРёРё РїРѕРєР° РЅРµС‚ РјРµС‚РѕРґР° Count Рё List Р±РµР· С„РёР»СЊС‚СЂРѕРІ, РёСЃРїРѕР»СЊР·СѓРµРј FindForPolling РєР°Рє Р°РЅР°Р»РѕРі РёР»Рё РґРѕР±Р°РІРёРј РїРѕР·Р¶Рµ.
-	// Р”Р»СЏ РїСЂРѕСЃС‚РѕС‚С‹ РїРѕРєР° РёСЃРїРѕР»СЊР·СѓРµРј Search СЃ РїСѓСЃС‚РѕР№ СЃС‚СЂРѕРєРѕР№, РµСЃР»Рё РЅСѓР¶РЅРѕ.
-	// РќРѕ Р»СѓС‡С€Рµ СЂРµР°Р»РёР·РѕРІР°С‚СЊ РїРѕР»РЅРѕС†РµРЅРЅС‹Р№ List РІ СЂРµРїРѕ.
-	// Рў.Рє. РјС‹ СЂРµС„Р°РєС‚РѕСЂРёРј CrudHandler, С‚Р°Рј РёСЃРїРѕР»СЊР·РѕРІР°Р»СЃСЏ db.Find.
-	// Р”Р°РІР°Р№ РїРѕРєР° РІРµСЂРЅРµРј Search СЃ РїСѓСЃС‚РѕР№ СЃС‚СЂРѕРєРѕР№, СЌС‚Рѕ СЃСЂР°Р±РѕС‚Р°РµС‚.
+	// В репозитории РїРѕРєР° нет метода Count Рё List без фильтров, используем FindForPolling как аналог или добавим РїРѕР·Р¶Рµ.
+	// Для простоты РїРѕРєР° используем Search с пустой строкой, если нужно.
+	// Но лучше реализовать полноценный List РІ репо.
+	// Т.к. РјС‹ рефакторим CrudHandler, там использовался db.Find.
+	// Давай РїРѕРєР° вернем Search с пустой строкой, это сработает.
 	list, err := s.repo.Search(ctx, "", limit, offset)
-	// Count РїРѕРєР° Р·Р°РіР»СѓС€РєР° 0, С‚Р°Рє РєР°Рє РІ Search РЅРµС‚ count.
-	// Р•СЃР»Рё РєСЂРёС‚РёС‡РЅРѕ, РЅСѓР¶РЅРѕ СЂР°СЃС€РёСЂРёС‚СЊ СЂРµРїРѕР·РёС‚РѕСЂРёР№.
+	// Count РїРѕРєР° заглушка 0, так как РІ Search нет count.
+	// Если критично, нужно расширить репозиторий.
 	return list, 0, err
 }
 
@@ -234,7 +234,7 @@ func ptrString(value *string) string {
 func printableValue(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "<РїСѓСЃС‚Рѕ>"
+		return "<пусто>"
 	}
 	return value
 }
@@ -254,12 +254,12 @@ func collectServerFieldChanges(before, after *server.Server, patch map[string]in
 		"device_name": {
 			before: ptrString(before.DeviceName),
 			after:  ptrString(after.DeviceName),
-			label:  "РќР°Р·РІР°РЅРёРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°",
+			label:  "Название устройства",
 		},
 		"server_name": {
 			before: ptrString(before.ServerName),
 			after:  ptrString(after.ServerName),
-			label:  "РРјСЏ СЃРµСЂРІРµСЂР°",
+			label:  "Имя сервера",
 		},
 		"ip": {
 			before: ptrString(before.IP),
@@ -279,12 +279,12 @@ func collectServerFieldChanges(before, after *server.Server, patch map[string]in
 		"server_version": {
 			before: ptrString(before.ServerVersion),
 			after:  ptrString(after.ServerVersion),
-			label:  "Р’РµСЂСЃРёСЏ СЃРµСЂРІРµСЂР°",
+			label:  "Версия сервера",
 		},
 		"description": {
 			before: ptrString(before.Description),
 			after:  ptrString(after.Description),
-			label:  "РћРїРёСЃР°РЅРёРµ",
+			label:  "Описание",
 		},
 		"cabinet_link": {
 			before: ptrString(before.CabinetLink),

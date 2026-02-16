@@ -329,13 +329,13 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	if comment != "" {
 		// Для простоты используем легаси структуру Comment, если фронт её ждет,
 		// но лучше писать в History с полем "comment"
-		// Р В еализуем через History как "comment_added"
+		// Реализуем через History как "comment_added"
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
 
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
 	if ticket.ServiceDeskUUID != "" {
-		// s.sdClient.UpdateEntity(...) // TODO: Р В еализовать обратную синхронизацию статуса
+		// s.sdClient.UpdateEntity(...) // TODO: Реализовать обратную синхронизацию статуса
 	}
 
 	return ticket, nil
@@ -968,7 +968,7 @@ func (s *ticketServiceImpl) recordHistory(
 // processHtmlContent ищет ссылки на файлы Naumen, скачивает их и заменяет на локальные URL.
 // sdUUID - внешний UUID заявки (например, serviceCall$123), используется для группировки файлов в папке.
 func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string) string {
-	// Р ВРЎвЂ°Р ВµР С все вхождения uuid=file$XXXXX
+	// Ищем все вхождения uuid=file$XXXXX
 	matches := naumenFileRegex.FindAllStringSubmatch(htmlContent, -1)
 	if len(matches) == 0 {
 		return htmlContent
@@ -1002,11 +1002,11 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 		}
 
 		// 3. Заменяем ссылку в HTML
-		// Р ВРЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р °СЏ: ... src="./download?uuid=file$13205558" ...
+		// Исходная: ... src="./download?uuid=file$13205558" ...
 		// Целевая:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
 
 		// Находим полный кусок "./download?uuid=file$XXXX" и заменяем его
-		// Р В егулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
+		// Регулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
 		// "./download?uuid=" + fileUUID -> "/api/static/tickets/" + sdUUID + "/" + fileUUID
 
 		oldLink := fmt.Sprintf("./download?uuid=%s", fileUUID)
@@ -1136,4 +1136,3 @@ func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, compan
 	}
 	return &contractID, nil
 }
-

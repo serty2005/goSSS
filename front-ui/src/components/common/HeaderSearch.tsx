@@ -14,29 +14,29 @@ const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const TICKET_STATUS_OPTIONS = [
-  { value: 'new', label: 'РќРѕРІР°СЏ' },
-  { value: 'in_progress', label: 'Р’ СЂР°Р±РѕС‚Рµ' },
-  { value: 'pending', label: 'РћР¶РёРґР°РЅРёРµ' },
-  { value: 'deferred', label: 'РћС‚Р»РѕР¶РµРЅРѕ' },
-  { value: 'onsite', label: 'РќР° РІС‹РµР·Рґ' },
-  { value: 'to_manager', label: 'РџРµСЂРµРґР°С‚СЊ РјРµРЅРµРґР¶РµСЂСѓ' },
-  { value: 'resolved', label: 'Р РµС€РµРЅР°' },
-  { value: 'spam', label: 'РЎРїР°Рј' },
-  { value: 'execution', label: 'Р РµР°Р»РёР·Р°С†РёСЏ' },
-  { value: 'closed', label: 'Р—Р°РєСЂС‹С‚Р°' },
+  { value: 'new', label: 'Новая' },
+  { value: 'in_progress', label: 'В работе' },
+  { value: 'pending', label: 'Ожидание' },
+  { value: 'deferred', label: 'Отложено' },
+  { value: 'onsite', label: 'На выезд' },
+  { value: 'to_manager', label: 'Передать менеджеру' },
+  { value: 'resolved', label: 'Решена' },
+  { value: 'spam', label: 'Спам' },
+  { value: 'execution', label: 'Реализация' },
+  { value: 'closed', label: 'Закрыта' },
 ];
 const ACTIVE_STATUS_VALUES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const LONGEST_STATUS_LABEL_WIDTH = 260;
 const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
-  { value: 'number', label: 'РќРѕРјРµСЂ' },
-  { value: 'status', label: 'РЎС‚Р°С‚СѓСЃ' },
-  { value: 'company_display', label: 'РљРѕРјРїР°РЅРёСЏ' },
-  { value: 'assignee_display', label: 'РСЃРїРѕР»РЅРёС‚РµР»СЊ' },
-  { value: 'subject', label: 'РўРµРјР°' },
-  { value: 'last_comment', label: 'РџРѕСЃР»РµРґРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№' },
-  { value: 'created_at', label: 'РЎРѕР·РґР°РЅРѕ' },
-  { value: 'last_activity', label: 'РћР±РЅРѕРІР»РµРЅРѕ' },
+  { value: 'number', label: 'Номер' },
+  { value: 'status', label: 'Статус' },
+  { value: 'company_display', label: 'Компания' },
+  { value: 'assignee_display', label: 'Исполнитель' },
+  { value: 'subject', label: 'Тема' },
+  { value: 'last_comment', label: 'Последний комментарий' },
+  { value: 'created_at', label: 'Создано' },
+  { value: 'last_activity', label: 'Обновлено' },
   { value: 'sync_with_bitrix', label: 'B24' },
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
@@ -251,7 +251,7 @@ const HeaderSearch: React.FC = () => {
   const saveCurrentPreset = async () => {
     const name = presetName.trim();
     if (!name) {
-      message.warning('Р’РІРµРґРёС‚Рµ РёРјСЏ С„РёР»СЊС‚СЂР°');
+      message.warning('Введите имя фильтра');
       return;
     }
     if (!user) {
@@ -289,9 +289,9 @@ const HeaderSearch: React.FC = () => {
       await updateProfileMutation.mutateAsync(nextConfig);
       setUser({ ...user, profile_config: nextConfig as any });
       setPresetName('');
-      message.success('Р¤РёР»СЊС‚СЂ СЃРѕС…СЂР°РЅС‘РЅ');
+      message.success('Фильтр сохранён');
     } catch {
-      message.error('РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С„РёР»СЊС‚СЂ');
+      message.error('Не удалось сохранить фильтр');
     }
   };
 
@@ -305,11 +305,11 @@ const HeaderSearch: React.FC = () => {
   }, [isSectionSearchPage, sectionTerm]);
 
   const sectionPlaceholder = (() => {
-    if (isCompaniesPage) return 'РџРѕРёСЃРє РєРѕРјРїР°РЅРёР№: РЅР°Р·РІР°РЅРёРµ, Р°РґСЂРµСЃ, СЋСЂ. РЅР°Р·РІР°РЅРёРµ';
-    if (isServersPage) return 'РџРѕРёСЃРє СЃРµСЂРІРµСЂРѕРІ: id, ip, РЅР°Р·РІР°РЅРёРµ';
-    if (isWorkstationsPage) return 'РџРѕРёСЃРє СЃС‚Р°РЅС†РёР№: id, РЅР°Р·РІР°РЅРёРµ';
-    if (isFiscalsPage) return 'РџРѕРёСЃРє Р¤Р : id, РјРѕРґРµР»СЊ, Р РќРњ';
-    return 'РџРѕРёСЃРє...';
+    if (isCompaniesPage) return 'Поиск компаний: название, адрес, юр. название';
+    if (isServersPage) return 'Поиск серверов: id, ip, название';
+    if (isWorkstationsPage) return 'Поиск станций: id, название';
+    if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
+    return 'Поиск...';
   })();
 
   const onSectionSearch = (value: string) => {
@@ -385,9 +385,9 @@ const HeaderSearch: React.FC = () => {
             value={ticketView}
             onChange={(value) => updateTicketParams({ view: value })}
             options={[
-              { value: 'list', label: 'РЎРїРёСЃРѕРє' },
-              { value: 'cards', label: 'РљР°СЂС‚РѕС‡РєРё' },
-              { value: 'table', label: 'РўР°Р±Р»РёС†Р°' },
+              { value: 'list', label: 'Список' },
+              { value: 'cards', label: 'Карточки' },
+              { value: 'table', label: 'Таблица' },
             ]}
             style={{ width: VIEW_SELECT_WIDTH, flexShrink: 0 }}
           />
@@ -410,7 +410,7 @@ const HeaderSearch: React.FC = () => {
             <Space style={{ width: LONGEST_STATUS_LABEL_WIDTH, justifyContent: 'space-between' }} align="start">
               <Select
                 mode="multiple"
-                placeholder="РЎС‚Р°С‚СѓСЃС‹"
+                placeholder="Статусы"
                 value={statusValues}
                 onChange={(values) => updateTicketParams({ status: values.length ? values.join(',') : undefined })}
                 options={TICKET_STATUS_OPTIONS}
@@ -420,12 +420,12 @@ const HeaderSearch: React.FC = () => {
                 checked={onlyActiveStatuses}
                 onChange={(event) => updateTicketParams({ only_active_statuses: event.target.checked ? '1' : undefined })}
               >
-                РђРєС‚РёРІРЅС‹Рµ
+                Активные
               </Checkbox>
             </Space>
             <Select
               mode="multiple"
-              placeholder="РЎРѕС‚СЂСѓРґРЅРёРєРё"
+              placeholder="Сотрудники"
               value={assigneeValues}
               onChange={(values) => updateTicketParams({ assignee_ids: values.length ? values.join(',') : undefined })}
               options={assigneeOptions}
@@ -450,7 +450,7 @@ const HeaderSearch: React.FC = () => {
         <Select
           showSearch
           allowClear
-          placeholder="РљРѕРјРїР°РЅРёСЏ"
+          placeholder="Компания"
           value={ticketCompany}
           onChange={(value) => updateTicketParams({ [companyParamKey]: value || undefined })}
           filterOption={(input, option) =>
@@ -466,7 +466,7 @@ const HeaderSearch: React.FC = () => {
           <>
             <Select
               allowClear
-              placeholder="Р’С‹Р±СЂР°С‚СЊ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ С„РёР»СЊС‚СЂ"
+              placeholder="Выбрать сохранённый фильтр"
               options={presets.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(value) => {
                 if (!value) return;
@@ -475,12 +475,12 @@ const HeaderSearch: React.FC = () => {
             />
             <Space.Compact style={{ width: '100%' }}>
               <Input
-                placeholder="РРјСЏ С„РёР»СЊС‚СЂР°"
+                placeholder="Имя фильтра"
                 value={presetName}
                 onChange={(event) => setPresetName(event.target.value)}
               />
               <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
-                РЎРѕС…СЂР°РЅРёС‚СЊ
+                Сохранить
               </Button>
             </Space.Compact>
           </>
@@ -505,7 +505,7 @@ const HeaderSearch: React.FC = () => {
                 },
           )}
         >
-          РЎР±СЂРѕСЃРёС‚СЊ С„РёР»СЊС‚СЂС‹
+          Сбросить фильтры
         </Button>
       </Space>
     );
@@ -515,8 +515,8 @@ const HeaderSearch: React.FC = () => {
         <Segmented
           value={archiveMode}
           options={[
-            { value: 'active', label: 'Р’ СЂР°Р±РѕС‚Рµ' },
-            { value: 'archive', label: 'РђСЂС…РёРІ' },
+            { value: 'active', label: 'В работе' },
+            { value: 'archive', label: 'Архив' },
           ]}
           onChange={(value) => {
             const nextMode = value as 'active' | 'archive';
@@ -524,7 +524,7 @@ const HeaderSearch: React.FC = () => {
           }}
         />
         <Input.Search
-          placeholder="РџРѕРёСЃРє РїРѕ Р·Р°СЏРІРєР°Рј..."
+          placeholder="Поиск по заявкам..."
           allowClear
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
@@ -545,7 +545,7 @@ const HeaderSearch: React.FC = () => {
             navigate('/tickets?create=1');
           }}
         >
-          РќРѕРІР°СЏ Р·Р°СЏРІРєР°
+          Новая заявка
         </Button>
       </Space>
     );
@@ -613,7 +613,7 @@ const HeaderSearch: React.FC = () => {
   return (
     <Space size="small">
       <Input.Search
-        placeholder="РџРѕРёСЃРє РїРѕ IP, Serial, Name..."
+        placeholder="Поиск по IP, Serial, Name..."
         allowClear
         value={searchTerm}
         onChange={(event) => setSearchTerm(event.target.value)}
@@ -623,7 +623,7 @@ const HeaderSearch: React.FC = () => {
       />
       <Space size={6}>
         <Switch size="small" checked={showInactive} onChange={onToggleShowInactive} />
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Р‘РµР· РєРѕРЅС‚СЂР°РєС‚Р°</span>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Без контракта</span>
       </Space>
     </Space>
   );

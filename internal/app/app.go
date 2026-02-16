@@ -185,13 +185,13 @@ func (a *Application) SeedDBAndExit() {
 }
 
 // SeedFromFTPCacheAndExit инициализирует БД из локального кэша FTP и загружает данные агентов.
-// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ при запуске с флагом --seed-ftp-cache для обработки ранее скачанных файлов
+// Используется при запуске с флагом --seed-ftp-cache для обработки ранее скачанных файлов
 // без обращения к FTP-серверу.
 func (a *Application) SeedFromFTPCacheAndExit() {
 	a.Logger.Info("Запуск в режиме инициализации из FTP-кэша...")
 	ctx := context.Background()
 
-	// 1. РРЅРёС†РёР°Р»РёР·РёСЂСѓРµРј записи в БД из существующих файлов кэша
+	// 1. Инициализируем записи в БД из существующих файлов кэша
 	if err := a.AgentFTPGateway.InitializeDBFromCache(ctx); err != nil {
 		a.Logger.Warn("Ошибка инициализации БД из кэша", "error", err)
 	}
@@ -202,7 +202,7 @@ func (a *Application) SeedFromFTPCacheAndExit() {
 		a.Logger.Warn("Ошибка загрузки данных из кэша", "error", err)
 	}
 
-	a.Logger.Info("РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ из FTP-кэша завершена", "processed_files", processedCount)
+	a.Logger.Info("Инициализация из FTP-кэша завершена", "processed_files", processedCount)
 	a.Logger.Info("Программа завершает работу.")
 	os.Exit(0)
 }
@@ -221,7 +221,7 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 	log.Info("Миграции базы данных успешно завершены.")
 
 	if err := services.EnsureFiscalSerialUniqueness(context.Background(), database); err != nil {
-		log.Fatal("Не удалось выполнить нормализацию и дедупликацию Р¤Р ", "error", err)
+		log.Fatal("Не удалось выполнить нормализацию и дедупликацию ФР", "error", err)
 	}
 	if err := db.SeedAdminUser(cfg, database, log); err != nil {
 		log.Fatal("Не удалось создать пользователя-администратора", "error", err)
@@ -357,7 +357,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 }
 
 func setupBackgroundServices(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
-	// --- 1. РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ Менеджера РРЅС‚РµРіСЂР°С†РёР№ ---
+	// --- 1. Инициализация Менеджера Интеграций ---
 	app.IntegrationManager = integrations.NewManager(app.Logger.With("component", "integration_manager"))
 
 	// --- 2. Настройка Адаптера Naumen ---
@@ -366,7 +366,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 		LinkRepo: repos.LinkRepo,
 		Logger:   app.Logger,
 	}
-	// РСЃРїРѕР»СЊР·СѓРµРј существующий клиент, оборачивая его в адаптер
+	// Используем существующий клиент, оборачивая его в адаптер
 	naumenAdapter := naumen.NewNaumenAdapter(clients.SDClient, app.Logger.With("component", "naumen_adapter"), mapperCtx)
 
 	// --- 3. Регистрация Провайдеров ---
@@ -443,6 +443,7 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Use(corsMiddleware.Handler)
 	r.Use(chi_middleware.RequestID)
 	r.Use(middleware.LoggerInjector(a.Logger))
+	r.Use(middleware.DebugHTTPIOMiddleware())
 	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
 	r.Use(chi_middleware.Timeout(60 * time.Second))
 
@@ -569,7 +570,7 @@ func (a *Application) setupRouter() *chi.Mux {
 		w.Write([]byte("Welcome to XenionDesk"))
 	})
 
-	// Р оут для Swagger документации
+	// Роут для Swagger документации
 	r.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL("/swagger/doc.json"),
 	))
@@ -597,7 +598,7 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		wg.Add(1)
 		go func() { defer wg.Done(); a.FRUpdateFounder.Start(ctx) }()
 	} else {
-		a.Logger.Info("Воркер поиска обновлений для Р¤Р  отключен.")
+		a.Logger.Info("Воркер поиска обновлений для ФР отключен.")
 	}
 
 	if a.Config.EnableAgentFTPGateway {
