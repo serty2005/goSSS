@@ -166,6 +166,7 @@ func toFiscalResponse(item fiscal.FiscalRegister) map[string]interface{} {
 		"ofd_name":                  item.OFDName,
 		"workstation_id":            item.WorkstationID,
 		"health_status_before_lock": item.HealthStatusBeforeLock,
+		"owner_binding_mode":        item.OwnerBindingMode,
 	}
 }
 

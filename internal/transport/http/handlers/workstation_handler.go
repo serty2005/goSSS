@@ -140,5 +140,6 @@ func toWorkstationResponse(item workstation.Workstation) map[string]interface{} 
 		"health_status":      item.HealthStatus,
 		"status_details":     statusDetails,
 		"owner_id":           item.OwnerID,
+		"owner_binding_mode": item.OwnerBindingMode,
 	}
 }

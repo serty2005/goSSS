@@ -3,9 +3,11 @@ package server
 import (
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // Server представляет сущность сервера.
@@ -25,6 +27,7 @@ type Server struct {
 	ServerVersion    *string    `gorm:"type:text"`
 	Description      *string    `gorm:"type:text"`
 	OwnerID          *string    `gorm:"type:text;index"`
+	OwnerBindingMode string     `gorm:"column:owner_binding_mode;type:varchar(16);default:'auto';index" json:"owner_binding_mode"`
 
 	// Связь Many-to-Many с Company
 	AdditionalOwners []company.Company `gorm:"many2many:server_additional_owners;foreignKey:ID;joinForeignKey:ServerID;references:ID;joinReferences:CompanyID"`
@@ -37,4 +40,11 @@ type Server struct {
 	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"` // Статус состояния (ok, attention_required)
 	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
 	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
+}
+
+func (s *Server) BeforeCreate(tx *gorm.DB) (err error) {
+	if strings.TrimSpace(s.OwnerBindingMode) == "" {
+		s.OwnerBindingMode = "auto"
+	}
+	return s.Base.BeforeCreate(tx)
 }

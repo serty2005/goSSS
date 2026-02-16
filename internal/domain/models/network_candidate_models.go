@@ -27,12 +27,15 @@ const (
 
 const (
 	OwnerChangeSourceManualResolution = "manual_resolution"
+	OwnerChangeSourceManualUpdate     = "manual_update"
+	OwnerChangeSourceCreated          = "created"
 	OwnerChangeSourceNetworkAuto      = "network_auto"
 	OwnerChangeSourceNetworkAutoWS    = "network_auto_ws"
 	OwnerChangeSourceNetworkAutoFR    = "network_auto_fr"
 	OwnerChangeSourceNetworkAutoBoth  = "network_auto_both"
 	OwnerChangeSourceNetworkConflict  = "network_conflict"
 	OwnerChangeSourceCandidateApprove = "candidate_approve"
+	OwnerChangeSourceAgentDataUpdate  = "agent_data_update"
 )
 
 type OwnerChangeHistory struct {
@@ -44,6 +47,8 @@ type OwnerChangeHistory struct {
 	ChangeSource    string    `gorm:"type:varchar(32);not null" json:"change_source"`
 	Comment         *string   `gorm:"type:text" json:"comment"`
 	ChangedByUserID *string   `gorm:"type:text" json:"changed_by_user_id"`
+	AgentUUID       *string   `gorm:"type:text;index" json:"agent_uuid"`
+	ObservationID   *uint     `gorm:"index" json:"observation_id"`
 	CreatedAt       time.Time `gorm:"index" json:"created_at"`
 }
 

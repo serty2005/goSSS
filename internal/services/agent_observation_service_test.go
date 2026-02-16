@@ -33,6 +33,7 @@ func setupObsService(t *testing.T) (*gorm.DB, AgentObservationService) {
 		&models.CandidateWorkstationStaging{},
 		&models.CandidateFiscalStaging{},
 		&models.ReconciliationTask{},
+		&models.OwnerChangeHistory{},
 	)
 	require.NoError(t, err)
 	return db, NewAgentObservationService(logger.New("", "test", "error", true), db)
@@ -164,10 +165,10 @@ func TestApplyObservation_StaleByAgentStreamIgnored(t *testing.T) {
 
 	lastModified := time.Date(2026, 1, 10, 10, 0, 0, 0, time.UTC)
 	ws := workstation.Workstation{
-		IdentityHash:    strRef(identityHash("111", "LM-1")),
-		Teamviewer:      strRef("111"),
-		Litemanager:     strRef("LM-1"),
-		OwnerID:         &ownerWS,
+		IdentityHash:     strRef(identityHash("111", "LM-1")),
+		Teamviewer:       strRef("111"),
+		Litemanager:      strRef("LM-1"),
+		OwnerID:          &ownerWS,
 		LastModifiedDate: &lastModified,
 	}
 	require.NoError(t, db.Create(&ws).Error)

@@ -19,6 +19,7 @@ import (
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/services"
+	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"strings"
@@ -183,12 +184,128 @@ func (o *Orchestrator) handleAgentObservationRequested(ctx context.Context, even
 	)
 
 	ctxWithTrace := contextkeys.WithTraceID(ctx, traceID)
-	if _, err := o.obsService.ApplyObservation(ctxWithTrace, payload.Source, &payload.Data); err != nil {
+	obs, err := o.obsService.ApplyObservation(ctxWithTrace, payload.Source, &payload.Data)
+	if err != nil {
 		log.Error("Не удалось применить наблюдение агента", "error", err)
 		return
 	}
 
+	o.publishAgentObservationUpdate(ctxWithTrace, payload.Source, &payload.Data, obs)
+
 	log.Debug("Наблюдение агента успешно применено")
+}
+
+func (o *Orchestrator) publishAgentObservationUpdate(ctx context.Context, source string, data *api.AgentDataDTO, obs *models.AgentObservation) {
+	if obs == nil || o.bus == nil {
+		return
+	}
+
+	agentUUID := strings.TrimSpace(source)
+	if data != nil && strings.TrimSpace(data.AgentUUID) != "" {
+		agentUUID = strings.TrimSpace(data.AgentUUID)
+	}
+	if !isUUIDValue(agentUUID) {
+		agentUUID = ""
+	}
+
+	var ownerMatch *bool
+	var wsOwner string
+	var frOwner string
+	if o.workstationRepo != nil && obs.WorkstationID != nil && strings.TrimSpace(*obs.WorkstationID) != "" {
+		if ws, err := o.workstationRepo.GetByID(ctx, strings.TrimSpace(*obs.WorkstationID)); err == nil && ws != nil && ws.OwnerID != nil {
+			wsOwner = strings.TrimSpace(*ws.OwnerID)
+		}
+	}
+	if o.frRepo != nil && obs.FRID != nil && strings.TrimSpace(*obs.FRID) != "" {
+		if fr, err := o.frRepo.GetByID(ctx, strings.TrimSpace(*obs.FRID)); err == nil && fr != nil && fr.OwnerID != nil {
+			frOwner = strings.TrimSpace(*fr.OwnerID)
+		}
+	}
+	if wsOwner != "" && frOwner != "" {
+		match := wsOwner == frOwner
+		ownerMatch = &match
+	}
+
+	currentRaw := ""
+	vTimeRaw := ""
+	serverURL := ""
+	if data != nil {
+		currentRaw = strings.TrimSpace(data.CurrentTime)
+		if raw, ok := data.AdditionalProperties["v_time"].(string); ok {
+			vTimeRaw = strings.TrimSpace(raw)
+		}
+		serverURL = strings.TrimSpace(data.URLRms)
+	}
+
+	payload := events.AgentObservationUpdatedPayload{
+		ObservationID: obs.ID,
+		AgentUUID:     stringPtrOrNil(agentUUID),
+		WorkstationID: trimStringPtr(obs.WorkstationID),
+		FRID:          trimStringPtr(obs.FRID),
+		OwnerMatch:    ownerMatch,
+		ObservedAt:    obs.ObservedAt,
+		CurrentTime:   parseFlexibleEventTime(currentRaw),
+		VTime:         parseFlexibleEventTime(vTimeRaw),
+		CurrentRaw:    stringPtrOrNil(currentRaw),
+		VTimeRaw:      stringPtrOrNil(vTimeRaw),
+		ServerURL:     stringPtrOrNil(serverURL),
+	}
+	o.bus.Publish(eventbus.Event{Type: events.AgentObservationUpdated, Payload: payload})
+}
+
+func parseFlexibleEventTime(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"02.01.2006 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			parsed = parsed.UTC()
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func trimStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func stringPtrOrNil(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func isUUIDValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 36 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // handleServiceDeskEntityUpdate обрабатывает обновление сущности из внешней системы ServiceDesk.

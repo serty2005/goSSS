@@ -54,6 +54,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		events.ServiceDeskCreateRequested, // Задача ушла в работу
 		events.ServiceDeskUpdateRequested,
 		events.DuplicatesFound, // Найдены дубликаты
+		events.AgentObservationUpdated,
 		// Можно добавить events.AgentDataReceived, если фронт хочет видеть сырой поток
 	}
 

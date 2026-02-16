@@ -1,19 +1,35 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
+import { companiesApi } from '@/api/companies';
 import { getEntityIcon } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
-import { UpdateFiscalPayload } from '@/types/api';
+import { EntityOwnerHistoryItemDTO, UpdateFiscalPayload } from '@/types/api';
 import dayjs from 'dayjs';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
+import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
+import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 
 const { Title, Text } = Typography;
+
+const sourceLabelMap: Record<string, string> = {
+  created: 'Создание',
+  manual_update: 'Ручное изменение',
+  agent_data_update: 'Обновление от агента',
+  candidate_approve: 'Подтверждение кандидата',
+  network_auto: 'Автоопределение сети',
+  network_auto_ws: 'Автоопределение сети (РС)',
+  network_auto_fr: 'Автоопределение сети (ФР)',
+  network_auto_both: 'Автоопределение сети (РС+ФР)',
+  network_conflict: 'Конфликт сети',
+  manual_resolution: 'Ручное разрешение',
+};
 
 const FiscalDetails: React.FC = () => {
   const { token } = antTheme.useToken();
@@ -22,6 +38,8 @@ const FiscalDetails: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [activeField, setActiveField] = useState<string | null>(null);
+  const [companySearch, setCompanySearch] = useState<string>('');
+  const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
   const user = useAuthStore((state) => state.user);
   const canEdit = canEditEquipment(user?.roles);
 
@@ -31,41 +49,50 @@ const FiscalDetails: React.FC = () => {
     enabled: !!id,
   });
 
+  const { data: ownerHistoryRes } = useQuery({
+    queryKey: ['owner-history', 'FiscalRegister', id],
+    queryFn: () => equipmentApi.getOwnerHistory('FiscalRegister', id!, 200),
+    enabled: !!id,
+  });
+
+  const { data: companiesRes } = useQuery({
+    queryKey: ['companies-search', companySearch],
+    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    staleTime: 10_000,
+  });
+
   const updateMutation = useMutation({
     mutationFn: (values: UpdateFiscalPayload) => equipmentApi.updateFiscal(id!, values),
     onSuccess: () => {
       message.success('Данные обновлены');
       queryClient.invalidateQueries({ queryKey: ['fiscal', id] });
+      queryClient.invalidateQueries({ queryKey: ['owner-history', 'FiscalRegister', id] });
       setActiveField(null);
     },
     onError: () => message.error('Ошибка обновления'),
   });
 
-  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
-  if (!fiscalRes?.data) return <div>Фискальный регистратор не найден</div>;
+  const fiscal = fiscalRes?.data;
+  const companyOptions = useMemo(() => (companiesRes?.data || []).map((item) => ({
+    value: String(item.id || ''),
+    title: String(item.title || item.additional_name || item.id || ''),
+    parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+  })).filter((item) => item.value && item.title), [companiesRes?.data]);
+  const agentUpdate = useMemo(() => (fiscal ? getAgentUpdateMeta(fiscal) : null), [fiscal]);
+  const licensesData = useMemo(() => (
+    fiscal?.licenses
+      ? Object.entries(fiscal.licenses).map(([licenseID, data]) => ({ licenseID, ...data }))
+      : []
+  ), [fiscal?.licenses]);
 
-  const fiscal = fiscalRes.data;
-  const agentUpdate = getAgentUpdateMeta(fiscal);
+  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
+  if (!fiscal) return <div>Фискальный регистратор не найден</div>;
 
   const saveField = (field: keyof UpdateFiscalPayload, value: string) => {
-    if (!canEdit) {
-      return;
-    }
+    if (!canEdit) return;
     setActiveField(field);
     updateMutation.mutate({ [field]: value } as UpdateFiscalPayload);
   };
-
-  const getFnDateColor = (dateStr?: string) => {
-    if (!dateStr) return undefined;
-    const diff = dayjs(dateStr).diff(dayjs(), 'day');
-    if (diff < 0) return 'red';
-    if (diff < 30) return 'orange';
-    return 'green';
-  };
-
-  const licensesData = fiscal.licenses
-    ? Object.entries(fiscal.licenses).map(([licenseID, data]) => ({ licenseID, ...data }))
-    : [];
 
   const licenseColumns = [
     { title: 'ID', dataIndex: 'licenseID', width: 60 },
@@ -80,6 +107,24 @@ const FiscalDetails: React.FC = () => {
       return;
     }
     navigate(-1);
+  };
+
+  const renderActor = (record: EntityOwnerHistoryItemDTO) => {
+    if (record.changed_by_user_id) {
+      return `Пользователь ${record.changed_by_user_id}`;
+    }
+    if (record.agent_uuid) {
+      if (record.observation_id) {
+        return (
+          <Space size={4}>
+            <span>{record.agent_uuid}</span>
+            <a onClick={() => setActiveObservationID(record.observation_id)}>событие #{record.observation_id}</a>
+          </Space>
+        );
+      }
+      return record.agent_uuid;
+    }
+    return '-';
   };
 
   return (
@@ -108,6 +153,22 @@ const FiscalDetails: React.FC = () => {
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Card title="Информация о ККТ" className="glass-panel" size="small">
           <Descriptions bordered column={2} className="compact-descriptions">
+            <Descriptions.Item label="Владелец" span={2}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <CompanySearchSelect
+                  value={fiscal.owner_id}
+                  options={companyOptions}
+                  loading={updateMutation.isPending && activeField === 'owner_id'}
+                  placeholder="Выберите компанию-владельца"
+                  onSearch={setCompanySearch}
+                  onChange={(value) => {
+                    if (!canEdit || !value) return;
+                    saveField('owner_id', value);
+                  }}
+                />
+                <Text type="secondary">Режим привязки: {fiscal.owner_binding_mode || 'auto'}</Text>
+              </Space>
+            </Descriptions.Item>
             <Descriptions.Item label="РНМ">
               <InlineFieldEditor value={fiscal.rn_kkt} editable={canEdit} onSave={(v) => saveField('rn_kkt', v)} saving={updateMutation.isPending && activeField === 'rn_kkt'} />
               <div><Text type="secondary">Формат: {formatRnm(fiscal.rn_kkt)}</Text></div>
@@ -124,62 +185,63 @@ const FiscalDetails: React.FC = () => {
           </Descriptions>
         </Card>
 
-        <Card title="Фискальный накопитель" className="glass-panel" size="small">
-          <Descriptions bordered column={2} className="compact-descriptions">
-            <Descriptions.Item label="Номер ФН">
-              <InlineFieldEditor value={fiscal.fn_number} editable={canEdit} onSave={(v) => saveField('fn_number', v)} saving={updateMutation.isPending && activeField === 'fn_number'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Дата регистрации">
-              <InlineFieldEditor value={fiscal.kkt_reg_date ? dayjs(fiscal.kkt_reg_date).format('YYYY-MM-DD') : ''} editable={canEdit} placeholder="YYYY-MM-DD" onSave={(v) => saveField('kkt_reg_date', v)} saving={updateMutation.isPending && activeField === 'kkt_reg_date'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Дата окончания">
-              <Space direction="vertical" size={4}>
-                <InlineFieldEditor value={fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date).format('YYYY-MM-DD') : ''} editable={canEdit} placeholder="YYYY-MM-DD" onSave={(v) => saveField('fn_expire_date', v)} saving={updateMutation.isPending && activeField === 'fn_expire_date'} />
-                <Text strong style={{ color: getFnDateColor(fiscal.fn_expire_date) }}>
-                  {fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date).format('DD.MM.YYYY') : '-'}
-                </Text>
-              </Space>
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-
-        <Card title="Прошивки и ПО" className="glass-panel" size="small">
-          <Descriptions bordered column={3} className="compact-descriptions">
-            <Descriptions.Item label="Прошивка ФР">
-              <InlineFieldEditor value={fiscal.fr_firmware} editable={canEdit} onSave={(v) => saveField('fr_firmware', v)} saving={updateMutation.isPending && activeField === 'fr_firmware'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Загрузчик">
-              <InlineFieldEditor value={fiscal.fr_downloader} editable={canEdit} onSave={(v) => saveField('fr_downloader', v)} saving={updateMutation.isPending && activeField === 'fr_downloader'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Драйвер">
-              <InlineFieldEditor value={fiscal.driver_version} editable={canEdit} onSave={(v) => saveField('driver_version', v)} saving={updateMutation.isPending && activeField === 'driver_version'} />
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-
-        <Card title="Юридическое лицо" className="glass-panel" size="small">
-          <Descriptions bordered column={1} className="compact-descriptions">
-            <Descriptions.Item label="Организация">
-              <InlineFieldEditor value={fiscal.legal_name} editable={canEdit} onSave={(v) => saveField('legal_name', v)} saving={updateMutation.isPending && activeField === 'legal_name'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="ИНН">
-              <InlineFieldEditor value={fiscal.inn} editable={canEdit} onSave={(v) => saveField('inn', v)} saving={updateMutation.isPending && activeField === 'inn'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Адрес установки">
-              <InlineFieldEditor value={fiscal.address} editable={canEdit} onSave={(v) => saveField('address', v)} saving={updateMutation.isPending && activeField === 'address'} />
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-
         {licensesData.length > 0 && (
           <Card title="Лицензии ККТ" className="glass-panel" size="small">
             <Table dataSource={licensesData} columns={licenseColumns} rowKey="licenseID" pagination={false} size="small" />
           </Card>
         )}
+
+        <Card title="История изменений" className="glass-panel" size="small">
+          <Table<EntityOwnerHistoryItemDTO>
+            rowKey="id"
+            pagination={{ pageSize: 10 }}
+            dataSource={ownerHistoryRes?.data || []}
+            columns={[
+              {
+                title: 'Время',
+                dataIndex: 'created_at',
+                key: 'created_at',
+                render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
+                width: 200,
+              },
+              {
+                title: 'Источник',
+                dataIndex: 'change_source',
+                key: 'change_source',
+                width: 220,
+                render: (value: string) => sourceLabelMap[value] || value || '-',
+              },
+              {
+                title: 'Владелец',
+                key: 'owners',
+                width: 320,
+                render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
+                  const fromOwner = record.from_owner_id || '';
+                  const toOwner = record.to_owner_id || '';
+                  if (!fromOwner && !toOwner) return '-';
+                  if (fromOwner && toOwner && fromOwner !== toOwner) return `${fromOwner} → ${toOwner}`;
+                  return toOwner || fromOwner || '-';
+                },
+              },
+              {
+                title: 'Кто сделал',
+                key: 'actor',
+                render: (_: unknown, record: EntityOwnerHistoryItemDTO) => renderActor(record),
+                width: 260,
+              },
+              { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
+            ]}
+          />
+        </Card>
       </Space>
+
+      <AgentObservationRawModal
+        open={Boolean(activeObservationID)}
+        observationID={activeObservationID}
+        onClose={() => setActiveObservationID(undefined)}
+      />
     </div>
   );
 };
 
 export default FiscalDetails;
-

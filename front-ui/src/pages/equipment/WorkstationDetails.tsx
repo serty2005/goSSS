@@ -1,18 +1,34 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
+import { companiesApi } from '@/api/companies';
 import { getEntityIcon } from '@/utils/mappers';
-import { UpdateWorkstationPayload } from '@/types/api';
+import { EntityOwnerHistoryItemDTO, UpdateWorkstationPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
 import dayjs from 'dayjs';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
+import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
+import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 
 const { Title, Text } = Typography;
+
+const sourceLabelMap: Record<string, string> = {
+  created: 'Создание',
+  manual_update: 'Ручное изменение',
+  agent_data_update: 'Обновление от агента',
+  candidate_approve: 'Подтверждение кандидата',
+  network_auto: 'Автоопределение сети',
+  network_auto_ws: 'Автоопределение сети (РС)',
+  network_auto_fr: 'Автоопределение сети (ФР)',
+  network_auto_both: 'Автоопределение сети (РС+ФР)',
+  network_conflict: 'Конфликт сети',
+  manual_resolution: 'Ручное разрешение',
+};
 
 const WorkstationDetails: React.FC = () => {
   const { token } = antTheme.useToken();
@@ -21,6 +37,8 @@ const WorkstationDetails: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [activeField, setActiveField] = useState<string | null>(null);
+  const [companySearch, setCompanySearch] = useState<string>('');
+  const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
   const user = useAuthStore((state) => state.user);
   const canEdit = canEditEquipment(user?.roles);
 
@@ -30,26 +48,42 @@ const WorkstationDetails: React.FC = () => {
     enabled: !!id,
   });
 
+  const { data: ownerHistoryRes } = useQuery({
+    queryKey: ['owner-history', 'Workstation', id],
+    queryFn: () => equipmentApi.getOwnerHistory('Workstation', id!, 200),
+    enabled: !!id,
+  });
+
+  const { data: companiesRes } = useQuery({
+    queryKey: ['companies-search', companySearch],
+    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    staleTime: 10_000,
+  });
+
   const updateMutation = useMutation({
     mutationFn: (values: UpdateWorkstationPayload) => equipmentApi.updateWorkstation(id!, values),
     onSuccess: () => {
       message.success('Данные обновлены');
       queryClient.invalidateQueries({ queryKey: ['workstation', id] });
+      queryClient.invalidateQueries({ queryKey: ['owner-history', 'Workstation', id] });
       setActiveField(null);
     },
     onError: () => message.error('Ошибка обновления'),
   });
 
-  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
-  if (!wsRes?.data) return <div>Рабочая станция не найдена</div>;
+  const ws = wsRes?.data;
+  const companyOptions = useMemo(() => (companiesRes?.data || []).map((item) => ({
+    value: String(item.id || ''),
+    title: String(item.title || item.additional_name || item.id || ''),
+    parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+  })).filter((item) => item.value && item.title), [companiesRes?.data]);
+  const agentUpdate = useMemo(() => (ws ? getAgentUpdateMeta(ws) : null), [ws]);
 
-  const ws = wsRes.data;
-  const agentUpdate = getAgentUpdateMeta(ws);
+  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
+  if (!ws) return <div>Рабочая станция не найдена</div>;
 
   const saveField = (field: keyof UpdateWorkstationPayload, value: string) => {
-    if (!canEdit) {
-      return;
-    }
+    if (!canEdit) return;
     setActiveField(field);
     updateMutation.mutate({ [field]: value } as UpdateWorkstationPayload);
   };
@@ -61,6 +95,24 @@ const WorkstationDetails: React.FC = () => {
       return;
     }
     navigate(-1);
+  };
+
+  const renderActor = (record: EntityOwnerHistoryItemDTO) => {
+    if (record.changed_by_user_id) {
+      return `Пользователь ${record.changed_by_user_id}`;
+    }
+    if (record.agent_uuid) {
+      if (record.observation_id) {
+        return (
+          <Space size={4}>
+            <span>{record.agent_uuid}</span>
+            <a onClick={() => setActiveObservationID(record.observation_id)}>событие #{record.observation_id}</a>
+          </Space>
+        );
+      }
+      return record.agent_uuid;
+    }
+    return '-';
   };
 
   return (
@@ -88,6 +140,22 @@ const WorkstationDetails: React.FC = () => {
 
       <Card title="Детали рабочей станции" className="glass-panel" size="small">
         <Descriptions bordered column={1} className="compact-descriptions">
+          <Descriptions.Item label="Владелец">
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <CompanySearchSelect
+                value={ws.owner_id}
+                options={companyOptions}
+                loading={updateMutation.isPending && activeField === 'owner_id'}
+                placeholder="Выберите компанию-владельца"
+                onSearch={setCompanySearch}
+                onChange={(value) => {
+                  if (!canEdit || !value) return;
+                  saveField('owner_id', value);
+                }}
+              />
+              <Text type="secondary">Режим привязки: {ws.owner_binding_mode || 'auto'}</Text>
+            </Space>
+          </Descriptions.Item>
           <Descriptions.Item label="Название устройства">
             <InlineFieldEditor value={ws.device_name} editable={canEdit} onSave={(v) => saveField('device_name', v)} saving={updateMutation.isPending && activeField === 'device_name'} />
           </Descriptions.Item>
@@ -105,9 +173,57 @@ const WorkstationDetails: React.FC = () => {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      <Card title="История изменений" className="glass-panel" size="small" style={{ marginTop: 16 }}>
+        <Table<EntityOwnerHistoryItemDTO>
+          rowKey="id"
+          pagination={{ pageSize: 10 }}
+          dataSource={ownerHistoryRes?.data || []}
+          columns={[
+            {
+              title: 'Время',
+              dataIndex: 'created_at',
+              key: 'created_at',
+              render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
+              width: 200,
+            },
+            {
+              title: 'Источник',
+              dataIndex: 'change_source',
+              key: 'change_source',
+              width: 220,
+              render: (value: string) => sourceLabelMap[value] || value || '-',
+            },
+            {
+              title: 'Владелец',
+              key: 'owners',
+              width: 320,
+              render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
+                const fromOwner = record.from_owner_id || '';
+                const toOwner = record.to_owner_id || '';
+                if (!fromOwner && !toOwner) return '-';
+                if (fromOwner && toOwner && fromOwner !== toOwner) return `${fromOwner} → ${toOwner}`;
+                return toOwner || fromOwner || '-';
+              },
+            },
+            {
+              title: 'Кто сделал',
+              key: 'actor',
+              render: (_: unknown, record: EntityOwnerHistoryItemDTO) => renderActor(record),
+              width: 260,
+            },
+            { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
+          ]}
+        />
+      </Card>
+
+      <AgentObservationRawModal
+        open={Boolean(activeObservationID)}
+        observationID={activeObservationID}
+        onClose={() => setActiveObservationID(undefined)}
+      />
     </div>
   );
 };
 
 export default WorkstationDetails;
-

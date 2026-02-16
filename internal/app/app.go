@@ -95,6 +95,8 @@ type Application struct {
 	BitrixWebhookHandler    *handlers.BitrixWebhookHandler
 	CandidateHandler        *handlers.CandidateHandler
 	NetworkCandidateHandler *handlers.NetworkCandidateHandler
+	OwnerHistoryHandler     *handlers.OwnerHistoryHandler
+	AgentObservationFeed    *handlers.AgentObservationFeedHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -345,9 +347,9 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo),
 		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
 		ContractService:         contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo),
-		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo),
-		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo),
+		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
+		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo, repos.OwnerHistoryRepo),
+		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo, repos.OwnerHistoryRepo),
 		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo),
 		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
@@ -411,6 +413,8 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation, srvs.CompanyService)
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
+	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
+	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
 }
 
 func setupIntegrationModules(app *Application, srvs Services) {
@@ -519,6 +523,9 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.NetworkCandidateHandler.Approve)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/groups/{groupID}/remove", a.NetworkCandidateHandler.RemoveGroup)
 		})
+
+		a.OwnerHistoryHandler.RegisterRoutes(r)
+		a.AgentObservationFeed.RegisterRoutes(r)
 
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)

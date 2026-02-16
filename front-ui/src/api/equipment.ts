@@ -1,6 +1,7 @@
 import apiClient from './axios';
 import { 
   ApiResponse, 
+  EntityOwnerHistoryItemDTO,
   ServerDetailDTO, 
   WorkstationDetailDTO, 
   FiscalDetailDTO,
@@ -66,6 +67,13 @@ export const equipmentApi = {
   
   updateFiscal: async (uuid: string, data: UpdateFiscalPayload) => {
     const response = await apiClient.put<ApiResponse<FiscalDetailDTO>>(`/fiscals/${uuid}`, data);
+    return response.data;
+  },
+
+  getOwnerHistory: async (entityType: 'Server' | 'Workstation' | 'FiscalRegister', entityID: string, limit = 100) => {
+    const response = await apiClient.get<ApiResponse<EntityOwnerHistoryItemDTO[]>>('/owner-history', {
+      params: { entity_type: entityType, entity_id: entityID, limit },
+    });
     return response.data;
   },
 };

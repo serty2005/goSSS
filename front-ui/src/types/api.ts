@@ -560,6 +560,8 @@ export interface FiscalDetailDTO {
   description?: string;
   
   licenses?: LicensesDict;
+  owner_id?: string;
+  owner_binding_mode?: 'auto' | 'manual';
 }
 
 export interface WorkstationDetailDTO {
@@ -573,6 +575,8 @@ export interface WorkstationDetailDTO {
   litemanager?: string;
   description?: string;
   health_status?: 'ok' | 'attention_required' | 'locked';
+  owner_id?: string;
+  owner_binding_mode?: 'auto' | 'manual';
 }
 
 export interface ServerDetailDTO {
@@ -600,6 +604,8 @@ export interface ServerDetailDTO {
   anydesk?: string;
   litemanager?: string;
   description?: string;
+  owner_id?: string;
+  owner_binding_mode?: 'auto' | 'manual';
 }
 
 // ... (предыдущие TaskDTO и прочее остаются)
@@ -634,6 +640,7 @@ export interface UpdateServerPayload {
   litemanager?: string;
   cabinet_link?: string;
   description?: string;
+  owner_id?: string;
 }
 
 export interface UpdateWorkstationPayload {
@@ -642,6 +649,7 @@ export interface UpdateWorkstationPayload {
   teamviewer?: string;
   litemanager?: string;
   description?: string;
+  owner_id?: string;
 }
 
 export interface UpdateFiscalPayload {
@@ -659,6 +667,7 @@ export interface UpdateFiscalPayload {
   address?: string;
   ofd_name?: string;
   description?: string;
+  owner_id?: string;
 }
 
 export interface ContractDetailDTO {
@@ -835,5 +844,58 @@ export interface NetworkCandidateApprovePayload {
     address?: string;
   };
   comment?: string;
+}
+
+export interface EntityOwnerHistoryItemDTO {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  from_owner_id?: string;
+  to_owner_id: string;
+  change_source: string;
+  comment?: string;
+  changed_by_user_id?: string;
+  actor_type?: 'user' | 'agent' | 'system';
+  agent_uuid?: string;
+  observation_id?: number;
+  created_at: string;
+  is_agent_update?: boolean;
+}
+
+export interface AgentObservationFeedRowDTO {
+  observation_id: number;
+  agent_uuid?: string;
+  workstation_id?: string;
+  fr_id?: string;
+  owner_match?: boolean;
+  observed_at: string;
+  current_time?: string;
+  v_time?: string;
+  current_time_parsed?: string;
+  v_time_parsed?: string;
+  server_url?: string;
+}
+
+export interface AgentListItemDTO {
+  uuid: string;
+  hostname?: string;
+  type?: string;
+  status?: string;
+  owner_id?: string;
+  workstation_id?: string;
+  last_observed_at?: string;
+  last_heartbeat?: string;
+}
+
+export interface AgentObservationDetailsDTO {
+  id: number;
+  source?: string;
+  status?: string;
+  observed_at?: string;
+  workstation_id?: string;
+  fr_id?: string;
+  payload_json?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
 }
 

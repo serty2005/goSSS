@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
@@ -14,19 +14,32 @@ const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const TICKET_STATUS_OPTIONS = [
-  { value: 'new', label: 'Новая' },
-  { value: 'in_progress', label: 'В работе' },
-  { value: 'pending', label: 'Ожидание' },
-  { value: 'deferred', label: 'Отложено' },
-  { value: 'onsite', label: 'На выезд' },
-  { value: 'to_manager', label: 'Передать менеджеру' },
-  { value: 'resolved', label: 'Решена' },
-  { value: 'spam', label: 'Спам' },
-  { value: 'execution', label: 'Реализация' },
-  { value: 'closed', label: 'Закрыта' },
+  { value: 'new', label: 'РќРѕРІР°СЏ' },
+  { value: 'in_progress', label: 'Р’ СЂР°Р±РѕС‚Рµ' },
+  { value: 'pending', label: 'РћР¶РёРґР°РЅРёРµ' },
+  { value: 'deferred', label: 'РћС‚Р»РѕР¶РµРЅРѕ' },
+  { value: 'onsite', label: 'РќР° РІС‹РµР·Рґ' },
+  { value: 'to_manager', label: 'РџРµСЂРµРґР°С‚СЊ РјРµРЅРµРґР¶РµСЂСѓ' },
+  { value: 'resolved', label: 'Р РµС€РµРЅР°' },
+  { value: 'spam', label: 'РЎРїР°Рј' },
+  { value: 'execution', label: 'Р РµР°Р»РёР·Р°С†РёСЏ' },
+  { value: 'closed', label: 'Р—Р°РєСЂС‹С‚Р°' },
 ];
 const ACTIVE_STATUS_VALUES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const LONGEST_STATUS_LABEL_WIDTH = 260;
+const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
+const TABLE_COLUMN_OPTIONS = [
+  { value: 'number', label: 'РќРѕРјРµСЂ' },
+  { value: 'status', label: 'РЎС‚Р°С‚СѓСЃ' },
+  { value: 'company_display', label: 'РљРѕРјРїР°РЅРёСЏ' },
+  { value: 'assignee_display', label: 'РСЃРїРѕР»РЅРёС‚РµР»СЊ' },
+  { value: 'subject', label: 'РўРµРјР°' },
+  { value: 'last_comment', label: 'РџРѕСЃР»РµРґРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№' },
+  { value: 'created_at', label: 'РЎРѕР·РґР°РЅРѕ' },
+  { value: 'last_activity', label: 'РћР±РЅРѕРІР»РµРЅРѕ' },
+  { value: 'sync_with_bitrix', label: 'B24' },
+];
+const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
 
 type TicketPreset = {
   id: string;
@@ -37,6 +50,7 @@ type TicketPreset = {
     assignee_ids?: string;
     period_from?: string;
     period_to?: string;
+    table_columns?: string;
   };
 };
 
@@ -86,6 +100,7 @@ const HeaderSearch: React.FC = () => {
   const isServersPage = location.pathname === '/servers';
   const isWorkstationsPage = location.pathname === '/workstations';
   const isFiscalsPage = location.pathname === '/fiscals';
+  const isAgentObservationsPage = location.pathname === '/agent-observations';
   const isSectionSearchPage = isCompaniesPage || isServersPage || isWorkstationsPage || isFiscalsPage;
   const screens = useBreakpoint();
   const isCompact = !screens.xl;
@@ -97,6 +112,7 @@ const HeaderSearch: React.FC = () => {
   const ticketStatus = ticketParams.get('status') || '';
   const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
   const ticketView = ticketParams.get('view') || 'list';
+  const ticketTableColumns = ticketParams.get('table_columns') || '';
   const ticketAssigneeIDs = ticketParams.get('assignee_ids') || '';
   const archiveMode = ticketParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
   const activeCompany = ticketParams.get('company') || undefined;
@@ -128,6 +144,13 @@ const HeaderSearch: React.FC = () => {
     return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const assigneeValues = useMemo(() => (ticketAssigneeIDs ? ticketAssigneeIDs.split(',').filter(Boolean) : []), [ticketAssigneeIDs]);
+  const selectedTableColumns = useMemo(() => {
+    if (!ticketTableColumns) {
+      return TABLE_COLUMN_KEYS;
+    }
+    const values = ticketTableColumns.split(',').filter((value) => TABLE_COLUMN_KEYS.includes(value));
+    return values.length ? values : TABLE_COLUMN_KEYS;
+  }, [ticketTableColumns]);
 
   const { data: filterRes, isFetching: isFiltersLoading } = useQuery({
     queryKey: ['ticket-filters', archiveMode, appliedSearch, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
@@ -221,13 +244,14 @@ const HeaderSearch: React.FC = () => {
       assignee_ids: preset.values.assignee_ids || undefined,
       period_from: preset.values.period_from || undefined,
       period_to: preset.values.period_to || undefined,
+      table_columns: preset.values.table_columns || undefined,
     });
   };
 
   const saveCurrentPreset = async () => {
     const name = presetName.trim();
     if (!name) {
-      message.warning('Введите имя фильтра');
+      message.warning('Р’РІРµРґРёС‚Рµ РёРјСЏ С„РёР»СЊС‚СЂР°');
       return;
     }
     if (!user) {
@@ -243,6 +267,7 @@ const HeaderSearch: React.FC = () => {
         assignee_ids: ticketAssigneeIDs || undefined,
         period_from: activePeriodFrom || undefined,
         period_to: activePeriodTo || undefined,
+        table_columns: ticketTableColumns || undefined,
       },
     };
 
@@ -264,9 +289,9 @@ const HeaderSearch: React.FC = () => {
       await updateProfileMutation.mutateAsync(nextConfig);
       setUser({ ...user, profile_config: nextConfig as any });
       setPresetName('');
-      message.success('Фильтр сохранён');
+      message.success('Р¤РёР»СЊС‚СЂ СЃРѕС…СЂР°РЅС‘РЅ');
     } catch {
-      message.error('Не удалось сохранить фильтр');
+      message.error('РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С„РёР»СЊС‚СЂ');
     }
   };
 
@@ -280,11 +305,11 @@ const HeaderSearch: React.FC = () => {
   }, [isSectionSearchPage, sectionTerm]);
 
   const sectionPlaceholder = (() => {
-    if (isCompaniesPage) return 'Поиск компаний: название, адрес, юр. название';
-    if (isServersPage) return 'Поиск серверов: id, ip, название';
-    if (isWorkstationsPage) return 'Поиск станций: id, название';
-    if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
-    return 'Поиск...';
+    if (isCompaniesPage) return 'РџРѕРёСЃРє РєРѕРјРїР°РЅРёР№: РЅР°Р·РІР°РЅРёРµ, Р°РґСЂРµСЃ, СЋСЂ. РЅР°Р·РІР°РЅРёРµ';
+    if (isServersPage) return 'РџРѕРёСЃРє СЃРµСЂРІРµСЂРѕРІ: id, ip, РЅР°Р·РІР°РЅРёРµ';
+    if (isWorkstationsPage) return 'РџРѕРёСЃРє СЃС‚Р°РЅС†РёР№: id, РЅР°Р·РІР°РЅРёРµ';
+    if (isFiscalsPage) return 'РџРѕРёСЃРє Р¤Р : id, РјРѕРґРµР»СЊ, Р РќРњ';
+    return 'РџРѕРёСЃРє...';
   })();
 
   const onSectionSearch = (value: string) => {
@@ -300,27 +325,92 @@ const HeaderSearch: React.FC = () => {
     navigate(query ? `${location.pathname}?${query}` : location.pathname);
   };
 
+  const [agentObservationParams] = useSearchParams();
+  const agentUUIDFilter = (agentObservationParams.get('agent_uuid') || agentObservationParams.get('agent') || '').trim();
+  const workstationFilter = (agentObservationParams.get('workstation_id') || '').trim();
+  const frFilter = (agentObservationParams.get('fr_id') || '').trim();
+  const pausedFilter = agentObservationParams.get('paused') === '1';
+
+  const buildAgentFilterTokens = () => {
+    const tokens: string[] = [];
+    if (agentUUIDFilter) tokens.push(`agent:${agentUUIDFilter}`);
+    if (workstationFilter) tokens.push(`ws:${workstationFilter}`);
+    if (frFilter) tokens.push(`fr:${frFilter}`);
+    return tokens;
+  };
+  const [agentFilterTokens, setAgentFilterTokens] = useState<string[]>(buildAgentFilterTokens());
+
+  useEffect(() => {
+    if (!isAgentObservationsPage) return;
+    setAgentFilterTokens(buildAgentFilterTokens());
+  }, [isAgentObservationsPage, agentUUIDFilter, workstationFilter, frFilter]);
+
+  const updateAgentObservationParams = (next: Record<string, string | undefined>) => {
+    const params = new URLSearchParams(agentObservationParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (!value) {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    });
+    const query = params.toString();
+    navigate(query ? `/agent-observations?${query}` : '/agent-observations');
+  };
+
+  const parseAgentFilterTokens = (tokens: string[]) => {
+    let nextAgent = '';
+    let nextWS = '';
+    let nextFR = '';
+    tokens.forEach((raw) => {
+      const token = String(raw || '').trim();
+      if (!token) return;
+      const [rawType, ...valueParts] = token.split(':');
+      const type = rawType.trim().toLowerCase();
+      const value = valueParts.join(':').trim();
+      if (!value) return;
+      if (type === 'agent') nextAgent = value;
+      if (type === 'ws' || type === 'workstation') nextWS = value;
+      if (type === 'fr' || type === 'fiscal') nextFR = value;
+    });
+    return { nextAgent, nextWS, nextFR };
+  };
+
   if (isTicketsPage) {
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
     const filterContent = (
       <Space direction="vertical" size="small" style={{ width: 420 }}>
-        <Select
-          value={ticketView}
-          onChange={(value) => updateTicketParams({ view: value })}
-          options={[
-            { value: 'list', label: 'Список' },
-            { value: 'cards', label: 'Карточки' },
-            { value: 'table', label: 'Таблица' },
-          ]}
-          style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
-        />
+        <Space style={{ width: '100%' }} align="start">
+          <Select
+            value={ticketView}
+            onChange={(value) => updateTicketParams({ view: value })}
+            options={[
+              { value: 'list', label: 'РЎРїРёСЃРѕРє' },
+              { value: 'cards', label: 'РљР°СЂС‚РѕС‡РєРё' },
+              { value: 'table', label: 'РўР°Р±Р»РёС†Р°' },
+            ]}
+            style={{ width: VIEW_SELECT_WIDTH, flexShrink: 0 }}
+          />
+          {ticketView === 'table' && (
+            <Select
+              mode="multiple"
+              value={selectedTableColumns}
+              onChange={(values) => updateTicketParams({
+                table_columns: values.length && values.length < TABLE_COLUMN_KEYS.length ? values.join(',') : undefined,
+              })}
+              options={TABLE_COLUMN_OPTIONS}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+          )}
+        </Space>
+
 
         {archiveMode !== 'archive' && (
           <>
             <Space style={{ width: LONGEST_STATUS_LABEL_WIDTH, justifyContent: 'space-between' }} align="start">
               <Select
                 mode="multiple"
-                placeholder="Статусы"
+                placeholder="РЎС‚Р°С‚СѓСЃС‹"
                 value={statusValues}
                 onChange={(values) => updateTicketParams({ status: values.length ? values.join(',') : undefined })}
                 options={TICKET_STATUS_OPTIONS}
@@ -330,12 +420,12 @@ const HeaderSearch: React.FC = () => {
                 checked={onlyActiveStatuses}
                 onChange={(event) => updateTicketParams({ only_active_statuses: event.target.checked ? '1' : undefined })}
               >
-                Активные
+                РђРєС‚РёРІРЅС‹Рµ
               </Checkbox>
             </Space>
             <Select
               mode="multiple"
-              placeholder="Сотрудники"
+              placeholder="РЎРѕС‚СЂСѓРґРЅРёРєРё"
               value={assigneeValues}
               onChange={(values) => updateTicketParams({ assignee_ids: values.length ? values.join(',') : undefined })}
               options={assigneeOptions}
@@ -360,7 +450,7 @@ const HeaderSearch: React.FC = () => {
         <Select
           showSearch
           allowClear
-          placeholder="Компания"
+          placeholder="РљРѕРјРїР°РЅРёСЏ"
           value={ticketCompany}
           onChange={(value) => updateTicketParams({ [companyParamKey]: value || undefined })}
           filterOption={(input, option) =>
@@ -376,7 +466,7 @@ const HeaderSearch: React.FC = () => {
           <>
             <Select
               allowClear
-              placeholder="Выбрать сохранённый фильтр"
+              placeholder="Р’С‹Р±СЂР°С‚СЊ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ С„РёР»СЊС‚СЂ"
               options={presets.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(value) => {
                 if (!value) return;
@@ -385,12 +475,12 @@ const HeaderSearch: React.FC = () => {
             />
             <Space.Compact style={{ width: '100%' }}>
               <Input
-                placeholder="Имя фильтра"
+                placeholder="РРјСЏ С„РёР»СЊС‚СЂР°"
                 value={presetName}
                 onChange={(event) => setPresetName(event.target.value)}
               />
               <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
-                Сохранить
+                РЎРѕС…СЂР°РЅРёС‚СЊ
               </Button>
             </Space.Compact>
           </>
@@ -407,6 +497,7 @@ const HeaderSearch: React.FC = () => {
               : {
                   status: undefined,
                   only_active_statuses: undefined,
+                  table_columns: undefined,
                   assignee_ids: undefined,
                   company: undefined,
                   period_from: undefined,
@@ -414,7 +505,7 @@ const HeaderSearch: React.FC = () => {
                 },
           )}
         >
-          Сбросить фильтры
+          РЎР±СЂРѕСЃРёС‚СЊ С„РёР»СЊС‚СЂС‹
         </Button>
       </Space>
     );
@@ -424,8 +515,8 @@ const HeaderSearch: React.FC = () => {
         <Segmented
           value={archiveMode}
           options={[
-            { value: 'active', label: 'В работе' },
-            { value: 'archive', label: 'Архив' },
+            { value: 'active', label: 'Р’ СЂР°Р±РѕС‚Рµ' },
+            { value: 'archive', label: 'РђСЂС…РёРІ' },
           ]}
           onChange={(value) => {
             const nextMode = value as 'active' | 'archive';
@@ -433,7 +524,7 @@ const HeaderSearch: React.FC = () => {
           }}
         />
         <Input.Search
-          placeholder="Поиск по заявкам..."
+          placeholder="РџРѕРёСЃРє РїРѕ Р·Р°СЏРІРєР°Рј..."
           allowClear
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
@@ -454,7 +545,7 @@ const HeaderSearch: React.FC = () => {
             navigate('/tickets?create=1');
           }}
         >
-          Новая заявка
+          РќРѕРІР°СЏ Р·Р°СЏРІРєР°
         </Button>
       </Space>
     );
@@ -473,10 +564,56 @@ const HeaderSearch: React.FC = () => {
     );
   }
 
+  if (isAgentObservationsPage) {
+    return (
+      <Space size="small" wrap style={{ justifyContent: 'center' }}>
+        <Select
+          mode="tags"
+          value={agentFilterTokens}
+          onChange={(values) => {
+            const normalized = values.map((item) => String(item || '').trim()).filter(Boolean);
+            setAgentFilterTokens(normalized);
+            const parsed = parseAgentFilterTokens(normalized);
+            updateAgentObservationParams({
+              agent_uuid: parsed.nextAgent || undefined,
+              agent: undefined,
+              workstation_id: parsed.nextWS || undefined,
+              fr_id: parsed.nextFR || undefined,
+            });
+          }}
+          tokenSeparators={[',']}
+          style={{ width: 520, maxWidth: '100%' }}
+          placeholder="Фильтры: agent:<uuid>, ws:<id>, fr:<id>"
+        />
+        <Space size={6}>
+          <Switch checked={pausedFilter} onChange={(checked) => updateAgentObservationParams({ paused: checked ? '1' : undefined })} />
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>Пауза списка</span>
+        </Space>
+        <Button onClick={() => updateAgentObservationParams({ refresh: String(Date.now()) })}>
+          Обновить
+        </Button>
+        <Button
+          onClick={() => {
+            setAgentFilterTokens([]);
+            updateAgentObservationParams({
+              agent_uuid: undefined,
+              agent: undefined,
+              workstation_id: undefined,
+              fr_id: undefined,
+            });
+          }}
+        >
+          Сброс фильтров
+        </Button>
+      </Space>
+    );
+  }
+
+
   return (
     <Space size="small">
       <Input.Search
-        placeholder="Поиск по IP, Serial, Name..."
+        placeholder="РџРѕРёСЃРє РїРѕ IP, Serial, Name..."
         allowClear
         value={searchTerm}
         onChange={(event) => setSearchTerm(event.target.value)}
@@ -486,11 +623,10 @@ const HeaderSearch: React.FC = () => {
       />
       <Space size={6}>
         <Switch size="small" checked={showInactive} onChange={onToggleShowInactive} />
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Без контракта</span>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Р‘РµР· РєРѕРЅС‚СЂР°РєС‚Р°</span>
       </Space>
     </Space>
   );
 };
 
 export default HeaderSearch;
-

@@ -52,8 +52,8 @@ type CandidateApproveInput struct {
 
 	Workstations []CandidateWorkstationInput
 
-	// Ручной ввод remote IDs (опционально).
-	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+	// Р учной ввод remote IDs (опционально).
+	// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ когда агент не собрал TeamViewer/LiteManager/AnyDesk.
 	// Приоритет: ручной ввод > значения из staging.
 	TeamviewerID  *string
 	LitemanagerID *string
@@ -68,7 +68,7 @@ type CandidateWorkstationInput struct {
 }
 
 // AgentObservationService определяет интерфейс для обработки наблюдений от агентов мониторинга.
-// Реализует паттерн Service Layer, скрывая сложную логику сопоставления и создания сущностей.
+// Р еализует паттерн Service Layer, скрывая сложную логику сопоставления и создания сущностей.
 type AgentObservationService interface {
 	// ApplyObservation обрабатывает данные, полученные от агента мониторинга.
 	// Выполняет поиск существующих сущностей, создание/обновление Workstation и FiscalRegister,
@@ -82,7 +82,7 @@ type AgentObservationService interface {
 
 // agentObservationRepo реализует логику обработки наблюдений от агентов.
 // Отвечает за:
-// - Регистрацию наблюдений с идемпотентностью по payload_hash
+// - Р егистрацию наблюдений с идемпотентностью по payload_hash
 // - Поиск существующих сущностей (Server, Workstation, FiscalRegister)
 // - Создание/обновление сущностей с защитой от устаревших данных
 // - Определение владельца для network-hub серверов
@@ -101,7 +101,7 @@ type negativeCacheEntry struct {
 	cachedAt time.Time
 }
 
-// negativeCache — thread-safe кэш для хранения отрицательных результатов поиска сервера.
+// negativeCache вЂ” thread-safe кэш для хранения отрицательных результатов поиска сервера.
 // Ключ: комбинация serverKey|normalizedRMS, значение: negativeCacheEntry с временем кэширования.
 type negativeCache struct {
 	entries sync.Map
@@ -135,7 +135,7 @@ func (c *negativeCache) set(key string) {
 }
 
 // buildNegativeCacheKey строит ключ кэша из serverKey и normalizedRMS.
-// Используется для идентификации уникального поискового запроса.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для идентификации уникального поискового запроса.
 func buildNegativeCacheKey(serverKey, normalizedRMS string) string {
 	return fmt.Sprintf("%s|%s", serverKey, normalizedRMS)
 }
@@ -181,10 +181,10 @@ func NewAgentObservationRepo(logger logger.LoggerInterface, db *gorm.DB, opts ..
 // 3. Проверка на локальный адрес (игнорируем 127.x, 10.x, 192.168.x, 172.16-31.x)
 // 4. Проверка на устаревшие данные (сравнение observed_at с agent.last_observed_at)
 // 5. Поиск сервера по CRM ID, server_key или IP/URL
-// 6. Если сервер — network-hub, попытка автоматического определения владельца
+// 6. Если сервер вЂ” network-hub, попытка автоматического определения владельца
 // 7. Поиск/создание Workstation по remote IDs (TeamViewer, LiteManager, AnyDesk)
 // 8. Поиск/создание FiscalRegister по серийному номеру
-// 9. Если сервер не найден или нет remote IDs — создание кандидата
+// 9. Если сервер не найден или нет remote IDs вЂ” создание кандидата
 //
 // Параметры:
 //   - ctx: контекст для отмены операции
@@ -207,7 +207,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		return nil, errors.New("пустой payload")
 	}
 
-	// Извлекаем trace_id из контекста для сквозной трассировки
+	// РР·РІР»РµРєР°РµРј trace_id из контекста для сквозной трассировки
 	traceID := contextkeys.GetTraceID(ctx)
 	if traceID == "" {
 		traceID = uuid.New().String()
@@ -342,7 +342,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 
 		// Обработка network-hub серверов (автоматическое определение владельца)
 		if srv != nil {
-			// Используем инжектированный HubDetector или fallback на inline метод
+			// РСЃРїРѕР»СЊР·СѓРµРј инжектированный HubDetector или fallback на inline метод
 			var isHub bool
 			var err error
 			if s.hubDetector != nil {
@@ -361,7 +361,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					"hub_company_id", ptrValue(srv.OwnerID),
 				)
 
-				// Используем инжектированный OwnerResolver или fallback на inline метод
+				// РСЃРїРѕР»СЊР·СѓРµРј инжектированный OwnerResolver или fallback на inline метод
 				var resolution *domainServices.OwnerResolution
 				hubCompanyID := strings.TrimSpace(ptrValue(srv.OwnerID))
 				if s.ownerResolver != nil {
@@ -418,7 +418,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					)
 
 					ownerRef := strPtr(resolution.OwnerID)
-					ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
+					ws, staleWS, err := s.applyWorkstation(tx, obs.ID, srv, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
 					if err != nil {
 						return fmt.Errorf("ошибка применения рабочей станции: %w", err)
 					}
@@ -431,9 +431,9 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					frApplied := false
 					frStale := false
 					if strings.TrimSpace(data.SerialNumber) != "" {
-						fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
+						fr, staleFR, err := s.applyFiscal(tx, obs.ID, srv, ws, data, observedAt, false, ownerRef, models.OwnerChangeSourceNetworkAuto, updater)
 						if err != nil {
-							return fmt.Errorf("ошибка применения ФР: %w", err)
+							return fmt.Errorf("ошибка применения Р¤Р : %w", err)
 						}
 						if fr != nil {
 							obs.FRID = &fr.ID
@@ -453,7 +453,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					return s.resolveConflicts(tx, obs)
 				}
 
-				// Невозможно автоматически определить владельца — создаем network-candidate
+				// Невозможно автоматически определить владельца вЂ” создаем network-candidate
 				nc, err := s.stageNetworkCandidate(tx, obs, data, observedAt, normalizedRMS, serverKey, srv)
 				if err != nil {
 					return fmt.Errorf("ошибка создания network-candidate: %w", err)
@@ -472,8 +472,8 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		// Создание кандидата для ручного подтверждения оператором.
 		//
 		// Это намеренное поведение в двух случаях:
-		// 1. srv == nil — сервер не найден в системе, требуется создание нового сервера
-		// 2. !hasRemoteID(data) — агент не собрал ни один remote ID (TeamViewer, LiteManager, AnyDesk).
+		// 1. srv == nil вЂ” сервер не найден в системе, требуется создание нового сервера
+		// 2. !hasRemoteID(data) вЂ” агент не собрал ни один remote ID (TeamViewer, LiteManager, AnyDesk).
 		//    Без remote ID невозможно идентифицировать рабочую станцию.
 		//    Администратор должен вручную указать remote IDs при принятии кандидата на АО.
 		if srv == nil || !hasRemoteID(data) {
@@ -485,7 +485,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 			case srv == nil:
 				reason = "сервер не найден в системе"
 			case !hasRemoteID(data):
-				reason = "отсутствуют remote IDs (TeamViewer/LiteManager/AnyDesk) — невозможно идентифицировать РС"
+				reason = "отсутствуют remote IDs (TeamViewer/LiteManager/AnyDesk) вЂ” невозможно идентифицировать Р С"
 			}
 
 			s.logger.Info("Создание кандидата для ручного подтверждения",
@@ -514,7 +514,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		}
 
 		// Стандартная обработка: создание/обновление Workstation и FiscalRegister
-		ws, staleWS, err := s.applyWorkstation(tx, srv, data, observedAt, false, nil, "", updater)
+		ws, staleWS, err := s.applyWorkstation(tx, obs.ID, srv, data, observedAt, false, nil, "", updater)
 		if err != nil {
 			return fmt.Errorf("ошибка применения рабочей станции: %w", err)
 		}
@@ -528,9 +528,9 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		frApplied := false
 		frStale := false
 		if strings.TrimSpace(data.SerialNumber) != "" {
-			fr, staleFR, err := s.applyFiscal(tx, srv, ws, data, observedAt, false, nil, "", updater)
+			fr, staleFR, err := s.applyFiscal(tx, obs.ID, srv, ws, data, observedAt, false, nil, "", updater)
 			if err != nil {
-				return fmt.Errorf("ошибка применения ФР: %w", err)
+				return fmt.Errorf("ошибка применения Р¤Р : %w", err)
 			}
 			if fr != nil {
 				obs.FRID = &fr.ID
@@ -584,8 +584,8 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 // 2. Создание или получение компании (по ID или создание новой)
 // 3. Создание или получение сервера (по ID, CRM ID или server_key)
 // 4. Обновление сервера данными от оператора
-// 5. Обработка всех staged-наблюдений (создание РС и ФР)
-// 6. Переименование РС по указанию оператора
+// 5. Обработка всех staged-наблюдений (создание Р С и Р¤Р )
+// 6. Переименование Р С по указанию оператора
 // 7. Обновление статуса кандидата на APPROVED
 // 8. Закрытие связанных задач сверки
 //
@@ -713,12 +713,12 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 				obsAt = parseObservedAt(payload.CurrentTime)
 			}
 			updater := resolveAgentUpdater(so.Source, &payload)
-			ws, _, err := s.applyWorkstation(tx, srv, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater)
+			ws, _, err := s.applyWorkstation(tx, so.ID, srv, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater)
 			if err != nil {
 				return err
 			}
 			if ws != nil && strings.TrimSpace(payload.SerialNumber) != "" {
-				if _, _, err := s.applyFiscal(tx, srv, ws, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater); err != nil {
+				if _, _, err := s.applyFiscal(tx, so.ID, srv, ws, &payload, obsAt, true, nil, models.OwnerChangeSourceCandidateApprove, updater); err != nil {
 					return err
 				}
 			}
@@ -769,7 +769,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		out.Status = models.CandidateStatusApproved
 		out.ApprovedCompanyID = strPtr(in.CompanyID)
 		out.ApprovedServerID = strPtr(approvedServerID)
-		s.logger.Info("Ручное подтверждение завершено",
+		s.logger.Info("Р учное подтверждение завершено",
 			"company_id", in.CompanyID,
 			"server_id", approvedServerID,
 		)
@@ -930,7 +930,7 @@ func (s *agentObservationRepo) renameApprovedWorkstations(tx *gorm.DB, candidate
 // 3. По ServerCRMID из входных параметров
 // 4. По ServerKey из кандидата
 //
-// Если сервер не найден — создается новая запись.
+// Если сервер не найден вЂ” создается новая запись.
 func (s *agentObservationRepo) ensureServer(tx *gorm.DB, c *models.Candidate, in CandidateApproveInput) (*server.Server, error) {
 	var srv server.Server
 	if in.ServerID != nil && strings.TrimSpace(*in.ServerID) != "" {
@@ -1077,7 +1077,7 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 		}
 	}
 
-	// Сервер не найден — сохраняем в кэше отрицательных результатов
+	// Сервер не найден вЂ” сохраняем в кэше отрицательных результатов
 	s.negativeCache.set(cacheKey)
 	s.logger.Debug("Сервер не найден",
 		"source", source,
@@ -1092,14 +1092,14 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 //
 // Алгоритм:
 // 1. Вычисление identity_hash (SHA256 от TeamViewer:LiteManager)
-// 2. Поиск существующей РС по identity_hash или remote IDs
+// 2. Поиск существующей Р С по identity_hash или remote IDs
 // 3. Проверка на устаревшие данные (observed_at < last_modified_date)
-// 4. Создание новой РС или обновление существующей
-// 5. При смене владельца — запись в owner_change_history
+// 4. Создание новой Р С или обновление существующей
+// 5. При смене владельца вЂ” запись в owner_change_history
 //
 // Параметры:
 //   - tx: транзакция БД
-//   - srv: сервер, к которому привязывается РС
+//   - srv: сервер, к которому привязывается Р С
 //   - data: данные от агента
 //   - observedAt: время наблюдения
 //   - forceOwner: принудительная смена владельца (при подтверждении кандидата)
@@ -1107,7 +1107,7 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 //   - ownerChangeSource: источник смены владельца для истории
 //
 // Возвращает:
-//   - *workstation.Workstation: созданная/обновленная РС
+//   - *workstation.Workstation: созданная/обновленная Р С
 //   - bool: true если данные устарели (stale)
 //   - error: ошибка БД
 //
@@ -1116,8 +1116,8 @@ func (s *agentObservationRepo) findServer(tx *gorm.DB, crmID, serverKey, normali
 //   - Если владельца нет: присваиваем владельца от сервера
 //   - Если binding!=manual и владелец отличается: обновляем владельца
 //   - Если binding=manual: не меняем владельца автоматически
-func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*workstation.Workstation, bool, error) {
-	// Вычисление identity_hash для поиска существующей РС
+func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint, srv *server.Server, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*workstation.Workstation, bool, error) {
+	// Вычисление identity_hash для поиска существующей Р С
 	identity := identityHash(data.TeamviewerID, data.LitemanagerID)
 
 	s.logger.Debug("Поиск рабочей станции",
@@ -1131,7 +1131,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 
 	ws, err := s.findWorkstation(tx, data, identity)
 	if err != nil {
-		return nil, false, fmt.Errorf("ошибка поиска РС: %w", err)
+		return nil, false, fmt.Errorf("ошибка поиска Р С: %w", err)
 	}
 
 	if ws == nil {
@@ -1141,7 +1141,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 	// Проверка на устаревшие данные
 	stale := ws.LastModifiedDate != nil && observedAt.Before(*ws.LastModifiedDate)
 	if stale {
-		s.logger.Info("Рабочая станция не обновлена: устаревшие данные",
+		s.logger.Info("Р абочая станция не обновлена: устаревшие данные",
 			"workstation_id", ws.ID,
 			"observed_at", observedAt.UTC().Format(time.RFC3339),
 			"last_modified", ws.LastModifiedDate.UTC().Format(time.RFC3339),
@@ -1172,7 +1172,14 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 		}
 
 		if err := tx.Create(ws).Error; err != nil {
-			return nil, false, fmt.Errorf("ошибка создания РС: %w", err)
+			return nil, false, fmt.Errorf("ошибка создания Р С: %w", err)
+		}
+		agentUUID := ""
+		if isUUID(updater) {
+			agentUUID = updater
+		}
+		if err := s.writeCreationEvent(tx, "Workstation", ws.ID, ptrValue(ws.OwnerID), ownerChangeSource, "Создание рабочей станции", agentUUID, observationID); err != nil {
+			return nil, false, fmt.Errorf("ошибка записи истории создания рабочей станции: %w", err)
 		}
 
 		s.logger.Info("Создана новая рабочая станция",
@@ -1197,7 +1204,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 		"identity_hash":      valOrNil(strPtr(identity)),
 	}
 
-	// Обновление имени устройства только если РС новая или имя пустое
+	// Обновление имени устройства только если Р С новая или имя пустое
 	if ws.IsNew || strings.TrimSpace(ptrValue(ws.DeviceName)) == "" {
 		updates["device_name"] = valOrNil(strPtr(strings.TrimSpace(data.Hostname)))
 	}
@@ -1225,10 +1232,10 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 	}
 
 	if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Updates(updates).Error; err != nil {
-		return nil, false, fmt.Errorf("ошибка обновления РС: %w", err)
+		return nil, false, fmt.Errorf("ошибка обновления Р С: %w", err)
 	}
 
-	// Обработка AnyDesk (уникальный ID — очищаем дубликаты)
+	// Обработка AnyDesk (уникальный ID вЂ” очищаем дубликаты)
 	if ad := normRIDPtr(data.AnydeskID); ad != nil {
 		res := tx.Model(&workstation.Workstation{}).Where("anydesk = ? AND id <> ?", *ad, ws.ID).Update("anydesk", nil)
 		if res.Error != nil {
@@ -1248,23 +1255,34 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 
 	// Получение обновленной записи
 	if err := tx.Where("id = ?", ws.ID).First(ws).Error; err != nil {
-		return nil, false, fmt.Errorf("ошибка получения обновленной РС: %w", err)
+		return nil, false, fmt.Errorf("ошибка получения обновленной Р С: %w", err)
+	}
+
+	newOwner := ptrValue(ws.OwnerID)
+	agentUUID := ""
+	if isUUID(updater) {
+		agentUUID = updater
 	}
 
 	// Запись истории смены владельца
-	if prevOwner != "" && targetOwner != "" && prevOwner != targetOwner && ownerChangeSource != "" {
-		if err := s.writeOwnerChange(tx, "Workstation", ws.ID, prevOwner, targetOwner, ownerChangeSource, "Смена владельца рабочей станции"); err != nil {
+	if prevOwner != "" && newOwner != "" && prevOwner != newOwner && ownerChangeSource != "" {
+		if err := s.writeOwnerChange(tx, "Workstation", ws.ID, prevOwner, newOwner, ownerChangeSource, "Смена владельца рабочей станции", agentUUID, observationID); err != nil {
 			return nil, false, fmt.Errorf("ошибка записи истории владельца: %w", err)
 		}
-		s.logger.Info("Зафиксирована смена владельца РС",
+		s.logger.Info("Зафиксирована смена владельца Р С",
 			"workstation_id", ws.ID,
 			"prev_owner_id", prevOwner,
-			"new_owner_id", targetOwner,
+			"new_owner_id", newOwner,
 			"source", ownerChangeSource,
 		)
 	}
+	if agentUUID != "" {
+		if err := s.writeAgentDataUpdate(tx, "Workstation", ws.ID, newOwner, agentUUID, "Обновление данных рабочей станции от агента", observationID); err != nil {
+			return nil, false, fmt.Errorf("ошибка записи истории агентского обновления: %w", err)
+		}
+	}
 
-	s.logger.Info("Рабочая станция обновлена",
+	s.logger.Info("Р абочая станция обновлена",
 		"workstation_id", ws.ID,
 		"server_id", srv.ID,
 		"owner_id", ptrValue(ws.OwnerID),
@@ -1279,15 +1297,15 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 //
 // Алгоритм:
 // 1. Нормализация серийного номера (uppercase, без пробелов)
-// 2. Поиск существующего ФР по normalized serial
+// 2. Поиск существующего Р¤Р  по normalized serial
 // 3. Проверка на устаревшие данные (observed_at < last_modified_date)
-// 4. Создание нового ФР или обновление существующего (Full Trust)
-// 5. При смене владельца — запись в owner_change_history
+// 4. Создание нового Р¤Р  или обновление существующего (Full Trust)
+// 5. При смене владельца вЂ” запись в owner_change_history
 //
 // Параметры:
 //   - tx: транзакция БД
-//   - srv: сервер, к которому привязывается ФР (через РС)
-//   - ws: рабочая станция, к которой привязывается ФР
+//   - srv: сервер, к которому привязывается Р¤Р  (через Р С)
+//   - ws: рабочая станция, к которой привязывается Р¤Р
 //   - data: данные от агента
 //   - observedAt: время наблюдения
 //   - forceOwner: принудительная смена владельца (при подтверждении кандидата)
@@ -1295,15 +1313,15 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, srv *server.Server,
 //   - ownerChangeSource: источник смены владельца для истории
 //
 // Возвращает:
-//   - *fiscal.FiscalRegister: созданный/обновленный ФР (nil если нет serial_number)
+//   - *fiscal.FiscalRegister: созданный/обновленный Р¤Р  (nil если нет serial_number)
 //   - bool: true если данные устарели (stale)
 //   - error: ошибка БД
 //
 // Особенности:
-//   - Full Trust: все поля ФР обновляются из данных агента безусловно
+//   - Full Trust: все поля Р¤Р  обновляются из данных агента безусловно
 //   - Серийный номер нормализуется для надежного поиска
-//   - ФР привязывается к РС, а не напрямую к серверу
-func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*fiscal.FiscalRegister, bool, error) {
+//   - Р¤Р  привязывается к Р С, а не напрямую к серверу
+func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv *server.Server, ws *workstation.Workstation, data *api.AgentDataDTO, observedAt time.Time, forceOwner bool, ownerOverride *string, ownerChangeSource string, updater string) (*fiscal.FiscalRegister, bool, error) {
 	// Нормализация серийного номера для поиска
 	sn := normalizeSerial(data.SerialNumber)
 	if sn == "" {
@@ -1320,7 +1338,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 	var fr fiscal.FiscalRegister
 	err := tx.Where("fr_serial_normalized = ?", sn).First(&fr).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, fmt.Errorf("ошибка поиска ФР: %w", err)
+		return nil, false, fmt.Errorf("ошибка поиска Р¤Р : %w", err)
 	}
 
 	// Определение целевого владельца
@@ -1359,7 +1377,14 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 		}
 
 		if err := tx.Create(&fr).Error; err != nil {
-			return nil, false, fmt.Errorf("ошибка создания ФР: %w", err)
+			return nil, false, fmt.Errorf("ошибка создания Р¤Р : %w", err)
+		}
+		agentUUID := ""
+		if isUUID(updater) {
+			agentUUID = updater
+		}
+		if err := s.writeCreationEvent(tx, "FiscalRegister", fr.ID, ptrValue(fr.OwnerID), ownerChangeSource, "Создание фискального регистратора", agentUUID, observationID); err != nil {
+			return nil, false, fmt.Errorf("ошибка записи истории создания фискального регистратора: %w", err)
 		}
 
 		s.logger.Info("Создан новый фискальный регистратор",
@@ -1385,7 +1410,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 		return &fr, true, nil
 	}
 
-	// Обновление существующего ФР (Full Trust — все поля обновляются)
+	// Обновление существующего Р¤Р  (Full Trust вЂ” все поля обновляются)
 	updates := map[string]interface{}{
 		"workstation_id":       ws.ID,
 		"fr_serial_number":     strings.TrimSpace(data.SerialNumber),
@@ -1425,26 +1450,37 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 	}
 
 	if err := tx.Model(&fiscal.FiscalRegister{}).Where("id = ?", fr.ID).Updates(updates).Error; err != nil {
-		return nil, false, fmt.Errorf("ошибка обновления ФР: %w", err)
+		return nil, false, fmt.Errorf("ошибка обновления Р¤Р : %w", err)
 	}
 
 	// Получение обновленной записи
 	if err := tx.Where("id = ?", fr.ID).First(&fr).Error; err != nil {
-		return nil, false, fmt.Errorf("ошибка получения обновленного ФР: %w", err)
+		return nil, false, fmt.Errorf("ошибка получения обновленного Р¤Р : %w", err)
+	}
+
+	newOwner := ptrValue(fr.OwnerID)
+	agentUUID := ""
+	if isUUID(updater) {
+		agentUUID = updater
 	}
 
 	// Запись истории смены владельца
-	if prevOwner != "" && targetOwner != "" && prevOwner != targetOwner && ownerChangeSource != "" {
-		if err := s.writeOwnerChange(tx, "FiscalRegister", fr.ID, prevOwner, targetOwner, ownerChangeSource, "Смена владельца фискального регистратора"); err != nil {
+	if prevOwner != "" && newOwner != "" && prevOwner != newOwner && ownerChangeSource != "" {
+		if err := s.writeOwnerChange(tx, "FiscalRegister", fr.ID, prevOwner, newOwner, ownerChangeSource, "Смена владельца фискального регистратора", agentUUID, observationID); err != nil {
 			return nil, false, fmt.Errorf("ошибка записи истории владельца: %w", err)
 		}
-		s.logger.Info("Зафиксирована смена владельца ФР",
+		s.logger.Info("Зафиксирована смена владельца Р¤Р ",
 			"fr_id", fr.ID,
 			"serial_number", ptrValue(fr.FRSerialNumber),
 			"prev_owner_id", prevOwner,
-			"new_owner_id", targetOwner,
+			"new_owner_id", newOwner,
 			"source", ownerChangeSource,
 		)
+	}
+	if agentUUID != "" {
+		if err := s.writeAgentDataUpdate(tx, "FiscalRegister", fr.ID, newOwner, agentUUID, "Обновление данных фискального регистратора от агента", observationID); err != nil {
+			return nil, false, fmt.Errorf("ошибка записи истории агентского обновления: %w", err)
+		}
 	}
 
 	s.logger.Info("Фискальный регистратор обновлен",
@@ -1461,7 +1497,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 // findWorkstation выполняет поиск рабочей станции по нескольким критериям.
 //
 // Порядок поиска:
-// 1. По identity_hash (SHA256 от TeamViewer:LiteManager) — самый надежный
+// 1. По identity_hash (SHA256 от TeamViewer:LiteManager) вЂ” самый надежный
 // 2. По TeamViewer ID
 // 3. По LiteManager ID
 // 4. По AnyDesk ID
@@ -1472,7 +1508,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, srv *server.Server, ws *
 //   - identityHashValue: предварительно вычисленный identity_hash
 //
 // Возвращает:
-//   - *workstation.Workstation: найденная РС или nil
+//   - *workstation.Workstation: найденная Р С или nil
 //   - error: ошибка БД (не включает ErrRecordNotFound)
 func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataDTO, identityHashValue string) (*workstation.Workstation, error) {
 	var ws workstation.Workstation
@@ -1480,7 +1516,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 	// 1. Поиск по identity_hash (наиболее надежный)
 	if identityHashValue != "" {
 		if err := tx.Where("identity_hash = ?", identityHashValue).First(&ws).Error; err == nil {
-			s.logger.Debug("РС найдена по identity_hash",
+			s.logger.Debug("Р С найдена по identity_hash",
 				"workstation_id", ws.ID,
 				"identity_hash", identityHashValue,
 				"owner_id", ptrValue(ws.OwnerID),
@@ -1492,7 +1528,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 	// 2. Поиск по TeamViewer ID
 	if tv := normRID(data.TeamviewerID); tv != "" {
 		if err := tx.Where("teamviewer = ?", tv).First(&ws).Error; err == nil {
-			s.logger.Debug("РС найдена по TeamViewer ID",
+			s.logger.Debug("Р С найдена по TeamViewer ID",
 				"workstation_id", ws.ID,
 				"teamviewer_id", tv,
 				"owner_id", ptrValue(ws.OwnerID),
@@ -1504,7 +1540,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 	// 3. Поиск по LiteManager ID
 	if lm := normRID(data.LitemanagerID); lm != "" {
 		if err := tx.Where("litemanager = ?", lm).First(&ws).Error; err == nil {
-			s.logger.Debug("РС найдена по LiteManager ID",
+			s.logger.Debug("Р С найдена по LiteManager ID",
 				"workstation_id", ws.ID,
 				"litemanager_id", lm,
 				"owner_id", ptrValue(ws.OwnerID),
@@ -1516,7 +1552,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 	// 4. Поиск по AnyDesk ID
 	if ad := normRID(data.AnydeskID); ad != "" {
 		if err := tx.Where("anydesk = ?", ad).First(&ws).Error; err == nil {
-			s.logger.Debug("РС найдена по AnyDesk ID",
+			s.logger.Debug("Р С найдена по AnyDesk ID",
 				"workstation_id", ws.ID,
 				"anydesk_id", ad,
 				"owner_id", ptrValue(ws.OwnerID),
@@ -1525,7 +1561,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 		}
 	}
 
-	s.logger.Debug("РС не найдена по remote IDs",
+	s.logger.Debug("Р С не найдена по remote IDs",
 		"identity_hash", identityHashValue,
 		"teamviewer_id", normRID(data.TeamviewerID),
 		"litemanager_id", normRID(data.LitemanagerID),
@@ -1537,15 +1573,15 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 // stage создает или обновляет кандидата для ручной обработки оператором.
 //
 // Вызывается когда:
-//   - Сервер не найден (srv == nil) — новый сервер, требуется создание
-//   - Нет remote IDs для идентификации РС (!hasRemoteID) — агент не собрал TeamViewer/LiteManager/AnyDesk.
+//   - Сервер не найден (srv == nil) вЂ” новый сервер, требуется создание
+//   - Нет remote IDs для идентификации Р С (!hasRemoteID) вЂ” агент не собрал TeamViewer/LiteManager/AnyDesk.
 //     Это нормальная ситуация: агент мог не обнаружить установленные программы удаленного доступа.
 //     Администратор должен вручную указать remote IDs при подтверждении кандидата на АО.
 //
 // Алгоритм:
 // 1. Поиск существующего кандидата по CRM ID или server_key
-// 2. Создание записи CandidateWorkstationStaging с данными РС
-// 3. Создание записи CandidateFiscalStaging с данными ФР (если есть serial_number)
+// 2. Создание записи CandidateWorkstationStaging с данными Р С
+// 3. Создание записи CandidateFiscalStaging с данными Р¤Р  (если есть serial_number)
 // 4. Создание/обновление задачи на подключение ТП
 //
 // Параметры:
@@ -1563,8 +1599,8 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 //
 // Создаваемые записи:
 //   - Candidate: основная запись кандидата (статус NEW)
-//   - CandidateWorkstationStaging: данные РС для просмотра оператором
-//   - CandidateFiscalStaging: данные ФР для просмотра оператором
+//   - CandidateWorkstationStaging: данные Р С для просмотра оператором
+//   - CandidateFiscalStaging: данные Р¤Р  для просмотра оператором
 //   - ReconciliationTask: задача на подключение ТП
 func (s *agentObservationRepo) stage(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string, srv *server.Server) (*models.Candidate, error) {
 	s.logger.Debug("Создание staging-записи для кандидата",
@@ -1611,8 +1647,8 @@ func (s *agentObservationRepo) stage(tx *gorm.DB, obs *models.AgentObservation, 
 // 1. По CRM ID (исключая подтвержденных)
 // 2. По server_key (исключая подтвержденных)
 //
-// Если кандидат найден — обновляет existing_server_id если он был пустым.
-// Если не найден — создает нового кандидата со статусом NEW.
+// Если кандидат найден вЂ” обновляет existing_server_id если он был пустым.
+// Если не найден вЂ” создает нового кандидата со статусом NEW.
 func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverKey, rms string, existingServerID *string) (*models.Candidate, error) {
 	var c models.Candidate
 	crmID = strings.TrimSpace(crmID)
@@ -1667,7 +1703,7 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 
 // upsertAgent создает или обновляет запись agent_instance.
 // Связывает агента с рабочей станцией и обновляет время последнего heartbeat.
-// Если агент не существует — создается новая запись со статусом ACTIVE.
+// Если агент не существует вЂ” создается новая запись со статусом ACTIVE.
 func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api.AgentDataDTO, wsID string, observedAt time.Time) error {
 	agentUUID := strings.TrimSpace(data.AgentUUID)
 	if agentUUID == "" && isUUID(source) {
@@ -1685,7 +1721,7 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 	}
 	if detachResult.RowsAffected > 0 {
 		s.logger.Info(
-			"Сброшены дублирующие привязки агентов к РС",
+			"Сброшены дублирующие привязки агентов к Р С",
 			"workstation_id", wsID,
 			"kept_agent_uuid", agentUUID,
 			"detached_agents_count", detachResult.RowsAffected,
@@ -1725,8 +1761,8 @@ func (s *agentObservationRepo) upsertAgent(tx *gorm.DB, source string, data *api
 }
 
 // createOrRefreshTask создает или обновляет задачу сверки (ReconciliationTask).
-// Если активная задача уже существует — обновляет details и comment.
-// Если нет — создает новую задачу со статусом "new".
+// Если активная задача уже существует вЂ” обновляет details и comment.
+// Если нет вЂ” создает новую задачу со статусом "new".
 func (s *agentObservationRepo) createOrRefreshTask(tx *gorm.DB, taskType, entityUUID, comment string, details map[string]interface{}) error {
 	var existing models.ReconciliationTask
 	err := tx.Where("task_type = ? AND entity_uuid = ? AND status IN ?", taskType, entityUUID, []string{"new", "pending_sd_action", "sd_error"}).Order("id desc").First(&existing).Error
@@ -1750,23 +1786,73 @@ func (s *agentObservationRepo) resolveConflicts(tx *gorm.DB, obs *models.AgentOb
 
 // writeOwnerChange записывает историю смены владельца сущности.
 // Не записывает если fromOwnerID или toOwnerID пустые или равны.
-func (s *agentObservationRepo) writeOwnerChange(tx *gorm.DB, entityType, entityID, fromOwnerID, toOwnerID, source, comment string) error {
+func (s *agentObservationRepo) writeOwnerChange(tx *gorm.DB, entityType, entityID, fromOwnerID, toOwnerID, source, comment, agentUUID string, observationID uint) error {
 	if strings.TrimSpace(fromOwnerID) == "" || strings.TrimSpace(toOwnerID) == "" || strings.TrimSpace(fromOwnerID) == strings.TrimSpace(toOwnerID) {
 		return nil
 	}
 	record := models.OwnerChangeHistory{
-		EntityType:   entityType,
-		EntityID:     entityID,
-		FromOwnerID:  strPtr(fromOwnerID),
-		ToOwnerID:    strings.TrimSpace(toOwnerID),
-		ChangeSource: strings.TrimSpace(source),
-		Comment:      strPtr(comment),
+		EntityType:    entityType,
+		EntityID:      entityID,
+		FromOwnerID:   strPtr(fromOwnerID),
+		ToOwnerID:     strings.TrimSpace(toOwnerID),
+		ChangeSource:  strings.TrimSpace(source),
+		Comment:       strPtr(comment),
+		AgentUUID:     strPtr(agentUUID),
+		ObservationID: uintPtrOrNil(observationID),
 	}
 	return tx.Create(&record).Error
 }
 
+func (s *agentObservationRepo) writeAgentDataUpdate(tx *gorm.DB, entityType, entityID, ownerID, agentUUID, comment string, observationID uint) error {
+	ownerID = strings.TrimSpace(ownerID)
+	agentUUID = strings.TrimSpace(agentUUID)
+	if ownerID == "" || agentUUID == "" {
+		return nil
+	}
+	record := models.OwnerChangeHistory{
+		EntityType:    entityType,
+		EntityID:      entityID,
+		FromOwnerID:   strPtr(ownerID),
+		ToOwnerID:     ownerID,
+		ChangeSource:  models.OwnerChangeSourceAgentDataUpdate,
+		Comment:       strPtr(comment),
+		AgentUUID:     strPtr(agentUUID),
+		ObservationID: uintPtrOrNil(observationID),
+	}
+	return tx.Create(&record).Error
+}
+
+func (s *agentObservationRepo) writeCreationEvent(tx *gorm.DB, entityType, entityID, ownerID, source, comment, agentUUID string, observationID uint) error {
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return nil
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = models.OwnerChangeSourceCreated
+	}
+	record := models.OwnerChangeHistory{
+		EntityType:    entityType,
+		EntityID:      entityID,
+		ToOwnerID:     ownerID,
+		ChangeSource:  source,
+		Comment:       strPtr(comment),
+		AgentUUID:     strPtr(strings.TrimSpace(agentUUID)),
+		ObservationID: uintPtrOrNil(observationID),
+	}
+	return tx.Create(&record).Error
+}
+
+func uintPtrOrNil(value uint) *uint {
+	if value == 0 {
+		return nil
+	}
+	out := value
+	return &out
+}
+
 // isNetworkHubServer проверяет, является ли сервер network-hub.
-// Network-hub — это сервер, владелец которого имеет owner_mode = "network_hub".
+// Network-hub вЂ” это сервер, владелец которого имеет owner_mode = "network_hub".
 // Такие серверы автоматически распределяют наблюдения по дочерним компаниям.
 func (s *agentObservationRepo) isNetworkHubServer(tx *gorm.DB, srv *server.Server) (bool, error) {
 	if srv == nil || srv.OwnerID == nil || strings.TrimSpace(*srv.OwnerID) == "" {
@@ -1786,10 +1872,10 @@ func (s *agentObservationRepo) isNetworkHubServer(tx *gorm.DB, srv *server.Serve
 //
 // Алгоритм:
 // 1. Получение списка дочерних компаний hub-компании
-// 2. Поиск существующего ФР по серийному номеру среди дочерних компаний
-// 3. Поиск существующей РС по remote IDs среди дочерних компаний
-// 4. Если найден ровно один уникальный владелец — возвращаем его с confident=true
-// 5. Если найдено 0 или >1 владельцев — возвращаем confident=false
+// 2. Поиск существующего Р¤Р  по серийному номеру среди дочерних компаний
+// 3. Поиск существующей Р С по remote IDs среди дочерних компаний
+// 4. Если найден ровно один уникальный владелец вЂ” возвращаем его с confident=true
+// 5. Если найдено 0 или >1 владельцев вЂ” возвращаем confident=false
 //
 // Параметры:
 //   - tx: транзакция БД
@@ -1802,10 +1888,10 @@ func (s *agentObservationRepo) isNetworkHubServer(tx *gorm.DB, srv *server.Serve
 //   - error: ошибка БД
 //
 // Логика скоринга:
-//   - ФР с совпадающим serial дает кандидата на владельца
-//   - РС с совпадающим remote ID дает кандидата на владельца
-//   - Если все кандидаты указывают на одну компанию — автоматическое присвоение
-//   - Если кандидаты указывают на разные компании — требуется ручной выбор
+//   - Р¤Р  с совпадающим serial дает кандидата на владельца
+//   - Р С с совпадающим remote ID дает кандидата на владельца
+//   - Если все кандидаты указывают на одну компанию вЂ” автоматическое присвоение
+//   - Если кандидаты указывают на разные компании вЂ” требуется ручной выбор
 func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID string, data *api.AgentDataDTO) (string, bool, error) {
 	if strings.TrimSpace(hubCompanyID) == "" {
 		return "", false, nil
@@ -1841,21 +1927,21 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 	// Сбор кандидатов на владельца
 	owners := map[string]struct{}{}
 
-	// Поиск ФР по серийному номеру среди дочерних компаний
+	// Поиск Р¤Р  по серийному номеру среди дочерних компаний
 	if sn := normalizeSerial(data.SerialNumber); sn != "" {
 		var fr fiscal.FiscalRegister
 		if err := tx.Where("fr_serial_normalized = ? AND owner_id IN ?", sn, childIDs).First(&fr).Error; err == nil && fr.OwnerID != nil {
 			owners[strings.TrimSpace(*fr.OwnerID)] = struct{}{}
-			s.logger.Debug("Найден ФР среди дочерних компаний",
+			s.logger.Debug("Найден Р¤Р  среди дочерних компаний",
 				"serial_normalized", sn,
 				"fr_owner_id", ptrValue(fr.OwnerID),
 			)
 		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", false, fmt.Errorf("ошибка поиска ФР: %w", err)
+			return "", false, fmt.Errorf("ошибка поиска Р¤Р : %w", err)
 		}
 	}
 
-	// Поиск РС по remote IDs среди дочерних компаний
+	// Поиск Р С по remote IDs среди дочерних компаний
 	conditions := []string{}
 	values := []interface{}{}
 	if tv := normRID(data.TeamviewerID); tv != "" {
@@ -1874,7 +1960,7 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 	if len(conditions) > 0 {
 		var list []workstation.Workstation
 		if err := tx.Where("owner_id IN ?", childIDs).Where(strings.Join(conditions, " OR "), values...).Find(&list).Error; err != nil {
-			return "", false, fmt.Errorf("ошибка поиска РС: %w", err)
+			return "", false, fmt.Errorf("ошибка поиска Р С: %w", err)
 		}
 		for i := range list {
 			if list[i].OwnerID != nil && strings.TrimSpace(*list[i].OwnerID) != "" {
@@ -1882,7 +1968,7 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 			}
 		}
 		if len(list) > 0 {
-			s.logger.Debug("Найдены РС среди дочерних компаний",
+			s.logger.Debug("Найдены Р С среди дочерних компаний",
 				"workstations_count", len(list),
 				"unique_owners", len(owners),
 			)
@@ -1898,7 +1984,7 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 		return "", false, nil
 	}
 
-	// Извлечение единственного владельца
+	// РР·РІР»РµС‡РµРЅРёРµ единственного владельца
 	for ownerID := range owners {
 		s.logger.Info("Владелец автоматически определен",
 			"hub_company_id", hubCompanyID,
@@ -1914,15 +2000,15 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 // stageNetworkCandidate создает или обновляет network-кандидата для network-hub сервера.
 //
 // Вызывается когда:
-//   - Сервер найден и является network-hub (владелец — hub-компания)
+//   - Сервер найден и является network-hub (владелец вЂ” hub-компания)
 //   - Автоматическое определение владельца невозможно (0 или >1 кандидатов)
 //
 // Алгоритм:
 // 1. Поиск существующего NetworkCandidate по hub_company_id и server_id
 // 2. Создание новой записи NetworkCandidate если не найдена
 // 3. Создание NetworkCandidateGroup для связи с наблюдением
-// 4. Создание записей NetworkCandidateWSStaging с данными РС
-// 5. Создание записей NetworkCandidateFRStaging с данными ФР
+// 4. Создание записей NetworkCandidateWSStaging с данными Р С
+// 5. Создание записей NetworkCandidateFRStaging с данными Р¤Р
 //
 // Параметры:
 //   - tx: транзакция БД
@@ -1940,7 +2026,7 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 // Особенности:
 //   - NetworkCandidate группирует наблюдения от одного hub-сервера
 //   - Оператор должен вручную выбрать компанию-владельца из дочерних компаний hub-а
-//   - После выбора владельца создаются РС и ФР с указанным владельцем
+//   - После выбора владельца создаются Р С и Р¤Р  с указанным владельцем
 func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS, serverKey string, srv *server.Server) (*models.NetworkCandidate, error) {
 	if srv == nil || srv.OwnerID == nil || strings.TrimSpace(*srv.OwnerID) == "" {
 		s.logger.Error("Ошибка создания network-candidate: сервер или владелец не найдены",
@@ -2056,7 +2142,7 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 //
 // Вызывается когда:
 //   - Сервер найден и является network-hub
-//   - OwnerResolver обнаружил конфликт (WS и ФР указывают на разные компании)
+//   - OwnerResolver обнаружил конфликт (WS и Р¤Р  указывают на разные компании)
 //
 // Алгоритм аналогичен stageNetworkCandidate, но дополнительно:
 //   - Сохраняет информацию о конфликте в поле ConflictInfo
@@ -2109,10 +2195,10 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 		// Формируем описание конфликта
 		parts := []string{}
 		if resolution.WSMatch != nil {
-			parts = append(parts, fmt.Sprintf("РС найдена у владельца %s (по %s)", resolution.WSMatch.OwnerID, resolution.WSMatch.MatchBy))
+			parts = append(parts, fmt.Sprintf("Р С найдена у владельца %s (по %s)", resolution.WSMatch.OwnerID, resolution.WSMatch.MatchBy))
 		}
 		if resolution.FRMatch != nil {
-			parts = append(parts, fmt.Sprintf("ФР найден у владельца %s (по %s)", resolution.FRMatch.OwnerID, resolution.FRMatch.MatchBy))
+			parts = append(parts, fmt.Sprintf("Р¤Р  найден у владельца %s (по %s)", resolution.FRMatch.OwnerID, resolution.FRMatch.MatchBy))
 		}
 		conflictInfoStr = strings.Join(parts, "; ")
 	}
@@ -2229,7 +2315,7 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 
 // isStaleByAgentStream проверяет, являются ли данные устаревшими по сравнению
 // с последним наблюдением от того же агента.
-// Используется для защиты от обработки старых данных при восстановлении связи.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для защиты от обработки старых данных при восстановлении связи.
 // Возвращает (true, lastObservedAt) если observedAt < lastObservedAt.
 func (s *agentObservationRepo) isStaleByAgentStream(tx *gorm.DB, source string, data *api.AgentDataDTO, observedAt time.Time) (bool, time.Time, error) {
 	agentUUID := strings.TrimSpace(data.AgentUUID)
@@ -2255,7 +2341,7 @@ func (s *agentObservationRepo) isStaleByAgentStream(tx *gorm.DB, source string, 
 
 // parseObservedAt парсит время наблюдения из строки агента.
 // Поддерживает форматы: "2006-01-02 15:04:05", RFC3339, RFC3339Nano, "2006-01-02T15:04:05".
-// Если строка пустая или невалидная — возвращает текущее время UTC.
+// Если строка пустая или невалидная вЂ” возвращает текущее время UTC.
 func parseObservedAt(v string) time.Time {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -2289,7 +2375,7 @@ func parseDate(v string) *time.Time {
 }
 
 // normalizeRMS нормализует URL/IP сервера RMS.
-// Извлекает хост и порт, добавляет порт 8080 если не указан.
+// РР·РІР»РµРєР°РµС‚ хост и порт, добавляет порт 8080 если не указан.
 // Примеры: "SERVER.DOMAIN.RU:443" -> "server.domain.ru:443", "192.168.1.1" -> "192.168.1.1:8080"
 func normalizeRMS(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -2343,7 +2429,7 @@ func isLocalRMS(rms string) bool {
 }
 
 // buildServerKey генерирует UUID v5 (SHA1) на основе нормализованного URL.
-// Используется для идентификации сервера при отсутствии CRM ID.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для идентификации сервера при отсутствии CRM ID.
 func buildServerKey(rms string) string {
 	rms = strings.TrimSpace(strings.ToLower(rms))
 	if rms == "" {
@@ -2352,7 +2438,7 @@ func buildServerKey(rms string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(rms)).String()
 }
 
-// normalizeSerial нормализует серийный номер ФР.
+// normalizeSerial нормализует серийный номер Р¤Р .
 // Приводит к верхнему регистру и удаляет пробелы.
 // Пример: "123 456 789" -> "123456789"
 func normalizeSerial(v string) string {
@@ -2388,20 +2474,20 @@ func normRIDPtr(v string) *string {
 //   - AnyDesk ID (anydesk_id)
 //
 // Возвращает true, если хотя бы один ID присутствует.
-// Если все ID отсутствуют — создание РС невозможно, наблюдение отправляется в staging.
+// Если все ID отсутствуют вЂ” создание Р С невозможно, наблюдение отправляется в staging.
 // В этом случае администратор должен вручную указать remote IDs при подтверждении кандидата.
 func hasRemoteID(data *api.AgentDataDTO) bool {
 	return normRID(data.TeamviewerID) != "" || normRID(data.LitemanagerID) != "" || normRID(data.AnydeskID) != ""
 }
 
-// resolveStageWorkstationID ищет уже существующую РС по remote IDs и
+// resolveStageWorkstationID ищет уже существующую Р С по remote IDs и
 // возвращает ее реальный ID для сохранения в staging.
-// Если РС не найдена, возвращает nil.
+// Если Р С не найдена, возвращает nil.
 func (s *agentObservationRepo) resolveStageWorkstationID(tx *gorm.DB, data *api.AgentDataDTO) (*string, error) {
 	identity := identityHash(data.TeamviewerID, data.LitemanagerID)
 	ws, err := s.findWorkstation(tx, data, identity)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка поиска РС для staging: %w", err)
+		return nil, fmt.Errorf("ошибка поиска Р С для staging: %w", err)
 	}
 	if ws == nil {
 		return nil, nil
@@ -2414,7 +2500,7 @@ func (s *agentObservationRepo) resolveStageWorkstationID(tx *gorm.DB, data *api.
 }
 
 // identityHash вычисляет SHA256 хеш от пары TeamViewer:LiteManager.
-// Используется для поиска существующей РС по identity_hash.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для поиска существующей Р С по identity_hash.
 func identityHash(tv, lm string) string {
 	tv = normRID(tv)
 	lm = normRID(lm)
@@ -2426,7 +2512,7 @@ func identityHash(tv, lm string) string {
 }
 
 // payloadDigest вычисляет SHA256 хеш от всего payload и возвращает JSON.
-// Используется для идемпотентности — дубликаты по хешу пропускаются.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для идемпотентности вЂ” дубликаты по хешу пропускаются.
 func payloadDigest(data *api.AgentDataDTO) (string, datatypes.JSON, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -2473,7 +2559,7 @@ func strPtr(v string) *string {
 }
 
 // valOrNil возвращает значение указателя или nil для пустой строки.
-// Используется для GORM Updates — nil означает "не обновлять поле".
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ для GORM Updates вЂ” nil означает "не обновлять поле".
 func valOrNil(v *string) interface{} {
 	if v == nil || strings.TrimSpace(*v) == "" {
 		return nil

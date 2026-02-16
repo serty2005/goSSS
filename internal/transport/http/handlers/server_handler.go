@@ -188,6 +188,7 @@ func toServerResponse(item server.Server) map[string]interface{} {
 		"server_version":     item.ServerVersion,
 		"description":        item.Description,
 		"owner_id":           item.OwnerID,
+		"owner_binding_mode": item.OwnerBindingMode,
 		"additional_owners":  item.AdditionalOwners,
 		"server_name":        item.ServerName,
 		"server_edition":     item.ServerEdition,

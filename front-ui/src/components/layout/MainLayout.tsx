@@ -295,6 +295,7 @@ const MainLayout: React.FC = () => {
   if (canAccessAcceptance) {
     menuItems.splice(3, 0, { key: '/acceptance', icon: <AuditOutlined />, label: 'Принятие на АО' });
     menuItems.splice(4, 0, { key: '/network-acceptance', icon: <AuditOutlined />, label: 'Принятие в сеть' });
+    menuItems.splice(5, 0, { key: '/agent-observations', icon: <AuditOutlined />, label: 'Наблюдения агентов' });
   }
   if (isAdmin) {
     menuItems.splice(1, 0, { key: '/tasks', icon: <CheckSquareOutlined />, label: 'Задачи' });

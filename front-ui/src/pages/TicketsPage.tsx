@@ -87,6 +87,10 @@ const isClosedLikeStatus = (status?: string) => status === 'resolved' || status 
 const ACTIVE_STATUS_VALUES: TicketStatus[] = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const DATE_STAMP_MIN_WIDTH = '10ch';
 const TIME_STAMP_MIN_WIDTH = '5ch';
+const TABLE_COLUMN_KEYS = ['number', 'status', 'company_display', 'assignee_display', 'subject', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
+type TableColumnKey = (typeof TABLE_COLUMN_KEYS)[number];
+type TableSortKey = 'number' | 'assignee_display' | 'created_at' | 'last_activity';
+type TableSortOrder = 'asc' | 'desc';
 
 const formatDateStamp = (value?: string) => ({
   date: value ? dayjs(value).format('DD.MM.YYYY') : '-',
@@ -232,6 +236,8 @@ const TicketsPage: React.FC = () => {
 
   const q = searchParams.get('q') || '';
   const status = searchParams.get('status') || '';
+  const tableColumnsParam = searchParams.get('table_columns') || '';
+  const tableSortParam = searchParams.get('table_sort') || '';
   const onlyActiveStatuses = searchParams.get('only_active_statuses') === '1';
   const assigneeIDs = searchParams.get('assignee_ids') || '';
   const archiveMode = searchParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
@@ -263,6 +269,28 @@ const TicketsPage: React.FC = () => {
     return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const effectiveStatus = effectiveStatusValues.join(',');
+  const selectedTableColumnKeys = useMemo<TableColumnKey[]>(() => {
+    if (!tableColumnsParam) {
+      return [...TABLE_COLUMN_KEYS];
+    }
+    const values = tableColumnsParam
+      .split(',')
+      .filter((value): value is TableColumnKey => (TABLE_COLUMN_KEYS as readonly string[]).includes(value));
+    return values.length ? values : [...TABLE_COLUMN_KEYS];
+  }, [tableColumnsParam]);
+  const tableSort = useMemo<{ key: TableSortKey; order: TableSortOrder } | null>(() => {
+    if (!tableSortParam) {
+      return null;
+    }
+    const [rawKey, rawOrder] = tableSortParam.split(':');
+    if (
+      (rawKey === 'number' || rawKey === 'assignee_display' || rawKey === 'created_at' || rawKey === 'last_activity')
+      && (rawOrder === 'asc' || rawOrder === 'desc')
+    ) {
+      return { key: rawKey, order: rawOrder };
+    }
+    return null;
+  }, [tableSortParam]);
 
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
     queryKey: ['tickets', {
@@ -447,7 +475,7 @@ const TicketsPage: React.FC = () => {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, tickets.length]);
 
-  const tableData = useMemo(
+  const tableDataBase = useMemo(
     () =>
       visibleTickets.map((ticket) => ({
         ...ticket,
@@ -457,6 +485,26 @@ const TicketsPage: React.FC = () => {
       })),
     [visibleTickets],
   );
+  const tableData = useMemo(() => {
+    if (!tableSort) {
+      return tableDataBase;
+    }
+    const factor = tableSort.order === 'asc' ? 1 : -1;
+    return [...tableDataBase].sort((a, b) => {
+      switch (tableSort.key) {
+        case 'number':
+          return ((a.number || 0) - (b.number || 0)) * factor;
+        case 'assignee_display':
+          return String(a.assignee_display || '').localeCompare(String(b.assignee_display || ''), 'ru') * factor;
+        case 'created_at':
+          return (dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()) * factor;
+        case 'last_activity':
+          return (dayjs(a.last_activity).valueOf() - dayjs(b.last_activity).valueOf()) * factor;
+        default:
+          return 0;
+      }
+    });
+  }, [tableDataBase, tableSort]);
 
   type TableRow = (typeof tableData)[number];
 
@@ -652,18 +700,68 @@ const TicketsPage: React.FC = () => {
     });
   };
 
-  const tableColumns = tableColumnsState.map((col, index) => ({
-    ...col,
-    onHeaderCell: () => ({
-      id: col.key as string,
-      width: col.width,
-      minWidth: (col as { minWidth?: number }).minWidth || 90,
-      onResize: handleResize(index),
-      onResizeStart: () => setIsResizingColumn(true),
-      onResizeStop: () => setIsResizingColumn(false),
-      isResizing: isResizingColumn,
-    }),
-  }));
+  function applyTableSort(key: TableSortKey) {
+    const params = new URLSearchParams(searchParams);
+    const nextOrder: TableSortOrder | null =
+      tableSort?.key !== key ? 'asc' : tableSort.order === 'asc' ? 'desc' : null;
+    if (!nextOrder) {
+      params.delete('table_sort');
+    } else {
+      params.set('table_sort', `${key}:${nextOrder}`);
+    }
+    params.set('page', '1');
+    setSearchParams(params);
+  }
+
+  function renderSortableTitle(label: string, key: TableSortKey) {
+    const order = tableSort?.key === key ? tableSort.order : null;
+    return (
+      <Space size={4}>
+        <span>{label}</span>
+        <Button
+          size="small"
+          type="text"
+          onClick={(event) => {
+            event.stopPropagation();
+            applyTableSort(key);
+          }}
+        >
+          {order === 'asc' ? '↑' : order === 'desc' ? '↓' : '↕'}
+        </Button>
+      </Space>
+    );
+  }
+
+  const tableColumnsVisibleState = tableColumnsState.filter((col) =>
+    selectedTableColumnKeys.includes(String(col.key) as TableColumnKey),
+  );
+  const tableColumns = tableColumnsVisibleState.map((col) => {
+    const columnKey = String(col.key);
+    const stateIndex = tableColumnsState.findIndex((item) => item.key === col.key);
+    const sortableLabel =
+      columnKey === 'number'
+        ? 'Номер'
+        : columnKey === 'assignee_display'
+          ? 'Исполнитель'
+          : columnKey === 'created_at'
+            ? 'Создано'
+            : columnKey === 'last_activity'
+              ? 'Обновлено'
+              : null;
+    return {
+      ...col,
+      title: sortableLabel ? renderSortableTitle(sortableLabel, columnKey as TableSortKey) : col.title,
+      onHeaderCell: () => ({
+        id: col.key as string,
+        width: col.width,
+        minWidth: (col as { minWidth?: number }).minWidth || 90,
+        onResize: handleResize(stateIndex),
+        onResizeStart: () => setIsResizingColumn(true),
+        onResizeStop: () => setIsResizingColumn(false),
+        isResizing: isResizingColumn,
+      }),
+    };
+  });
 
   const applyAssigneeFilter = (assigneeID?: number) => {
     if (!assigneeID) return;
@@ -735,27 +833,42 @@ const TicketsPage: React.FC = () => {
                             onClick={(event) => event.stopPropagation()}
                           />
                         </div>
-                        <div className="ticket-card-assignee-wrap">
+                        <div className="ticket-company-centered ticket-company-top">
+                          {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
                           <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
                             <a
                               className="ticket-assignee-linklike"
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                applyAssigneeFilter(item.assignee?.id);
                               }}
                             >
-                              {item.assignee?.full_name || 'Не назначен'}
+                              {item.company_name || item.company_id}
                             </a>
                           </Popover>
                         </div>
-                        <Space size={4}>
-                          <Tag color={meta.color}>{meta.label}</Tag>
-                          {item.is_common_contract && <Tag color="gold">Платный</Tag>}
-                        </Space>
+                        <div className="ticket-card-right">
+                          <Space size={4} className="ticket-card-status-wrap">
+                            <Tag color={meta.color}>{meta.label}</Tag>
+                            {item.is_common_contract && <Tag color="gold">Платный</Tag>}
+                          </Space>
+                          <div className="ticket-card-assignee-right">
+                            <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
+                              <a
+                                className="ticket-assignee-linklike"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  applyAssigneeFilter(item.assignee?.id);
+                                }}
+                              >
+                                {item.assignee?.full_name || 'Не назначен'}
+                              </a>
+                            </Popover>
+                          </div>
+                        </div>
                       </div>
-                      <div className="ticket-company-centered">
-                        {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
+                      <div className="ticket-company-centered ticket-company-mobile">
                         <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
                           <a
                             className="ticket-assignee-linklike"
@@ -768,7 +881,6 @@ const TicketsPage: React.FC = () => {
                           </a>
                         </Popover>
                       </div>
-
                       <Paragraph style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
                         {item.subject || 'Без темы'}
                       </Paragraph>

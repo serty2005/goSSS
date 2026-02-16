@@ -95,6 +95,9 @@ const (
 	// Подписчики: UI через WebSocket для обновления в реальном времени.
 	// Payload: ID тикета.
 	TicketUpdated = "ticket.updated"
+	// AgentObservationUpdated — событие обновления наблюдения агента для UI-ленты.
+	// Публикуется после успешного применения наблюдения от агента.
+	AgentObservationUpdated = "agent.observation.updated"
 	// BitrixTicketSyncRequested публикуется при изменении тикета, требующем синхронизации в Bitrix24.
 	// Payload: BitrixSyncEntityPayload.
 	BitrixTicketSyncRequested = "bitrix.ticket.sync.requested"
@@ -121,6 +124,21 @@ type TicketUpdatedPayload struct {
 	Source     string    `json:"source"`
 	Message    string    `json:"message,omitempty"`
 	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// AgentObservationUpdatedPayload описывает актуальное состояние агента для UI-ленты наблюдений.
+type AgentObservationUpdatedPayload struct {
+	ObservationID uint       `json:"observation_id"`
+	AgentUUID     *string    `json:"agent_uuid,omitempty"`
+	WorkstationID *string    `json:"workstation_id,omitempty"`
+	FRID          *string    `json:"fr_id,omitempty"`
+	OwnerMatch    *bool      `json:"owner_match,omitempty"`
+	ObservedAt    time.Time  `json:"observed_at"`
+	CurrentTime   *time.Time `json:"current_time_parsed,omitempty"`
+	VTime         *time.Time `json:"v_time_parsed,omitempty"`
+	CurrentRaw    *string    `json:"current_time,omitempty"`
+	VTimeRaw      *string    `json:"v_time,omitempty"`
+	ServerURL     *string    `json:"server_url,omitempty"`
 }
 
 // ServiceDeskEntityPayload — полезная нагрузка для события ServiceDeskEntityUpdated.
