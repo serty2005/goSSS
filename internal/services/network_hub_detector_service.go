@@ -104,23 +104,22 @@ func (s *NetworkHubDetectorService) IsNetworkHubServer(ctx context.Context, srv 
 
 // checkHubIndicators проверяет признаки network-hub компании.
 func (s *NetworkHubDetectorService) checkHubIndicators(ctx context.Context, companyID string) (bool, error) {
-	// Признак 1: У компании нет рабочих станций
-	var wsCount int64
+	// Признак 1: У компании есть дочерние компании
+	var childCount int64
 	if err := s.db.WithContext(ctx).
-		Model(&workstation.Workstation{}).
-		Where("owner_id = ?", companyID).
-		Count(&wsCount).Error; err != nil {
-		return false, fmt.Errorf("ошибка подсчёта РС: %w", err)
+		Model(&company.Company{}).
+		Where("parent_id = ?", companyID).
+		Count(&childCount).Error; err != nil {
+		return false, fmt.Errorf("ошибка подсчёта дочерних компаний: %w", err)
 	}
-	if wsCount > 0 {
-		s.logger.Debug("NetworkHubDetector: у компании есть РС — не network_hub",
+	if childCount == 0 {
+		s.logger.Debug("NetworkHubDetector: у компании нет дочерних компаний — не network_hub",
 			"company_id", companyID,
-			"ws_count", wsCount,
 		)
 		return false, nil
 	}
 
-	// Признак 2: Дочерние компании не имеют серверов
+	// Признак 2: У дочерних компаний нет серверов
 	var childServerCount int64
 	if err := s.db.WithContext(ctx).
 		Table("servers").
@@ -145,18 +144,57 @@ func (s *NetworkHubDetectorService) checkHubIndicators(ctx context.Context, comp
 		Count(&srvCount).Error; err != nil {
 		return false, fmt.Errorf("ошибка подсчёта серверов: %w", err)
 	}
+	if srvCount == 0 {
+		s.logger.Debug("NetworkHubDetector: у компании нет серверов — не network_hub",
+			"company_id", companyID,
+		)
+		return false, nil
+	}
 
-	isHub := srvCount > 0
+	// Признак 4: У дочерних компаний есть оборудование (РС или ФР)
+	var childWSCount int64
+	if err := s.db.WithContext(ctx).
+		Table("workstations").
+		Joins("JOIN companies ON companies.id = workstations.owner_id").
+		Where("companies.parent_id = ?", companyID).
+		Count(&childWSCount).Error; err != nil {
+		return false, fmt.Errorf("ошибка подсчёта РС дочерних компаний: %w", err)
+	}
+	var childFRCount int64
+	if err := s.db.WithContext(ctx).
+		Table("fiscal_registers fr").
+		Joins("JOIN companies ON companies.id = fr.owner_id").
+		Where("companies.parent_id = ?", companyID).
+		Count(&childFRCount).Error; err != nil {
+		return false, fmt.Errorf("ошибка подсчёта ФР дочерних компаний: %w", err)
+	}
+	if childWSCount == 0 && childFRCount == 0 {
+		s.logger.Debug("NetworkHubDetector: у дочерних компаний нет оборудования — не network_hub",
+			"company_id", companyID,
+		)
+		return false, nil
+	}
 
+	// Доп. метрика: РС родителя больше не является блокирующим признаком.
+	var wsCount int64
+	if err := s.db.WithContext(ctx).
+		Model(&workstation.Workstation{}).
+		Where("owner_id = ?", companyID).
+		Count(&wsCount).Error; err != nil {
+		return false, fmt.Errorf("ошибка подсчёта РС: %w", err)
+	}
 	s.logger.Debug("NetworkHubDetector: проверка завершена",
 		"company_id", companyID,
-		"is_hub", isHub,
+		"is_hub", true,
+		"child_count", childCount,
 		"server_count", srvCount,
 		"ws_count", wsCount,
 		"child_server_count", childServerCount,
+		"child_ws_count", childWSCount,
+		"child_fr_count", childFRCount,
 	)
 
-	return isHub, nil
+	return true, nil
 }
 
 // ClearCache очищает кэш результатов.
