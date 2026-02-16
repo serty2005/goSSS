@@ -86,21 +86,23 @@ const normalizeCandidate = (raw: Record<string, unknown>): CandidateDTO => {
 
 const normalizeRemoteID = (value?: string) => String(value || '').trim().toLowerCase();
 
-const buildMergeKey = (item: CandidateWorkstationStagingDTO, fallbackIndex: number) => {
+const buildRemoteTokens = (item: CandidateWorkstationStagingDTO): string[] => {
   const tv = normalizeRemoteID(item.teamviewer_id);
   const lm = normalizeRemoteID(item.litemanager_id);
   const ad = normalizeRemoteID(item.anydesk_id);
-  const parts = [
+  return [
     tv ? `tv:${tv}` : '',
     lm ? `lm:${lm}` : '',
     ad ? `ad:${ad}` : '',
   ].filter(Boolean);
+};
 
-  if (parts.length > 0) {
-    return parts.join('|');
+const buildFallbackToken = (workstationUUID: string | undefined, stagingID: number | undefined, fallbackIndex: number): string => {
+  const wsUUID = String(workstationUUID || '').trim().toLowerCase();
+  if (wsUUID) {
+    return `ws:${wsUUID}`;
   }
-
-  return `fallback:${item.workstation_uuid || item.id || fallbackIndex}`;
+  return `fallback:${stagingID || fallbackIndex}`;
 };
 
 const maxObservedAt = (left?: string, right?: string) => {
@@ -110,19 +112,55 @@ const maxObservedAt = (left?: string, right?: string) => {
 };
 
 const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): CandidateWorkstationDraft[] => {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const parent = items.map((_, index) => index);
+  const find = (value: number): number => {
+    if (parent[value] !== value) {
+      parent[value] = find(parent[value]);
+    }
+    return parent[value];
+  };
+  const unite = (left: number, right: number) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) {
+      parent[rightRoot] = leftRoot;
+    }
+  };
+
+  const tokenOwner = new Map<string, number>();
+  items.forEach((item, index) => {
+    const tokens = buildRemoteTokens(item);
+    const fallbackToken = buildFallbackToken(item.workstation_uuid, item.id, index);
+    const allTokens = tokens.length > 0 ? [...tokens, fallbackToken] : [fallbackToken];
+    allTokens.forEach((token) => {
+      const owner = tokenOwner.get(token);
+      if (owner === undefined) {
+        tokenOwner.set(token, index);
+        return;
+      }
+      unite(owner, index);
+    });
+  });
+
   const merged = new Map<string, CandidateWorkstationDraft & {
     staging_ids: number[];
     observation_ids: number[];
+    remote_tokens: Set<string>;
     agent_observed_at?: string;
   }>();
 
   items.forEach((item, index) => {
-    const key = buildMergeKey(item, index);
+    const key = String(find(index));
     const existing = merged.get(key);
+    const remoteTokens = buildRemoteTokens(item);
 
     if (!existing) {
       merged.set(key, {
-        merge_key: key,
+        merge_key: '',
         staging_id: item.id,
         staging_ids: item.id ? [item.id] : [],
         observation_id: item.observation_id,
@@ -134,6 +172,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
         litemanager_id: item.litemanager_id,
         anydesk_id: item.anydesk_id,
         agent_uuid: item.agent_uuid,
+        remote_tokens: new Set(remoteTokens),
         agent_observed_at: item.observed_at,
         observed_at: item.observed_at,
       });
@@ -152,6 +191,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     existing.teamviewer_id = existing.teamviewer_id || item.teamviewer_id;
     existing.litemanager_id = existing.litemanager_id || item.litemanager_id;
     existing.anydesk_id = existing.anydesk_id || item.anydesk_id;
+    remoteTokens.forEach((token) => existing.remote_tokens.add(token));
     existing.observed_at = maxObservedAt(existing.observed_at, item.observed_at);
     if (item.agent_uuid) {
       const shouldReplaceAgent = !existing.agent_uuid
@@ -164,20 +204,25 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     }
   });
 
-  return Array.from(merged.values()).map((item) => ({
-    merge_key: item.merge_key,
-    staging_id: item.staging_ids[0] || item.staging_id,
-    observation_id: item.observation_id,
-    observation_ids: item.observation_ids,
-    workstation_uuid: item.workstation_uuid,
-    hostname: item.hostname,
-    name: item.name,
-    teamviewer_id: item.teamviewer_id,
-    litemanager_id: item.litemanager_id,
-    anydesk_id: item.anydesk_id,
-    agent_uuid: item.agent_uuid,
-    observed_at: item.observed_at,
-  }));
+  return Array.from(merged.values()).map((item, index) => {
+    const remoteKey = Array.from(item.remote_tokens).sort().join('|');
+    const mergeKey = remoteKey || buildFallbackToken(item.workstation_uuid, item.staging_ids[0], index);
+
+    return {
+      merge_key: mergeKey,
+      staging_id: item.staging_ids[0] || item.staging_id,
+      observation_id: item.observation_id,
+      observation_ids: item.observation_ids,
+      workstation_uuid: item.workstation_uuid,
+      hostname: item.hostname,
+      name: item.name,
+      teamviewer_id: item.teamviewer_id,
+      litemanager_id: item.litemanager_id,
+      anydesk_id: item.anydesk_id,
+      agent_uuid: item.agent_uuid,
+      observed_at: item.observed_at,
+    };
+  });
 };
 
 const AcceptancePage: React.FC = () => {

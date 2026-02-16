@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { Card, Empty, Input, Space, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { CandidateFiscalStagingDTO } from '@/types/api';
@@ -13,7 +13,9 @@ interface StagedAgentEntitiesProps {
 }
 
 interface AgentGroup {
+  key: string;
   agentID: string;
+  agentIDs: string[];
   workstations: CandidateWorkstationDraft[];
   fiscals: CandidateFiscalStagingDTO[];
   observationIDs: number[];
@@ -22,6 +24,27 @@ interface AgentGroup {
 const { Text } = Typography;
 
 const NO_AGENT_ID = 'нет данных';
+
+const pickFiscalIdentity = (item: CandidateFiscalStagingDTO): string => {
+  const normalized = String(item.serial_normalized || '').trim().toLowerCase();
+  if (normalized) return `sn:${normalized}`;
+  const serial = String(item.serial_number || '').trim().toLowerCase();
+  if (serial) return `sn:${serial}`;
+  return `id:${item.id}`;
+};
+
+const collectObservationIDs = (ws: CandidateWorkstationDraft): number[] => {
+  return (ws.observation_ids || (ws.observation_id ? [ws.observation_id] : []))
+    .filter((id): id is number => typeof id === 'number' && id > 0);
+};
+
+const pickLastObservedAt = (group: AgentGroup): string => {
+  return (
+    [...group.workstations.map((item) => item.observed_at), ...group.fiscals.map((item) => item.observed_at)]
+      .filter(Boolean)
+      .sort((a, b) => dayjs(b).valueOf() - dayjs(a).valueOf())[0] || ''
+  );
+};
 
 export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
   workstations,
@@ -35,46 +58,97 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
 
   const groups = useMemo(() => {
     const map = new Map<string, AgentGroup>();
+    const observationToWorkstation = new Map<number, string>();
+    const fiscalIdentityByGroup = new Map<string, Set<string>>();
+    const agentIDsByGroup = new Map<string, Set<string>>();
 
-    const ensure = (agentID: string) => {
-      if (!map.has(agentID)) {
-        map.set(agentID, { agentID, workstations: [], fiscals: [], observationIDs: [] });
+    const ensure = (groupKey: string): AgentGroup => {
+      const existing = map.get(groupKey);
+      if (existing) return existing;
+      const created: AgentGroup = {
+        key: groupKey,
+        agentID: NO_AGENT_ID,
+        agentIDs: [],
+        workstations: [],
+        fiscals: [],
+        observationIDs: [],
+      };
+      map.set(groupKey, created);
+      fiscalIdentityByGroup.set(groupKey, new Set<string>());
+      agentIDsByGroup.set(groupKey, new Set<string>());
+      return created;
+    };
+
+    const addObservationID = (group: AgentGroup, observationID?: number) => {
+      if (!observationID || observationID <= 0) return;
+      if (!group.observationIDs.includes(observationID)) {
+        group.observationIDs.push(observationID);
       }
-      return map.get(agentID)!;
+    };
+
+    const addAgentFromObservation = (groupKey: string, observationID: number) => {
+      const groupAgents = agentIDsByGroup.get(groupKey);
+      if (!groupAgents) return;
+      const agentID = String(observationAgents[observationID] || '').trim() || NO_AGENT_ID;
+      groupAgents.add(agentID);
     };
 
     workstations.forEach((ws) => {
-      const agentID = String(ws.agent_uuid || '').trim() || NO_AGENT_ID;
-      const group = ensure(agentID);
+      const groupKey = `ws:${ws.merge_key}`;
+      const group = ensure(groupKey);
+
       if (!group.workstations.some((item) => item.merge_key === ws.merge_key)) {
         group.workstations.push(ws);
       }
-      (ws.observation_ids || (ws.observation_id ? [ws.observation_id] : []))
-        .filter((id): id is number => typeof id === 'number' && id > 0)
-        .forEach((id) => {
-          if (!group.observationIDs.includes(id)) {
-            group.observationIDs.push(id);
-          }
-        });
+
+      collectObservationIDs(ws).forEach((observationID) => {
+        observationToWorkstation.set(observationID, ws.merge_key);
+        addObservationID(group, observationID);
+        addAgentFromObservation(groupKey, observationID);
+      });
+
+      const wsAgentID = String(ws.agent_uuid || '').trim();
+      if (wsAgentID) {
+        const groupAgents = agentIDsByGroup.get(groupKey);
+        if (groupAgents) {
+          groupAgents.add(wsAgentID);
+        }
+      }
     });
 
     fiscals.forEach((fr) => {
-      const byObservation = String(observationAgents[fr.observation_id] || '').trim();
-      const agentID = byObservation || NO_AGENT_ID;
-      const group = ensure(agentID);
-      if (!group.fiscals.some((item) => item.id === fr.id)) {
+      const fiscalIdentity = pickFiscalIdentity(fr);
+      const workstationKey = fr.observation_id ? observationToWorkstation.get(fr.observation_id) : undefined;
+      const groupKey = workstationKey ? `ws:${workstationKey}` : `fr:${fiscalIdentity}`;
+      const group = ensure(groupKey);
+
+      const existingFiscalKeys = fiscalIdentityByGroup.get(groupKey);
+      if (existingFiscalKeys && !existingFiscalKeys.has(fiscalIdentity)) {
+        existingFiscalKeys.add(fiscalIdentity);
         group.fiscals.push(fr);
       }
-      if (fr.observation_id && !group.observationIDs.includes(fr.observation_id)) {
-        group.observationIDs.push(fr.observation_id);
+
+      addObservationID(group, fr.observation_id);
+      if (fr.observation_id) {
+        addAgentFromObservation(groupKey, fr.observation_id);
       }
     });
 
-    return Array.from(map.values());
+    return Array.from(map.values())
+      .map((group) => {
+        const agents = Array.from(agentIDsByGroup.get(group.key) || []);
+        const realAgents = agents.filter((item) => item !== NO_AGENT_ID);
+        const primaryAgent = realAgents[0] || NO_AGENT_ID;
+        const normalizedAgents = realAgents.length > 0 ? realAgents : [NO_AGENT_ID];
+        return {
+          ...group,
+          agentID: primaryAgent,
+          agentIDs: normalizedAgents,
+          observationIDs: [...group.observationIDs].sort((a, b) => a - b),
+        };
+      })
+      .sort((left, right) => dayjs(pickLastObservedAt(right)).valueOf() - dayjs(pickLastObservedAt(left)).valueOf());
   }, [fiscals, observationAgents, workstations]);
-
-  const groupsWithAgent = groups.filter((group) => group.agentID !== NO_AGENT_ID);
-  const groupsWithoutAgent = groups.filter((group) => group.agentID === NO_AGENT_ID);
 
   const saveName = () => {
     if (!editingKey) return;
@@ -96,140 +170,76 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
   return (
     <Card size="small" title="Сущности агентов">
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        {groupsWithAgent.map((group) => (
-          <Card
-            key={group.agentID}
-            size="small"
-            hoverable
-            bodyStyle={{ padding: 10 }}
-            onClick={() => onGroupClick({
-              agentID: group.agentID,
-              observationIDs: group.observationIDs,
-              unresolvedServer: false,
-            })}
-          >
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Text strong>{group.agentID}</Text>
-
-              {group.workstations.map((ws) => {
-                const isEditing = editingKey === ws.merge_key;
-                return (
-                  <Space key={ws.merge_key} direction="vertical" size={0} style={{ width: '100%' }}>
-                    {isEditing ? (
-                      <Input
-                        autoFocus
-                        size="small"
-                        value={draftName}
-                        onClick={(event) => event.stopPropagation()}
-                        onChange={(event) => setDraftName(event.target.value)}
-                        onBlur={saveName}
-                        onPressEnter={saveName}
-                      />
-                    ) : (
-                      <Text strong style={{ cursor: 'text' }} onClick={(event) => {
-                        event.stopPropagation();
-                        setEditingKey(ws.merge_key);
-                        setDraftName(ws.name || ws.hostname || '');
-                      }}
-                      >
-                        {ws.name || ws.hostname || 'Станция без имени'}
-                      </Text>
-                    )}
-                    {ws.teamviewer_id ? <Text type="secondary">TeamViewer: {ws.teamviewer_id}</Text> : null}
-                    {ws.litemanager_id ? <Text type="secondary">LiteManager: {ws.litemanager_id}</Text> : null}
-                    {ws.anydesk_id ? <Text type="secondary">AnyDesk: {ws.anydesk_id}</Text> : null}
-                  </Space>
-                );
+        {groups.map((group) => {
+          const lastObservedAt = pickLastObservedAt(group);
+          const hasUnknownAgent = group.agentIDs.includes(NO_AGENT_ID);
+          return (
+            <Card
+              key={group.key}
+              size="small"
+              hoverable
+              bodyStyle={{ padding: 10 }}
+              onClick={() => onGroupClick({
+                agentID: group.agentID,
+                observationIDs: group.observationIDs,
+                unresolvedServer: hasUnknownAgent,
               })}
+            >
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {group.agentIDs.length > 1 ? (
+                  <Text strong>Агенты: {group.agentIDs.join(', ')}</Text>
+                ) : (
+                  <Text strong>{group.agentID === NO_AGENT_ID ? 'Агент без UUID' : group.agentID}</Text>
+                )}
+                {hasUnknownAgent ? <Tag color="orange">Есть сообщения без UUID</Tag> : null}
 
-              {group.fiscals.map((fr) => (
-                <Space key={fr.id} direction="vertical" size={0}>
-                  <Text strong>{fr.serial_number || fr.serial_normalized || `ФР #${fr.id}`}</Text>
-                  <Text type="secondary">РН ККТ: {fr.rn_kkt || '-'}</Text>
-                  <Text type="secondary">Модель: {fr.model_name || '-'}</Text>
-                  <Text type="secondary">ИНН: {fr.inn || '-'}</Text>
-                </Space>
-              ))}
-
-              <Text type="secondary">
-                Последнее наблюдение:{' '}
-                {dayjs(
-                  [...group.workstations.map((item) => item.observed_at), ...group.fiscals.map((item) => item.observed_at)]
-                    .filter(Boolean)
-                    .sort((a, b) => dayjs(b).valueOf() - dayjs(a).valueOf())[0],
-                ).isValid()
-                  ? dayjs(
-                    [...group.workstations.map((item) => item.observed_at), ...group.fiscals.map((item) => item.observed_at)]
-                      .filter(Boolean)
-                      .sort((a, b) => dayjs(b).valueOf() - dayjs(a).valueOf())[0],
-                  ).format('DD.MM.YYYY HH:mm:ss')
-                  : '-'}
-              </Text>
-            </Space>
-          </Card>
-        ))}
-
-        {groupsWithoutAgent.length > 0 ? (
-          <>
-            <Tag color="orange">Агент без UUID</Tag>
-            {groupsWithoutAgent.map((group, index) => (
-              <Card
-                key={`${group.agentID}-${index}`}
-                size="small"
-                hoverable
-                bodyStyle={{ padding: 10 }}
-                onClick={() => onGroupClick({
-                  agentID: NO_AGENT_ID,
-                  observationIDs: group.observationIDs,
-                  unresolvedServer: true,
-                })}
-              >
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-
-                  {group.workstations.map((ws) => {
-                    const isEditing = editingKey === ws.merge_key;
-                    return (
-                      <Space key={ws.merge_key} direction="vertical" size={0} style={{ width: '100%' }}>
-                        {isEditing ? (
-                          <Input
-                            autoFocus
-                            size="small"
-                            value={draftName}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={(event) => setDraftName(event.target.value)}
-                            onBlur={saveName}
-                            onPressEnter={saveName}
-                          />
-                        ) : (
-                          <Text strong style={{ cursor: 'text' }} onClick={(event) => {
-                            event.stopPropagation();
-                            setEditingKey(ws.merge_key);
-                            setDraftName(ws.name || ws.hostname || '');
-                          }}
-                          >
-                            {ws.name || ws.hostname || 'Станция без имени'}
-                          </Text>
-                        )}
-                        {ws.teamviewer_id ? <Text type="secondary">TeamViewer: {ws.teamviewer_id}</Text> : null}
-                        {ws.litemanager_id ? <Text type="secondary">LiteManager: {ws.litemanager_id}</Text> : null}
-                        {ws.anydesk_id ? <Text type="secondary">AnyDesk: {ws.anydesk_id}</Text> : null}
-                      </Space>
-                    );
-                  })}
-
-                  {group.fiscals.map((fr) => (
-                    <Space key={fr.id} direction="vertical" size={0}>
-                      <Text strong>{fr.serial_number || fr.serial_normalized || `ФР #${fr.id}`}</Text>
-                      <Text type="secondary">РН ККТ: {fr.rn_kkt || '-'}</Text>
-                      <Text type="secondary">Модель: {fr.model_name || '-'}</Text>
-                      <Text type="secondary">ИНН: {fr.inn || '-'}</Text>
+                {group.workstations.map((ws) => {
+                  const isEditing = editingKey === ws.merge_key;
+                  return (
+                    <Space key={ws.merge_key} direction="vertical" size={0} style={{ width: '100%' }}>
+                      {isEditing ? (
+                        <Input
+                          autoFocus
+                          size="small"
+                          value={draftName}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => setDraftName(event.target.value)}
+                          onBlur={saveName}
+                          onPressEnter={saveName}
+                        />
+                      ) : (
+                        <Text strong style={{ cursor: 'text' }} onClick={(event) => {
+                          event.stopPropagation();
+                          setEditingKey(ws.merge_key);
+                          setDraftName(ws.name || ws.hostname || '');
+                        }}
+                        >
+                          {ws.name || ws.hostname || 'Станция без имени'}
+                        </Text>
+                      )}
+                      {ws.teamviewer_id ? <Text type="secondary">TeamViewer: {ws.teamviewer_id}</Text> : null}
+                      {ws.litemanager_id ? <Text type="secondary">LiteManager: {ws.litemanager_id}</Text> : null}
+                      {ws.anydesk_id ? <Text type="secondary">AnyDesk: {ws.anydesk_id}</Text> : null}
                     </Space>
-                  ))}
-                </Space>
-              </Card>
-            ))}
-          </>
-        ) : null}
+                  );
+                })}
+
+                {group.fiscals.map((fr) => (
+                  <Space key={pickFiscalIdentity(fr)} direction="vertical" size={0}>
+                    <Text strong>{fr.serial_number || fr.serial_normalized || `ФР #${fr.id}`}</Text>
+                    <Text type="secondary">РН ККТ: {fr.rn_kkt || '-'}</Text>
+                    <Text type="secondary">Модель: {fr.model_name || '-'}</Text>
+                    <Text type="secondary">ИНН: {fr.inn || '-'}</Text>
+                  </Space>
+                ))}
+
+                <Text type="secondary">
+                  Последнее наблюдение: {dayjs(lastObservedAt).isValid() ? dayjs(lastObservedAt).format('DD.MM.YYYY HH:mm:ss') : '-'}
+                </Text>
+              </Space>
+            </Card>
+          );
+        })}
       </Space>
     </Card>
   );
