@@ -866,7 +866,9 @@ export interface AgentObservationFeedRowDTO {
   observation_id: number;
   agent_uuid?: string;
   workstation_id?: string;
+  workstation_name?: string;
   fr_id?: string;
+  fr_name?: string;
   owner_match?: boolean;
   observed_at: string;
   current_time?: string;

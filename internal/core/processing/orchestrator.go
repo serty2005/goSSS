@@ -7,8 +7,8 @@ package processing
 import (
 	"context"
 	"encoding/json"
-	"etalon-server/internal/core/events"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
@@ -211,14 +211,30 @@ func (o *Orchestrator) publishAgentObservationUpdate(ctx context.Context, source
 	var ownerMatch *bool
 	var wsOwner string
 	var frOwner string
+	var workstationName string
+	var frName string
 	if o.workstationRepo != nil && obs.WorkstationID != nil && strings.TrimSpace(*obs.WorkstationID) != "" {
-		if ws, err := o.workstationRepo.GetByID(ctx, strings.TrimSpace(*obs.WorkstationID)); err == nil && ws != nil && ws.OwnerID != nil {
-			wsOwner = strings.TrimSpace(*ws.OwnerID)
+		if ws, err := o.workstationRepo.GetByID(ctx, strings.TrimSpace(*obs.WorkstationID)); err == nil && ws != nil {
+			if ws.OwnerID != nil {
+				wsOwner = strings.TrimSpace(*ws.OwnerID)
+			}
+			if ws.DeviceName != nil {
+				workstationName = strings.TrimSpace(*ws.DeviceName)
+			}
 		}
 	}
 	if o.frRepo != nil && obs.FRID != nil && strings.TrimSpace(*obs.FRID) != "" {
-		if fr, err := o.frRepo.GetByID(ctx, strings.TrimSpace(*obs.FRID)); err == nil && fr != nil && fr.OwnerID != nil {
-			frOwner = strings.TrimSpace(*fr.OwnerID)
+		if fr, err := o.frRepo.GetByID(ctx, strings.TrimSpace(*obs.FRID)); err == nil && fr != nil {
+			if fr.OwnerID != nil {
+				frOwner = strings.TrimSpace(*fr.OwnerID)
+			}
+			if fr.ModelKKT != nil && strings.TrimSpace(*fr.ModelKKT) != "" {
+				frName = strings.TrimSpace(*fr.ModelKKT)
+			} else if fr.RNKKT != nil && strings.TrimSpace(*fr.RNKKT) != "" {
+				frName = strings.TrimSpace(*fr.RNKKT)
+			} else if fr.FRSerialNumber != nil && strings.TrimSpace(*fr.FRSerialNumber) != "" {
+				frName = strings.TrimSpace(*fr.FRSerialNumber)
+			}
 		}
 	}
 	if wsOwner != "" && frOwner != "" {
@@ -238,17 +254,19 @@ func (o *Orchestrator) publishAgentObservationUpdate(ctx context.Context, source
 	}
 
 	payload := events.AgentObservationUpdatedPayload{
-		ObservationID: obs.ID,
-		AgentUUID:     stringPtrOrNil(agentUUID),
-		WorkstationID: trimStringPtr(obs.WorkstationID),
-		FRID:          trimStringPtr(obs.FRID),
-		OwnerMatch:    ownerMatch,
-		ObservedAt:    obs.ObservedAt,
-		CurrentTime:   parseFlexibleEventTime(currentRaw),
-		VTime:         parseFlexibleEventTime(vTimeRaw),
-		CurrentRaw:    stringPtrOrNil(currentRaw),
-		VTimeRaw:      stringPtrOrNil(vTimeRaw),
-		ServerURL:     stringPtrOrNil(serverURL),
+		ObservationID:   obs.ID,
+		AgentUUID:       stringPtrOrNil(agentUUID),
+		WorkstationID:   trimStringPtr(obs.WorkstationID),
+		WorkstationName: stringPtrOrNil(workstationName),
+		FRID:            trimStringPtr(obs.FRID),
+		FRName:          stringPtrOrNil(frName),
+		OwnerMatch:      ownerMatch,
+		ObservedAt:      obs.ObservedAt,
+		CurrentTime:     parseFlexibleEventTime(currentRaw),
+		VTime:           parseFlexibleEventTime(vTimeRaw),
+		CurrentRaw:      stringPtrOrNil(currentRaw),
+		VTimeRaw:        stringPtrOrNil(vTimeRaw),
+		ServerURL:       stringPtrOrNil(serverURL),
 	}
 	o.bus.Publish(eventbus.Event{Type: events.AgentObservationUpdated, Payload: payload})
 }

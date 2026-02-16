@@ -128,17 +128,19 @@ type TicketUpdatedPayload struct {
 
 // AgentObservationUpdatedPayload описывает актуальное состояние агента для UI-ленты наблюдений.
 type AgentObservationUpdatedPayload struct {
-	ObservationID uint       `json:"observation_id"`
-	AgentUUID     *string    `json:"agent_uuid,omitempty"`
-	WorkstationID *string    `json:"workstation_id,omitempty"`
-	FRID          *string    `json:"fr_id,omitempty"`
-	OwnerMatch    *bool      `json:"owner_match,omitempty"`
-	ObservedAt    time.Time  `json:"observed_at"`
-	CurrentTime   *time.Time `json:"current_time_parsed,omitempty"`
-	VTime         *time.Time `json:"v_time_parsed,omitempty"`
-	CurrentRaw    *string    `json:"current_time,omitempty"`
-	VTimeRaw      *string    `json:"v_time,omitempty"`
-	ServerURL     *string    `json:"server_url,omitempty"`
+	ObservationID   uint       `json:"observation_id"`
+	AgentUUID       *string    `json:"agent_uuid,omitempty"`
+	WorkstationID   *string    `json:"workstation_id,omitempty"`
+	WorkstationName *string    `json:"workstation_name,omitempty"`
+	FRID            *string    `json:"fr_id,omitempty"`
+	FRName          *string    `json:"fr_name,omitempty"`
+	OwnerMatch      *bool      `json:"owner_match,omitempty"`
+	ObservedAt      time.Time  `json:"observed_at"`
+	CurrentTime     *time.Time `json:"current_time_parsed,omitempty"`
+	VTime           *time.Time `json:"v_time_parsed,omitempty"`
+	CurrentRaw      *string    `json:"current_time,omitempty"`
+	VTimeRaw        *string    `json:"v_time,omitempty"`
+	ServerURL       *string    `json:"server_url,omitempty"`
 }
 
 // ServiceDeskEntityPayload — полезная нагрузка для события ServiceDeskEntityUpdated.

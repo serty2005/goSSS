@@ -46,17 +46,19 @@ type observationPayload struct {
 }
 
 type observationFeedRow struct {
-	ObservationID  uint       `json:"observation_id"`
-	AgentUUID      *string    `json:"agent_uuid"`
-	WorkstationID  *string    `json:"workstation_id"`
-	FRID           *string    `json:"fr_id"`
-	OwnerMatch     *bool      `json:"owner_match"`
-	ObservedAt     time.Time  `json:"observed_at"`
-	CurrentTimeRaw *string    `json:"current_time"`
-	VTimeRaw       *string    `json:"v_time"`
-	CurrentTime    *time.Time `json:"current_time_parsed"`
-	VTime          *time.Time `json:"v_time_parsed"`
-	ServerURL      *string    `json:"server_url"`
+	ObservationID   uint       `json:"observation_id"`
+	AgentUUID       *string    `json:"agent_uuid"`
+	WorkstationID   *string    `json:"workstation_id"`
+	WorkstationName *string    `json:"workstation_name"`
+	FRID            *string    `json:"fr_id"`
+	FRName          *string    `json:"fr_name"`
+	OwnerMatch      *bool      `json:"owner_match"`
+	ObservedAt      time.Time  `json:"observed_at"`
+	CurrentTimeRaw  *string    `json:"current_time"`
+	VTimeRaw        *string    `json:"v_time"`
+	CurrentTime     *time.Time `json:"current_time_parsed"`
+	VTime           *time.Time `json:"v_time_parsed"`
+	ServerURL       *string    `json:"server_url"`
 }
 
 func (h *AgentObservationFeedHandler) GetObservationByID(w http.ResponseWriter, r *http.Request) {
@@ -162,13 +164,19 @@ func (h *AgentObservationFeedHandler) ListLatestByAgent(w http.ResponseWriter, r
 		}
 	}
 
-	wsOwners := h.loadWorkstationOwners(r, wsIDs)
-	frOwners := h.loadFROwners(r, frIDs)
+	wsMeta := h.loadWorkstationMeta(r, wsIDs)
+	frMeta := h.loadFRMeta(r, frIDs)
 	for i := range result {
-		wsOwner, wsExists := wsOwners[trimPtrValue(result[i].WorkstationID)]
-		frOwner, frExists := frOwners[trimPtrValue(result[i].FRID)]
+		wsInfo, wsExists := wsMeta[trimPtrValue(result[i].WorkstationID)]
+		frInfo, frExists := frMeta[trimPtrValue(result[i].FRID)]
+		if wsExists && wsInfo.Name != "" {
+			result[i].WorkstationName = stringPtrOrNil(wsInfo.Name)
+		}
+		if frExists && frInfo.Name != "" {
+			result[i].FRName = stringPtrOrNil(frInfo.Name)
+		}
 		if wsExists && frExists {
-			value := wsOwner == frOwner && wsOwner != ""
+			value := wsInfo.OwnerID == frInfo.OwnerID && wsInfo.OwnerID != ""
 			result[i].OwnerMatch = &value
 		}
 	}
@@ -250,44 +258,66 @@ func parseObservationFeedRow(raw observationFeedDBRow) observationFeedRow {
 	return row
 }
 
-func (h *AgentObservationFeedHandler) loadWorkstationOwners(r *http.Request, ids []string) map[string]string {
-	out := map[string]string{}
+type observationEntityMeta struct {
+	OwnerID string
+	Name    string
+}
+
+func (h *AgentObservationFeedHandler) loadWorkstationMeta(r *http.Request, ids []string) map[string]observationEntityMeta {
+	out := map[string]observationEntityMeta{}
 	if len(ids) == 0 {
 		return out
 	}
 	type row struct {
-		ID      string  `gorm:"column:id"`
-		OwnerID *string `gorm:"column:owner_id"`
+		ID         string  `gorm:"column:id"`
+		OwnerID    *string `gorm:"column:owner_id"`
+		DeviceName *string `gorm:"column:device_name"`
 	}
 	var rows []row
 	_ = h.db.WithContext(r.Context()).
 		Table("workstations").
-		Select("id, owner_id").
+		Select("id, owner_id, device_name").
 		Where("id IN ?", uniqueStrings(ids)).
 		Find(&rows).Error
 	for i := range rows {
-		out[strings.TrimSpace(rows[i].ID)] = strings.TrimSpace(trimPtrValue(rows[i].OwnerID))
+		out[strings.TrimSpace(rows[i].ID)] = observationEntityMeta{
+			OwnerID: strings.TrimSpace(trimPtrValue(rows[i].OwnerID)),
+			Name:    strings.TrimSpace(trimPtrValue(rows[i].DeviceName)),
+		}
 	}
 	return out
 }
 
-func (h *AgentObservationFeedHandler) loadFROwners(r *http.Request, ids []string) map[string]string {
-	out := map[string]string{}
+func (h *AgentObservationFeedHandler) loadFRMeta(r *http.Request, ids []string) map[string]observationEntityMeta {
+	out := map[string]observationEntityMeta{}
 	if len(ids) == 0 {
 		return out
 	}
 	type row struct {
-		ID      string  `gorm:"column:id"`
-		OwnerID *string `gorm:"column:owner_id"`
+		ID             string  `gorm:"column:id"`
+		OwnerID        *string `gorm:"column:owner_id"`
+		ModelKKT       *string `gorm:"column:model_kkt"`
+		RNKKT          *string `gorm:"column:rn_kkt"`
+		FRSerialNumber *string `gorm:"column:fr_serial_number"`
 	}
 	var rows []row
 	_ = h.db.WithContext(r.Context()).
 		Table("fiscal_registers").
-		Select("id, owner_id").
+		Select("id, owner_id, model_kkt, rn_kkt, fr_serial_number").
 		Where("id IN ?", uniqueStrings(ids)).
 		Find(&rows).Error
 	for i := range rows {
-		out[strings.TrimSpace(rows[i].ID)] = strings.TrimSpace(trimPtrValue(rows[i].OwnerID))
+		name := strings.TrimSpace(trimPtrValue(rows[i].ModelKKT))
+		if name == "" {
+			name = strings.TrimSpace(trimPtrValue(rows[i].RNKKT))
+		}
+		if name == "" {
+			name = strings.TrimSpace(trimPtrValue(rows[i].FRSerialNumber))
+		}
+		out[strings.TrimSpace(rows[i].ID)] = observationEntityMeta{
+			OwnerID: strings.TrimSpace(trimPtrValue(rows[i].OwnerID)),
+			Name:    name,
+		}
 	}
 	return out
 }

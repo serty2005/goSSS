@@ -1,12 +1,12 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Card, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { agentObservationsApi } from '@/api/agentObservations';
 import { AgentObservationFeedRowDTO } from '@/types/api';
-import { useSSE } from '@/features/realtime/useSSE';
+import { useAgentObservationStream } from '@/features/realtime/useAgentObservationStream';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 
 const { Title } = Typography;
@@ -27,7 +27,6 @@ const parseDate = (value?: string) => {
 };
 
 const AgentObservationsPage: React.FC = () => {
-  const { subscribe } = useSSE();
   const [searchParams, setSearchParams] = useSearchParams();
   const agentFilter = (searchParams.get('agent_uuid') || searchParams.get('agent') || '').trim();
   const workstationFilter = (searchParams.get('workstation_id') || '').trim();
@@ -39,6 +38,40 @@ const AgentObservationsPage: React.FC = () => {
   const [snapshotRows, setSnapshotRows] = useState<LocalRow[]>([]);
   const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
   const pendingRef = useRef<Record<string, LocalRow>>({});
+
+  const matchesFilters = useCallback((row: AgentObservationFeedRowDTO) => {
+    if (agentFilter && (row.agent_uuid || '').trim() !== agentFilter) {
+      return false;
+    }
+    if (workstationFilter && (row.workstation_id || '').trim() !== workstationFilter) {
+      return false;
+    }
+    if (frFilter && (row.fr_id || '').trim() !== frFilter) {
+      return false;
+    }
+    return true;
+  }, [agentFilter, frFilter, workstationFilter]);
+
+  const sortRows = useCallback((items: LocalRow[]) => {
+    const getSortValue = (row: LocalRow) => {
+      if (sortField === 'v_time') {
+        return parseDate(row.v_time_parsed || row.v_time)?.valueOf() || 0;
+      }
+      if (sortField === 'current_time') {
+        return parseDate(row.current_time_parsed || row.current_time)?.valueOf() || 0;
+      }
+      return parseDate(row.observed_at)?.valueOf() || 0;
+    };
+
+    return items.slice().sort((left, right) => {
+      const leftValue = getSortValue(left);
+      const rightValue = getSortValue(right);
+      if (sortOrder === 'asc') {
+        return leftValue - rightValue;
+      }
+      return rightValue - leftValue;
+    });
+  }, [sortField, sortOrder]);
 
   const updateFilters = (next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(searchParams);
@@ -75,64 +108,59 @@ const AgentObservationsPage: React.FC = () => {
     }));
     pendingRef.current = Object.fromEntries(nextRows.map((item) => [item.rowKey, item]));
     if (!paused) {
-      setSnapshotRows(nextRows);
+      setSnapshotRows(sortRows(nextRows.filter(matchesFilters)));
     }
-  }, [data, paused]);
+  }, [data, matchesFilters, paused, sortRows]);
 
-  useEffect(() => {
-    const unsubscribe = subscribe('agent.observation.updated', (_eventType, rawData) => {
-      let payload: AgentObservationFeedRowDTO | null = null;
-      try {
-        payload = JSON.parse(rawData) as AgentObservationFeedRowDTO;
-      } catch {
-        return;
-      }
-      if (!payload) return;
+  const onRealtimeMessage = useCallback((eventType: string, rawData: string) => {
+    if (eventType !== 'agent.observation.updated') {
+      return;
+    }
 
-      const rowKey = String(payload.agent_uuid || payload.observation_id);
-      const localRow: LocalRow = {
-        ...payload,
-        rowKey,
-        highlightedUntil: Date.now() + 2000,
-      };
+    let payload: AgentObservationFeedRowDTO | null = null;
+    try {
+      payload = JSON.parse(rawData) as AgentObservationFeedRowDTO;
+    } catch {
+      return;
+    }
+    if (!payload) return;
 
-      pendingRef.current[rowKey] = localRow;
-      if (paused) {
-        return;
-      }
+    const rowKey = String(payload.agent_uuid || payload.observation_id);
+    const localRow: LocalRow = {
+      ...payload,
+      rowKey,
+      highlightedUntil: Date.now() + 2000,
+    };
 
-      setSnapshotRows((prev) => {
-        const map = new Map(prev.map((item) => [item.rowKey, item]));
+    pendingRef.current[rowKey] = localRow;
+    if (paused) {
+      return;
+    }
+
+    setSnapshotRows((prev) => {
+      const map = new Map(prev.map((item) => [item.rowKey, item]));
+      if (matchesFilters(localRow)) {
         map.set(rowKey, localRow);
-        const values = Array.from(map.values());
-        values.sort((a, b) => {
-          const left = parseDate(a.observed_at)?.valueOf() || 0;
-          const right = parseDate(b.observed_at)?.valueOf() || 0;
-          return right - left;
-        });
-        return values;
-      });
-
-      window.setTimeout(() => {
-        setSnapshotRows((prev) => prev.map((item) => (item.rowKey === rowKey ? { ...item, highlightedUntil: undefined } : item)));
-      }, 2200);
+      } else {
+        map.delete(rowKey);
+      }
+      return sortRows(Array.from(map.values()));
     });
-    return unsubscribe;
-  }, [paused, subscribe]);
+
+    window.setTimeout(() => {
+      setSnapshotRows((prev) => prev.map((item) => (item.rowKey === rowKey ? { ...item, highlightedUntil: undefined } : item)));
+    }, 2200);
+  }, [matchesFilters, paused, sortRows]);
+
+  const { isConnecting } = useAgentObservationStream({ onMessage: onRealtimeMessage });
 
   useEffect(() => {
     if (!paused) {
-      setSnapshotRows(Object.values(pendingRef.current));
+      setSnapshotRows(sortRows(Object.values(pendingRef.current).filter(matchesFilters)));
     }
-  }, [paused]);
+  }, [matchesFilters, paused, sortRows]);
 
-  const rows = useMemo(() => {
-    const now = Date.now();
-    return snapshotRows.map((item) => ({
-      ...item,
-      highlightedUntil: item.highlightedUntil && item.highlightedUntil > now ? item.highlightedUntil : undefined,
-    }));
-  }, [snapshotRows]);
+  const rows = useMemo(() => snapshotRows, [snapshotRows]);
 
   const columns: ColumnsType<LocalRow> = [
     {
@@ -146,27 +174,49 @@ const AgentObservationsPage: React.FC = () => {
       title: 'UUID агента',
       dataIndex: 'agent_uuid',
       key: 'agent_uuid',
-      render: (value?: string) => value || '-',
+      render: (value?: string) => (
+        value
+          ? <a onClick={() => updateFilters({ agent_uuid: value, agent: undefined })}>{value}</a>
+          : '-'
+      ),
     },
     {
       title: 'Рабочая станция',
       dataIndex: 'workstation_id',
       key: 'workstation_id',
-      render: (value?: string) => (
-        value
-          ? <a onClick={() => updateFilters({ workstation_id: value })}>{value}</a>
-          : '-'
-      ),
+      render: (_value: string | undefined, record) => {
+        if (!record.workstation_id) return '-';
+        const linkText = (record.workstation_name || '').trim() || record.workstation_id;
+        return (
+          <div onClick={() => updateFilters({ workstation_id: record.workstation_id })}>
+            <Link
+              to={`/workstations/${record.workstation_id}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {linkText}
+            </Link>
+          </div>
+        );
+      },
     },
     {
       title: 'ФР',
       dataIndex: 'fr_id',
       key: 'fr_id',
-      render: (value?: string) => (
-        value
-          ? <a onClick={() => updateFilters({ fr_id: value })}>{value}</a>
-          : '-'
-      ),
+      render: (_value: string | undefined, record) => {
+        if (!record.fr_id) return '-';
+        const linkText = (record.fr_name || '').trim() || record.fr_id;
+        return (
+          <div onClick={() => updateFilters({ fr_id: record.fr_id })}>
+            <Link
+              to={`/fiscals/${record.fr_id}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {linkText}
+            </Link>
+          </div>
+        );
+      },
     },
     {
       title: 'Владелец РС=ФР',
@@ -210,9 +260,17 @@ const AgentObservationsPage: React.FC = () => {
           {agentFilter ? <Tag color="blue">Агент: {agentFilter}</Tag> : null}
         </Space>
         {paused ? <Alert type="info" showIcon message="Список на паузе, входящие обновления продолжают накапливаться." style={{ marginBottom: 12 }} /> : null}
+        {!paused && isConnecting ? (
+          <Alert
+            type="info"
+            showIcon
+            message="Подключаем поток изменений..."
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
         <Table<LocalRow>
           rowKey="rowKey"
-          loading={isLoading}
+          loading={isLoading || (!paused && isConnecting)}
           columns={columns}
           dataSource={rows}
           onChange={(_pagination, _filters, sorter) => {
