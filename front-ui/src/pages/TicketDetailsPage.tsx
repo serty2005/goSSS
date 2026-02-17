@@ -614,7 +614,12 @@ const TicketDetailsPage: React.FC = () => {
                   onChange={(nextStatus: TicketStatus) => {
                     if (!id || nextStatus === metadata.status) return;
                     if (nextStatus === 'resolved') {
-                      setPendingStatus(nextStatus);
+                      const hasComments = (details?.comments || []).length > 0;
+                      if (!hasComments) {
+                        setPendingStatus(nextStatus);
+                        return;
+                      }
+                      changeStatusMutation.mutate({ id, status: nextStatus });
                       return;
                     }
                     changeStatusMutation.mutate({ id, status: nextStatus });
@@ -846,10 +851,10 @@ const TicketDetailsPage: React.FC = () => {
                   </div>
                 </Card>
 
-                {isClosedLikeStatus(metadata.status) && (
+                {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
                   <Card size="small" title="Результат">
                     <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
-                      <SafeHtmlContent html={metadata.result || '<span>Результат не заполнен</span>'} style={{ whiteSpace: 'pre-wrap' }} />
+                      <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
                     </div>
                   </Card>
                 )}
@@ -1151,7 +1156,7 @@ const TicketDetailsPage: React.FC = () => {
 
       <Modal
         open={Boolean(pendingStatus)}
-        title="Завершение заявки"
+        title="Отчёт по заявке"
         okText="Завершить заявку"
         cancelText="Отмена"
         onCancel={() => {
@@ -1169,7 +1174,7 @@ const TicketDetailsPage: React.FC = () => {
           rows={4}
           value={statusComment}
           onChange={(event) => setStatusComment(event.target.value)}
-          placeholder="Опишите итог выполнения заявки"
+          placeholder="Добавьте отчёт по выполнению"
         />
       </Modal>
 

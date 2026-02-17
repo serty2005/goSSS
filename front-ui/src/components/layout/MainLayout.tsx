@@ -3,11 +3,9 @@ import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, 
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
-  CheckSquareOutlined,
   CustomerServiceOutlined,
   BankOutlined,
   DesktopOutlined,
-  AuditOutlined,
   SettingOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -276,33 +274,52 @@ const MainLayout: React.FC = () => {
     ],
   };
 
+  const companiesChildren = [
+    { key: '/companies', label: 'Компании' },
+  ];
+
+  if (canAccessAcceptance) {
+    companiesChildren.push({ key: '/acceptance', label: 'Принятие на АО' });
+    companiesChildren.push({ key: '/network-acceptance', label: 'Принятие в сеть' });
+  }
+
+  const equipmentChildren = [
+    { key: '/servers', label: 'Серверы' },
+    { key: '/workstations', label: 'Рабочие станции' },
+    { key: '/fiscals', label: 'ФР' },
+  ];
+
+  if (canAccessAcceptance) {
+    equipmentChildren.push({ key: '/agent-observations', label: 'Наблюдения агентов' });
+  }
+
   const menuItems = [
     { key: '/', icon: <SearchOutlined />, label: 'Поиск' },
     { key: '/tickets', icon: <CustomerServiceOutlined />, label: 'Тикеты' },
-    { key: '/companies', icon: <BankOutlined />, label: 'Компании' },
+    {
+      key: 'companies',
+      icon: <BankOutlined />,
+      label: 'Компании',
+      children: companiesChildren,
+    },
     {
       key: 'equipment',
       icon: <DesktopOutlined />,
       label: 'Оборудование',
-      children: [
-        { key: '/servers', label: 'Серверы' },
-        { key: '/workstations', label: 'Рабочие станции' },
-        { key: '/fiscals', label: 'ФР' },
-      ],
+      children: equipmentChildren,
     },
   ];
 
-  if (canAccessAcceptance) {
-    menuItems.splice(3, 0, { key: '/acceptance', icon: <AuditOutlined />, label: 'Принятие на АО' });
-    menuItems.splice(4, 0, { key: '/network-acceptance', icon: <AuditOutlined />, label: 'Принятие в сеть' });
-    menuItems.splice(5, 0, { key: '/agent-observations', icon: <AuditOutlined />, label: 'Наблюдения агентов' });
-  }
   if (isAdmin) {
-    menuItems.splice(1, 0, { key: '/tasks', icon: <CheckSquareOutlined />, label: 'Задачи' });
-  }
-
-  if (isAdmin) {
-    menuItems.push({ key: '/admin', icon: <SettingOutlined />, label: 'Администрирование' });
+    menuItems.push({
+      key: 'admin',
+      icon: <SettingOutlined />,
+      label: 'Администрирование',
+      children: [
+        { key: '/admin', label: 'Настройки' },
+        { key: '/tasks', label: 'Проблемы' },
+      ],
+    });
   }
 
   const themeMenuContent = (

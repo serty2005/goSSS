@@ -3,14 +3,17 @@ package services
 import (
 	"context"
 	"etalon-server/internal/domain/bitrix"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
+	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	b24 "etalon-server/internal/infra/plugins/bitrix"
 	"fmt"
 	"html"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +23,7 @@ import (
 
 const (
 	bitrixDescriptionField = "UF_CRM_1766060620"
+	bitrixConnectionsField = "UF_CRM_1770623602"
 	bitrixTypeField        = "UF_CRM_1766059110729"
 	bitrixPointField       = "UF_CRM_1766062398"
 )
@@ -52,6 +56,8 @@ type bitrixSyncService struct {
 	client     *b24.Client
 	redis      *redis.Client
 	ticketRepo tickets.TicketRepository
+	serverRepo server.Repository
+	wsRepo     workstation.Repository
 	history    TicketHistoryWriter
 	userRepo   user.Repository
 	repo       bitrix.Repository
@@ -63,6 +69,8 @@ func NewBitrixSyncService(
 	client *b24.Client,
 	redisClient *redis.Client,
 	ticketRepo tickets.TicketRepository,
+	serverRepo server.Repository,
+	wsRepo workstation.Repository,
 	userRepo user.Repository,
 	repo bitrix.Repository,
 ) BitrixSyncService {
@@ -72,6 +80,8 @@ func NewBitrixSyncService(
 		client:     client,
 		redis:      redisClient,
 		ticketRepo: ticketRepo,
+		serverRepo: serverRepo,
+		wsRepo:     wsRepo,
 		history:    NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
 		userRepo:   userRepo,
 		repo:       repo,
@@ -448,6 +458,7 @@ func (s *bitrixSyncService) pullCommentsForDeal(ctx context.Context, ticket *tic
 
 func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets.Ticket) (map[string]interface{}, error) {
 	stageCode := mapTicketStatusToStage(ticket.Status)
+	connections := s.buildDealConnections(ctx, ticket)
 	fields := map[string]interface{}{
 		"CATEGORY_ID":          s.cfg.BitrixCategoryID,
 		"TITLE":                buildTicketTitle(ticket),
@@ -455,6 +466,8 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		"ORIGIN_ID":            ticket.ID,
 		"STAGE_ID":             "C17:" + stageCode,
 		bitrixDescriptionField: s.buildDealDescription(ticket),
+		"COMMENTS":             s.buildDealComment(ticket),
+		bitrixConnectionsField: connections,
 		bitrixTypeField:        mapTicketTypeToBitrixID(ticket.Type),
 		bitrixPointField:       ticket.BitrixServicePointID,
 	}
@@ -486,6 +499,207 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		}
 	}
 	return fields, nil
+}
+
+func (s *bitrixSyncService) buildDealConnections(ctx context.Context, ticket *tickets.Ticket) []string {
+	if ticket == nil || strings.TrimSpace(ticket.CompanyID) == "" || s.serverRepo == nil || s.wsRepo == nil {
+		return []string{}
+	}
+
+	ownerIDs := []string{strings.TrimSpace(ticket.CompanyID)}
+	servers, err := s.serverRepo.FindByOwnerIDs(ctx, ownerIDs)
+	if err != nil {
+		s.log.Warn("Bitrix24: не удалось получить серверы для поля подключений", "ticket_id", ticket.ID, "company_id", ticket.CompanyID, "error", err)
+	}
+	workstations, wsErr := s.wsRepo.FindByOwnerIDs(ctx, ownerIDs)
+	if wsErr != nil {
+		s.log.Warn("Bitrix24: не удалось получить рабочие станции для поля подключений", "ticket_id", ticket.ID, "company_id", ticket.CompanyID, "error", wsErr)
+	}
+
+	out := make([]string, 0, len(workstations)+1)
+
+	if srv := selectPrimaryServer(ticket, servers); srv != nil {
+		out = append(out, formatServerConnectionBlock(ticket.CompanyName, srv))
+	}
+
+	sortWorkstationsByPriority(workstations)
+	for _, ws := range workstations {
+		remote := collectRemoteConnectionIDs(ws.Teamviewer, ws.Anydesk, ws.Litemanager, nil)
+		if len(remote) == 0 {
+			continue
+		}
+		out = append(out, formatWorkstationConnectionBlock(ws, remote))
+	}
+
+	return out
+}
+
+func selectPrimaryServer(ticket *tickets.Ticket, servers []server.Server) *server.Server {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	if ticket != nil && ticket.AssetType != nil &&
+		strings.EqualFold(strings.TrimSpace(*ticket.AssetType), tickets.AssetTypeServer) &&
+		ticket.AssetID != nil && strings.TrimSpace(*ticket.AssetID) != "" {
+		for i := range servers {
+			if strings.TrimSpace(servers[i].ID) == strings.TrimSpace(*ticket.AssetID) {
+				return &servers[i]
+			}
+		}
+	}
+
+	sort.SliceStable(servers, func(i, j int) bool {
+		leftName := displayServerName(servers[i])
+		rightName := displayServerName(servers[j])
+		leftRank := connectionPriorityRank(leftName)
+		rightRank := connectionPriorityRank(rightName)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftName = strings.ToLower(strings.TrimSpace(leftName))
+		rightName = strings.ToLower(strings.TrimSpace(rightName))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return strings.TrimSpace(servers[i].ID) < strings.TrimSpace(servers[j].ID)
+	})
+	return &servers[0]
+}
+
+func sortWorkstationsByPriority(workstations []workstation.Workstation) {
+	sort.SliceStable(workstations, func(i, j int) bool {
+		leftName := ptrString(workstations[i].DeviceName)
+		rightName := ptrString(workstations[j].DeviceName)
+		leftRank := connectionPriorityRank(leftName)
+		rightRank := connectionPriorityRank(rightName)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftName = strings.ToLower(strings.TrimSpace(leftName))
+		rightName = strings.ToLower(strings.TrimSpace(rightName))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return strings.TrimSpace(workstations[i].ID) < strings.TrimSpace(workstations[j].ID)
+	})
+}
+
+func connectionPriorityRank(name string) int {
+	v := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(v, "гк") || strings.Contains(v, "main") {
+		return 0
+	}
+	if strings.Contains(v, "втк") {
+		return 1
+	}
+	return 2
+}
+
+func formatServerConnectionBlock(companyName string, srv *server.Server) string {
+	uniqueID := ptrString(srv.UniqueID)
+	if uniqueID == "" {
+		uniqueID = "-"
+	}
+	serverURL := ptrString(srv.IP)
+	if serverURL == "" {
+		serverURL = "-"
+	}
+	partnerLink := buildPartnerLink(ptrString(srv.CabinetLink), ptrString(srv.IP))
+	if partnerLink == "" {
+		partnerLink = "-"
+	}
+	version := ptrString(srv.ServerVersion)
+	if version == "" {
+		version = "-"
+	}
+
+	company := strings.TrimSpace(companyName)
+	if company == "" {
+		company = "-"
+	}
+
+	return strings.Join([]string{
+		company,
+		"1. UID: " + uniqueID,
+		"2. Link to partner account: " + partnerLink,
+		"3. iiko version: " + version,
+		"4. URL: " + serverURL,
+	}, "\n")
+}
+
+func formatWorkstationConnectionBlock(ws workstation.Workstation, remote []string) string {
+	name := ptrString(ws.DeviceName)
+	if name == "" {
+		name = ws.ID
+	}
+
+	lines := make([]string, 0, len(remote)+1)
+	lines = append(lines, name)
+	for i, item := range remote {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func displayServerName(srv server.Server) string {
+	if strings.TrimSpace(ptrString(srv.DeviceName)) != "" {
+		return strings.TrimSpace(ptrString(srv.DeviceName))
+	}
+	if strings.TrimSpace(ptrString(srv.ServerName)) != "" {
+		return strings.TrimSpace(ptrString(srv.ServerName))
+	}
+	return strings.TrimSpace(srv.ID)
+}
+
+func collectRemoteConnectionIDs(teamviewer, anydesk, litemanager, rdp *string) []string {
+	out := make([]string, 0, 4)
+	if v := strings.TrimSpace(ptrString(teamviewer)); v != "" {
+		out = append(out, "TeamViewer: "+v)
+	}
+	if v := strings.TrimSpace(ptrString(anydesk)); v != "" {
+		out = append(out, "AnyDesk: "+v)
+	}
+	if v := strings.TrimSpace(ptrString(litemanager)); v != "" {
+		out = append(out, "LiteManager: "+v)
+	}
+	if v := strings.TrimSpace(ptrString(rdp)); v != "" {
+		out = append(out, "RDP: "+v)
+	}
+	return out
+}
+
+func buildPartnerLink(cabinetLink, ip string) string {
+	clientID := extractClientID(cabinetLink)
+	if clientID == "" {
+		return ""
+	}
+	if looksLikeSyrveCloud(ip) {
+		return "https://pp.syrve.com/en/cabinet/client-area/index.html?clientId=" + clientID
+	}
+	return "https://pp.iiko.ru/ru/cabinet/client-area/index.html?clientId=" + clientID
+}
+
+func extractClientID(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	match := digitSequenceRe.FindString(v)
+	return strings.TrimSpace(match)
+}
+
+func looksLikeSyrveCloud(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(v, "syrve.online") || strings.Contains(v, "syrve.app")
+}
+
+func ptrString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (s *bitrixSyncService) buildCommentBody(ctx context.Context, ticketID string, comment *tickets.TicketComment, authorID *int64, authorName string) string {
@@ -528,15 +742,6 @@ func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string 
 	if ticket == nil {
 		return ""
 	}
-	lines := []string{
-		fmt.Sprintf("Тикет Etalon #%d", ticket.Number),
-	}
-	if strings.TrimSpace(ticket.Subject) != "" {
-		lines = append(lines, strings.TrimSpace(ticket.Subject))
-	}
-	lines = append(lines, s.buildTicketURL(ticket.ID))
-
-	header := strings.Join(lines, "\n")
 	body := convertEtalonHTMLToBitrix(ticket.Description, func(etalonUserID uint) (*int64, bool) {
 		bitrixUserID, err := s.resolveBitrixUserID(context.Background(), etalonUserID)
 		if err != nil || bitrixUserID == nil || *bitrixUserID <= 0 {
@@ -545,10 +750,18 @@ func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string 
 		return bitrixUserID, true
 	})
 	body = stripBitrixServiceDescriptionPrefix(body, ticket.ID)
-	if body == "" {
-		return header
+	return body
+}
+
+func (s *bitrixSyncService) buildDealComment(ticket *tickets.Ticket) string {
+	if ticket == nil {
+		return ""
 	}
-	return header + "\n\n" + body
+	url := s.buildTicketURL(ticket.ID)
+	if strings.TrimSpace(url) == "" {
+		return ""
+	}
+	return fmt.Sprintf("[p]\n[url=%s]Тикет в XD #%d[/url]\n[/p]", url, ticket.Number)
 }
 
 func (s *bitrixSyncService) buildTicketURL(ticketID string) string {
@@ -585,7 +798,7 @@ func consumeBitrixServiceBlock(text, ticketPath string) (string, bool) {
 		return text, false
 	}
 	first := strings.TrimSpace(lines[0])
-	if !strings.HasPrefix(first, "Тикет Etalon #") {
+	if !strings.HasPrefix(first, "Тикет Etalon #") && !strings.HasPrefix(first, "Тикет в XD #") {
 		return text, false
 	}
 
@@ -944,6 +1157,7 @@ var htmlBreakRe = regexp.MustCompile(`(?i)<br\s*/?>`)
 var htmlParagraphRe = regexp.MustCompile(`(?i)</p>\s*<p[^>]*>`)
 var htmlPOpenRe = regexp.MustCompile(`(?i)<p[^>]*>`)
 var htmlPCloseRe = regexp.MustCompile(`(?i)</p>`)
+var digitSequenceRe = regexp.MustCompile(`\d+`)
 
 func toPlainText(v string) string {
 	text := strings.ReplaceAll(v, "\r\n", "\n")

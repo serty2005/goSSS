@@ -988,7 +988,12 @@ const TicketsPage: React.FC = () => {
                       return;
                     }
                     if (nextStatus === 'resolved') {
-                      setPendingStatus(nextStatus);
+                      const hasComments = (details?.comments || []).length > 0;
+                      if (!hasComments) {
+                        setPendingStatus(nextStatus);
+                        return;
+                      }
+                      changeStatusMutation.mutate({ id: selectedTicketId, status: nextStatus });
                       return;
                     }
                     changeStatusMutation.mutate({ id: selectedTicketId, status: nextStatus });
@@ -1012,9 +1017,9 @@ const TicketsPage: React.FC = () => {
               <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.description || '<span>Нет описания</span>') }} />
             </Card>
 
-            {isClosedLikeStatus(metadata.status) && (
+            {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
               <Card size="small" title="Результат">
-                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '<span>Результат не заполнен</span>') }} />
+                <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(metadata.result || '') }} />
               </Card>
             )}
 

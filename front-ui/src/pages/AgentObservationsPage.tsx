@@ -54,13 +54,19 @@ const AgentObservationsPage: React.FC = () => {
 
   const sortRows = useCallback((items: LocalRow[]) => {
     const getSortValue = (row: LocalRow) => {
+      if (sortField === 'latest') {
+        if (typeof row.observation_id === 'number') {
+          return row.observation_id;
+        }
+        return parseDate(row.observed_at)?.valueOf() || 0;
+      }
       if (sortField === 'v_time') {
         return parseDate(row.v_time_parsed || row.v_time)?.valueOf() || 0;
       }
       if (sortField === 'current_time') {
         return parseDate(row.current_time_parsed || row.current_time)?.valueOf() || 0;
       }
-      return parseDate(row.observed_at)?.valueOf() || 0;
+      return 0;
     };
 
     return items.slice().sort((left, right) => {
@@ -164,10 +170,11 @@ const AgentObservationsPage: React.FC = () => {
 
   const columns: ColumnsType<LocalRow> = [
     {
-      title: 'Событие',
+      title: '№ наблюдения',
       dataIndex: 'observation_id',
       key: 'observation_id',
       width: 120,
+      sorter: true,
       render: (value: number) => <a onClick={() => setActiveObservationID(value)}>#{value}</a>,
     },
     {
@@ -280,7 +287,9 @@ const AgentObservationsPage: React.FC = () => {
               setSortOrder('desc');
               return;
             }
-            if (sortConfig.columnKey === 'v_time') {
+            if (sortConfig.columnKey === 'observation_id') {
+              setSortField('latest');
+            } else if (sortConfig.columnKey === 'v_time') {
               setSortField('v_time');
             } else if (sortConfig.columnKey === 'current_time') {
               setSortField('current_time');

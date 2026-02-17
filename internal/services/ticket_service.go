@@ -304,11 +304,14 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	comment = strings.TrimSpace(comment)
-	if (status == tickets.StatusResolved || status == tickets.StatusClosed) && comment != "" {
-		oldResult := ticket.Result
-		ticket.Result = comment
-		if oldResult != ticket.Result {
-			s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldResult, tickets.HistorySourceUI, oldResult, ticket.Result, nil)
+	statusRequiresFinalReport := status == tickets.StatusResolved || status == tickets.StatusClosed
+	if statusRequiresFinalReport {
+		existingComments, commentsErr := s.ticketRepo.GetComments(ctx, ticket.ID)
+		if commentsErr != nil {
+			return nil, commentsErr
+		}
+		if len(existingComments) == 0 && comment == "" {
+			return nil, fmt.Errorf("для завершения заявки без комментариев необходимо добавить отчёт")
 		}
 	}
 
@@ -325,11 +328,27 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	// Запись в историю
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
 
-	// Если есть комментарий, добавляем его как историю или отдельно
+	// Отчёт при смене статуса сохраняем как обычный комментарий в тикете.
 	if comment != "" {
-		// Для простоты используем легаси структуру Comment, если фронт её ждет,
-		// но лучше писать в History с полем "comment"
-		// Реализуем через History как "comment_added"
+		authorName := "Сотрудник"
+		u, uErr := s.userRepo.GetByID(ctx, userID)
+		if uErr == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
+			authorName = strings.TrimSpace(u.FullName)
+		}
+		commentID := uuid.New().String()
+		newComment := tickets.TicketComment{
+			ID:              commentID,
+			TicketID:        ticket.ID,
+			ServiceDeskUUID: commentID,
+			Text:            comment,
+			AuthorName:      authorName,
+			CreationDate:    time.Now(),
+			IsInternal:      false,
+			IsPrivate:       false,
+		}
+		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
+			return nil, err
+		}
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
 
