@@ -48,8 +48,6 @@ export const CompanySearchSelect: React.FC<CompanySearchSelectProps> = ({
   const selectOptions = options.map((item) => ({
     value: item.value,
     label: renderCompanyOptionLabel(item.title, item.parentTitle),
-    searchText: `${item.parentTitle || ''} ${item.title}`.trim().toLowerCase(),
-    selectedLabel: item.parentTitle ? `${item.parentTitle} / ${item.title}` : item.title,
   }));
 
   return (
@@ -58,7 +56,6 @@ export const CompanySearchSelect: React.FC<CompanySearchSelectProps> = ({
       value={value}
       allowClear={allowClear}
       filterOption={false}
-      optionLabelProp="selectedLabel"
       placeholder={placeholder}
       loading={loading}
       options={selectOptions}

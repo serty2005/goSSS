@@ -1346,6 +1346,10 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 	if ownerOverride != nil && strings.TrimSpace(ptrValue(ownerOverride)) != "" {
 		targetOwner = strings.TrimSpace(ptrValue(ownerOverride))
 	}
+	licensesJSON, hasLicenses := normalizeFiscalLicensesJSON(data.Licenses)
+	attributeExcise, hasAttributeExcise := parseAgentBoolValue(data.AttributeExcise)
+	attributeMarked, hasAttributeMarked := parseAgentBoolValue(data.AttributeMarked)
+	ofdName := strings.TrimSpace(data.OFDName)
 
 	// Создание нового фискального регистратора
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1358,6 +1362,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 			RNKKT:              strPtr(strings.TrimSpace(data.RNM)),
 			INN:                strPtr(strings.TrimSpace(data.INN)),
 			FNNumber:           strPtr(strings.TrimSpace(data.FNSerial)),
+			FNExecution:        strPtr(strings.TrimSpace(data.FNExecution)),
 			LegalName:          strPtr(strings.TrimSpace(data.OrganizationName)),
 			Address:            strPtr(strings.TrimSpace(data.Address)),
 			FRDownloader:       strPtr(strings.TrimSpace(data.BootVersion)),
@@ -1365,6 +1370,18 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 			FRFirmware:         strPtr(strings.TrimSpace(data.BootVersion)),
 			LastModifiedDate:   &observedAt,
 			Base:               common.Base{LastUpdatedBy: updater},
+		}
+		if hasLicenses {
+			fr.Licenses = licensesJSON
+		}
+		if hasAttributeExcise {
+			fr.AttributeExcise = attributeExcise
+		}
+		if hasAttributeMarked {
+			fr.AttributeMarked = attributeMarked
+		}
+		if ofdName != "" {
+			fr.OFDName = &ofdName
 		}
 		if forceOwner {
 			fr.OwnerBindingMode = models.OwnerBindingModeManual
@@ -1419,6 +1436,7 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 		"rn_kkt":               valOrNil(strPtr(strings.TrimSpace(data.RNM))),
 		"inn":                  valOrNil(strPtr(strings.TrimSpace(data.INN))),
 		"fn_number":            valOrNil(strPtr(strings.TrimSpace(data.FNSerial))),
+		"fn_execution":         valOrNil(strPtr(strings.TrimSpace(data.FNExecution))),
 		"legal_name":           valOrNil(strPtr(strings.TrimSpace(data.OrganizationName))),
 		"address":              valOrNil(strPtr(strings.TrimSpace(data.Address))),
 		"fr_downloader":        valOrNil(strPtr(strings.TrimSpace(data.BootVersion))),
@@ -1432,6 +1450,18 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 	}
 	if t := parseDate(data.DateTimeReg); t != nil {
 		updates["kkt_reg_date"] = *t
+	}
+	if hasLicenses {
+		updates["licenses"] = licensesJSON
+	}
+	if hasAttributeExcise {
+		updates["attribute_excise"] = attributeExcise
+	}
+	if hasAttributeMarked {
+		updates["attribute_marked"] = attributeMarked
+	}
+	if ofdName != "" {
+		updates["ofd_name"] = ofdName
 	}
 
 	// Логика обновления владельца
@@ -2377,6 +2407,69 @@ func parseDate(v string) *time.Time {
 // normalizeRMS нормализует URL/IP сервера RMS.
 // Извлекает хост и порт, добавляет порт 8080 если не указан.
 // Примеры: "SERVER.DOMAIN.RU:443" -> "server.domain.ru:443", "192.168.1.1" -> "192.168.1.1:8080"
+func parseAgentBoolValue(raw *string) (*bool, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	value := strings.ToLower(strings.TrimSpace(*raw))
+	if value == "" {
+		return nil, false
+	}
+	switch value {
+	case "true", "1", "yes", "y":
+		parsed := true
+		return &parsed, true
+	case "false", "0", "no", "n":
+		parsed := false
+		return &parsed, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeFiscalLicensesJSON(field api.LicensesField) (datatypes.JSON, bool) {
+	normalized := normalizeFiscalLicensesValue(field)
+	if normalized == "" {
+		return nil, false
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, false
+	}
+	return datatypes.JSON(encoded), true
+}
+
+func normalizeFiscalLicensesValue(field api.LicensesField) string {
+	if len(field.Structured) > 0 {
+		parts := make([]string, 0, 2)
+		for _, id := range []string{"17", "19"} {
+			item, exists := field.Structured[id]
+			if !exists {
+				continue
+			}
+			dateUntil := strings.TrimSpace(item.DateUntil)
+			if dateUntil == "" {
+				continue
+			}
+			parts = append(parts, id+":"+dateUntil)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ";")
+		}
+		return ""
+	}
+
+	legacy := strings.TrimSpace(field.Legacy)
+	if legacy == "" {
+		return ""
+	}
+	matches := regexp.MustCompile(`(?i)([1-4])[^0-9]{0,20}(20\d{2})`).FindStringSubmatch(legacy)
+	if len(matches) == 3 {
+		return matches[2] + ":" + matches[1]
+	}
+	return legacy
+}
+
 func normalizeRMS(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

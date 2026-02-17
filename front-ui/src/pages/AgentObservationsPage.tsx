@@ -188,6 +188,13 @@ const AgentObservationsPage: React.FC = () => {
       ),
     },
     {
+      title: 'Версия агента',
+      dataIndex: 'vc',
+      key: 'vc',
+      width: 140,
+      render: (value?: string) => value || '-',
+    },
+    {
       title: 'Рабочая станция',
       dataIndex: 'workstation_id',
       key: 'workstation_id',

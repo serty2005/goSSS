@@ -535,6 +535,8 @@ export interface LicensesDict {
 
 export interface FiscalDetailDTO {
   id: string;
+  created_at?: string;
+  deleted_at?: string;
   updated_at?: string;
   last_updated_by?: string;
   last_modified_date?: string;
@@ -544,6 +546,7 @@ export interface FiscalDetailDTO {
   inn?: string;
   fr_serial_number?: string;
   fn_number?: string;
+  fn_execution?: string;
   
   // Внимание: смешанный регистр в JSON
   kkt_reg_date?: string;
@@ -552,6 +555,10 @@ export interface FiscalDetailDTO {
   fr_firmware?: string;
   fr_downloader?: string;
   driver_version?: string;
+  ffd?: string;
+  fr_serial_normalized?: string;
+  workstation_id?: string;
+  health_status_before_lock?: string;
   
   health_status?: 'ok' | 'attention_required' | 'locked';
   
@@ -559,7 +566,10 @@ export interface FiscalDetailDTO {
   address?: string;
   description?: string;
   
-  licenses?: LicensesDict;
+  licenses?: LicensesDict | string;
+  attribute_excise?: boolean | null;
+  attribute_marked?: boolean | null;
+  ofd_name?: string;
   owner_id?: string;
   owner_binding_mode?: 'auto' | 'manual';
 }
@@ -865,6 +875,7 @@ export interface EntityOwnerHistoryItemDTO {
 export interface AgentObservationFeedRowDTO {
   observation_id: number;
   agent_uuid?: string;
+  vc?: string;
   workstation_id?: string;
   workstation_name?: string;
   fr_id?: string;

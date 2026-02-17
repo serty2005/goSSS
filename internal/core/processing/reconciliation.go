@@ -743,6 +743,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 		compareAndSet(updates, "fr_downloader", fr.FRDownloader, agentData["fr_downloader"])
 		compareAndSet(updates, "driver_version", fr.DriverVersion, agentData["driver_version"])
 		compareAndSet(updates, "fn_number", fr.FNNumber, agentData["fn_number"])
+		compareAndSet(updates, "fn_execution", fr.FNExecution, agentData["fn_execution"])
 		compareAndSet(updates, "address", fr.Address, agentData["address"])
 		compareAndSet(updates, "ofd_name", fr.OFDName, agentData["ofd_name"])
 

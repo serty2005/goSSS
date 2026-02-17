@@ -20,6 +20,7 @@ type FiscalRegister struct {
 	FRSerialNumber         *string        `gorm:"type:text;index"`
 	FRSerialNormalized     *string        `gorm:"column:fr_serial_normalized;type:text;uniqueIndex"`
 	FNNumber               *string        `gorm:"type:text"`
+	FNExecution            *string        `gorm:"type:text" json:"fn_execution"`
 	KKTRegDate             *time.Time     `json:"kkt_reg_date"`
 	FNExpireDate           *time.Time     `json:"fn_expire_date"`
 	LastModifiedDate       *time.Time     `json:"last_modified_date"`

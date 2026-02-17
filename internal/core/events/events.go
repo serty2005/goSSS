@@ -130,6 +130,7 @@ type TicketUpdatedPayload struct {
 type AgentObservationUpdatedPayload struct {
 	ObservationID   uint       `json:"observation_id"`
 	AgentUUID       *string    `json:"agent_uuid,omitempty"`
+	AgentVC         *string    `json:"vc,omitempty"`
 	WorkstationID   *string    `json:"workstation_id,omitempty"`
 	WorkstationName *string    `json:"workstation_name,omitempty"`
 	FRID            *string    `json:"fr_id,omitempty"`

@@ -160,6 +160,7 @@ func toFiscalResponse(item fiscal.FiscalRegister) map[string]interface{} {
 		"fr_serial_number":          item.FRSerialNumber,
 		"fr_serial_normalized":      item.FRSerialNormalized,
 		"fn_number":                 item.FNNumber,
+		"fn_execution":              item.FNExecution,
 		"kkt_reg_date":              item.KKTRegDate,
 		"fn_expire_date":            item.FNExpireDate,
 		"last_modified_date":        item.LastModifiedDate,

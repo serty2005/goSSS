@@ -2,6 +2,7 @@ package dtos
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,33 @@ type LicenseInfo struct {
 	Name      string `json:"name"`
 	DateFrom  string `json:"date_from"`
 	DateUntil string `json:"date_until"`
+}
+
+func pickString(raw map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, exists := raw[key]
+		if !exists || value == nil {
+			continue
+		}
+		if str, ok := value.(string); ok {
+			str = strings.TrimSpace(str)
+			if str != "" {
+				return str
+			}
+		}
+	}
+	return ""
+}
+
+func (li *LicenseInfo) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	li.Name = pickString(raw, "name")
+	li.DateFrom = pickString(raw, "date_from", "dateFrom")
+	li.DateUntil = pickString(raw, "date_until", "dateUntil")
+	return nil
 }
 
 // LicensesField - это специальный тип для поля 'licenses',
@@ -101,7 +129,9 @@ type AgentDataDTO struct {
 	AnydeskID        string        `json:"anydesk_id"`
 	LitemanagerID    string        `json:"litemanager_id"`
 	CurrentTime      string        `json:"current_time"`
+	VTime            string        `json:"v_time,omitempty"`
 	AgentVersion     string        `json:"agent_version"`
+	VC               string        `json:"vc,omitempty"`
 	InstalledDriver  string        `json:"installed_driver,omitempty"`
 	BootVersion      string        `json:"bootVersion,omitempty"`      // Версия прошивки (для FRFirmware)
 	Licenses         LicensesField `json:"licenses,omitempty"`         // Используем кастомный тип
@@ -248,9 +278,18 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	if strings.TrimSpace(a.OFDName) == "" {
+		if rawVal, exists := raw["ofdName"]; exists && rawVal != nil {
+			if val, ok := rawVal.(string); ok {
+				a.OFDName = strings.TrimSpace(val)
+			}
+		}
+	}
+
 	// Удаляем обработанные поля из raw мапы
 	delete(raw, "attribute_excise")
 	delete(raw, "attribute_marked")
+	delete(raw, "ofdName")
 
 	// Создаем временную структуру без проблемных полей для парсинга остальных данных
 	type Alias AgentDataDTO
@@ -285,7 +324,9 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "anydesk_id")
 	delete(raw, "litemanager_id")
 	delete(raw, "current_time")
+	delete(raw, "v_time")
 	delete(raw, "agent_version")
+	delete(raw, "vc")
 	delete(raw, "installed_driver")
 	delete(raw, "bootVersion")
 	delete(raw, "licenses")

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
@@ -345,6 +346,86 @@ func TestApplyObservation_FiscalOwnerTransferredToServerOwner(t *testing.T) {
 	var taskCount int64
 	require.NoError(t, db.Model(&models.ReconciliationTask{}).Where("task_type = ? AND entity_uuid = ?", "ownership_conflict_fr", fr.ID).Count(&taskCount).Error)
 	require.EqualValues(t, 0, taskCount)
+}
+
+func TestApplyObservation_FiscalStoresLegacyLicensesAndAttributes(t *testing.T) {
+	db, svc := setupObsService(t)
+	owner := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &owner, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+	ws := workstation.Workstation{IdentityHash: strRef(identityHash("991", "LM-991")), Teamviewer: strRef("991"), Litemanager: strRef("LM-991"), OwnerID: &owner}
+	require.NoError(t, db.Create(&ws).Error)
+
+	attrExcise := "true"
+	attrMarked := "false"
+	obs, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{
+		Hostname:        "ws",
+		URLRms:          "example.com",
+		CRMID:           crm,
+		CurrentTime:     "2026-01-10 10:00:00",
+		TeamviewerID:    "991",
+		LitemanagerID:   "LM-991",
+		SerialNumber:    "SN-991",
+		AttributeExcise: &attrExcise,
+		AttributeMarked: &attrMarked,
+		OFDName:         "ООО \"Ярус\"",
+		FNExecution:     "  ФН-1.2 исполнение Ин15-4  ",
+		Licenses:        api.LicensesField{Legacy: "Подписка до 3 квартала 2026 года"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusApplied, obs.Status)
+
+	var fr fiscal.FiscalRegister
+	require.NoError(t, db.First(&fr, "fr_serial_normalized = ?", "SN-991").Error)
+	require.NotNil(t, fr.AttributeExcise)
+	require.True(t, *fr.AttributeExcise)
+	require.NotNil(t, fr.AttributeMarked)
+	require.False(t, *fr.AttributeMarked)
+	require.NotNil(t, fr.OFDName)
+	require.Equal(t, "ООО \"Ярус\"", *fr.OFDName)
+	require.NotNil(t, fr.FNExecution)
+	require.Equal(t, "ФН-1.2 исполнение Ин15-4", *fr.FNExecution)
+
+	var licensesValue string
+	require.NoError(t, json.Unmarshal(fr.Licenses, &licensesValue))
+	require.Equal(t, "2026:3", licensesValue)
+}
+
+func TestApplyObservation_FiscalStoresStructuredLicenses(t *testing.T) {
+	db, svc := setupObsService(t)
+	owner := "cmp-1"
+	crm := "CRM-1"
+	srv := server.Server{OwnerID: &owner, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+	ws := workstation.Workstation{IdentityHash: strRef(identityHash("992", "LM-992")), Teamviewer: strRef("992"), Litemanager: strRef("LM-992"), OwnerID: &owner}
+	require.NoError(t, db.Create(&ws).Error)
+
+	obs, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{
+		Hostname:      "ws",
+		URLRms:        "example.com",
+		CRMID:         crm,
+		CurrentTime:   "2026-01-10 10:00:00",
+		TeamviewerID:  "992",
+		LitemanagerID: "LM-992",
+		SerialNumber:  "SN-992",
+		Licenses: api.LicensesField{
+			Structured: map[string]api.LicenseInfo{
+				"17": {DateUntil: "2038-01-19 03:14:07"},
+				"19": {DateUntil: "2039-01-19 03:14:07"},
+				"2":  {DateUntil: "2000-01-01 00:00:00"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.AgentObservationStatusApplied, obs.Status)
+
+	var fr fiscal.FiscalRegister
+	require.NoError(t, db.First(&fr, "fr_serial_normalized = ?", "SN-992").Error)
+
+	var licensesValue string
+	require.NoError(t, json.Unmarshal(fr.Licenses, &licensesValue))
+	require.Equal(t, "17:2038-01-19 03:14:07;19:2039-01-19 03:14:07", licensesValue)
 }
 
 func strRef(v string) *string {

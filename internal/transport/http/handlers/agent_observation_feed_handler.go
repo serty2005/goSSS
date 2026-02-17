@@ -43,11 +43,13 @@ type observationPayload struct {
 	URLRms    string `json:"url_rms"`
 	Current   string `json:"current_time"`
 	VTime     string `json:"v_time"`
+	VC        string `json:"vc"`
 }
 
 type observationFeedRow struct {
 	ObservationID   uint       `json:"observation_id"`
 	AgentUUID       *string    `json:"agent_uuid"`
+	AgentVC         *string    `json:"vc"`
 	WorkstationID   *string    `json:"workstation_id"`
 	WorkstationName *string    `json:"workstation_name"`
 	FRID            *string    `json:"fr_id"`
@@ -250,6 +252,7 @@ func parseObservationFeedRow(raw observationFeedDBRow) observationFeedRow {
 		agentUUID = strings.TrimSpace(raw.Source)
 	}
 	row.AgentUUID = stringPtrOrNil(agentUUID)
+	row.AgentVC = stringPtrOrNil(strings.TrimSpace(payload.VC))
 	row.ServerURL = stringPtrOrNil(strings.TrimSpace(payload.URLRms))
 	row.CurrentTimeRaw = stringPtrOrNil(strings.TrimSpace(payload.Current))
 	row.VTimeRaw = stringPtrOrNil(strings.TrimSpace(payload.VTime))

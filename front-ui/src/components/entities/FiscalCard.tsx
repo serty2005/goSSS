@@ -101,11 +101,6 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
           {renderFnInfo(data.fn_expire_date)}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">Исполнение ФН:</Text>
-          <Text>{fnExecution || '-'}</Text>
-        </div>
-
         {(data.driver_version || data.fr_firmware || data.fr_downloader) && (
           <div style={{ marginTop: 4, fontSize: 11, color: '#8c8c8c', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: 4 }}>
             FW: {data.fr_firmware || '-'} {data.fr_downloader ? `| FWDownloader: ${data.fr_downloader}` : ''}{data.driver_version ? `| Drv: ${data.driver_version}` : ''}

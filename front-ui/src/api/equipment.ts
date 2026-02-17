@@ -70,6 +70,10 @@ export const equipmentApi = {
     return response.data;
   },
 
+  deleteFiscal: async (uuid: string) => {
+    await apiClient.delete(`/fiscals/${uuid}`);
+  },
+
   getOwnerHistory: async (entityType: 'Server' | 'Workstation' | 'FiscalRegister', entityID: string, limit = 100) => {
     const response = await apiClient.get<ApiResponse<EntityOwnerHistoryItemDTO[]>>('/owner-history', {
       params: { entity_type: entityType, entity_id: entityID, limit },

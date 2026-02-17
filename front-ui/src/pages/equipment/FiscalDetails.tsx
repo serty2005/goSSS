@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Popconfirm, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { companiesApi } from '@/api/companies';
@@ -9,9 +9,8 @@ import { getEntityIcon } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
 import { EntityOwnerHistoryItemDTO, UpdateFiscalPayload } from '@/types/api';
 import dayjs from 'dayjs';
-import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
-import { canEditEquipment } from '@/utils/permissions';
+import { canEditEquipment, isAdmin } from '@/utils/permissions';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
@@ -31,6 +30,27 @@ const sourceLabelMap: Record<string, string> = {
   manual_resolution: 'Ручное разрешение',
 };
 
+type LicenseRow = {
+  licenseID: string;
+  dateLabel: string;
+  expiresAt?: dayjs.Dayjs;
+};
+
+const renderTermIndicator = (date?: dayjs.Dayjs) => {
+  if (!date || !date.isValid()) return '-';
+  const monthsLeft = date.endOf('day').diff(dayjs(), 'month', true);
+  const color = monthsLeft > 6 ? '#52c41a' : monthsLeft > 2 ? '#faad14' : '#ff4d4f';
+  return <Badge color={color} text={date.format('DD.MM.YYYY')} />;
+};
+
+const formatFFD = (value?: string) => {
+  if (!value) return '-';
+  if (value === '105') return '1.05';
+  if (value === '120') return '1.2';
+  if (value === '110') return '1.1';
+  return value;
+};
+
 const FiscalDetails: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
@@ -42,6 +62,7 @@ const FiscalDetails: React.FC = () => {
   const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
   const user = useAuthStore((state) => state.user);
   const canEdit = canEditEquipment(user?.roles);
+  const canDelete = isAdmin(user?.roles);
 
   const { data: fiscalRes, isLoading } = useQuery({
     queryKey: ['fiscal', id],
@@ -61,6 +82,13 @@ const FiscalDetails: React.FC = () => {
     staleTime: 10_000,
   });
 
+  const { data: ownerCompanyRes } = useQuery({
+    queryKey: ['company', fiscalRes?.data?.owner_id],
+    queryFn: () => companiesApi.getCompany(fiscalRes!.data.owner_id!),
+    enabled: Boolean(fiscalRes?.data?.owner_id),
+    staleTime: 60_000,
+  });
+
   const updateMutation = useMutation({
     mutationFn: (values: UpdateFiscalPayload) => equipmentApi.updateFiscal(id!, values),
     onSuccess: () => {
@@ -72,33 +100,81 @@ const FiscalDetails: React.FC = () => {
     onError: () => message.error('Ошибка обновления'),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => equipmentApi.deleteFiscal(id!),
+    onSuccess: () => {
+      message.success('ФР удалён');
+      navigate('/fiscals');
+    },
+    onError: () => message.error('Ошибка удаления'),
+  });
+
   const fiscal = fiscalRes?.data;
-  const companyOptions = useMemo(() => (companiesRes?.data || []).map((item) => ({
-    value: String(item.id || ''),
-    title: String(item.title || item.additional_name || item.id || ''),
-    parentTitle: item.parent_title ? String(item.parent_title) : undefined,
-  })).filter((item) => item.value && item.title), [companiesRes?.data]);
+  const companyOptions = useMemo(() => {
+    const base = (companiesRes?.data || []).map((item) => ({
+      value: String(item.id || ''),
+      title: String(item.title || item.additional_name || item.id || ''),
+      parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+    })).filter((item) => item.value && item.title);
+
+    const ownerData = ownerCompanyRes?.data;
+    if (ownerData?.id && ownerData?.title && !base.some((item) => item.value === ownerData.id)) {
+      base.unshift({
+        value: ownerData.id,
+        title: ownerData.title,
+        parentTitle: ownerData.parent_title ? String(ownerData.parent_title) : undefined,
+      });
+    }
+    return base;
+  }, [companiesRes?.data, ownerCompanyRes?.data]);
+
   const agentUpdate = useMemo(() => (fiscal ? getAgentUpdateMeta(fiscal) : null), [fiscal]);
-  const licensesData = useMemo(() => (
-    fiscal?.licenses
-      ? Object.entries(fiscal.licenses).map(([licenseID, data]) => ({ licenseID, ...data }))
-      : []
-  ), [fiscal?.licenses]);
+
+  const licensesData = useMemo<LicenseRow[]>(() => {
+    if (!fiscal?.licenses) return [];
+
+    if (typeof fiscal.licenses === 'string') {
+      const raw = fiscal.licenses.trim();
+      if (!raw) return [];
+
+      return raw
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+          const splitIndex = part.indexOf(':');
+          const licenseID = splitIndex >= 0 ? part.slice(0, splitIndex).trim() : part;
+          const dateRaw = splitIndex >= 0 ? part.slice(splitIndex + 1).trim() : '';
+          const parsed = dayjs(dateRaw);
+          return {
+            licenseID: licenseID || 'license',
+            dateLabel: parsed.isValid() ? parsed.format('DD.MM.YYYY') : (dateRaw || '-'),
+            expiresAt: parsed.isValid() ? parsed : undefined,
+          };
+        })
+        .filter((item) => item.licenseID === '17' || item.licenseID === '19');
+    }
+
+    return Object.entries(fiscal.licenses)
+      .map(([licenseID, data]) => {
+      const parsed = dayjs(data.date_until);
+      return {
+        licenseID,
+        dateLabel: parsed.isValid() ? parsed.format('DD.MM.YYYY') : '-',
+        expiresAt: parsed.isValid() ? parsed : undefined,
+      };
+      })
+      .filter((item) => item.licenseID === '17' || item.licenseID === '19');
+  }, [fiscal?.licenses]);
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
   if (!fiscal) return <div>Фискальный регистратор не найден</div>;
 
-  const saveField = (field: keyof UpdateFiscalPayload, value: string) => {
+  const saveOwner = (value: string) => {
     if (!canEdit) return;
-    setActiveField(field);
-    updateMutation.mutate({ [field]: value } as UpdateFiscalPayload);
+    setActiveField('owner_id');
+    updateMutation.mutate({ owner_id: value } as UpdateFiscalPayload);
   };
-
-  const licenseColumns = [
-    { title: 'ID', dataIndex: 'licenseID', width: 60 },
-    { title: 'Название', dataIndex: 'name' },
-    { title: 'До', dataIndex: 'date_until', render: (value: string) => value ? value.split(' ')[0] : '-' },
-  ];
 
   const handleBack = () => {
     const backTo = (location.state as { backTo?: string } | null)?.backTo;
@@ -127,6 +203,10 @@ const FiscalDetails: React.FC = () => {
     return '-';
   };
 
+  const renderFlag = (value?: boolean | null) => (
+    <Badge color={value ? '#52c41a' : '#ff4d4f'} text={value ? 'да' : 'нет'} />
+  );
+
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -147,7 +227,18 @@ const FiscalDetails: React.FC = () => {
           ) : null}
         </Space>
 
-        {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}
+        {canDelete && (
+          <Popconfirm
+            title="Удалить фискальный регистратор?"
+            description="Действие необратимо."
+            okText="Удалить"
+            cancelText="Отмена"
+            okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+            onConfirm={() => deleteMutation.mutate()}
+          >
+            <Button danger icon={<DeleteOutlined />}>Удалить</Button>
+          </Popconfirm>
+        )}
       </div>
 
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -163,33 +254,52 @@ const FiscalDetails: React.FC = () => {
                   onSearch={setCompanySearch}
                   onChange={(value) => {
                     if (!canEdit || !value) return;
-                    saveField('owner_id', value);
+                    saveOwner(value);
                   }}
                 />
-                <Text type="secondary">Режим привязки: {fiscal.owner_binding_mode || 'auto'}</Text>
+                <Space>
+                  <Text type="secondary">Режим привязки: {fiscal.owner_binding_mode || 'auto'}</Text>
+                  {fiscal.owner_id ? <Button type="link" onClick={() => navigate(`/companies/${fiscal.owner_id}`)}>К владельцу</Button> : null}
+                </Space>
               </Space>
             </Descriptions.Item>
+
             <Descriptions.Item label="РНМ">
-              <InlineFieldEditor value={fiscal.rn_kkt} editable={canEdit} onSave={(v) => saveField('rn_kkt', v)} saving={updateMutation.isPending && activeField === 'rn_kkt'} />
+              {fiscal.rn_kkt || '-'}
               <div><Text type="secondary">Формат: {formatRnm(fiscal.rn_kkt)}</Text></div>
             </Descriptions.Item>
-            <Descriptions.Item label="Заводской номер">
-              <InlineFieldEditor value={fiscal.fr_serial_number} editable={canEdit} onSave={(v) => saveField('fr_serial_number', v)} saving={updateMutation.isPending && activeField === 'fr_serial_number'} />
+            <Descriptions.Item label="Юр. лицо">{fiscal.legal_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Модель">{fiscal.model_kkt || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Адрес" span={2}>{fiscal.address || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Заводской номер">{fiscal.fr_serial_number || '-'}</Descriptions.Item>
+            <Descriptions.Item label="ИНН">{fiscal.inn || '-'}</Descriptions.Item>
+            <Descriptions.Item label="ФН">{fiscal.fn_number || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Исполнение ФН">{fiscal.fn_execution || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Дата регистрации ККТ">{fiscal.kkt_reg_date ? dayjs(fiscal.kkt_reg_date).format('DD.MM.YYYY HH:mm:ss') : '-'}</Descriptions.Item>
+            <Descriptions.Item label="Срок ФН">{renderTermIndicator(fiscal.fn_expire_date ? dayjs(fiscal.fn_expire_date) : undefined)}</Descriptions.Item>
+            <Descriptions.Item label="ФФД">{formatFFD(fiscal.ffd)}</Descriptions.Item>
+            <Descriptions.Item label="Версия драйвера">{fiscal.driver_version || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Прошивка">{fiscal.fr_firmware || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Акцизные товары">{renderFlag(fiscal.attribute_excise)}</Descriptions.Item>
+            <Descriptions.Item label="ОФД">{fiscal.ofd_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Маркированные товары">{renderFlag(fiscal.attribute_marked)}</Descriptions.Item>
+            <Descriptions.Item label="Лицензии ККТ" span={2}>
+              {licensesData.length === 0 ? '-' : (
+                <Space size={12} wrap>
+                  {licensesData.map((item) => (
+                    <Space key={`${item.licenseID}:${item.dateLabel}`} size={4}>
+                      <Text>{item.licenseID}</Text>
+                      {item.expiresAt ? renderTermIndicator(item.expiresAt) : <Text>{item.dateLabel}</Text>}
+                    </Space>
+                  ))}
+                </Space>
+              )}
             </Descriptions.Item>
-            <Descriptions.Item label="Модель">
-              <InlineFieldEditor value={fiscal.model_kkt} editable={canEdit} onSave={(v) => saveField('model_kkt', v)} saving={updateMutation.isPending && activeField === 'model_kkt'} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Описание">
-              <InlineFieldEditor value={fiscal.description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
-            </Descriptions.Item>
+            <Descriptions.Item label="ID РС">{fiscal.workstation_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Статус">{fiscal.health_status || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Обновлено">{fiscal.updated_at ? dayjs(fiscal.updated_at).format('DD.MM.YYYY HH:mm:ss') : '-'}</Descriptions.Item>
           </Descriptions>
         </Card>
-
-        {licensesData.length > 0 && (
-          <Card title="Лицензии ККТ" className="glass-panel" size="small">
-            <Table dataSource={licensesData} columns={licenseColumns} rowKey="licenseID" pagination={false} size="small" />
-          </Card>
-        )}
 
         <Card title="История изменений" className="glass-panel" size="small">
           <Table<EntityOwnerHistoryItemDTO>

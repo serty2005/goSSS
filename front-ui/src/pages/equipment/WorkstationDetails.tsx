@@ -59,6 +59,12 @@ const WorkstationDetails: React.FC = () => {
     queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
     staleTime: 10_000,
   });
+  const { data: ownerCompanyRes } = useQuery({
+    queryKey: ['company', wsRes?.data?.owner_id],
+    queryFn: () => companiesApi.getCompany(wsRes!.data.owner_id!),
+    enabled: Boolean(wsRes?.data?.owner_id),
+    staleTime: 60_000,
+  });
 
   const updateMutation = useMutation({
     mutationFn: (values: UpdateWorkstationPayload) => equipmentApi.updateWorkstation(id!, values),
@@ -72,11 +78,22 @@ const WorkstationDetails: React.FC = () => {
   });
 
   const ws = wsRes?.data;
-  const companyOptions = useMemo(() => (companiesRes?.data || []).map((item) => ({
-    value: String(item.id || ''),
-    title: String(item.title || item.additional_name || item.id || ''),
-    parentTitle: item.parent_title ? String(item.parent_title) : undefined,
-  })).filter((item) => item.value && item.title), [companiesRes?.data]);
+  const companyOptions = useMemo(() => {
+    const base = (companiesRes?.data || []).map((item) => ({
+      value: String(item.id || ''),
+      title: String(item.title || item.additional_name || item.id || ''),
+      parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+    })).filter((item) => item.value && item.title);
+    const ownerData = ownerCompanyRes?.data;
+    if (ownerData?.id && ownerData?.title && !base.some((item) => item.value === ownerData.id)) {
+      base.unshift({
+        value: ownerData.id,
+        title: ownerData.title,
+        parentTitle: ownerData.parent_title ? String(ownerData.parent_title) : undefined,
+      });
+    }
+    return base;
+  }, [companiesRes?.data, ownerCompanyRes?.data]);
   const agentUpdate = useMemo(() => (ws ? getAgentUpdateMeta(ws) : null), [ws]);
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
@@ -153,7 +170,12 @@ const WorkstationDetails: React.FC = () => {
                   saveField('owner_id', value);
                 }}
               />
-              <Text type="secondary">Режим привязки: {ws.owner_binding_mode || 'auto'}</Text>
+              <Space>
+                <Text type="secondary">Режим привязки: {ws.owner_binding_mode || 'auto'}</Text>
+                {ws.owner_id ? (
+                  <Button type="link" onClick={() => navigate(`/companies/${ws.owner_id}`)}>К владельцу</Button>
+                ) : null}
+              </Space>
             </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Название устройства">

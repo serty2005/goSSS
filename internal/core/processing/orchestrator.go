@@ -244,18 +244,19 @@ func (o *Orchestrator) publishAgentObservationUpdate(ctx context.Context, source
 
 	currentRaw := ""
 	vTimeRaw := ""
+	agentVC := ""
 	serverURL := ""
 	if data != nil {
 		currentRaw = strings.TrimSpace(data.CurrentTime)
-		if raw, ok := data.AdditionalProperties["v_time"].(string); ok {
-			vTimeRaw = strings.TrimSpace(raw)
-		}
+		vTimeRaw = strings.TrimSpace(data.VTime)
+		agentVC = strings.TrimSpace(data.VC)
 		serverURL = strings.TrimSpace(data.URLRms)
 	}
 
 	payload := events.AgentObservationUpdatedPayload{
 		ObservationID:   obs.ID,
 		AgentUUID:       stringPtrOrNil(agentUUID),
+		AgentVC:         stringPtrOrNil(agentVC),
 		WorkstationID:   trimStringPtr(obs.WorkstationID),
 		WorkstationName: stringPtrOrNil(workstationName),
 		FRID:            trimStringPtr(obs.FRID),
