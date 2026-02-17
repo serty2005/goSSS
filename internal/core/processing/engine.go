@@ -1,4 +1,4 @@
-﻿// Файл: internal/core/processing/engine.go
+// Файл: internal/core/processing/engine.go
 //
 // Package processing содержит движок обработки агентских данных.
 // Движок отвечает за сверку данных от агентов мониторинга с существующими

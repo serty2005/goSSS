@@ -12,15 +12,29 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5/middleware"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func TimeoutUnless(timeout time.Duration, skip func(*http.Request) bool) func(http.Handler) http.Handler {
+	base := chiMiddleware.Timeout(timeout)
+	return func(next http.Handler) http.Handler {
+		withTimeout := base(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if skip != nil && skip(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			withTimeout.ServeHTTP(w, r)
+		})
+	}
+}
 
 // LoggerInjector внедряет логгер с request-id в контекст запроса.
 func LoggerInjector(baseLogger logger.LoggerInterface) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := middleware.GetReqID(r.Context())
+			requestID := chiMiddleware.GetReqID(r.Context())
 			ctxLogger := baseLogger.With("request_id", requestID)
 			ctx := context.WithValue(r.Context(), contextkeys.LoggerContextKey, ctxLogger)
 			next.ServeHTTP(w, r.WithContext(ctx))

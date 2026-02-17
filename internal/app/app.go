@@ -445,7 +445,9 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Use(middleware.LoggerInjector(a.Logger))
 	r.Use(middleware.DebugHTTPIOMiddleware())
 	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
-	r.Use(chi_middleware.Timeout(60 * time.Second))
+	r.Use(middleware.TimeoutUnless(60*time.Second, func(r *http.Request) bool {
+		return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/events")
+	}))
 
 	// Без Auth Middleware, авторизация внутри хендлера
 	r.Post("/api/submit_json", a.AgentHandler.HandleSubmitJSON)
