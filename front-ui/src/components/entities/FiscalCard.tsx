@@ -17,9 +17,6 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
   const navigate = useNavigate();
   const agentUpdate = getAgentUpdateMeta(data);
   const organizationName = data.legal_name || data.organization_name;
-  const fnExecution = typeof data.fn_execution === 'string'
-    ? data.fn_execution
-    : (typeof data.fnExecution === 'string' ? data.fnExecution : undefined);
 
   const renderFnInfo = (dateStr?: string) => {
     if (!dateStr) return <Tag>Нет ФН</Tag>;
