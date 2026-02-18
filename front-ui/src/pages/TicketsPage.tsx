@@ -25,13 +25,14 @@ import { DndContext, DragEndEvent, PointerSensor, closestCenter, useSensor, useS
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Resizable } from 'react-resizable';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import { useAuthStore } from '@/store/authStore';
+import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { sanitizeRichHtml } from '@/utils/sanitizeRichHtml';
 
 const { Text, Paragraph } = Typography;
@@ -215,7 +216,11 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing,
 
 const TicketsPage: React.FC = () => {
   const { token } = antTheme.useToken();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsRaw = useTicketParamsStore((state) => state.ticketParams);
+  const setSearchParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
+  const createTicketRequestID = useTicketParamsStore((state) => state.createTicketRequestID);
+  const clearCreateTicketRequest = useTicketParamsStore((state) => state.clearCreateTicketRequest);
+  const searchParams = useMemo(() => new URLSearchParams(searchParamsRaw), [searchParamsRaw]);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
@@ -247,7 +252,6 @@ const TicketsPage: React.FC = () => {
   const periodFrom = archiveMode === 'archive' ? archivePeriodFrom : activePeriodFrom;
   const periodTo = archiveMode === 'archive' ? archivePeriodTo : activePeriodTo;
   const viewMode = (searchParams.get('view') as ViewMode) || 'list';
-  const createParam = searchParams.get('create') || '';
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const statusValues = useMemo(
@@ -446,10 +450,12 @@ const TicketsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (createParam === '1') {
-      setIsCreateOpen(true);
+    if (createTicketRequestID === 0) {
+      return;
     }
-  }, [createParam]);
+    setIsCreateOpen(true);
+    clearCreateTicketRequest();
+  }, [clearCreateTicketRequest, createTicketRequestID]);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -706,7 +712,7 @@ const TicketsPage: React.FC = () => {
       params.set('table_sort', `${key}:${nextOrder}`);
     }
     params.set('page', '1');
-    setSearchParams(params);
+    setSearchParamsRaw(params.toString());
   }
 
   function renderSortableTitle(label: string, key: TableSortKey) {
@@ -764,7 +770,7 @@ const TicketsPage: React.FC = () => {
     const params = new URLSearchParams(searchParams);
     params.set('assignee_ids', String(assigneeID));
     params.set('page', '1');
-    setSearchParams(params);
+    setSearchParamsRaw(params.toString());
   };
 
   return (
@@ -1153,14 +1159,8 @@ const TicketsPage: React.FC = () => {
         open={isCreateOpen}
         onClose={() => {
           setIsCreateOpen(false);
-          const next = new URLSearchParams(searchParams);
-          next.delete('create');
-          setSearchParams(next);
         }}
         onCreated={() => {
-          const next = new URLSearchParams(searchParams);
-          next.delete('create');
-          setSearchParams(next);
           queryClient.invalidateQueries({ queryKey: ['tickets'] });
         }}
       />

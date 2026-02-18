@@ -1,6 +1,6 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
+import { AutoComplete, Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -8,6 +8,7 @@ import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
 import { profileApi } from '@/api/profile';
 import { useAuthStore } from '@/store/authStore';
+import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 
 const { useBreakpoint } = Grid;
@@ -41,6 +42,7 @@ const TABLE_COLUMN_OPTIONS = [
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
 const TICKET_STATE_PARAM_KEYS = [
+  'preset_id',
   'q',
   'view',
   'status',
@@ -56,18 +58,26 @@ const TICKET_STATE_PARAM_KEYS = [
   'archive_period_to',
 ] as const;
 type TicketStateParamKey = (typeof TICKET_STATE_PARAM_KEYS)[number];
+const TICKET_PRESET_PARAM_KEYS = [
+  'view',
+  'archive_mode',
+  'status',
+  'only_active_statuses',
+  'table_columns',
+  'assignee_ids',
+  'company',
+  'archive_company',
+  'period_from',
+  'period_to',
+  'archive_period_from',
+  'archive_period_to',
+] as const;
+type TicketPresetParamKey = (typeof TICKET_PRESET_PARAM_KEYS)[number];
 
 type TicketPreset = {
   id: string;
   name: string;
-  values: {
-    status?: string;
-    company?: string;
-    assignee_ids?: string;
-    period_from?: string;
-    period_to?: string;
-    table_columns?: string;
-  };
+  values: Partial<Record<TicketPresetParamKey, string>>;
 };
 
 const HeaderSearch: React.FC = () => {
@@ -121,11 +131,15 @@ const HeaderSearch: React.FC = () => {
   const screens = useBreakpoint();
   const isCompact = !screens.xl;
 
-  const [ticketParams, setTicketParams] = useSearchParams();
+  const ticketParamsRaw = useTicketParamsStore((state) => state.ticketParams);
+  const setTicketParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
+  const requestCreateTicket = useTicketParamsStore((state) => state.requestCreateTicket);
+  const ticketParams = useMemo(() => new URLSearchParams(ticketParamsRaw), [ticketParamsRaw]);
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
   const [presetName, setPresetName] = useState('');
   const appliedSearch = ticketParams.get('q') || '';
   const ticketStatus = ticketParams.get('status') || '';
+  const selectedPresetID = ticketParams.get('preset_id') || undefined;
   const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
   const ticketView = ticketParams.get('view') || 'list';
   const ticketTableColumns = ticketParams.get('table_columns') || '';
@@ -145,8 +159,15 @@ const HeaderSearch: React.FC = () => {
   const periodToParamKey = archiveMode === 'archive' ? 'archive_period_to' : 'period_to';
 
   useEffect(() => {
-    setTicketTerm(ticketParams.get('q') || '');
-  }, [ticketParams]);
+    if (!isTicketsPage || !location.search) {
+      return;
+    }
+    navigate(location.pathname, { replace: true });
+  }, [isTicketsPage, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    setTicketTerm(new URLSearchParams(ticketParamsRaw).get('q') || '');
+  }, [ticketParamsRaw]);
 
   const statusValues = useMemo(() => (ticketStatus ? ticketStatus.split(',').filter(Boolean) : []), [ticketStatus]);
   const effectiveStatusValues = useMemo(() => {
@@ -240,6 +261,15 @@ const HeaderSearch: React.FC = () => {
     }
     return raw.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string');
   }, [user?.profile_config]);
+  const presetNameOptions = useMemo(
+    () => presets.map((item) => ({ value: item.name })),
+    [presets],
+  );
+  const normalizedPresetName = useMemo(() => presetName.trim().toLocaleLowerCase('ru-RU'), [presetName]);
+  const existingPresetByName = useMemo(
+    () => presets.find((item) => item.name.trim().toLocaleLowerCase('ru-RU') === normalizedPresetName),
+    [normalizedPresetName, presets],
+  );
   const nextPresetID = useMemo(() => {
     const maxIndex = presets.reduce((maxValue, item) => {
       const match = item.id.match(/^preset_(\d+)$/);
@@ -294,8 +324,14 @@ const HeaderSearch: React.FC = () => {
         params.set(key, value);
       }
     });
+    const shouldResetPreset =
+      !Object.prototype.hasOwnProperty.call(next, 'preset_id')
+      && Object.keys(next).some((key) => (TICKET_PRESET_PARAM_KEYS as readonly string[]).includes(key) || key === 'q');
+    if (shouldResetPreset) {
+      params.delete('preset_id');
+    }
     params.set('page', '1');
-    setTicketParams(params);
+    setTicketParamsRaw(params.toString());
   };
 
   useEffect(() => {
@@ -304,7 +340,7 @@ const HeaderSearch: React.FC = () => {
     }
   }, [isTicketsListPage]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isTicketsListPage || ticketStateRefReady.current) {
       return;
     }
@@ -355,8 +391,8 @@ const HeaderSearch: React.FC = () => {
       return;
     }
     nextParams.set('page', '1');
-    setTicketParams(nextParams, { replace: true });
-  }, [hasExplicitTicketState, isTicketsListPage, profileTicketState, setTicketParams, ticketParams, ticketStateStorageKey]);
+    setTicketParamsRaw(nextParams.toString());
+  }, [hasExplicitTicketState, isTicketsListPage, profileTicketState, setTicketParamsRaw, ticketParams, ticketStateStorageKey]);
 
   useEffect(() => {
     if (!isTicketsPage) {
@@ -416,14 +452,13 @@ const HeaderSearch: React.FC = () => {
     if (!preset) {
       return;
     }
-    updateTicketParams({
-      status: preset.values.status || undefined,
-      company: preset.values.company || undefined,
-      assignee_ids: preset.values.assignee_ids || undefined,
-      period_from: preset.values.period_from || undefined,
-      period_to: preset.values.period_to || undefined,
-      table_columns: preset.values.table_columns || undefined,
+    const nextParams: Record<string, string | undefined> = {};
+    TICKET_PRESET_PARAM_KEYS.forEach((key) => {
+      nextParams[key] = preset.values[key] || undefined;
     });
+    nextParams.preset_id = preset.id;
+    updateTicketParams(nextParams);
+    setPresetName(preset.name);
   };
 
   const saveCurrentPreset = async () => {
@@ -436,18 +471,21 @@ const HeaderSearch: React.FC = () => {
       return;
     }
 
+    const nextPresetValues: Partial<Record<TicketPresetParamKey, string>> = {};
+    TICKET_PRESET_PARAM_KEYS.forEach((key) => {
+      const value = ticketParams.get(key);
+      if (value) {
+        nextPresetValues[key] = value;
+      }
+    });
     const nextPreset: TicketPreset = {
-      id: nextPresetID,
-      name,
-      values: {
-        status: ticketStatus || undefined,
-        company: activeCompany || undefined,
-        assignee_ids: ticketAssigneeIDs || undefined,
-        period_from: activePeriodFrom || undefined,
-        period_to: activePeriodTo || undefined,
-        table_columns: ticketTableColumns || undefined,
-      },
+      id: existingPresetByName?.id || nextPresetID,
+      name: existingPresetByName?.name || name,
+      values: nextPresetValues,
     };
+    const nextPresets = existingPresetByName
+      ? presets.map((item) => (item.id === existingPresetByName.id ? nextPreset : item))
+      : [...presets, nextPreset];
 
     const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
     const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
@@ -458,7 +496,7 @@ const HeaderSearch: React.FC = () => {
         ...ticketsConfig,
         filters: {
           ...filtersConfig,
-          presets: [...presets, nextPreset],
+          presets: nextPresets,
         },
       },
     };
@@ -467,9 +505,42 @@ const HeaderSearch: React.FC = () => {
       await updateProfileMutation.mutateAsync(nextConfig);
       setUser({ ...user, profile_config: nextConfig as any });
       setPresetName('');
-      message.success('Фильтр сохранён');
+      updateTicketParams({ preset_id: nextPreset.id });
+      message.success(existingPresetByName ? 'Фильтр обновлён' : 'Фильтр сохранён');
     } catch {
       message.error('Не удалось сохранить фильтр');
+    }
+  };
+
+  const deleteCurrentPreset = async () => {
+    if (!user || !existingPresetByName) {
+      return;
+    }
+    const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
+    const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
+    const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
+    const nextPresets = presets.filter((item) => item.id !== existingPresetByName.id);
+    const nextConfig: Record<string, unknown> = {
+      ...currentConfig,
+      tickets: {
+        ...ticketsConfig,
+        filters: {
+          ...filtersConfig,
+          presets: nextPresets,
+        },
+      },
+    };
+
+    try {
+      await updateProfileMutation.mutateAsync(nextConfig);
+      setUser({ ...user, profile_config: nextConfig as any });
+      if (selectedPresetID === existingPresetByName.id) {
+        updateTicketParams({ preset_id: undefined });
+      }
+      setPresetName('');
+      message.success('Фильтр удалён');
+    } catch {
+      message.error('Не удалось удалить фильтр');
     }
   };
 
@@ -648,27 +719,25 @@ const HeaderSearch: React.FC = () => {
         />
 
         {archiveMode !== 'archive' && (
-          <>
-            <Select
-              allowClear
-              placeholder="Выбрать сохранённый фильтр"
-              options={presets.map((item) => ({ value: item.id, label: item.name }))}
-              onChange={(value) => {
-                if (!value) return;
-                applyPreset(value);
-              }}
+          <Space.Compact style={{ width: '100%' }}>
+            <AutoComplete
+              options={presetNameOptions}
+              placeholder="Имя фильтра"
+              value={presetName}
+              onChange={setPresetName}
+              filterOption={(inputValue, option) =>
+                String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())
+              }
             />
-            <Space.Compact style={{ width: '100%' }}>
-              <Input
-                placeholder="Имя фильтра"
-                value={presetName}
-                onChange={(event) => setPresetName(event.target.value)}
-              />
-              <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
-                Сохранить
+            <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
+              {existingPresetByName ? 'Обновить' : 'Сохранить'}
+            </Button>
+            {existingPresetByName && (
+              <Button danger onClick={() => void deleteCurrentPreset()} loading={updateProfileMutation.isPending}>
+                Удалить
               </Button>
-            </Space.Compact>
-          </>
+            )}
+          </Space.Compact>
         )}
 
         <Button
@@ -716,6 +785,22 @@ const HeaderSearch: React.FC = () => {
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
           style={{ width: isCompact ? 240 : 320 }}
         />
+        {archiveMode !== 'archive' && (
+          <Select
+            allowClear
+            placeholder="Сохранённый фильтр"
+            value={selectedPresetID}
+            options={presets.map((item) => ({ value: item.id, label: item.name }))}
+            onChange={(value) => {
+              if (!value) {
+                updateTicketParams({ preset_id: undefined });
+                return;
+              }
+              applyPreset(value);
+            }}
+            style={{ width: isCompact ? 180 : 220 }}
+          />
+        )}
         <Popover trigger="click" placement="bottomRight" content={filterContent}>
           <Button shape="circle" icon={<SettingOutlined />} />
         </Popover>
@@ -724,10 +809,11 @@ const HeaderSearch: React.FC = () => {
           icon={<PlusOutlined />}
           onClick={() => {
             if (isTicketsListPage) {
-              updateTicketParams({ create: '1' });
+              requestCreateTicket();
               return;
             }
-            navigate('/tickets?create=1');
+            requestCreateTicket();
+            navigate('/tickets');
           }}
         >
           Новая заявка
@@ -815,4 +901,3 @@ const HeaderSearch: React.FC = () => {
 };
 
 export default HeaderSearch;
-
