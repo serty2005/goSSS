@@ -297,7 +297,6 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_company_updated")
 	h.publishTicketUpdated(ticket.ID, "ticket_company_updated", "ui", "Изменена компания тикета")
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }

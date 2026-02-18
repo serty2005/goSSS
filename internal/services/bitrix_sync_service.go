@@ -119,6 +119,33 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		return 0, fmt.Errorf("тикет не найден")
 	}
 
+	fields, err := s.buildDealFields(ctx, ticket)
+	if err != nil {
+		return 0, err
+	}
+
+	if s.repo != nil {
+		link, linkErr := s.repo.GetDealLinkByTicketID(ctx, ticket.ID)
+		if linkErr != nil {
+			return 0, linkErr
+		}
+		if link != nil && link.B24DealID > 0 {
+			dealID := link.B24DealID
+			if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
+				return 0, err
+			}
+			s.setDealSuppress(ctx, dealID)
+			if err := s.repo.UpsertDealLink(ctx, &bitrix.DealLink{
+				TicketID:   ticket.ID,
+				B24DealID:  dealID,
+				LastSyncAt: time.Now(),
+			}); err != nil {
+				return 0, err
+			}
+			return dealID, nil
+		}
+	}
+
 	deals, err := s.client.DealListByOrigin(ctx, s.cfg.BitrixOriginatorID, ticket.ID)
 	if err != nil {
 		return 0, err
@@ -127,10 +154,6 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		return 0, fmt.Errorf("обнаружено более одной сделки Bitrix24 для тикета %s", ticket.ID)
 	}
 
-	fields, err := s.buildDealFields(ctx, ticket)
-	if err != nil {
-		return 0, err
-	}
 	var dealID int64
 	if len(deals) == 0 {
 		dealID, err = s.client.DealAdd(ctx, fields)
@@ -145,6 +168,9 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 	}
 	s.setDealSuppress(ctx, dealID)
 
+	if s.repo == nil {
+		return dealID, nil
+	}
 	if err := s.repo.UpsertDealLink(ctx, &bitrix.DealLink{
 		TicketID:   ticket.ID,
 		B24DealID:  dealID,

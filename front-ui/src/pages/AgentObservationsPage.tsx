@@ -6,7 +6,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { agentObservationsApi } from '@/api/agentObservations';
 import { AgentObservationFeedRowDTO } from '@/types/api';
-import { useAgentObservationStream } from '@/features/realtime/useAgentObservationStream';
+import { useSSE } from '@/features/realtime/useSSE';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 
 const { Title } = Typography;
@@ -38,6 +38,7 @@ const AgentObservationsPage: React.FC = () => {
   const [snapshotRows, setSnapshotRows] = useState<LocalRow[]>([]);
   const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
   const pendingRef = useRef<Record<string, LocalRow>>({});
+  const { subscribe } = useSSE();
 
   const matchesFilters = useCallback((row: AgentObservationFeedRowDTO) => {
     if (agentFilter && (row.agent_uuid || '').trim() !== agentFilter) {
@@ -104,6 +105,8 @@ const AgentObservationsPage: React.FC = () => {
       return response.data || [];
     },
     refetchOnWindowFocus: false,
+    refetchInterval: paused ? false : 5000,
+    refetchIntervalInBackground: true,
   });
 
   useEffect(() => {
@@ -158,7 +161,7 @@ const AgentObservationsPage: React.FC = () => {
     }, 2200);
   }, [matchesFilters, paused, sortRows]);
 
-  const { isConnecting } = useAgentObservationStream({ onMessage: onRealtimeMessage });
+  useEffect(() => subscribe('agent.observation.updated', onRealtimeMessage), [onRealtimeMessage, subscribe]);
 
   useEffect(() => {
     if (!paused) {
@@ -274,17 +277,9 @@ const AgentObservationsPage: React.FC = () => {
           {agentFilter ? <Tag color="blue">Агент: {agentFilter}</Tag> : null}
         </Space>
         {paused ? <Alert type="info" showIcon message="Список на паузе, входящие обновления продолжают накапливаться." style={{ marginBottom: 12 }} /> : null}
-        {!paused && isConnecting ? (
-          <Alert
-            type="info"
-            showIcon
-            message="Подключаем поток изменений..."
-            style={{ marginBottom: 12 }}
-          />
-        ) : null}
         <Table<LocalRow>
           rowKey="rowKey"
-          loading={isLoading || (!paused && isConnecting)}
+          loading={isLoading}
           columns={columns}
           dataSource={rows}
           onChange={(_pagination, _filters, sorter) => {

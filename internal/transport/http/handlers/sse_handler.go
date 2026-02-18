@@ -18,6 +18,8 @@ type SSEHandler struct {
 	bus eventbus.EventBus
 }
 
+const sseChannelBufferSize = 256
+
 // NewSSEHandler создает новый экземпляр.
 func NewSSEHandler(bus eventbus.EventBus) *SSEHandler {
 	return &SSEHandler{bus: bus}
@@ -60,7 +62,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Создаем канал через EventBus. Он закроется автоматически при r.Context().Done()
-	eventChan := h.bus.SubscribeChannel(r.Context(), 10, relevantEvents...)
+	eventChan := h.bus.SubscribeChannel(r.Context(), sseChannelBufferSize, relevantEvents...)
 
 	log.Debug("SSE клиент подключен", "remote", r.RemoteAddr)
 

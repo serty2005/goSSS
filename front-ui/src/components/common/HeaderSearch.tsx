@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
@@ -40,6 +40,22 @@ const TABLE_COLUMN_OPTIONS = [
   { value: 'sync_with_bitrix', label: 'B24' },
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
+const TICKET_STATE_PARAM_KEYS = [
+  'q',
+  'view',
+  'status',
+  'only_active_statuses',
+  'table_columns',
+  'assignee_ids',
+  'archive_mode',
+  'company',
+  'archive_company',
+  'period_from',
+  'period_to',
+  'archive_period_from',
+  'archive_period_to',
+] as const;
+type TicketStateParamKey = (typeof TICKET_STATE_PARAM_KEYS)[number];
 
 type TicketPreset = {
   id: string;
@@ -144,6 +160,8 @@ const HeaderSearch: React.FC = () => {
     return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const assigneeValues = useMemo(() => (ticketAssigneeIDs ? ticketAssigneeIDs.split(',').filter(Boolean) : []), [ticketAssigneeIDs]);
+  const ownAssigneeID = user?.id ? String(user.id) : '';
+  const isMineOnly = Boolean(ownAssigneeID) && assigneeValues.length === 1 && assigneeValues[0] === ownAssigneeID;
   const selectedTableColumns = useMemo(() => {
     if (!ticketTableColumns) {
       return TABLE_COLUMN_KEYS;
@@ -174,6 +192,9 @@ const HeaderSearch: React.FC = () => {
   });
 
   const updateProfileMutation = useMutation({
+    mutationFn: async (config: Record<string, unknown>) => profileApi.updateConfig({ profile_config: config }),
+  });
+  const persistTicketStateMutation = useMutation({
     mutationFn: async (config: Record<string, unknown>) => profileApi.updateConfig({ profile_config: config }),
   });
 
@@ -229,6 +250,40 @@ const HeaderSearch: React.FC = () => {
     }, 0);
     return `preset_${maxIndex + 1}`;
   }, [presets]);
+  const ticketStateStorageKey = useMemo(() => {
+    const userKey = user?.id ? String(user.id) : 'guest';
+    return `tickets-last-state-${userKey}`;
+  }, [user?.id]);
+  const hasExplicitTicketState = TICKET_STATE_PARAM_KEYS.some((key) => ticketParams.has(key));
+  const ticketStateRefReady = useRef(false);
+  const lastSyncedTicketStateRef = useRef('');
+  const ticketStateFromParams = useMemo(() => {
+    const nextState: Record<string, string> = {};
+    TICKET_STATE_PARAM_KEYS.forEach((key) => {
+      const value = ticketParams.get(key);
+      if (value) {
+        nextState[key] = value;
+      }
+    });
+    return nextState;
+  }, [ticketParams]);
+  const serializedTicketState = useMemo(() => JSON.stringify(ticketStateFromParams), [ticketStateFromParams]);
+  const profileTicketState = useMemo(() => {
+    const raw = (
+      user?.profile_config as { tickets?: { filters?: { last_state?: Record<string, unknown> } } } | undefined
+    )?.tickets?.filters?.last_state;
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+    const parsed: Record<string, string> = {};
+    TICKET_STATE_PARAM_KEYS.forEach((key) => {
+      const value = raw[key];
+      if (typeof value === 'string' && value) {
+        parsed[key] = value;
+      }
+    });
+    return Object.keys(parsed).length ? parsed : null;
+  }, [user?.profile_config]);
 
   const updateTicketParams = (next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(ticketParams);
@@ -242,6 +297,119 @@ const HeaderSearch: React.FC = () => {
     params.set('page', '1');
     setTicketParams(params);
   };
+
+  useEffect(() => {
+    if (!isTicketsListPage) {
+      ticketStateRefReady.current = false;
+    }
+  }, [isTicketsListPage]);
+
+  useEffect(() => {
+    if (!isTicketsListPage || ticketStateRefReady.current) {
+      return;
+    }
+    ticketStateRefReady.current = true;
+    if (hasExplicitTicketState) {
+      return;
+    }
+
+    const parseState = (rawState: string | null): Record<string, string> | null => {
+      if (!rawState) {
+        return null;
+      }
+      try {
+        const savedState = JSON.parse(rawState) as Record<string, unknown>;
+        if (!savedState || typeof savedState !== 'object') {
+          return null;
+        }
+        const parsed: Record<string, string> = {};
+        TICKET_STATE_PARAM_KEYS.forEach((key) => {
+          const value = savedState[key];
+          if (typeof value === 'string' && value) {
+            parsed[key] = value;
+          }
+        });
+        return Object.keys(parsed).length ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const localState = parseState(localStorage.getItem(ticketStateStorageKey));
+    const savedState = localState || profileTicketState;
+    if (!savedState) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(ticketParams);
+    let hasChanges = false;
+    (Object.keys(savedState) as TicketStateParamKey[]).forEach((key) => {
+      const savedValue = savedState[key];
+      if (!savedValue || nextParams.has(key)) {
+        return;
+      }
+      nextParams.set(key, savedValue);
+      hasChanges = true;
+    });
+    if (!hasChanges) {
+      return;
+    }
+    nextParams.set('page', '1');
+    setTicketParams(nextParams, { replace: true });
+  }, [hasExplicitTicketState, isTicketsListPage, profileTicketState, setTicketParams, ticketParams, ticketStateStorageKey]);
+
+  useEffect(() => {
+    if (!isTicketsPage) {
+      return;
+    }
+    if (isTicketsListPage && !ticketStateRefReady.current) {
+      return;
+    }
+    localStorage.setItem(ticketStateStorageKey, serializedTicketState);
+  }, [isTicketsPage, isTicketsListPage, serializedTicketState, ticketStateStorageKey]);
+
+  useEffect(() => {
+    if (!user || !isTicketsPage) {
+      return;
+    }
+    if (isTicketsListPage && !ticketStateRefReady.current) {
+      return;
+    }
+    if (lastSyncedTicketStateRef.current === serializedTicketState) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => {
+      const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
+      const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
+      const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
+      const nextConfig: Record<string, unknown> = {
+        ...currentConfig,
+        tickets: {
+          ...ticketsConfig,
+          filters: {
+            ...filtersConfig,
+            last_state: ticketStateFromParams,
+          },
+        },
+      };
+      lastSyncedTicketStateRef.current = serializedTicketState;
+      setUser({ ...user, profile_config: nextConfig as any });
+      persistTicketStateMutation.mutate(nextConfig, {
+        onError: () => {
+          lastSyncedTicketStateRef.current = '';
+        },
+      });
+    }, 400);
+    return () => window.clearTimeout(timeoutID);
+  }, [
+    isTicketsPage,
+    isTicketsListPage,
+    persistTicketStateMutation,
+    serializedTicketState,
+    setUser,
+    ticketStateFromParams,
+    user,
+  ]);
 
   const applyPreset = (presetID: string) => {
     const preset = presets.find((item) => item.id === presetID);
@@ -442,6 +610,13 @@ const HeaderSearch: React.FC = () => {
               loading={!assigneesRes}
               style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
             />
+            <Checkbox
+              checked={isMineOnly}
+              disabled={!ownAssigneeID}
+              onChange={(event) => updateTicketParams({ assignee_ids: event.target.checked ? ownAssigneeID : undefined })}
+            >
+              Мои
+            </Checkbox>
           </>
         )}
 
@@ -640,3 +815,4 @@ const HeaderSearch: React.FC = () => {
 };
 
 export default HeaderSearch;
+
