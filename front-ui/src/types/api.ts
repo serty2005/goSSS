@@ -219,6 +219,8 @@ export interface TicketListItemDTO {
   subject: string;
   company_name?: string;
   description?: string;
+  reporter_name?: string;
+  created_source?: 'ui' | 'bitrix' | 'servicedesk' | 'system' | string;
   result?: string;
   status: TicketStatus;
   last_comment?: string;
@@ -248,6 +250,9 @@ export interface TicketDTO {
   number: number;
   subject: string;
   description?: string;
+  reporter_id?: number;
+  reporter_name?: string;
+  service_desk_uuid?: string;
   result?: string;
   company_name?: string;
   status: TicketStatus;

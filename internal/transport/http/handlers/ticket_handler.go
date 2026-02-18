@@ -463,6 +463,8 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			LastCommentIsPrivate: lastComments[item.ID].IsPrivate,
 			CompanyID:            item.CompanyID,
 			CompanyName:          item.CompanyName,
+			ReporterName:         resolveTicketReporterName(item),
+			CreatedSource:        resolveTicketCreatedSource(item),
 			ContractID:           item.ContractID,
 			IsCommonContract:     item.IsCommonContract,
 			SyncWithBitrix:       item.SyncWithBitrix,
@@ -752,6 +754,33 @@ func parseDateTimeParam(raw string, endOfDay bool) *time.Time {
 		return &parsed
 	}
 	return nil
+}
+
+func resolveTicketCreatedSource(item tickets.Ticket) string {
+	sdUUID := strings.TrimSpace(item.ServiceDeskUUID)
+	if strings.HasPrefix(sdUUID, "b24:deal:") {
+		return tickets.HistorySourceBitrix
+	}
+	if item.ReporterID != nil && *item.ReporterID > 0 {
+		return tickets.HistorySourceUI
+	}
+	if sdUUID != "" {
+		return tickets.HistorySourceServiceDesk
+	}
+	return tickets.HistorySourceSystem
+}
+
+func resolveTicketReporterName(item tickets.Ticket) string {
+	if item.Reporter != nil && strings.TrimSpace(item.Reporter.FullName) != "" {
+		return strings.TrimSpace(item.Reporter.FullName)
+	}
+	if strings.TrimSpace(item.ReporterName) != "" {
+		return strings.TrimSpace(item.ReporterName)
+	}
+	if resolveTicketCreatedSource(item) == tickets.HistorySourceBitrix {
+		return "Bitrix24"
+	}
+	return "Сотрудник"
 }
 
 func getUserIDFromContext(r *http.Request) uint {

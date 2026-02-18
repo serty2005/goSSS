@@ -1,7 +1,7 @@
 ﻿import React from 'react';
 import { Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ticketsApi } from '@/api/tickets';
 import dayjs from 'dayjs';
 import { TicketListItemDTO, TicketStatus } from '@/types/api';
@@ -13,6 +13,23 @@ interface Props {
 }
 
 const { Text } = Typography;
+
+const normalizeDescription = (value?: string) => {
+  if (!value) return '';
+  return value
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p>/gi, '\n')
+    .replace(/<\/?p[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+};
 
 const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = true }) => {
   const navigate = useNavigate();
@@ -109,13 +126,17 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       dataIndex: 'number',
       key: 'number',
       width: 100,
-      render: (val: number) => <Text strong>#{val}</Text>,
+      render: (val: number, record: TicketListItemDTO) => (
+        <Link to={`/tickets/${record.id}`} onClick={(event) => event.stopPropagation()}>
+          <Text strong>#{val}</Text>
+        </Link>
+      ),
     },
     {
-      title: 'Тема',
-      dataIndex: 'subject',
+      title: 'Описание',
+      dataIndex: 'description',
       key: 'subject',
-      render: (textValue: string) => <Text style={{ color: '#1890ff', cursor: 'pointer' }}>{textValue}</Text>,
+      render: (textValue?: string) => <Text>{normalizeDescription(textValue) || 'Без описания'}</Text>,
     },
     {
       title: 'Статус',
@@ -136,6 +157,12 @@ const TicketTable: React.FC<Props> = ({ companyId, limit = 10, showPagination = 
       dataIndex: 'assignee',
       key: 'assignee',
       render: (assignee?: { full_name: string }) => assignee?.full_name || '-',
+    },
+    {
+      title: 'Автор',
+      dataIndex: 'reporter_name',
+      key: 'reporter_name',
+      render: (value?: string) => value || 'Сотрудник',
     },
   ];
 

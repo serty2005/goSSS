@@ -34,13 +34,16 @@ const TABLE_COLUMN_OPTIONS = [
   { value: 'status', label: 'Статус' },
   { value: 'company_display', label: 'Компания' },
   { value: 'assignee_display', label: 'Исполнитель' },
-  { value: 'subject', label: 'Тема' },
+  { value: 'reporter_display', label: 'Автор' },
+  { value: 'subject', label: 'Описание' },
+  { value: 'bitrix_deal_title', label: 'Заголовок Bitrix24' },
   { value: 'last_comment', label: 'Последний комментарий' },
   { value: 'created_at', label: 'Создано' },
   { value: 'last_activity', label: 'Обновлено' },
   { value: 'sync_with_bitrix', label: 'B24' },
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
+const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title');
 const TICKET_STATE_PARAM_KEYS = [
   'preset_id',
   'q',
@@ -185,10 +188,10 @@ const HeaderSearch: React.FC = () => {
   const isMineOnly = Boolean(ownAssigneeID) && assigneeValues.length === 1 && assigneeValues[0] === ownAssigneeID;
   const selectedTableColumns = useMemo(() => {
     if (!ticketTableColumns) {
-      return TABLE_COLUMN_KEYS;
+      return DEFAULT_TABLE_COLUMN_KEYS;
     }
     const values = ticketTableColumns.split(',').filter((value) => TABLE_COLUMN_KEYS.includes(value));
-    return values.length ? values : TABLE_COLUMN_KEYS;
+    return values.length ? values : DEFAULT_TABLE_COLUMN_KEYS;
   }, [ticketTableColumns]);
 
   const { data: filterRes, isFetching: isFiltersLoading } = useQuery({

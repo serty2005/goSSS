@@ -79,12 +79,26 @@ const normalizeDescription = (value?: string) => {
     .trim();
 };
 
+const resolveTicketSubjectFromDescription = (value?: string) => {
+  const normalized = normalizeDescription(value);
+  return normalized || 'Без описания';
+};
+
+const resolveTicketCreatedSourceLabel = (source?: string) => {
+  if (source === 'ui') return 'UI';
+  if (source === 'bitrix') return 'Bitrix24';
+  if (source === 'servicedesk') return 'ServiceDesk';
+  if (source === 'system') return 'System';
+  return 'Неизвестно';
+};
+
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
 const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
 const ACTIVE_STATUS_VALUES: TicketStatus[] = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const DATE_STAMP_MIN_WIDTH = '10ch';
 const TIME_STAMP_MIN_WIDTH = '5ch';
-const TABLE_COLUMN_KEYS = ['number', 'status', 'company_display', 'assignee_display', 'subject', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
+const TABLE_COLUMN_KEYS = ['number', 'status', 'company_display', 'assignee_display', 'reporter_display', 'subject', 'bitrix_deal_title', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
+const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title');
 type TableColumnKey = (typeof TABLE_COLUMN_KEYS)[number];
 type TableSortKey = 'number' | 'assignee_display' | 'created_at' | 'last_activity';
 type TableSortOrder = 'asc' | 'desc';
@@ -271,12 +285,12 @@ const TicketsPage: React.FC = () => {
   const effectiveStatus = effectiveStatusValues.join(',');
   const selectedTableColumnKeys = useMemo<TableColumnKey[]>(() => {
     if (!tableColumnsParam) {
-      return [...TABLE_COLUMN_KEYS];
+      return [...DEFAULT_TABLE_COLUMN_KEYS];
     }
     const values = tableColumnsParam
       .split(',')
       .filter((value): value is TableColumnKey => (TABLE_COLUMN_KEYS as readonly string[]).includes(value));
-    return values.length ? values : [...TABLE_COLUMN_KEYS];
+    return values.length ? values : [...DEFAULT_TABLE_COLUMN_KEYS];
   }, [tableColumnsParam]);
   const tableSort = useMemo<{ key: TableSortKey; order: TableSortOrder } | null>(() => {
     if (!tableSortParam) {
@@ -481,9 +495,11 @@ const TicketsPage: React.FC = () => {
     () =>
       visibleTickets.map((ticket) => ({
         ...ticket,
+        subject: resolveTicketSubjectFromDescription(ticket.description),
         company_display: ticket.company_name || ticket.company_id || 'Компания не указана',
         last_comment_display: normalizeDescription(ticket.last_comment),
         assignee_display: ticket.assignee?.full_name || 'Не назначен',
+        reporter_display: ticket.reporter_name || 'Сотрудник',
       })),
     [visibleTickets],
   );
@@ -518,7 +534,14 @@ const TicketsPage: React.FC = () => {
         key: 'number',
         width: 90,
         minWidth: estimateHeaderMinWidth('Номер'),
-        render: (val: number) => <Text strong>#{val}</Text>,
+        render: (val: number, row) => (
+          <Link
+            to={`/tickets/${row.id}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Text strong>#{val}</Text>
+          </Link>
+        ),
       },
       {
         title: 'Статус',
@@ -558,12 +581,29 @@ const TicketsPage: React.FC = () => {
         ellipsis: true,
       },
       {
-        title: 'Тема',
+        title: 'Автор',
+        dataIndex: 'reporter_display',
+        key: 'reporter_display',
+        width: 180,
+        minWidth: estimateHeaderMinWidth('Автор'),
+        ellipsis: true,
+      },
+      {
+        title: 'Описание',
         dataIndex: 'subject',
         key: 'subject',
         width: 260,
-        minWidth: estimateHeaderMinWidth('Тема'),
+        minWidth: estimateHeaderMinWidth('Описание'),
         ellipsis: true,
+      },
+      {
+        title: 'Заголовок Bitrix24',
+        dataIndex: 'bitrix_deal_title',
+        key: 'bitrix_deal_title',
+        width: 240,
+        minWidth: estimateHeaderMinWidth('Заголовок Bitrix24'),
+        ellipsis: true,
+        render: (value?: string) => value || '-',
       },
       {
         title: 'Последний комментарий',
@@ -788,7 +828,12 @@ const TicketsPage: React.FC = () => {
                     <Space direction="vertical" size={0} className="ticket-list-main">
                       <Text className="ticket-company-centered" strong>{item.company_name || item.company_id}</Text>
                       <Space size={8}>
-                        <Text strong>#{item.number}</Text>
+                        <Link
+                          to={`/tickets/${item.id}`}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <Text strong>#{item.number}</Text>
+                        </Link>
                         <Tag color={meta.color}>{meta.label}</Tag>
                         {item.is_common_contract && <Tag color="gold">Платный</Tag>}
                         <BitrixSyncIndicator
@@ -798,7 +843,7 @@ const TicketsPage: React.FC = () => {
                           onClick={(event) => event.stopPropagation()}
                         />
                       </Space>
-                      <Text>{item.subject || 'Без темы'}</Text>
+                      <Text>{resolveTicketSubjectFromDescription(item.description)}</Text>
                       {item.last_comment && (
                         <Paragraph className="ticket-description-paragraph" type="secondary" ellipsis={{ rows: 3 }}>
                           {normalizeDescription(item.last_comment)}
@@ -807,6 +852,9 @@ const TicketsPage: React.FC = () => {
                     </Space>
                     <Space direction="vertical" size={6} className="ticket-list-side">
                       <Text className="ticket-assignee-linklike">{item.assignee?.full_name || 'Не назначен'}</Text>
+                      <Text type="secondary">
+                        {item.reporter_name || 'Сотрудник'} • {resolveTicketCreatedSourceLabel(item.created_source)}
+                      </Text>
                       <TicketDateStamp label="Создано" value={item.created_at} />
                       <TicketDateStamp label="Обновлено" value={item.last_activity} />
                     </Space>
@@ -827,7 +875,12 @@ const TicketsPage: React.FC = () => {
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <div className="ticket-card-top">
                         <div className="ticket-card-left">
-                          <Text strong className="ticket-card-number">#{item.number}</Text>
+                          <Link
+                            to={`/tickets/${item.id}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <Text strong className="ticket-card-number">#{item.number}</Text>
+                          </Link>
                           <BitrixSyncIndicator
                             sync={item.sync_with_bitrix}
                             dealURL={item.bitrix_deal_url}
@@ -884,8 +937,11 @@ const TicketsPage: React.FC = () => {
                         </Popover>
                       </div>
                       <Paragraph style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
-                        {item.subject || 'Без темы'}
+                        {resolveTicketSubjectFromDescription(item.description)}
                       </Paragraph>
+                      <Text type="secondary">
+                        {item.reporter_name || 'Сотрудник'} • {resolveTicketCreatedSourceLabel(item.created_source)}
+                      </Text>
                       {item.last_comment && (
                         <Paragraph className="ticket-description-paragraph" type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 3 }}>
                           {normalizeDescription(item.last_comment)}

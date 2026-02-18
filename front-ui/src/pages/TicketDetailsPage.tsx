@@ -69,6 +69,15 @@ const historySourceLabel = (source?: string) => {
   return 'System';
 };
 
+const resolveTicketCreatedSource = (metadata?: TicketDetailsDTO['metadata']) => {
+  if (!metadata) return 'system';
+  const sdUUID = String(metadata.service_desk_uuid || '').trim();
+  if (sdUUID.startsWith('b24:deal:')) return 'bitrix';
+  if (metadata.reporter_id && metadata.reporter_id > 0) return 'ui';
+  if (sdUUID) return 'servicedesk';
+  return 'system';
+};
+
 const resolveEntityTitle = (item: InfrastructureItem) => {
   const dataRow = item.data as Record<string, string | undefined>;
   return (
@@ -589,7 +598,13 @@ const TicketDetailsPage: React.FC = () => {
               <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
               <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
             </Space>
-            <Text type="secondary">Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}</Text>
+            <Text type="secondary">
+              Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}
+              {' • '}
+              {metadata.reporter_name || 'Сотрудник'}
+              {' • '}
+              {historySourceLabel(resolveTicketCreatedSource(metadata))}
+            </Text>
           </Space>
 
           <Space>
@@ -914,6 +929,9 @@ const TicketDetailsPage: React.FC = () => {
             label: 'История',
             children: (
               <Card size="small" title="История изменений">
+                <Text type="secondary">
+                  Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')} • {metadata.reporter_name || 'Сотрудник'} • {historySourceLabel(resolveTicketCreatedSource(metadata))}
+                </Text>
                 {(details.history || []).length === 0 ? (
                   <Empty description="История пока пуста" />
                 ) : (

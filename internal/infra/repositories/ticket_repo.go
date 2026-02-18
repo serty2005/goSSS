@@ -102,7 +102,7 @@ func (r *ticketRepo) Find(ctx context.Context, filter tickets.TicketFilter) ([]t
 		query = query.Offset(filter.Offset)
 	}
 
-	err := query.Preload("Assignee").Find(&items).Error
+	err := query.Preload("Assignee").Preload("Reporter").Find(&items).Error
 	return items, err
 }
 

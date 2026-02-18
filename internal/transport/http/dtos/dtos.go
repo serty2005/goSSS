@@ -179,6 +179,8 @@ type TicketListDTO struct {
 	CreatedAt            time.Time  `json:"created_at"`    // Дата создания
 	CompanyID            string     `json:"company_id"`
 	CompanyName          string     `json:"company_name"`
+	ReporterName         string     `json:"reporter_name,omitempty"`
+	CreatedSource        string     `json:"created_source,omitempty"`
 	ContractID           *string    `json:"contract_id,omitempty"`
 	IsCommonContract     bool       `json:"is_common_contract,omitempty"`
 	SyncWithBitrix       bool       `json:"sync_with_bitrix"`
