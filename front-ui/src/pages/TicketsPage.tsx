@@ -43,16 +43,16 @@ import { SafeHtmlContent } from '@/utils/safeHtml';
 const { Text, Paragraph } = Typography;
 
 const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
-  { value: 'new', label: 'РќРѕРІР°СЏ', color: 'blue' },
-  { value: 'in_progress', label: 'Р’ СЂР°Р±РѕС‚Рµ', color: 'processing' },
-  { value: 'pending', label: 'РћР¶РёРґР°РЅРёРµ', color: 'orange' },
-  { value: 'deferred', label: 'РћС‚Р»РѕР¶РµРЅРѕ', color: 'orange' },
-  { value: 'onsite', label: 'РќР° РІС‹РµР·Рґ', color: 'cyan' },
-  { value: 'to_manager', label: 'РџРµСЂРµРґР°С‚СЊ РјРµРЅРµРґР¶РµСЂСѓ', color: 'purple' },
-  { value: 'resolved', label: 'Р РµС€РµРЅР°', color: 'green' },
-  { value: 'spam', label: 'РЎРїР°Рј', color: 'red' },
-  { value: 'execution', label: 'Р РµР°Р»РёР·Р°С†РёСЏ', color: 'magenta' },
-  { value: 'closed', label: 'Р—Р°РєСЂС‹С‚Р°', color: 'default' },
+  { value: 'new', label: 'Новая', color: 'blue' },
+  { value: 'in_progress', label: 'Р’ работе', color: 'processing' },
+  { value: 'pending', label: 'Ожидание', color: 'orange' },
+  { value: 'deferred', label: 'Отложено', color: 'orange' },
+  { value: 'onsite', label: 'На выезд', color: 'cyan' },
+  { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
+  { value: 'resolved', label: 'Решена', color: 'green' },
+  { value: 'spam', label: 'Спам', color: 'red' },
+  { value: 'execution', label: 'Реализация', color: 'magenta' },
+  { value: 'closed', label: 'Закрыта', color: 'default' },
 ];
 
 type ViewMode = 'list' | 'cards' | 'table';
@@ -86,7 +86,7 @@ const normalizeDescription = (value?: string) => {
 
 const resolveTicketSubjectFromDescription = (value?: string) => {
   const normalized = normalizeDescription(value);
-  return normalized || 'Р‘РµР· РѕРїРёСЃР°РЅРёСЏ';
+  return normalized || 'Без описания';
 };
 
 const resolveTicketCreatedSourceLabel = (source?: string) => {
@@ -94,7 +94,7 @@ const resolveTicketCreatedSourceLabel = (source?: string) => {
   if (source === 'bitrix') return 'Bitrix24';
   if (source === 'servicedesk') return 'ServiceDesk';
   if (source === 'system') return 'System';
-  return 'РќРµРёР·РІРµСЃС‚РЅРѕ';
+  return 'Неизвестно';
 };
 
 const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
@@ -139,10 +139,10 @@ const BitrixSyncIndicator: React.FC<{
     return <Tag color="processing">B24</Tag>;
   }
   return (
-    <Tooltip title="РћС‚РєСЂС‹С‚СЊ СЃРґРµР»РєСѓ РІ Bitrix24">
+    <Tooltip title="Открыть сделку РІ Bitrix24">
       <a href={dealURL} target="_blank" rel="noreferrer" onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
         <Tag color="success" style={{ marginInlineEnd: 0 }}>
-          {compact ? 'B24' : 'РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ B24'}
+          {compact ? 'B24' : 'Синхронизировано B24'}
         </Tag>
         <LinkOutlined />
       </a>
@@ -151,7 +151,7 @@ const BitrixSyncIndicator: React.FC<{
 };
 
 const estimateHeaderMinWidth = (title: string) => {
-  // Р‘Р°Р·РѕРІР°СЏ РѕС†РµРЅРєР°: С€РёСЂРёРЅР° С‚РµРєСЃС‚Р° Р·Р°РіРѕР»РѕРІРєР° + РѕС‚СЃС‚СѓРїС‹ + РёРєРѕРЅРєР° drag-handle.
+  // Базовая оценка: ширина текста заголовка + отступы + РёРєРѕРЅРєР° drag-handle.
   return Math.max(70, title.length * 8 + 20);
 };
 
@@ -426,7 +426,7 @@ const TicketsPage: React.FC = () => {
           return null;
         }
         const dataRow = item.data as Record<string, string | undefined>;
-        const title = dataRow.device_name || dataRow.server_name || dataRow.uuid || 'РћР±РѕСЂСѓРґРѕРІР°РЅРёРµ';
+        const title = dataRow.device_name || dataRow.server_name || dataRow.uuid || 'Оборудование';
         const rows = [
           ...(item.entity_type === 'Server' ? [{ label: 'IP', value: dataRow.ip }] : []),
           { label: 'AnyDesk', value: dataRow.anydesk },
@@ -444,7 +444,7 @@ const TicketsPage: React.FC = () => {
     () =>
       (details?.comments || []).map((item) => ({
         id: item.uuid,
-        author: item.author_name || 'РЎРѕС‚СЂСѓРґРЅРёРє',
+        author: item.author_name || 'Сотрудник',
         authorRaw: item.author_name || '',
         date: dayjs(item.creation_date).format('DD.MM.YYYY HH:mm'),
         text: item.text,
@@ -457,26 +457,26 @@ const TicketsPage: React.FC = () => {
     mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string }) =>
       ticketsApi.changeStatus(payload.id, payload.status, payload.comment),
     onSuccess: () => {
-      message.success('РЎС‚Р°С‚СѓСЃ РѕР±РЅРѕРІР»С‘РЅ');
+      message.success('Статус обновлён');
       setPendingStatus(null);
       setStatusComment('');
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
     },
-    onError: () => message.error('РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ СЃС‚Р°С‚СѓСЃ'),
+    onError: () => message.error('Не удалось обновить статус'),
   });
 
   const addCommentMutation = useMutation({
     mutationFn: async (payload: { id: string; comment: string; isPrivate: boolean }) =>
       ticketsApi.addComment(payload.id, payload.comment, payload.isPrivate),
     onSuccess: () => {
-      message.success('РљРѕРјРјРµРЅС‚Р°СЂРёР№ РґРѕР±Р°РІР»РµРЅ');
+      message.success('Комментарий добавлен');
       setCommentDraft('');
       setCommentIsPrivate(false);
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
     },
-    onError: () => message.error('РќРµ СѓРґР°Р»РѕСЃСЊ РґРѕР±Р°РІРёС‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№'),
+    onError: () => message.error('Не удалось добавить комментарий'),
   });
 
   const updateCommentMutation = useMutation({
@@ -562,10 +562,10 @@ const TicketsPage: React.FC = () => {
       visibleTickets.map((ticket) => ({
         ...ticket,
         subject: resolveTicketSubjectFromDescription(ticket.description),
-        company_display: ticket.company_name || ticket.company_id || 'РљРѕРјРїР°РЅРёСЏ РЅРµ СѓРєР°Р·Р°РЅР°',
+        company_display: ticket.company_name || ticket.company_id || 'Компания РЅРµ указана',
         last_comment_display: normalizeDescription(ticket.last_comment),
-        assignee_display: ticket.assignee?.full_name || 'РќРµ РЅР°Р·РЅР°С‡РµРЅ',
-        reporter_display: ticket.reporter_name || 'РЎРѕС‚СЂСѓРґРЅРёРє',
+        assignee_display: ticket.assignee?.full_name || 'Не назначен',
+        reporter_display: ticket.reporter_name || 'Сотрудник',
       })),
     [visibleTickets],
   );
@@ -595,11 +595,11 @@ const TicketsPage: React.FC = () => {
   const tableColumnsBase: ColumnsType<TableRow> = useMemo(
     () => [
       {
-        title: 'РќРѕРјРµСЂ',
+        title: 'Номер',
         dataIndex: 'number',
         key: 'number',
         width: 90,
-        minWidth: estimateHeaderMinWidth('РќРѕРјРµСЂ'),
+        minWidth: estimateHeaderMinWidth('Номер'),
         render: (val: number, row) => (
           <Link
             to={`/tickets/${row.id}`}
@@ -610,27 +610,27 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: 'РЎС‚Р°С‚СѓСЃ',
+        title: 'Статус',
         dataIndex: 'status',
         key: 'status',
         width: 140,
-        minWidth: estimateHeaderMinWidth('РЎС‚Р°С‚СѓСЃ'),
+        minWidth: estimateHeaderMinWidth('Статус'),
         render: (value: TicketStatus, row) => {
           const meta = statusMeta(value);
           return (
             <Space size={4}>
               <Tag color={meta.color}>{meta.label}</Tag>
-              {row.is_common_contract && <Tag color="gold">РџР»Р°С‚РЅС‹Р№</Tag>}
+              {row.is_common_contract && <Tag color="gold">Платный</Tag>}
             </Space>
           );
         },
       },
       {
-        title: 'РљРѕРјРїР°РЅРёСЏ',
+        title: 'Компания',
         dataIndex: 'company_display',
         key: 'company_display',
         width: 220,
-        minWidth: estimateHeaderMinWidth('РљРѕРјРїР°РЅРёСЏ'),
+        minWidth: estimateHeaderMinWidth('Компания'),
         ellipsis: true,
         render: (value: string) => (
           <Text ellipsis style={{ width: '100%', display: 'block' }}>
@@ -639,44 +639,44 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: 'РСЃРїРѕР»РЅРёС‚РµР»СЊ',
+        title: 'Исполнитель',
         dataIndex: 'assignee_display',
         key: 'assignee_display',
         width: 170,
-        minWidth: estimateHeaderMinWidth('РСЃРїРѕР»РЅРёС‚РµР»СЊ'),
+        minWidth: estimateHeaderMinWidth('Исполнитель'),
         ellipsis: true,
       },
       {
-        title: 'РђРІС‚РѕСЂ',
+        title: 'Автор',
         dataIndex: 'reporter_display',
         key: 'reporter_display',
         width: 180,
-        minWidth: estimateHeaderMinWidth('РђРІС‚РѕСЂ'),
+        minWidth: estimateHeaderMinWidth('Автор'),
         ellipsis: true,
       },
       {
-        title: 'РћРїРёСЃР°РЅРёРµ',
+        title: 'Описание',
         dataIndex: 'subject',
         key: 'subject',
         width: 260,
-        minWidth: estimateHeaderMinWidth('РћРїРёСЃР°РЅРёРµ'),
+        minWidth: estimateHeaderMinWidth('Описание'),
         ellipsis: true,
       },
       {
-        title: 'Р—Р°РіРѕР»РѕРІРѕРє Bitrix24',
+        title: 'Заголовок Bitrix24',
         dataIndex: 'bitrix_deal_title',
         key: 'bitrix_deal_title',
         width: 240,
-        minWidth: estimateHeaderMinWidth('Р—Р°РіРѕР»РѕРІРѕРє Bitrix24'),
+        minWidth: estimateHeaderMinWidth('Заголовок Bitrix24'),
         ellipsis: true,
         render: (value?: string) => value || '-',
       },
       {
-        title: 'РџРѕСЃР»РµРґРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№',
+        title: 'Последний комментарий',
         dataIndex: 'last_comment_display',
         key: 'last_comment',
         width: 260,
-        minWidth: estimateHeaderMinWidth('РџРѕСЃР»РµРґРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№'),
+        minWidth: estimateHeaderMinWidth('Последний комментарий'),
         ellipsis: true,
         render: (value: string) => (
           <Text type="secondary" ellipsis style={{ width: '100%', display: 'block' }}>
@@ -685,11 +685,11 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: 'РЎРѕР·РґР°РЅРѕ',
+        title: 'Создано',
         dataIndex: 'created_at',
         key: 'created_at',
         width: 110,
-        minWidth: estimateHeaderMinWidth('РЎРѕР·РґР°РЅРѕ'),
+        minWidth: estimateHeaderMinWidth('Создано'),
         render: (value?: string) => {
           const stamp = formatDateStamp(value);
           return (
@@ -701,11 +701,11 @@ const TicketsPage: React.FC = () => {
         },
       },
       {
-        title: 'РћР±РЅРѕРІР»РµРЅРѕ',
+        title: 'Обновлено',
         dataIndex: 'last_activity',
         key: 'last_activity',
         width: 110,
-        minWidth: estimateHeaderMinWidth('РћР±РЅРѕРІР»РµРЅРѕ'),
+        minWidth: estimateHeaderMinWidth('Обновлено'),
         render: (value: string) => {
           const stamp = formatDateStamp(value);
           return (
@@ -834,7 +834,7 @@ const TicketsPage: React.FC = () => {
             applyTableSort(key);
           }}
         >
-          {order === 'asc' ? 'в†‘' : order === 'desc' ? 'в†“' : 'в†•'}
+          {order === 'asc' ? '↑' : order === 'desc' ? '↓' : '↕'}
         </Button>
       </Space>
     );
@@ -848,13 +848,13 @@ const TicketsPage: React.FC = () => {
     const stateIndex = tableColumnsState.findIndex((item) => item.key === col.key);
     const sortableLabel =
       columnKey === 'number'
-        ? 'РќРѕРјРµСЂ'
+        ? 'Номер'
         : columnKey === 'assignee_display'
-          ? 'РСЃРїРѕР»РЅРёС‚РµР»СЊ'
+          ? 'Исполнитель'
           : columnKey === 'created_at'
-            ? 'РЎРѕР·РґР°РЅРѕ'
+            ? 'Создано'
             : columnKey === 'last_activity'
-              ? 'РћР±РЅРѕРІР»РµРЅРѕ'
+              ? 'Обновлено'
               : null;
     return {
       ...col,
@@ -901,7 +901,7 @@ const TicketsPage: React.FC = () => {
                           <Text strong>#{item.number}</Text>
                         </Link>
                         <Tag color={meta.color}>{meta.label}</Tag>
-                        {item.is_common_contract && <Tag color="gold">РџР»Р°С‚РЅС‹Р№</Tag>}
+                        {item.is_common_contract && <Tag color="gold">Платный</Tag>}
                         <BitrixSyncIndicator
                           sync={item.sync_with_bitrix}
                           dealURL={item.bitrix_deal_url}
@@ -917,12 +917,12 @@ const TicketsPage: React.FC = () => {
                       )}
                     </Space>
                     <Space direction="vertical" size={6} className="ticket-list-side">
-                      <Text className="ticket-assignee-linklike">{item.assignee?.full_name || 'РќРµ РЅР°Р·РЅР°С‡РµРЅ'}</Text>
+                      <Text className="ticket-assignee-linklike">{item.assignee?.full_name || 'Не назначен'}</Text>
                       <Text type="secondary">
-                        {item.reporter_name || 'РЎРѕС‚СЂСѓРґРЅРёРє'} вЂў {resolveTicketCreatedSourceLabel(item.created_source)}
+                        {item.reporter_name || 'Сотрудник'} • {resolveTicketCreatedSourceLabel(item.created_source)}
                       </Text>
-                      <TicketDateStamp label="РЎРѕР·РґР°РЅРѕ" value={item.created_at} />
-                      <TicketDateStamp label="РћР±РЅРѕРІР»РµРЅРѕ" value={item.last_activity} />
+                      <TicketDateStamp label="Создано" value={item.created_at} />
+                      <TicketDateStamp label="Обновлено" value={item.last_activity} />
                     </Space>
                   </Space>
                 </List.Item>
@@ -955,7 +955,7 @@ const TicketsPage: React.FC = () => {
                           />
                         </div>
                         <div className="ticket-company-centered ticket-company-top">
-                          {/* TODO: Р РµР°Р»РёР·РѕРІР°С‚СЊ СЃРѕРґРµСЂР¶РёРјРѕРµ popover РєРѕРјРїР°РЅРёРё РІРјРµСЃС‚Рµ СЃ popover РёСЃРїРѕР»РЅРёС‚РµР»СЏ. */}
+                          {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
                           <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
                             <a
                               className="ticket-assignee-linklike"
@@ -971,7 +971,7 @@ const TicketsPage: React.FC = () => {
                         <div className="ticket-card-right">
                           <Space size={4} className="ticket-card-status-wrap">
                             <Tag color={meta.color}>{meta.label}</Tag>
-                            {item.is_common_contract && <Tag color="gold">РџР»Р°С‚РЅС‹Р№</Tag>}
+                            {item.is_common_contract && <Tag color="gold">Платный</Tag>}
                           </Space>
                           <div className="ticket-card-assignee-right">
                             <Popover trigger="hover" content={<div style={{ minWidth: 180, minHeight: 48 }} />}>
@@ -983,7 +983,7 @@ const TicketsPage: React.FC = () => {
                                   applyAssigneeFilter(item.assignee?.id);
                                 }}
                               >
-                                {item.assignee?.full_name || 'РќРµ РЅР°Р·РЅР°С‡РµРЅ'}
+                                {item.assignee?.full_name || 'Не назначен'}
                               </a>
                             </Popover>
                           </div>
@@ -1006,7 +1006,7 @@ const TicketsPage: React.FC = () => {
                         {resolveTicketSubjectFromDescription(item.description)}
                       </Paragraph>
                       <Text type="secondary">
-                        {item.reporter_name || 'РЎРѕС‚СЂСѓРґРЅРёРє'} вЂў {resolveTicketCreatedSourceLabel(item.created_source)}
+                        {item.reporter_name || 'Сотрудник'} • {resolveTicketCreatedSourceLabel(item.created_source)}
                       </Text>
                       {item.last_comment && (
                         <Paragraph className="ticket-description-paragraph" type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 3 }}>
@@ -1014,8 +1014,8 @@ const TicketsPage: React.FC = () => {
                         </Paragraph>
                       )}
                       <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-                        <TicketDateStamp label="РЎРѕР·РґР°РЅРѕ" value={item.created_at} />
-                        <TicketDateStamp label="РћР±РЅРѕРІР»РµРЅРѕ" value={item.last_activity} />
+                        <TicketDateStamp label="Создано" value={item.created_at} />
+                        <TicketDateStamp label="Обновлено" value={item.last_activity} />
                       </Space>
                     </Space>
                   </Card>
@@ -1059,7 +1059,7 @@ const TicketsPage: React.FC = () => {
         <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
           {(isFetchingNextPage || (hasNextPage && visibleTickets.length > 0)) && <Spin size="small" />}
           {!hasNextPage && visibleTickets.length > 0 && (
-            <Text type="secondary">РџРѕРєР°Р·Р°РЅРѕ: {visibleTickets.length} РёР· {total}</Text>
+            <Text type="secondary">Показано: {visibleTickets.length} из· {total}</Text>
           )}
         </div>
       </Card>
@@ -1071,7 +1071,7 @@ const TicketsPage: React.FC = () => {
         title={
           metadata ? (
             <div style={{ display: 'grid', alignItems: 'center', gridTemplateColumns: '1fr auto 1fr', gap: 8 }}>
-              <span>Р‘С‹СЃС‚СЂС‹Р№ РїСЂРѕСЃРјРѕС‚СЂ #{metadata.number}</span>
+              <span>Быстрый просмотр #{metadata.number}</span>
               {metadata.company_id ? (
                 <Link to={`/companies/${metadata.company_id}`} onClick={closeQuickModal}>
                   {companyTitle}
@@ -1082,7 +1082,7 @@ const TicketsPage: React.FC = () => {
               <span />
             </div>
           ) : (
-            'Р‘С‹СЃС‚СЂС‹Р№ РїСЂРѕСЃРјРѕС‚СЂ Р·Р°СЏРІРєРё'
+            'Быстрый просмотр заявки'
           )
         }
         placement="right"
@@ -1104,7 +1104,7 @@ const TicketsPage: React.FC = () => {
                     changeStatusMutation.mutate({ id: selectedTicketId, status: 'in_progress' });
                   }}
                 >
-                  Р’РµСЂРЅСѓС‚СЊ РІ СЂР°Р±РѕС‚Сѓ
+                  Вернуть РІ работу
                 </Button>
               ) : (
                 <Select
@@ -1129,7 +1129,7 @@ const TicketsPage: React.FC = () => {
                 />
               )}
               <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
-              <Text type="secondary">РСЃРїРѕР»РЅРёС‚РµР»СЊ: {metadata.assignee?.full_name || 'РќРµ РЅР°Р·РЅР°С‡РµРЅ'}</Text>
+              <Text type="secondary">Исполнитель: {metadata.assignee?.full_name || 'Не назначен'}</Text>
               <Button
                 onClick={() => {
                   if (!selectedTicketId) return;
@@ -1137,27 +1137,27 @@ const TicketsPage: React.FC = () => {
                   closeQuickModal();
                 }}
               >
-                РћС‚РєСЂС‹С‚СЊ СЃС‚СЂР°РЅРёС†Сѓ
+                Открыть страницу
               </Button>
             </Space>
 
-            <Card size="small" title="РћРїРёСЃР°РЅРёРµ">
-              <SafeHtmlContent html={metadata.description || '<span>РќРµС‚ РѕРїРёСЃР°РЅРёСЏ</span>'} style={{ whiteSpace: 'pre-wrap' }} />
+            <Card size="small" title="Описание">
+              <SafeHtmlContent html={metadata.description || '<span>Нет описания</span>'} style={{ whiteSpace: 'pre-wrap' }} />
             </Card>
 
             {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
-              <Card size="small" title="Р РµР·СѓР»СЊС‚Р°С‚">
+              <Card size="small" title="Результат">
                 <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
               </Card>
             )}
 
-            <Card size="small" title="РџРѕРґРєР»СЋС‡РµРЅРёСЏ">
+            <Card size="small" title="Подключения">
               {isInfraLoading ? (
                 <div style={{ textAlign: 'center', padding: 12 }}>
                   <Spin />
                 </div>
               ) : connections.length === 0 ? (
-                <Text type="secondary">РџРѕРґРєР»СЋС‡РµРЅРёСЏ РЅРµ РЅР°Р№РґРµРЅС‹</Text>
+                <Text type="secondary">Подключений нет</Text>
               ) : (
                 <List
                   dataSource={connections}
@@ -1193,7 +1193,7 @@ const TicketsPage: React.FC = () => {
 
             <Card
               size="small"
-              title="РљРѕРјРјРµРЅС‚Р°СЂРёРё"
+              title="Комментарии"
             >
               {comments.length > 0 && (
                 <List
@@ -1203,10 +1203,10 @@ const TicketsPage: React.FC = () => {
                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
                         <Space size={8} style={{ justifyContent: 'space-between', width: '100%' }} wrap>
                           <Text type="secondary">
-                            {item.author} вЂў {item.date}
+                            {item.author} • {item.date}
                           </Text>
                           <Space size={8}>
-                            {item.isPrivate && <Tag color="orange">РџСЂРёРІР°С‚РЅС‹Р№</Tag>}
+                            {item.isPrivate && <Tag color="orange">Приватный</Tag>}
                             {canManageComment(item.authorRaw) && (
                               <Button
                                 type="link"
@@ -1284,7 +1284,7 @@ const TicketsPage: React.FC = () => {
                 <SmartTicketEditor
                   value={commentDraft}
                   onChange={setCommentDraft}
-                  placeholder="Р”РѕР±Р°РІСЊС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№"
+                  placeholder="Добавьте комментарий"
                   mentions={mentionOptions}
                   minHeight={96}
                 />
@@ -1294,7 +1294,7 @@ const TicketsPage: React.FC = () => {
                     checked={commentIsPrivate}
                     onChange={(event) => setCommentIsPrivate(event.target.checked)}
                   />
-                  РџСЂРёРІР°С‚РЅС‹Р№ РєРѕРјРјРµРЅС‚Р°СЂРёР№ (РЅРµ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РІРѕ РІРЅРµС€РЅРёРµ СЃРёСЃС‚РµРјС‹)
+                  Приватный (Только в Xenion)
                 </label>
                 <Button
                   type="primary"
@@ -1305,7 +1305,7 @@ const TicketsPage: React.FC = () => {
                     addCommentMutation.mutate({ id: selectedTicketId, comment: commentDraft, isPrivate: commentIsPrivate });
                   }}
                 >
-                  РћС‚РїСЂР°РІРёС‚СЊ
+                  Отправить
                 </Button>
               </Space>
             </Card>
@@ -1320,7 +1320,7 @@ const TicketsPage: React.FC = () => {
           setStatusComment('');
         }}
         width={420}
-        title="Р—Р°РІРµСЂС€РµРЅРёРµ Р·Р°СЏРІРєРё"
+        title="Завершение заявки"
         placement="right"
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -1328,7 +1328,7 @@ const TicketsPage: React.FC = () => {
             rows={4}
             value={statusComment}
             onChange={(event) => setStatusComment(event.target.value)}
-            placeholder="РћРїРёС€РёС‚Рµ РёС‚РѕРі РІС‹РїРѕР»РЅРµРЅРёСЏ Р·Р°СЏРІРєРё"
+            placeholder="Опишите итог выполнения заявки"
           />
           <Button
             type="primary"
@@ -1339,7 +1339,7 @@ const TicketsPage: React.FC = () => {
               changeStatusMutation.mutate({ id: selectedTicketId, status: pendingStatus, comment: statusComment.trim() });
             }}
           >
-            Р—Р°РІРµСЂС€РёС‚СЊ Р·Р°СЏРІРєСѓ
+            Завершить заявку
           </Button>
         </Space>
       </Drawer>

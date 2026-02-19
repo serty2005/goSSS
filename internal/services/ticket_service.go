@@ -930,7 +930,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		Comments:    make([]tickets.Comment, 0),
 	}
 
-	// Комментарии РёР· локальной БД (офлайн/сидер)
+	// Комментарии из локальной БД (офлайн/сидер)
 	localComments, _ := s.ticketRepo.GetComments(ctx, ticketID)
 	if len(localComments) > 0 {
 		for _, c := range localComments {
@@ -949,12 +949,12 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		}
 	}
 
-	// Попытка получить описание РёР· SD для легаси тикетов
+	// Попытка получить описание из SD для легаси тикетов
 	if s.isServiceDeskEnabledForReads() && ticket.ServiceDeskUUID != "" && len(localComments) == 0 {
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
 			if desc, ok := sdData["descriptionRTF"].(string); ok {
-				// Р’ идеале description должен быть РІ БД, РЅРѕ для легаси берем РёР· SD
+				// Р’ идеале description должен быть РІ БД, РЅРѕ для легаси берем из SD
 				if ticket.Description == "" {
 					details.Metadata.Description = s.processHtmlContent(ticket.ServiceDeskUUID, desc)
 				}

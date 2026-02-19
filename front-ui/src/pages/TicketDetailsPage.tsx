@@ -276,6 +276,24 @@ const TicketDetailsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
+  const parentCompanyID = useMemo(() => {
+    const companyData = companyResponse?.data as { parent_id?: string } | undefined;
+    const value = String(companyData?.parent_id || '').trim();
+    if (!value || value === metadata?.company_id) {
+      return '';
+    }
+    return value;
+  }, [companyResponse?.data, metadata?.company_id]);
+
+  const { data: parentInfraResponse, isLoading: isParentInfraLoading } = useQuery({
+    queryKey: ['company-parent-infra', parentCompanyID],
+    queryFn: () => companiesApi.getInfrastructure(parentCompanyID),
+    enabled: Boolean(parentCompanyID),
+    staleTime: 30_000,
+  });
+
+  const parentInfrastructure = useMemo(() => parentInfraResponse?.data || [], [parentInfraResponse?.data]);
+
   const companyTitle = useMemo(() => {
     const companyData = companyResponse?.data as { title?: string; additional_name?: string } | undefined;
     return (
@@ -404,6 +422,7 @@ const TicketDetailsPage: React.FC = () => {
   }, [companiesData?.data, metadata, companyTitle]);
 
   const serverItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Server'), [infrastructure]);
+  const parentServerItems = useMemo(() => parentInfrastructure.filter((item) => item.entity_type === 'Server'), [parentInfrastructure]);
   const workstationItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Workstation'), [infrastructure]);
   const fiscalItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'FiscalRegister'), [infrastructure]);
 
@@ -429,8 +448,8 @@ const TicketDetailsPage: React.FC = () => {
     return map;
   }, [connectionStatsResponse?.data]);
 
-  const connectionCards = useMemo(() => {
-    const serverCards = serverItems
+  const buildServerConnectionCards = (items: InfrastructureItem[], keyPrefix: string) => {
+    return items
       .map((item) => {
         const dataRow = item.data as Record<string, string | undefined>;
         const entityID = String(dataRow.uuid || '').trim();
@@ -438,7 +457,7 @@ const TicketDetailsPage: React.FC = () => {
         if (!entityID || !address) return null;
         const stats = connectionStatsMap.get(`Server:${entityID}`);
         return {
-          key: `Server-${entityID}`,
+          key: `${keyPrefix}-Server-${entityID}`,
           entityType: 'Server' as const,
           entityID,
           title: resolveEntityTitle(item),
@@ -454,6 +473,10 @@ const TicketDetailsPage: React.FC = () => {
       statsCount: number;
       rows: Array<{ label: string; field: string; value: string }>;
     }>;
+  };
+
+  const ownConnectionCards = useMemo(() => {
+    const serverCards = buildServerConnectionCards(serverItems, 'own');
 
     const workstationCards = workstationItems
       .map((item) => {
@@ -496,6 +519,11 @@ const TicketDetailsPage: React.FC = () => {
 
     return [...serverCards, ...workstationCards];
   }, [serverItems, workstationItems, connectionStatsMap]);
+
+  const parentConnectionCards = useMemo(
+    () => buildServerConnectionCards(parentServerItems, 'parent'),
+    [parentServerItems, connectionStatsMap],
+  );
 
   const attachments = useMemo(() => {
     return (details?.attachments || [])
@@ -613,6 +641,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['company-infra'] });
+      queryClient.invalidateQueries({ queryKey: ['company-parent-infra'] });
       queryClient.invalidateQueries({ queryKey: ['company-profile'] });
     },
     onError: () => message.error('Не удалось обновить компанию'),
@@ -657,6 +686,21 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['company-infra', metadata?.company_id] });
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
     },
+  });
+
+  const updateServerPartnerLinkMutation = useMutation({
+    mutationFn: async (payload: { serverID: string; portalLink: string }) => {
+      return equipmentApi.updateServer(payload.serverID, { cabinet_link: payload.portalLink });
+    },
+    onSuccess: () => {
+      message.success('Ссылка партнёрского портала обновлена');
+      queryClient.invalidateQueries({ queryKey: ['company-infra', metadata?.company_id] });
+      if (parentCompanyID) {
+        queryClient.invalidateQueries({ queryKey: ['company-parent-infra', parentCompanyID] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+    },
+    onError: () => message.error('Не удалось обновить ссылку партнёрского портала'),
   });
 
   const copyConnectionMutation = useMutation({
@@ -1215,45 +1259,87 @@ const TicketDetailsPage: React.FC = () => {
                         key: 'overview-connections',
                         label: 'Подключения',
                         children: (
-                          isInfraLoading ? (
+                          (isInfraLoading || isParentInfraLoading) ? (
                             <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                          ) : connectionCards.length === 0 ? (
+                          ) : ownConnectionCards.length === 0 && parentConnectionCards.length === 0 ? (
                             <Empty description="Подключения не найдены" />
                           ) : (
-                            <div className="ticket-overview-connection-grid">
-                              {connectionCards.map((group) => (
-                                <Card key={group.key} size="small" className="glass-panel">
-                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                    <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                                      <Text strong>{group.title}</Text>
-                                      <Tag color={group.entityType === 'Server' ? 'geekblue' : 'cyan'}>
-                                        {group.entityType === 'Server' ? 'Сервер' : 'Станция'}
-                                      </Tag>
-                                    </Space>
-                                    {group.rows.map((row) => (
-                                      <Paragraph
-                                        key={`${group.key}-${row.field}-${row.value}`}
-                                        style={{ margin: 0 }}
-                                        copyable={{
-                                          text: row.value,
-                                          onCopy: () => {
-                                            copyConnectionMutation.mutate({
-                                              label: row.label,
-                                              value: row.value,
-                                              entityType: group.entityType,
-                                              entityID: group.entityID,
-                                              connectionField: row.field,
-                                            });
-                                          },
-                                        }}
-                                      >
-                                        <Text type="secondary">{row.label}:</Text> {row.value}
-                                      </Paragraph>
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              {parentConnectionCards.length > 0 && (
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Text strong>Chain</Text>
+                                  <div className="ticket-overview-connection-grid">
+                                    {parentConnectionCards.map((group) => (
+                                      <Card key={group.key} size="small" className="glass-panel">
+                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                                            <Text strong>{group.title}</Text>
+                                            <Tag color="geekblue">Сервер</Tag>
+                                          </Space>
+                                          {group.rows.map((row) => (
+                                            <Paragraph
+                                              key={`${group.key}-${row.field}-${row.value}`}
+                                              style={{ margin: 0 }}
+                                              copyable={{
+                                                text: row.value,
+                                                onCopy: () => {
+                                                  copyConnectionMutation.mutate({
+                                                    label: row.label,
+                                                    value: row.value,
+                                                    entityType: group.entityType,
+                                                    entityID: group.entityID,
+                                                    connectionField: row.field,
+                                                  });
+                                                },
+                                              }}
+                                            >
+                                              <Text type="secondary">{row.label}:</Text> {row.value}
+                                            </Paragraph>
+                                          ))}
+                                        </Space>
+                                      </Card>
                                     ))}
-                                  </Space>
-                                </Card>
-                              ))}
-                            </div>
+                                  </div>
+                                </Space>
+                              )}
+
+                              {ownConnectionCards.length > 0 && (
+                                <div className="ticket-overview-connection-grid">
+                                  {ownConnectionCards.map((group) => (
+                                    <Card key={group.key} size="small" className="glass-panel">
+                                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                        <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                                          <Text strong>{group.title}</Text>
+                                          <Tag color={group.entityType === 'Server' ? 'geekblue' : 'cyan'}>
+                                            {group.entityType === 'Server' ? 'Сервер' : 'Станция'}
+                                          </Tag>
+                                        </Space>
+                                        {group.rows.map((row) => (
+                                          <Paragraph
+                                            key={`${group.key}-${row.field}-${row.value}`}
+                                            style={{ margin: 0 }}
+                                            copyable={{
+                                              text: row.value,
+                                              onCopy: () => {
+                                                copyConnectionMutation.mutate({
+                                                  label: row.label,
+                                                  value: row.value,
+                                                  entityType: group.entityType,
+                                                  entityID: group.entityID,
+                                                  connectionField: row.field,
+                                                });
+                                              },
+                                            }}
+                                          >
+                                            <Text type="secondary">{row.label}:</Text> {row.value}
+                                          </Paragraph>
+                                        ))}
+                                      </Space>
+                                    </Card>
+                                  ))}
+                                </div>
+                              )}
+                            </Space>
                           )
                         ),
                       },
@@ -1272,6 +1358,7 @@ const TicketDetailsPage: React.FC = () => {
                                     {serverItems.map((item) => {
                                       const dataRow = item.data as Record<string, string | undefined>;
                                       const path = resolveEntityPath(item);
+                                      const serverID = String(dataRow.uuid || '').trim();
                                       return (
                                         <Card
                                           key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
@@ -1288,11 +1375,21 @@ const TicketDetailsPage: React.FC = () => {
                                               <Text strong>{resolveEntityTitle(item)}</Text>
                                               <Tag color="geekblue">Сервер</Tag>
                                             </Space>
-                                            {dataRow.partners_link && (
-                                              <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-                                                Партнёрский портал
-                                              </a>
-                                            )}
+                                            <div onClick={(event) => event.stopPropagation()}>
+                                              <Text type="secondary">Партнёрский портал:</Text>{' '}
+                                              <InlineFieldEditor
+                                                value={dataRow.partners_link || ''}
+                                                placeholder="Ссылка не указана"
+                                                onSave={(value) => {
+                                                  if (!serverID) return;
+                                                  updateServerPartnerLinkMutation.mutate({
+                                                    serverID,
+                                                    portalLink: value,
+                                                  });
+                                                }}
+                                                saving={updateServerPartnerLinkMutation.isPending}
+                                              />
+                                            </div>
                                             <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
                                               <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
                                             </Paragraph>
