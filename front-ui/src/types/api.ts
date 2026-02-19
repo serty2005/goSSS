@@ -592,6 +592,7 @@ export interface WorkstationDetailDTO {
   last_updated_by?: string;
   last_modified_date?: string;
   device_name?: string;
+  server_id?: string;
   teamviewer?: string;
   anydesk?: string;
   litemanager?: string;

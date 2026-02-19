@@ -15,8 +15,11 @@ import (
 	b24 "etalon-server/internal/infra/plugins/bitrix"
 	"etalon-server/pkg/eventbus"
 	"fmt"
+	"html"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -566,6 +569,17 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 	if link != nil {
 		commentLocalID = link.EtalonCommentID
 	}
+	if enriched, enrichErr := s.enrichCommentWithBitrixAttachments(ctx, ticket, commentLocalID, commentText, comment); enrichErr != nil {
+		s.log.Warn(
+			"Bitrix24: не удалось обработать вложения комментария",
+			"ticket_id", ticket.ID,
+			"comment_local_id", commentLocalID,
+			"bitrix_comment_id", comment.ID,
+			"error", enrichErr,
+		)
+	} else {
+		commentText = enriched
+	}
 	oldText := ""
 	existingComments, _ := s.ticketRepo.GetComments(ctx, ticket.ID)
 	for i := range existingComments {
@@ -647,6 +661,144 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 		})
 	}
 	return nil
+}
+
+func (s *bitrixIncomingService) enrichCommentWithBitrixAttachments(
+	ctx context.Context,
+	ticket *tickets.Ticket,
+	commentLocalID string,
+	baseText string,
+	comment *b24.TimelineComment,
+) (string, error) {
+	if ticket == nil || comment == nil || comment.Raw == nil {
+		return baseText, nil
+	}
+	diskIDs := b24.ExtractTimelineCommentDiskFileIDs(comment.Raw)
+	if len(diskIDs) == 0 {
+		return baseText, nil
+	}
+
+	rendered := make([]string, 0, len(diskIDs))
+	for _, diskID := range diskIDs {
+		meta, err := s.client.DiskFileGet(ctx, diskID)
+		if err != nil {
+			return baseText, err
+		}
+		if meta == nil || meta.ID <= 0 || strings.TrimSpace(meta.DownloadURL) == "" {
+			continue
+		}
+
+		content, err := s.client.DownloadByURL(ctx, meta.DownloadURL)
+		if err != nil {
+			return baseText, err
+		}
+		publicURL, mimeType, fileName, err := s.persistBitrixCommentAttachment(ctx, ticket.ID, commentLocalID, meta, content)
+		if err != nil {
+			return baseText, err
+		}
+		if publicURL == "" {
+			continue
+		}
+		rendered = append(rendered, renderBitrixAttachmentHTML(publicURL, fileName, mimeType))
+	}
+	if len(rendered) == 0 {
+		return baseText, nil
+	}
+
+	text := strings.TrimSpace(baseText)
+	if text == "" {
+		return strings.Join(rendered, "\n"), nil
+	}
+	return text + "\n" + strings.Join(rendered, "\n"), nil
+}
+
+func (s *bitrixIncomingService) persistBitrixCommentAttachment(
+	ctx context.Context,
+	ticketID string,
+	commentLocalID string,
+	meta *b24.DiskFile,
+	content []byte,
+) (string, string, string, error) {
+	if meta == nil || len(content) == 0 {
+		return "", "", "", nil
+	}
+	basePath := strings.TrimSpace(s.cfg.TicketStoragePath)
+	if basePath == "" {
+		return "", "", "", fmt.Errorf("не задан TICKET_STORAGE_PATH")
+	}
+
+	fileName := sanitizeBitrixAttachmentName(meta.Name)
+	if fileName == "" {
+		fileName = fmt.Sprintf("disk-%d.bin", meta.ID)
+	}
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	mimeType := http.DetectContentType(content)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	storageKey := filepath.ToSlash(filepath.Join(ticketID, "bitrix", fmt.Sprintf("disk-%d-%s", meta.ID, fileName)))
+	absPath := filepath.Join(basePath, filepath.FromSlash(storageKey))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return "", "", "", err
+	}
+	if err := os.WriteFile(absPath, content, 0644); err != nil {
+		return "", "", "", err
+	}
+
+	asset, err := s.ticketRepo.UpsertFileAsset(ctx, &tickets.FileAsset{
+		StorageKey:   storageKey,
+		OriginalName: fileName,
+		MimeType:     mimeType,
+		Size:         int64(len(content)),
+		Checksum:     checksum,
+	})
+	if err != nil {
+		return "", "", "", err
+	}
+	if asset == nil {
+		return "", "", "", nil
+	}
+
+	commentUUID := strings.TrimSpace(commentLocalID)
+	var commentPtr *string
+	if commentUUID != "" {
+		commentPtr = &commentUUID
+	}
+	if err := s.ticketRepo.UpsertTicketFileLink(ctx, &tickets.TicketFileLink{
+		TicketID:     ticketID,
+		FileID:       asset.ID,
+		RelationType: tickets.RelationTypeInlineComment,
+		CommentUUID:  commentPtr,
+	}); err != nil {
+		return "", "", "", err
+	}
+
+	return "/api/static/tickets/" + storageKey, mimeType, fileName, nil
+}
+
+func sanitizeBitrixAttachmentName(name string) string {
+	value := strings.TrimSpace(name)
+	if value == "" {
+		return ""
+	}
+	value = filepath.Base(value)
+	value = strings.ReplaceAll(value, "/", "_")
+	value = strings.ReplaceAll(value, "\\", "_")
+	return strings.TrimSpace(value)
+}
+
+func renderBitrixAttachmentHTML(publicURL, fileName, mimeType string) string {
+	urlSafe := html.EscapeString(strings.TrimSpace(publicURL))
+	nameSafe := html.EscapeString(strings.TrimSpace(fileName))
+	if nameSafe == "" {
+		nameSafe = "Файл"
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/") {
+		return fmt.Sprintf(`<img src="%s" alt="%s" />`, urlSafe, nameSafe)
+	}
+	return fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">%s</a>`, urlSafe, nameSafe)
 }
 
 func (s *bitrixIncomingService) resolveTicketByDealID(ctx context.Context, dealID int64) (*tickets.Ticket, error) {

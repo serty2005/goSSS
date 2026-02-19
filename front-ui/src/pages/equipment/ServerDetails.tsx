@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, theme as antTheme } from 'antd';
+import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
+import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { companiesApi } from '@/api/companies';
@@ -12,6 +12,7 @@ import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
+import EntityHierarchyExplorer from '@/components/entities/EntityHierarchyExplorer';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -27,6 +28,61 @@ const sourceLabelMap: Record<string, string> = {
   network_auto_both: 'Автоопределение сети (РС+ФР)',
   network_conflict: 'Конфликт сети',
   manual_resolution: 'Ручное разрешение',
+};
+
+const fieldLabelMap: Record<string, string> = {
+  id: 'ID',
+  created_at: 'Создано',
+  updated_at: 'Обновлено',
+  last_updated_by: 'Последний источник обновления',
+  deleted_at: 'Удалено',
+  last_modified_date: 'Дата изменения в SD',
+  unique_id: 'Unique ID',
+  ip: 'URL/IP',
+  cabinet_link: 'Партнёрский портал',
+  device_name: 'Название устройства',
+  litemanager: 'LiteManager',
+  server_version: 'Версия сервера',
+  description: 'Описание',
+  owner_id: 'Владелец',
+  owner_binding_mode: 'Режим назначения владельца',
+  additional_owners: 'Дополнительные владельцы',
+  server_name: 'Имя сервера',
+  server_edition: 'Редакция сервера',
+  last_polled_at: 'Последний опрос',
+  status: 'Статус',
+  health_status: 'Health Status',
+  status_details: 'Детали статуса',
+  crm_id: 'CRM ID',
+  rdp: 'RDP',
+  teamviewer: 'TeamViewer',
+  anydesk: 'AnyDesk',
+  partners_link: 'Ссылка партнёрского портала',
+};
+
+const isPresent = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const formatDynamicValue = (key: string, value: unknown) => {
+  if (!isPresent(value)) return '-';
+  if (typeof value === 'boolean') return value ? 'Да' : 'Нет';
+  if (Array.isArray(value)) return value.join(', ');
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value, null, 2);
+  }
+  if (typeof value === 'string' && (key.endsWith('_at') || key.endsWith('_date'))) {
+    return formatDate(value);
+  }
+  return String(value);
+};
+
+const toTitle = (value: string | undefined, fallback: string) => {
+  const cleaned = String(value || '').trim();
+  return cleaned || fallback;
 };
 
 const ServerDetails: React.FC = () => {
@@ -58,12 +114,98 @@ const ServerDetails: React.FC = () => {
     staleTime: 10_000,
   });
 
+  const server = serverRes?.data;
+
+  const { data: ownerCompanyRes } = useQuery({
+    queryKey: ['company', server?.owner_id],
+    queryFn: () => companiesApi.getCompany(server!.owner_id!),
+    enabled: Boolean(server?.owner_id),
+    staleTime: 60_000,
+  });
+
+  const parentCompanyID = String(ownerCompanyRes?.data?.parent_id || '').trim();
+  const { data: parentCompanyRes } = useQuery({
+    queryKey: ['company', 'parent', parentCompanyID],
+    queryFn: () => companiesApi.getCompany(parentCompanyID),
+    enabled: Boolean(parentCompanyID),
+    staleTime: 60_000,
+  });
+
+  const { data: ownerInfraRes, isLoading: isOwnerInfraLoading } = useQuery({
+    queryKey: ['company', server?.owner_id, 'infra', 'server-details-hierarchy'],
+    queryFn: () => companiesApi.getInfrastructure(server!.owner_id!),
+    enabled: Boolean(server?.owner_id),
+    staleTime: 30_000,
+  });
+
+  const workstationIDs = useMemo(() => {
+    return (ownerInfraRes?.data || [])
+      .filter((item) => item.entity_type === 'Workstation')
+      .map((item) => String((item.data as Record<string, unknown>).uuid || '').trim())
+      .filter(Boolean);
+  }, [ownerInfraRes?.data]);
+
+  const fiscalIDs = useMemo(() => {
+    return (ownerInfraRes?.data || [])
+      .filter((item) => item.entity_type === 'FiscalRegister')
+      .map((item) => String((item.data as Record<string, unknown>).uuid || '').trim())
+      .filter(Boolean);
+  }, [ownerInfraRes?.data]);
+
+  const workstationDetailQueries = useQueries({
+    queries: workstationIDs.map((workstationID) => ({
+      queryKey: ['workstation', workstationID, 'hierarchy'],
+      queryFn: () => equipmentApi.getWorkstation(workstationID),
+      staleTime: 30_000,
+    })),
+  });
+
+  const fiscalDetailQueries = useQueries({
+    queries: fiscalIDs.map((fiscalID) => ({
+      queryKey: ['fiscal', fiscalID, 'hierarchy'],
+      queryFn: () => equipmentApi.getFiscal(fiscalID),
+      staleTime: 30_000,
+    })),
+  });
+
+  const hierarchyLoading = isOwnerInfraLoading
+    || workstationDetailQueries.some((query) => query.isLoading)
+    || fiscalDetailQueries.some((query) => query.isLoading);
+
+  const hierarchyWorkstations = useMemo(() => {
+    if (!server) return [];
+    return workstationDetailQueries
+      .map((query) => query.data?.data)
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .filter((item) => String(item.server_id || '') === String(server.id))
+      .map((item) => ({
+        id: String(item.id),
+        title: toTitle(item.device_name, 'Рабочая станция'),
+        serverID: String(item.server_id || ''),
+      }));
+  }, [server, workstationDetailQueries]);
+
+  const hierarchyWorkstationIDs = useMemo(() => new Set(hierarchyWorkstations.map((item) => item.id)), [hierarchyWorkstations]);
+
+  const hierarchyFiscals = useMemo(() => {
+    return fiscalDetailQueries
+      .map((query) => query.data?.data)
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .filter((item) => hierarchyWorkstationIDs.has(String(item.workstation_id || '')))
+      .map((item) => ({
+        id: String(item.id),
+        title: toTitle(item.model_kkt || item.rn_kkt, 'Фискальный регистратор'),
+        workstationID: String(item.workstation_id || ''),
+      }));
+  }, [fiscalDetailQueries, hierarchyWorkstationIDs]);
+
   const updateMutation = useMutation({
     mutationFn: (values: UpdateServerPayload) => equipmentApi.updateServer(id!, values),
     onSuccess: () => {
       message.success('Данные сервера обновлены');
       queryClient.invalidateQueries({ queryKey: ['server', id] });
       queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
+      queryClient.invalidateQueries({ queryKey: ['company', server?.owner_id, 'infra', 'server-details-hierarchy'] });
       setActiveField(null);
     },
     onError: () => message.error('Ошибка обновления'),
@@ -75,12 +217,24 @@ const ServerDetails: React.FC = () => {
     onError: () => message.error('Не удалось отправить запрос на опрос'),
   });
 
-  const server = serverRes?.data;
-  const companyOptions = useMemo(() => (companiesRes?.data || []).map((item) => ({
-    value: String(item.id || ''),
-    title: String(item.title || item.additional_name || item.id || ''),
-    parentTitle: item.parent_title ? String(item.parent_title) : undefined,
-  })).filter((item) => item.value && item.title), [companiesRes?.data]);
+  const companyOptions = useMemo(() => {
+    const base = (companiesRes?.data || []).map((item) => ({
+      value: String(item.id || ''),
+      title: String(item.title || item.additional_name || item.id || ''),
+      parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+    })).filter((item) => item.value && item.title);
+
+    const ownerData = ownerCompanyRes?.data;
+    if (ownerData?.id && ownerData?.title && !base.some((item) => item.value === ownerData.id)) {
+      base.unshift({
+        value: ownerData.id,
+        title: ownerData.title,
+        parentTitle: ownerData.parent_title ? String(ownerData.parent_title) : undefined,
+      });
+    }
+
+    return base;
+  }, [companiesRes?.data, ownerCompanyRes?.data]);
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
   if (!server) return <div>Сервер не найден</div>;
@@ -99,6 +253,34 @@ const ServerDetails: React.FC = () => {
     }
     navigate(-1);
   };
+
+  const serverRecord = server as unknown as Record<string, unknown>;
+  const fixedRenderedKeys = new Set([
+    'id',
+    'owner_id',
+    'owner_binding_mode',
+    'device_name',
+    'server_name',
+    'description',
+    'ip',
+    'health_status',
+    'status',
+    'unique_id',
+    'crm_id',
+    'partners_link',
+    'cabinet_link',
+    'server_version',
+    'server_edition',
+    'teamviewer',
+    'anydesk',
+    'rdp',
+    'litemanager',
+    'last_polled_at',
+  ]);
+
+  const dynamicFields = Object.entries(serverRecord)
+    .filter(([key, value]) => !fixedRenderedKeys.has(key) && isPresent(value))
+    .sort(([a], [b]) => a.localeCompare(b, 'ru'));
 
   return (
     <div>
@@ -141,7 +323,12 @@ const ServerDetails: React.FC = () => {
                     saveField('owner_id', value);
                   }}
                 />
-                <Text type="secondary">Режим назначения: {server.owner_binding_mode || 'auto'}</Text>
+                <Space>
+                  <Text type="secondary">Режим назначения: {server.owner_binding_mode || 'auto'}</Text>
+                  {server.owner_id ? (
+                    <Button type="link" onClick={() => navigate(`/companies/${server.owner_id}`)}>К владельцу</Button>
+                  ) : null}
+                </Space>
               </Space>
             </Descriptions.Item>
             <Descriptions.Item label="Название устройства">
@@ -150,7 +337,10 @@ const ServerDetails: React.FC = () => {
             <Descriptions.Item label="Имя сервера">
               <InlineFieldEditor value={server.server_name} editable={canEdit} onSave={(v) => saveField('server_name', v)} saving={updateMutation.isPending && activeField === 'server_name'} />
             </Descriptions.Item>
-            <Descriptions.Item label="URL">
+            <Descriptions.Item label="Описание" span={2}>
+              <InlineFieldEditor value={server.description} editable={canEdit} multiline onSave={(v) => saveField('description', v)} saving={updateMutation.isPending && activeField === 'description'} />
+            </Descriptions.Item>
+            <Descriptions.Item label="URL/IP">
               <InlineFieldEditor value={server.ip} editable={canEdit} onSave={(v) => saveField('ip', v)} saving={updateMutation.isPending && activeField === 'ip'} />
             </Descriptions.Item>
             <Descriptions.Item label="Health Status">
@@ -174,63 +364,124 @@ const ServerDetails: React.FC = () => {
             <Descriptions.Item label="Версия сервера">
               <InlineFieldEditor value={server.server_version} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />
             </Descriptions.Item>
+            <Descriptions.Item label="Редакция сервера">
+              <InlineFieldEditor value={server.server_edition} editable={canEdit} onSave={(v) => saveField('server_edition', v)} saving={updateMutation.isPending && activeField === 'server_edition'} />
+            </Descriptions.Item>
+            <Descriptions.Item label="AnyDesk">
+              <InlineFieldEditor value={server.anydesk} editable={canEdit} onSave={(v) => saveField('anydesk', v)} saving={updateMutation.isPending && activeField === 'anydesk'} />
+            </Descriptions.Item>
+            <Descriptions.Item label="TeamViewer">
+              <InlineFieldEditor value={server.teamviewer} editable={canEdit} onSave={(v) => saveField('teamviewer', v)} saving={updateMutation.isPending && activeField === 'teamviewer'} />
+            </Descriptions.Item>
+            <Descriptions.Item label="RDP">
+              <InlineFieldEditor value={server.rdp} editable={canEdit} onSave={(v) => saveField('rdp', v)} saving={updateMutation.isPending && activeField === 'rdp'} />
+            </Descriptions.Item>
+            <Descriptions.Item label="LiteManager">
+              <InlineFieldEditor value={server.litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
+            </Descriptions.Item>
             <Descriptions.Item label="Посл. опрос">{formatDate(server.last_polled_at)}</Descriptions.Item>
+            <Descriptions.Item label="Статус">{server.status || '-'}</Descriptions.Item>
+
+            {dynamicFields.map(([key, value]) => (
+              <Descriptions.Item key={key} label={fieldLabelMap[key] || key} span={key === 'status_details' ? 2 : 1}>
+                {typeof value === 'object' && value !== null ? (
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{formatDynamicValue(key, value)}</pre>
+                ) : (
+                  formatDynamicValue(key, value)
+                )}
+              </Descriptions.Item>
+            ))}
           </Descriptions>
         </Card>
 
-        <Card title="История изменений" className="glass-panel" size="small">
-          <Table<EntityOwnerHistoryItemDTO>
-            rowKey="id"
-            pagination={{ pageSize: 10 }}
-            dataSource={ownerHistoryRes?.data || []}
-            columns={[
-              {
-                title: 'Время',
-                dataIndex: 'created_at',
-                key: 'created_at',
-                render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
-                width: 200,
-              },
-              {
-                title: 'Источник',
-                dataIndex: 'change_source',
-                key: 'change_source',
-                width: 220,
-                render: (value: string) => sourceLabelMap[value] || value || '-',
-              },
-              {
-                title: 'Владелец',
-                key: 'owners',
-                render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
-                  const fromOwner = record.from_owner_id || '';
-                  const toOwner = record.to_owner_id || '';
-                  if (!fromOwner && !toOwner) {
-                    return '-';
-                  }
-                  if (fromOwner && toOwner && fromOwner !== toOwner) {
-                    return `${fromOwner} → ${toOwner}`;
-                  }
-                  return toOwner || fromOwner || '-';
-                },
-                width: 340,
-              },
-              {
-                title: 'Кто сделал',
-                key: 'actor',
-                render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
-                  if (record.changed_by_user_id) {
-                    return `Пользователь ${record.changed_by_user_id}`;
-                  }
-                  if (record.agent_uuid) {
-                    return record.agent_uuid;
-                  }
-                  return '-';
-                },
-              },
-              { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
-            ]}
-          />
-        </Card>
+        <Tabs
+          defaultActiveKey="history"
+          items={[
+            {
+              key: 'history',
+              label: 'История',
+              children: (
+                <Card title="История изменений" className="glass-panel" size="small">
+                  <Table<EntityOwnerHistoryItemDTO>
+                    rowKey="id"
+                    pagination={{ pageSize: 10 }}
+                    dataSource={ownerHistoryRes?.data || []}
+                    columns={[
+                      {
+                        title: 'Время',
+                        dataIndex: 'created_at',
+                        key: 'created_at',
+                        render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
+                        width: 200,
+                      },
+                      {
+                        title: 'Источник',
+                        dataIndex: 'change_source',
+                        key: 'change_source',
+                        width: 220,
+                        render: (value: string) => sourceLabelMap[value] || value || '-',
+                      },
+                      {
+                        title: 'Владелец',
+                        key: 'owners',
+                        render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
+                          const fromOwner = record.from_owner_id || '';
+                          const toOwner = record.to_owner_id || '';
+                          if (!fromOwner && !toOwner) {
+                            return '-';
+                          }
+                          if (fromOwner && toOwner && fromOwner !== toOwner) {
+                            return `${fromOwner} → ${toOwner}`;
+                          }
+                          return toOwner || fromOwner || '-';
+                        },
+                        width: 340,
+                      },
+                      {
+                        title: 'Кто сделал',
+                        key: 'actor',
+                        render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
+                          if (record.changed_by_user_id) {
+                            return `Пользователь ${record.changed_by_user_id}`;
+                          }
+                          if (record.agent_uuid) {
+                            return record.agent_uuid;
+                          }
+                          return '-';
+                        },
+                      },
+                      { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
+                    ]}
+                  />
+                </Card>
+              ),
+            },
+            {
+              key: 'hierarchy',
+              label: 'Иерархия',
+              children: (
+                <Card title="Иерархия связей" className="glass-panel" size="small">
+                  {!server.owner_id ? (
+                    <Empty description="Для сервера не назначен владелец, иерархия недоступна" />
+                  ) : (
+                    <EntityHierarchyExplorer
+                      loading={hierarchyLoading}
+                      rootCompany={ownerCompanyRes?.data ? { id: String(ownerCompanyRes.data.id), title: toTitle(ownerCompanyRes.data.title, 'Компания') } : undefined}
+                      parentCompany={parentCompanyRes?.data ? { id: String(parentCompanyRes.data.id), title: toTitle(parentCompanyRes.data.title, 'Родительская компания') } : undefined}
+                      server={{
+                        id: String(server.id),
+                        title: toTitle(server.device_name || server.server_name, 'Сервер'),
+                      }}
+                      workstations={hierarchyWorkstations}
+                      fiscals={hierarchyFiscals}
+                      initialFocus={{ type: 'server', id: String(server.id) }}
+                    />
+                  )}
+                </Card>
+              ),
+            },
+          ]}
+        />
       </Space>
     </div>
   );

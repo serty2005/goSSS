@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Modal, Space, Upload, theme as antTheme } from 'antd';
 import type { UploadProps } from 'antd';
-import { BlockOutlined, BoldOutlined, CodeOutlined, ItalicOutlined, LinkOutlined, PictureOutlined, UserOutlined } from '@ant-design/icons';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { BlockOutlined, BoldOutlined, CodeOutlined, ItalicOutlined, LinkOutlined, PaperClipOutlined, PictureOutlined, UserOutlined } from '@ant-design/icons';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
@@ -19,6 +19,7 @@ type Props = {
   placeholder?: string;
   mentions?: MentionOption[];
   onImageUpload?: (file: File) => Promise<string | null>;
+  onFileUpload?: (file: File) => Promise<string | null>;
   minHeight?: number;
 };
 
@@ -103,6 +104,7 @@ const SmartTicketEditor: React.FC<Props> = ({
   placeholder,
   mentions = [],
   onImageUpload,
+  onFileUpload,
   minHeight = 120,
 }) => {
   const { token } = antTheme.useToken();
@@ -113,6 +115,7 @@ const SmartTicketEditor: React.FC<Props> = ({
   const [linkLoading, setLinkLoading] = useState(false);
   const mentionRangeRef = useRef<MentionRange | null>(null);
   const mentionItemsRef = useRef<MentionOption[]>([]);
+  const editorRef = useRef<Editor | null>(null);
 
   const extensions = useMemo(
     () => [
@@ -161,6 +164,40 @@ const SmartTicketEditor: React.FC<Props> = ({
       return Math.min(prev, visibleMentions.length - 1);
     });
   }, [visibleMentions]);
+
+  const escapeHtml = (raw: string) => String(raw || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const insertUploadedFile = useCallback(async (file: File) => {
+    const activeEditor = editorRef.current;
+    if (!activeEditor) return;
+    const isImage = file.type.startsWith('image/');
+    if (isImage && onImageUpload) {
+      const uploaded = await onImageUpload(file);
+      if (!uploaded) return;
+      activeEditor.chain().focus().setImage({ src: uploaded, alt: file.name }).run();
+      return;
+    }
+    if (!onFileUpload) return;
+    const uploaded = await onFileUpload(file);
+    if (!uploaded) return;
+    const safeHref = escapeHtml(uploaded);
+    const safeName = escapeHtml(file.name || 'Файл');
+    activeEditor.chain().focus().insertContent(`<a href="${safeHref}" target="_blank" rel="noreferrer">${safeName}</a>`).run();
+  }, [onFileUpload, onImageUpload]);
+
+  const insertUploadedFiles = useCallback(async (files: File[]) => {
+    for (let i = 0; i < files.length; i += 1) {
+      await insertUploadedFile(files[i]);
+      if (i < files.length - 1 && editorRef.current) {
+        editorRef.current.chain().focus().insertContent('<br/>').run();
+      }
+    }
+  }, [insertUploadedFile]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -243,28 +280,34 @@ const SmartTicketEditor: React.FC<Props> = ({
 
         return false;
       },
-      handlePaste: (view, event) => {
-        if (!onImageUpload) return false;
+      handlePaste: (_view, event) => {
         const items = Array.from(event.clipboardData?.items || []);
-        const imageItem = items.find((item) => item.kind === 'file' && item.type.startsWith('image/'));
-        if (!imageItem) return false;
-        const file = imageItem.getAsFile();
-        if (!file) return false;
+        const files = items
+          .filter((item) => item.kind === 'file')
+          .map((item) => item.getAsFile())
+          .filter((item): item is File => Boolean(item));
+        if (files.length === 0) return false;
+        if (!onImageUpload && !onFileUpload) return false;
 
         event.preventDefault();
-        onImageUpload(file)
-          .then((uploaded) => {
-            if (!uploaded) return;
-            const { state } = view;
-            const node = state.schema.nodes.image.create({ src: uploaded, alt: file.name });
-            const tr = state.tr.replaceSelectionWith(node);
-            view.dispatch(tr.scrollIntoView());
-          })
-          .catch(() => null);
+        void insertUploadedFiles(files);
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (files.length === 0) return false;
+        if (!onImageUpload && !onFileUpload) return false;
+
+        event.preventDefault();
+        void insertUploadedFiles(files);
         return true;
       },
     },
   });
+
+  useEffect(() => {
+    editorRef.current = editor ?? null;
+  }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
@@ -316,22 +359,14 @@ const SmartTicketEditor: React.FC<Props> = ({
   }, [editor]);
 
   const handleImageUpload = useCallback(async (options: UploadRequestOption) => {
-    if (!onImageUpload) {
-      options.onError?.(new Error('Загрузка изображения недоступна'));
-      return;
-    }
-
     try {
       const file = options.file as File;
-      const uploaded = await onImageUpload(file);
-      if (uploaded && editor) {
-        editor.chain().focus().setImage({ src: uploaded, alt: file.name }).run();
-      }
+      await insertUploadedFile(file);
       options.onSuccess?.({});
     } catch (error) {
       options.onError?.(error as Error);
     }
-  }, [editor, onImageUpload]);
+  }, [insertUploadedFile]);
 
   const applyMention = (item: MentionOption) => {
     if (!editor || !mentionRange) return;
@@ -388,6 +423,11 @@ const SmartTicketEditor: React.FC<Props> = ({
               void openLinkModal();
             }}
           />
+          {(onImageUpload || onFileUpload) && (
+            <Upload showUploadList={false} customRequest={handleImageUpload}>
+              <Button size="small" icon={<PaperClipOutlined />} />
+            </Upload>
+          )}
           {onImageUpload && (
             <Upload showUploadList={false} accept="image/*" customRequest={handleImageUpload}>
               <Button size="small" icon={<PictureOutlined />} />
@@ -535,3 +575,5 @@ const SmartTicketEditor: React.FC<Props> = ({
 };
 
 export default SmartTicketEditor;
+
+

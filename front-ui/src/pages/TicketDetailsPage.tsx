@@ -755,6 +755,17 @@ const TicketDetailsPage: React.FC = () => {
       .replace(/^static\//, '/api/static/');
   };
 
+  const uploadInlineFile = async (source: File): Promise<string | null> => {
+    const response = await uploadAttachmentsMutation.mutateAsync([source]);
+    const uploaded = response.data?.items?.[0];
+    if (!uploaded?.file_path) {
+      return null;
+    }
+    return String(uploaded.file_path)
+      .replace(/^\/static\//, '/api/static/')
+      .replace(/^static\//, '/api/static/');
+  };
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
@@ -1004,6 +1015,7 @@ const TicketDetailsPage: React.FC = () => {
                               placeholder="Введите описание тикета"
                               mentions={mentionOptions}
                               onImageUpload={uploadInlineImage}
+                              onFileUpload={uploadInlineFile}
                             />
                             <Space>
                               <Button
@@ -1090,6 +1102,7 @@ const TicketDetailsPage: React.FC = () => {
                                               placeholder="Измените комментарий"
                                               mentions={mentionOptions}
                                               onImageUpload={uploadInlineImage}
+                                              onFileUpload={uploadInlineFile}
                                               minHeight={100}
                                             />
                                             <Space>
@@ -1127,6 +1140,7 @@ const TicketDetailsPage: React.FC = () => {
                                   placeholder="Добавьте комментарий"
                                   mentions={mentionOptions}
                                   onImageUpload={uploadInlineImage}
+                                  onFileUpload={uploadInlineFile}
                                   minHeight={100}
                                 />
                                 <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>

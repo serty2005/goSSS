@@ -525,6 +525,21 @@ const TicketsPage: React.FC = () => {
       .replace(/^static\//, '/api/static/');
   };
 
+  const uploadInlineFile = async (source: File): Promise<string | null> => {
+    if (!selectedTicketId) {
+      return null;
+    }
+    const response = await ticketsApi.uploadAttachments(selectedTicketId, [source]);
+    const uploaded = response.data?.items?.[0];
+    if (!uploaded?.file_path) {
+      return null;
+    }
+    queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
+    return String(uploaded.file_path)
+      .replace(/^\/static\//, '/api/static/')
+      .replace(/^static\//, '/api/static/');
+  };
+
   const closeQuickModal = () => {
     setSelectedTicketId(null);
     setCommentDraft('');
@@ -1259,6 +1274,7 @@ const TicketsPage: React.FC = () => {
                               placeholder="Измените комментарий"
                               mentions={mentionOptions}
                               onImageUpload={uploadInlineImage}
+                              onFileUpload={uploadInlineFile}
                               minHeight={96}
                             />
                             <Space>
@@ -1303,6 +1319,7 @@ const TicketsPage: React.FC = () => {
                   placeholder="Добавьте комментарий"
                   mentions={mentionOptions}
                   onImageUpload={uploadInlineImage}
+                  onFileUpload={uploadInlineFile}
                   minHeight={96}
                 />
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorTextSecondary }}>

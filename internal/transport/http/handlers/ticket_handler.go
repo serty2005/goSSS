@@ -167,7 +167,7 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, userID, getUserRolesFromContext(r))
+	updatedComment, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, userID, getUserRolesFromContext(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTicketNotFound):
@@ -182,6 +182,9 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if updatedComment != nil && !updatedComment.IsPrivate {
+		h.publishBitrixCommentSync(ticketID, *updatedComment, userID)
+	}
 	h.publishTicketUpdated(ticketID, "ticket_comment_updated", "ui", "Комментарий изменён")
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

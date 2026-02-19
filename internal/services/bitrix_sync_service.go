@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
@@ -12,6 +13,8 @@ import (
 	b24 "etalon-server/internal/infra/plugins/bitrix"
 	"fmt"
 	"html"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -212,10 +215,6 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 	if err != nil {
 		return err
 	}
-	if existing != nil {
-		return nil
-	}
-
 	authorID, err := s.resolveBitrixUserID(ctx, etalonUserID)
 	if err != nil {
 		return err
@@ -229,7 +228,25 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 		s.log.Info("Bitrix24: определен пользователь для внутренней ссылки автора комментария", "ticket_id", ticketID, "comment_id", comment.ID, "etalon_user_id", etalonUserID, "b24_user_id", *authorID)
 	}
 
-	b24ID, err := s.client.TimelineCommentAdd(ctx, link.B24DealID, message, nil)
+	files, err := s.buildCommentFilesPayload(ctx, ticketID, comment)
+	if err != nil {
+		return err
+	}
+
+	if existing != nil {
+		if err := s.client.TimelineCommentUpdateWithFiles(ctx, existing.B24CommentID, message, files); err != nil {
+			return err
+		}
+		s.setCommentSuppress(ctx, existing.B24CommentID)
+		return nil
+	}
+
+	var b24ID int64
+	if len(files) > 0 {
+		b24ID, err = s.client.TimelineCommentAddWithFiles(ctx, "deal", link.B24DealID, message, files)
+	} else {
+		b24ID, err = s.client.TimelineCommentAdd(ctx, link.B24DealID, message, nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -376,7 +393,16 @@ func (s *bitrixSyncService) syncPendingComments(ctx context.Context, ticket *tic
 			continue
 		}
 		message := s.buildCommentBody(ctx, ticket.ID, &comment, nil, "")
-		b24ID, err := s.client.TimelineCommentAdd(ctx, dealID, message, nil)
+		files, err := s.buildCommentFilesPayload(ctx, ticket.ID, &comment)
+		if err != nil {
+			return err
+		}
+		var b24ID int64
+		if len(files) > 0 {
+			b24ID, err = s.client.TimelineCommentAddWithFiles(ctx, "deal", dealID, message, files)
+		} else {
+			b24ID, err = s.client.TimelineCommentAdd(ctx, dealID, message, nil)
+		}
 		if err != nil {
 			return err
 		}
@@ -728,7 +754,7 @@ func ptrString(value *string) string {
 	return strings.TrimSpace(*value)
 }
 
-func (s *bitrixSyncService) buildCommentBody(ctx context.Context, ticketID string, comment *tickets.TicketComment, authorID *int64, authorName string) string {
+func (s *bitrixSyncService) buildCommentBody(ctx context.Context, _ string, comment *tickets.TicketComment, authorID *int64, authorName string) string {
 	if comment == nil {
 		return ""
 	}
@@ -739,29 +765,7 @@ func (s *bitrixSyncService) buildCommentBody(ctx context.Context, ticketID strin
 		}
 		return bitrixUserID, true
 	})
-	lines := []string{s.withBitrixAuthorMention(commentBody, authorID, authorName)}
-
-	links, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, []string{tickets.RelationTypeInlineComment})
-	if err != nil || len(links) == 0 {
-		return strings.Join(lines, "\n")
-	}
-
-	for _, link := range links {
-		if link.CommentUUID == nil || strings.TrimSpace(*link.CommentUUID) != strings.TrimSpace(comment.ServiceDeskUUID) {
-			continue
-		}
-		asset, err := s.ticketRepo.GetFileAssetByID(ctx, link.FileID)
-		if err != nil || asset == nil {
-			continue
-		}
-		url := s.buildAttachmentURL(asset.StorageKey)
-		if strings.HasPrefix(strings.ToLower(asset.MimeType), "image/") {
-			lines = append(lines, "[IMG]"+url+"[/IMG]")
-		} else {
-			lines = append(lines, url)
-		}
-	}
-	return strings.Join(lines, "\n")
+	return s.withBitrixAuthorMention(commentBody, authorID, authorName)
 }
 
 func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string {
@@ -884,12 +888,136 @@ func (s *bitrixSyncService) resolveEtalonUserDisplayName(ctx context.Context, et
 	return strings.TrimSpace(strings.Join([]string{u.LastName, u.FirstName}, " ")), nil
 }
 
-func (s *bitrixSyncService) buildAttachmentURL(storageKey string) string {
-	base := strings.TrimRight(strings.TrimSpace(s.cfg.EtalonTicketBaseURL), "/")
-	if base == "" {
-		return "/api/static/tickets/" + strings.TrimLeft(storageKey, "/")
+func (s *bitrixSyncService) buildCommentFilesPayload(
+	ctx context.Context,
+	ticketID string,
+	comment *tickets.TicketComment,
+) ([]b24.FileToUpload, error) {
+	if comment == nil || strings.TrimSpace(ticketID) == "" {
+		return []b24.FileToUpload{}, nil
 	}
-	return base + "/api/static/tickets/" + strings.TrimLeft(storageKey, "/")
+
+	links, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, []string{
+		tickets.RelationTypeInlineComment,
+		tickets.RelationTypeDirectTicketAttachment,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(links) == 0 {
+		return []b24.FileToUpload{}, nil
+	}
+
+	commentKeys := map[string]struct{}{}
+	if value := strings.TrimSpace(comment.ServiceDeskUUID); value != "" {
+		commentKeys[value] = struct{}{}
+	}
+	if value := strings.TrimSpace(comment.ID); value != "" {
+		commentKeys[value] = struct{}{}
+	}
+	if len(commentKeys) == 0 {
+		return []b24.FileToUpload{}, nil
+	}
+
+	fileIDs := make([]string, 0, len(links))
+	seenFiles := make(map[string]struct{}, len(links))
+	for _, link := range links {
+		if strings.TrimSpace(link.RelationType) == tickets.RelationTypeInlineComment {
+			if link.CommentUUID == nil {
+				continue
+			}
+			commentKey := strings.TrimSpace(*link.CommentUUID)
+			if _, ok := commentKeys[commentKey]; !ok {
+				continue
+			}
+		} else if strings.TrimSpace(link.RelationType) == tickets.RelationTypeDirectTicketAttachment {
+			asset, err := s.ticketRepo.GetFileAssetByID(ctx, link.FileID)
+			if err != nil {
+				return nil, err
+			}
+			if asset == nil {
+				continue
+			}
+			if !commentTextReferencesStorageKey(comment.Text, asset.StorageKey) {
+				continue
+			}
+		} else {
+			continue
+		}
+		fileID := strings.TrimSpace(link.FileID)
+		if fileID == "" {
+			continue
+		}
+		if _, exists := seenFiles[fileID]; exists {
+			continue
+		}
+		seenFiles[fileID] = struct{}{}
+		fileIDs = append(fileIDs, fileID)
+	}
+	if len(fileIDs) == 0 {
+		return []b24.FileToUpload{}, nil
+	}
+	basePath := ""
+	if s.cfg != nil {
+		basePath = strings.TrimSpace(s.cfg.TicketStoragePath)
+	}
+	if basePath == "" {
+		return nil, fmt.Errorf("не задан путь хранилища файлов тикетов")
+	}
+
+	result := make([]b24.FileToUpload, 0, len(fileIDs))
+	for _, fileID := range fileIDs {
+		asset, err := s.ticketRepo.GetFileAssetByID(ctx, fileID)
+		if err != nil {
+			return nil, err
+		}
+		if asset == nil {
+			continue
+		}
+
+		storageKey := strings.TrimSpace(asset.StorageKey)
+		if storageKey == "" {
+			continue
+		}
+		absPath := filepath.Join(basePath, filepath.FromSlash(storageKey))
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			return nil, err
+		}
+
+		fileName := strings.TrimSpace(asset.OriginalName)
+		if fileName == "" {
+			fileName = filepath.Base(storageKey)
+		}
+		if fileName == "" {
+			continue
+		}
+
+		result = append(result, b24.FileToUpload{
+			Name:          fileName,
+			Base64Content: base64.StdEncoding.EncodeToString(content),
+		})
+	}
+	return result, nil
+}
+
+func commentTextReferencesStorageKey(commentText string, storageKey string) bool {
+	text := strings.TrimSpace(commentText)
+	key := strings.TrimSpace(storageKey)
+	if text == "" || key == "" {
+		return false
+	}
+	path := "/api/static/tickets/" + strings.TrimLeft(filepath.ToSlash(key), "/")
+	if strings.Contains(text, path) {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/") {
+		legacy := strings.TrimPrefix(path, "/api")
+		if strings.Contains(text, legacy) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *bitrixSyncService) resolveBitrixUserID(ctx context.Context, etalonUserID uint) (*int64, error) {

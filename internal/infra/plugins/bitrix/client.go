@@ -3,6 +3,7 @@ package bitrix
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/infra/config"
@@ -35,6 +36,20 @@ type TimelineComment struct {
 	EntityType string
 	EntityID   int64
 	Raw        map[string]interface{}
+}
+
+type FileToUpload struct {
+	Name          string
+	Base64Content string
+}
+
+type DiskFile struct {
+	ID          int64
+	Name        string
+	Size        int64
+	FileID      int64
+	DownloadURL string
+	Raw         map[string]interface{}
 }
 
 type ListElement struct {
@@ -167,6 +182,31 @@ func (c *Client) TimelineCommentAdd(ctx context.Context, dealID int64, comment s
 	return toInt64(raw), nil
 }
 
+func (c *Client) TimelineCommentAddWithFiles(
+	ctx context.Context,
+	entityType string,
+	entityID int64,
+	comment string,
+	files []FileToUpload,
+) (int64, error) {
+	body := map[string]interface{}{
+		"fields": buildTimelineCommentAddFields(entityType, entityID, comment, files),
+	}
+	raw, _, err := c.call(ctx, "crm.timeline.comment.add", body)
+	if err != nil {
+		return 0, err
+	}
+	return toInt64(raw), nil
+}
+
+func (c *Client) TimelineCommentUpdateWithFiles(ctx context.Context, commentID int64, comment string, files []FileToUpload) error {
+	_, _, err := c.call(ctx, "crm.timeline.comment.update", map[string]interface{}{
+		"id":     commentID,
+		"fields": buildTimelineCommentUpdateFields(comment, files, files != nil),
+	})
+	return err
+}
+
 func (c *Client) TimelineCommentList(ctx context.Context, dealID int64, start int) ([]TimelineComment, int, error) {
 	body := map[string]interface{}{
 		"filter": map[string]interface{}{
@@ -241,6 +281,95 @@ func (c *Client) TimelineCommentGet(ctx context.Context, commentID int64) (*Time
 		item.EntityID = toInt64(m["BINDINGS_ENTITY_ID"])
 	}
 	return item, nil
+}
+
+func (c *Client) DiskFileGet(ctx context.Context, diskFileID int64) (*DiskFile, error) {
+	raw, _, err := c.call(ctx, "disk.file.get", map[string]interface{}{"id": diskFileID})
+	if err != nil {
+		return nil, err
+	}
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+	out := &DiskFile{
+		ID:          toInt64(m["ID"]),
+		Name:        strings.TrimSpace(toString(m["NAME"])),
+		Size:        toInt64(m["SIZE"]),
+		FileID:      toInt64(m["FILE_ID"]),
+		DownloadURL: strings.TrimSpace(toString(m["DOWNLOAD_URL"])),
+		Raw:         m,
+	}
+	if out.ID <= 0 {
+		out.ID = toInt64(m["id"])
+	}
+	if out.Name == "" {
+		out.Name = strings.TrimSpace(toString(m["name"]))
+	}
+	if out.Size <= 0 {
+		out.Size = toInt64(m["size"])
+	}
+	if out.FileID <= 0 {
+		out.FileID = toInt64(m["file_id"])
+	}
+	if out.DownloadURL == "" {
+		out.DownloadURL = strings.TrimSpace(toString(m["downloadUrl"]))
+	}
+	return out, nil
+}
+
+func (c *Client) DownloadByURL(ctx context.Context, url string) ([]byte, error) {
+	target := strings.TrimSpace(url)
+	if target == "" {
+		return nil, errors.New("пустой URL для скачивания файла")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("не удалось скачать файл, статус: %d", resp.StatusCode)
+	}
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+var timelineCommentDiskFileIDRe = regexp.MustCompile(`\[DISK FILE ID=n?(\d+)\]`)
+
+func ExtractTimelineCommentDiskFileIDs(raw map[string]interface{}) []int64 {
+	if len(raw) == 0 {
+		return []int64{}
+	}
+	collected := make([]int64, 0, 8)
+
+	if filesRaw, ok := raw["FILES"]; ok {
+		collected = append(collected, extractDiskFileIDsFromFilesField(filesRaw)...)
+	}
+
+	comment := strings.TrimSpace(toString(raw["COMMENT"]))
+	if comment != "" {
+		matches := timelineCommentDiskFileIDRe.FindAllStringSubmatch(comment, -1)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			id, err := strconv.ParseInt(strings.TrimSpace(m[1]), 10, 64)
+			if err != nil || id <= 0 {
+				continue
+			}
+			collected = append(collected, id)
+		}
+	}
+
+	return dedupeInt64(collected)
 }
 
 func (c *Client) ListsGetIblockTypeID(ctx context.Context, iblockID int) (string, error) {
@@ -606,4 +735,128 @@ func clonePropertyMap(src map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return props
+}
+
+func buildTimelineCommentAddFields(entityType string, entityID int64, comment string, files []FileToUpload) map[string]interface{} {
+	normalizedEntityType := strings.TrimSpace(strings.ToLower(entityType))
+	if normalizedEntityType == "" {
+		normalizedEntityType = "deal"
+	}
+	fields := map[string]interface{}{
+		"ENTITY_TYPE": normalizedEntityType,
+		"ENTITY_ID":   entityID,
+		"COMMENT":     comment,
+	}
+	fileField := buildTimelineCommentFilesField(files)
+	if len(fileField) > 0 {
+		fields["FILES"] = fileField
+	}
+	return fields
+}
+
+func buildTimelineCommentUpdateFields(comment string, files []FileToUpload, includeFiles bool) map[string]interface{} {
+	fields := map[string]interface{}{
+		"COMMENT": comment,
+	}
+	if includeFiles {
+		fields["FILES"] = buildTimelineCommentFilesField(files)
+	}
+	return fields
+}
+
+func buildTimelineCommentFilesField(files []FileToUpload) [][]string {
+	if len(files) == 0 {
+		return [][]string{}
+	}
+	out := make([][]string, 0, len(files))
+	for _, file := range files {
+		name := strings.TrimSpace(file.Name)
+		content := normalizeBase64Content(file.Base64Content)
+		if name == "" || content == "" {
+			continue
+		}
+		out = append(out, []string{name, content})
+	}
+	return out
+}
+
+func normalizeBase64Content(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.Index(trimmed, ","); idx > 0 {
+		prefix := strings.ToLower(strings.TrimSpace(trimmed[:idx]))
+		if strings.HasPrefix(prefix, "data:") && strings.Contains(prefix, ";base64") {
+			trimmed = strings.TrimSpace(trimmed[idx+1:])
+		}
+	}
+	if trimmed == "" {
+		return ""
+	}
+	_, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil {
+		return ""
+	}
+	return trimmed
+}
+
+func dedupeInt64(items []int64) []int64 {
+	if len(items) == 0 {
+		return []int64{}
+	}
+	seen := make(map[int64]struct{}, len(items))
+	out := make([]int64, 0, len(items))
+	for _, id := range items {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func extractDiskFileIDsFromFilesField(filesRaw interface{}) []int64 {
+	out := make([]int64, 0, 8)
+	switch files := filesRaw.(type) {
+	case []interface{}:
+		for _, item := range files {
+			fileMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if id := extractDiskFileIDFromMap(fileMap); id > 0 {
+				out = append(out, id)
+			}
+		}
+	case map[string]interface{}:
+		for key, value := range files {
+			id := toInt64(key)
+			if nested, ok := value.(map[string]interface{}); ok {
+				nestedID := extractDiskFileIDFromMap(nested)
+				if nestedID > 0 {
+					id = nestedID
+				}
+			}
+			if id > 0 {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+func extractDiskFileIDFromMap(item map[string]interface{}) int64 {
+	if len(item) == 0 {
+		return 0
+	}
+	id := toInt64(item["ID"])
+	if id <= 0 {
+		id = toInt64(item["id"])
+	}
+	return id
 }
