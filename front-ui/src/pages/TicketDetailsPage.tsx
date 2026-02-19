@@ -1251,9 +1251,9 @@ const TicketDetailsPage: React.FC = () => {
                           ) : (
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               {parentConnectionCards.length > 0 && (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text strong>Chain</Text>
-                                  <div className="ticket-overview-connection-grid">
+                                <Card size="small" className="glass-panel" title="Серверы родительской компании">
+                                  
+                                  <div className="ticket-overview-connection-grid" style={{ marginTop: 8 }}>
                                     {parentConnectionCards.map((group) => (
                                       <Card key={group.key} size="small" className="glass-panel">
                                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -1285,7 +1285,7 @@ const TicketDetailsPage: React.FC = () => {
                                       </Card>
                                     ))}
                                   </div>
-                                </Space>
+                                </Card>
                               )}
 
                               {ownConnectionCards.length > 0 && (

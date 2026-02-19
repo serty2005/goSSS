@@ -67,6 +67,12 @@ const HTMLCodePaste = Extension.create({
       new Plugin({
         props: {
           handlePaste: (view, event) => {
+            const hasImageFile = Array.from(event.clipboardData?.items || []).some(
+              (item) => item.kind === 'file' && item.type.startsWith('image/'),
+            );
+            if (hasImageFile) {
+              return false;
+            }
             const html = event.clipboardData?.getData('text/html') || '';
             const text = event.clipboardData?.getData('text/plain') || '';
             const payload = html || text;

@@ -510,6 +510,21 @@ const TicketsPage: React.FC = () => {
       ticketsApi.recordConnectionCopy(payload.id, payload.label, payload.value),
   });
 
+  const uploadInlineImage = async (source: File): Promise<string | null> => {
+    if (!selectedTicketId) {
+      return null;
+    }
+    const response = await ticketsApi.uploadAttachments(selectedTicketId, [source]);
+    const uploaded = response.data?.items?.[0];
+    if (!uploaded?.file_path) {
+      return null;
+    }
+    queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
+    return String(uploaded.file_path)
+      .replace(/^\/static\//, '/api/static/')
+      .replace(/^static\//, '/api/static/');
+  };
+
   const closeQuickModal = () => {
     setSelectedTicketId(null);
     setCommentDraft('');
@@ -1059,7 +1074,7 @@ const TicketsPage: React.FC = () => {
         <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
           {(isFetchingNextPage || (hasNextPage && visibleTickets.length > 0)) && <Spin size="small" />}
           {!hasNextPage && visibleTickets.length > 0 && (
-            <Text type="secondary">Показано: {visibleTickets.length} из· {total}</Text>
+            <Text type="secondary">Показано: {visibleTickets.length} из {total}</Text>
           )}
         </div>
       </Card>
@@ -1243,6 +1258,7 @@ const TicketsPage: React.FC = () => {
                               onChange={setEditingCommentDraft}
                               placeholder="Измените комментарий"
                               mentions={mentionOptions}
+                              onImageUpload={uploadInlineImage}
                               minHeight={96}
                             />
                             <Space>
@@ -1286,6 +1302,7 @@ const TicketsPage: React.FC = () => {
                   onChange={setCommentDraft}
                   placeholder="Добавьте комментарий"
                   mentions={mentionOptions}
+                  onImageUpload={uploadInlineImage}
                   minHeight={96}
                 />
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorTextSecondary }}>
