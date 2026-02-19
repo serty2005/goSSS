@@ -39,6 +39,8 @@ var bitrixServicePointSelectFields = []string{
 	"PROPERTY_681",
 }
 
+var bitrixImageTagRe = regexp.MustCompile(`(?is)\[IMG\].*?\[/IMG\]`)
+
 type BitrixSyncService interface {
 	IsEnabled() bool
 	SyncTicketByID(ctx context.Context, ticketID string) error
@@ -238,6 +240,18 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 			return err
 		}
 		s.setCommentSuppress(ctx, existing.B24CommentID)
+		if len(files) > 0 {
+			finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, existing.B24CommentID, message, files)
+			if textErr != nil {
+				return textErr
+			}
+			if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
+				if err := s.client.TimelineCommentUpdateWithFiles(ctx, existing.B24CommentID, finalText, nil); err != nil {
+					return err
+				}
+				s.setCommentSuppress(ctx, existing.B24CommentID)
+			}
+		}
 		return nil
 	}
 
@@ -251,6 +265,18 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 		return err
 	}
 	s.setCommentSuppress(ctx, b24ID)
+	if len(files) > 0 {
+		finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, b24ID, message, files)
+		if textErr != nil {
+			return textErr
+		}
+		if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
+			if err := s.client.TimelineCommentUpdateWithFiles(ctx, b24ID, finalText, nil); err != nil {
+				return err
+			}
+			s.setCommentSuppress(ctx, b24ID)
+		}
+	}
 
 	return s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
 		EtalonCommentID: comment.ID,
@@ -1018,6 +1044,195 @@ func commentTextReferencesStorageKey(commentText string, storageKey string) bool
 		}
 	}
 	return false
+}
+
+func (s *bitrixSyncService) rewriteCommentForBitrixImagePreview(
+	ctx context.Context,
+	commentID int64,
+	commentText string,
+	files []b24.FileToUpload,
+) (string, error) {
+	if commentID <= 0 || len(files) == 0 {
+		return commentText, nil
+	}
+	item, err := s.client.TimelineCommentGet(ctx, commentID)
+	if err != nil {
+		return commentText, err
+	}
+	if item == nil || len(item.Raw) == 0 {
+		return commentText, nil
+	}
+	imageIDs := matchImageDiskFileIDsByName(item.Raw, files)
+	if len(imageIDs) == 0 {
+		return commentText, nil
+	}
+	return replaceBitrixImageTagsWithDiskMarkers(commentText, imageIDs), nil
+}
+
+func matchImageDiskFileIDsByName(raw map[string]interface{}, files []b24.FileToUpload) []int64 {
+	type imageEntry struct {
+		id   int64
+		name string
+	}
+	imagesByName := make(map[string][]int64)
+	fallback := make([]int64, 0, 4)
+
+	filesRaw, ok := raw["FILES"]
+	if !ok {
+		return []int64{}
+	}
+	imageEntries := extractImageEntriesFromRawFiles(filesRaw)
+	for _, entry := range imageEntries {
+		if entry.id <= 0 {
+			continue
+		}
+		fallback = append(fallback, entry.id)
+		if entry.name != "" {
+			key := strings.ToLower(strings.TrimSpace(entry.name))
+			imagesByName[key] = append(imagesByName[key], entry.id)
+		}
+	}
+	if len(fallback) == 0 {
+		return []int64{}
+	}
+
+	ordered := make([]int64, 0, len(fallback))
+	used := make(map[int64]struct{}, len(fallback))
+	for _, file := range files {
+		nameKey := strings.ToLower(strings.TrimSpace(file.Name))
+		if nameKey == "" {
+			continue
+		}
+		queue := imagesByName[nameKey]
+		if len(queue) == 0 {
+			continue
+		}
+		id := queue[0]
+		imagesByName[nameKey] = queue[1:]
+		if id <= 0 {
+			continue
+		}
+		if _, exists := used[id]; exists {
+			continue
+		}
+		used[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+	if len(ordered) == 0 {
+		return fallback
+	}
+	for _, id := range fallback {
+		if _, exists := used[id]; exists {
+			continue
+		}
+		ordered = append(ordered, id)
+	}
+	return ordered
+}
+
+func extractImageEntriesFromRawFiles(filesRaw interface{}) []struct {
+	id   int64
+	name string
+} {
+	out := make([]struct {
+		id   int64
+		name string
+	}, 0, 4)
+	switch files := filesRaw.(type) {
+	case map[string]interface{}:
+		for key, value := range files {
+			m, ok := value.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if !boolFromAny(m["image"]) {
+				continue
+			}
+			id := int64FromAny(m["id"])
+			if id <= 0 {
+				id = int64FromAny(m["ID"])
+			}
+			if id <= 0 {
+				id = int64FromAny(key)
+			}
+			name := strings.TrimSpace(toString(m["name"]))
+			if name == "" {
+				name = strings.TrimSpace(toString(m["NAME"]))
+			}
+			if id > 0 {
+				out = append(out, struct {
+					id   int64
+					name string
+				}{id: id, name: name})
+			}
+		}
+	case []interface{}:
+		for _, value := range files {
+			m, ok := value.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if !boolFromAny(m["image"]) {
+				continue
+			}
+			id := int64FromAny(m["id"])
+			if id <= 0 {
+				id = int64FromAny(m["ID"])
+			}
+			name := strings.TrimSpace(toString(m["name"]))
+			if name == "" {
+				name = strings.TrimSpace(toString(m["NAME"]))
+			}
+			if id > 0 {
+				out = append(out, struct {
+					id   int64
+					name string
+				}{id: id, name: name})
+			}
+		}
+	}
+	return out
+}
+
+func replaceBitrixImageTagsWithDiskMarkers(comment string, imageDiskIDs []int64) string {
+	if len(imageDiskIDs) == 0 {
+		return comment
+	}
+	text := strings.TrimSpace(comment)
+	if text == "" {
+		return comment
+	}
+	index := 0
+	result := bitrixImageTagRe.ReplaceAllStringFunc(text, func(_ string) string {
+		if index >= len(imageDiskIDs) {
+			return ""
+		}
+		id := imageDiskIDs[index]
+		index++
+		return fmt.Sprintf("[IMG][DISK FILE ID=n%d][/IMG]", id)
+	})
+	for ; index < len(imageDiskIDs); index++ {
+		result = strings.TrimSpace(result + "\n" + fmt.Sprintf("[IMG][DISK FILE ID=n%d][/IMG]", imageDiskIDs[index]))
+	}
+	return strings.TrimSpace(result)
+}
+
+func boolFromAny(v interface{}) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		value := strings.TrimSpace(strings.ToLower(x))
+		return value == "true" || value == "1" || value == "y" || value == "yes"
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	case float64:
+		return int64(x) != 0
+	default:
+		return false
+	}
 }
 
 func (s *bitrixSyncService) resolveBitrixUserID(ctx context.Context, etalonUserID uint) (*int64, error) {

@@ -61,6 +61,16 @@ export interface CompanyBitrixMappingRowDTO {
   bitrix_service_point_enabled?: boolean;
 }
 
+export interface CompanyContractReportRowDTO {
+  company_id: string;
+  company_title: string;
+  company_parent_title?: string;
+  company_contract_status: string;
+  contract_id?: string;
+  contract_type?: string;
+  contract_state?: string;
+}
+
 export type AntBadgeStatus = 'success' | 'processing' | 'error' | 'default' | 'warning';
 
 // --- CMDB Entities (Rich DTOs) ---

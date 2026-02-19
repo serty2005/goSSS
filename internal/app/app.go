@@ -97,6 +97,7 @@ type Application struct {
 	NetworkCandidateHandler *handlers.NetworkCandidateHandler
 	OwnerHistoryHandler     *handlers.OwnerHistoryHandler
 	AgentObservationFeed    *handlers.AgentObservationFeedHandler
+	ReportHandler           *handlers.ReportHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -415,6 +416,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
+	app.ReportHandler = handlers.NewReportHandler(app.DB)
 }
 
 func setupIntegrationModules(app *Application, srvs Services) {
@@ -529,6 +531,9 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		a.OwnerHistoryHandler.RegisterRoutes(r)
 		a.AgentObservationFeed.RegisterRoutes(r)
+		r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Group(func(r chi.Router) {
+			a.ReportHandler.RegisterRoutes(r)
+		})
 
 		a.SearchHandler.RegisterRoutes(r)
 		a.TaskHandler.RegisterRoutes(r)

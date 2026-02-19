@@ -20,6 +20,7 @@ import HeaderSearch from '@/components/common/HeaderSearch';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { profileApi } from '@/api/profile';
+import { LayoutHeaderContext, type ReportHeaderConfig } from '@/components/layout/LayoutHeaderContext';
 import { buildProfileConfigWithPalettes, paletteFromProfileConfig } from '@/theme/profileConfig';
 import { defaultThemePalettes, type ThemeMode, type ThemePalette } from '@/theme/themeConfig';
 import { useTicketRealtime, type TicketRealtimePayload } from '@/features/realtime/useTicketRealtime';
@@ -95,6 +96,7 @@ const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
 const MainLayout: React.FC = () => {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [headerConfig, setHeaderConfig] = useState<ReportHeaderConfig | null>(null);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const notificationsOpenRef = useRef(false);
@@ -145,6 +147,7 @@ const MainLayout: React.FC = () => {
 
   const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
   const sidebarCollapsed = !screens.lg || sidebarCollapsedPreference;
+  const isReportHeader = headerConfig?.mode === 'reports';
 
   useEffect(() => {
     if (!notificationsOpen) {
@@ -156,6 +159,12 @@ const MainLayout: React.FC = () => {
   useEffect(() => {
     notificationsOpenRef.current = notificationsOpen;
   }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (!location.pathname.startsWith('/reports/')) {
+      setHeaderConfig(null);
+    }
+  }, [location.pathname]);
 
   const pushNotification = useCallback((payload: TicketRealtimePayload) => {
     const ticketID = String(payload.ticket_id || '').trim();
@@ -315,6 +324,7 @@ const MainLayout: React.FC = () => {
       children: [
         { key: '/admin', label: 'Настройки' },
         { key: '/tasks', label: 'Проблемы' },
+        { key: '/reports/companies-contracts', label: 'Отчеты: Компании и контракты' },
       ],
     });
   }
@@ -489,8 +499,17 @@ const MainLayout: React.FC = () => {
             />
           </div>
 
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-            <HeaderSearch />
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+            {isReportHeader ? (
+              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+                <Text strong ellipsis style={{ margin: 0, minWidth: 120 }}>{headerConfig?.title}</Text>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: 1, minWidth: 0, overflowX: 'auto' }}>
+                  {headerConfig?.controls}
+                </div>
+              </div>
+            ) : (
+              <HeaderSearch />
+            )}
           </div>
 
           <Space size="middle">
@@ -570,7 +589,9 @@ const MainLayout: React.FC = () => {
             overflow: 'initial',
           }}
         >
-          <Outlet />
+          <LayoutHeaderContext.Provider value={{ headerConfig, setHeaderConfig }}>
+            <Outlet />
+          </LayoutHeaderContext.Provider>
         </Content>
       </Layout>
     </Layout>

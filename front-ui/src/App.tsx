@@ -26,6 +26,7 @@ import FiscalsPage from '@/pages/equipment/FiscalsPage';
 import UsersAdminPage from '@/pages/admin/UsersAdminPage';
 import ServicePointsImportPage from '@/pages/admin/ServicePointsImportPage';
 import AgentObservationsPage from '@/pages/AgentObservationsPage';
+import CompanyContractsReportPage from '@/pages/reports/CompanyContractsReportPage';
 
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
@@ -151,6 +152,14 @@ const App: React.FC = () => {
                     <SupportOrAdminRoute>
                       <AgentObservationsPage />
                     </SupportOrAdminRoute>
+                  )}
+                />
+                <Route
+                  path="reports/companies-contracts"
+                  element={(
+                    <AdminRoute>
+                      <CompanyContractsReportPage />
+                    </AdminRoute>
                   )}
                 />
                 <Route
