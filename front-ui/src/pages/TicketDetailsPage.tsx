@@ -688,21 +688,6 @@ const TicketDetailsPage: React.FC = () => {
     },
   });
 
-  const updateServerPartnerLinkMutation = useMutation({
-    mutationFn: async (payload: { serverID: string; portalLink: string }) => {
-      return equipmentApi.updateServer(payload.serverID, { cabinet_link: payload.portalLink });
-    },
-    onSuccess: () => {
-      message.success('Ссылка партнёрского портала обновлена');
-      queryClient.invalidateQueries({ queryKey: ['company-infra', metadata?.company_id] });
-      if (parentCompanyID) {
-        queryClient.invalidateQueries({ queryKey: ['company-parent-infra', parentCompanyID] });
-      }
-      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
-    },
-    onError: () => message.error('Не удалось обновить ссылку партнёрского портала'),
-  });
-
   const copyConnectionMutation = useMutation({
     mutationFn: async (payload: {
       label: string;
@@ -1358,7 +1343,6 @@ const TicketDetailsPage: React.FC = () => {
                                     {serverItems.map((item) => {
                                       const dataRow = item.data as Record<string, string | undefined>;
                                       const path = resolveEntityPath(item);
-                                      const serverID = String(dataRow.uuid || '').trim();
                                       return (
                                         <Card
                                           key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
@@ -1375,21 +1359,13 @@ const TicketDetailsPage: React.FC = () => {
                                               <Text strong>{resolveEntityTitle(item)}</Text>
                                               <Tag color="geekblue">Сервер</Tag>
                                             </Space>
-                                            <div onClick={(event) => event.stopPropagation()}>
-                                              <Text type="secondary">Партнёрский портал:</Text>{' '}
-                                              <InlineFieldEditor
-                                                value={dataRow.partners_link || ''}
-                                                placeholder="Ссылка не указана"
-                                                onSave={(value) => {
-                                                  if (!serverID) return;
-                                                  updateServerPartnerLinkMutation.mutate({
-                                                    serverID,
-                                                    portalLink: value,
-                                                  });
-                                                }}
-                                                saving={updateServerPartnerLinkMutation.isPending}
-                                              />
-                                            </div>
+                                            {dataRow.partners_link ? (
+                                              <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                                                Партнёрский портал
+                                              </a>
+                                            ) : (
+                                              <Text type="secondary">Партнёрский портал: -</Text>
+                                            )}
                                             <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
                                               <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
                                             </Paragraph>

@@ -90,9 +90,9 @@ type ticketServiceImpl struct {
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo
 }
 
-var ErrReporterNotFound = errors.New("пользователь-автор РЅРµ найден")
-var ErrTicketNotFound = errors.New("заявка РЅРµ найдена")
-var ErrCommentNotFound = errors.New("комментарий РЅРµ найден")
+var ErrReporterNotFound = errors.New("пользователь-автор не найден")
+var ErrTicketNotFound = errors.New("заявка не найдена")
+var ErrCommentNotFound = errors.New("комментарий не найден")
 var ErrCommentForbidden = errors.New("недостаточно прав для операции с комментарием")
 
 func NewTicketService(
@@ -171,20 +171,20 @@ func (s *ticketServiceImpl) GetDashboardStats(ctx context.Context) (*tickets.Das
 func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error) {
 	author, err := s.userRepo.GetByID(ctx, authorID)
 	if err != nil {
-		return nil, fmt.Errorf("РЅРµ удалось получить автора тикета: %w", err)
+		return nil, fmt.Errorf("не удалось получить автора тикета: %w", err)
 	}
 	if author == nil {
 		return nil, ErrReporterNotFound
 	}
 	if dto.AssigneeID == nil || *dto.AssigneeID == 0 {
-		return nil, fmt.Errorf("РЅРµ выбран исполнитель")
+		return nil, fmt.Errorf("не выбран исполнитель")
 	}
 	assignee, err := s.userRepo.GetByID(ctx, *dto.AssigneeID)
 	if err != nil {
-		return nil, fmt.Errorf("РЅРµ удалось получить исполнителя: %w", err)
+		return nil, fmt.Errorf("не удалось получить исполнителя: %w", err)
 	}
 	if assignee == nil {
-		return nil, fmt.Errorf("исполнитель РЅРµ найден")
+		return nil, fmt.Errorf("исполнитель не найден")
 	}
 
 	ownerCompany, err := s.companyRepo.GetByID(ctx, dto.CompanyID)
@@ -203,7 +203,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if syncWithBitrix && (resolvedBitrixServicePointID == nil || *resolvedBitrixServicePointID <= 0) {
 		mapping, mappingErr := s.bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, dto.CompanyID)
 		if mappingErr != nil {
-			return nil, fmt.Errorf("РЅРµ удалось получить сопоставление компании с точкой Bitrix24: %w", mappingErr)
+			return nil, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", mappingErr)
 		}
 		if mapping != nil && mapping.BitrixServicePointID > 0 {
 			mappedID := mapping.BitrixServicePointID
@@ -211,10 +211,10 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		}
 	}
 	if syncWithBitrix && resolvedBitrixServicePointID == nil {
-		return nil, fmt.Errorf("РЅРµ выбрана точка обслуживания Bitrix24")
+		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 	}
 	if syncWithBitrix && strings.TrimSpace(dto.BitrixDealTitle) == "" {
-		return nil, fmt.Errorf("РЅРµ заполнен заголовок сделки Bitrix24")
+		return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
 	}
 
 	ticket := &tickets.Ticket{
@@ -234,7 +234,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	}
 
 	if ownerCompany == nil {
-		return nil, fmt.Errorf("компания РЅРµ найдена")
+		return nil, fmt.Errorf("компания не найдена")
 	}
 
 	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
@@ -312,15 +312,15 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 	if ticket.IsArchived && status != tickets.StatusInProgress {
-		return nil, fmt.Errorf("архивный тикет РјРѕР¶РЅРѕ вернуть только РІ статус \"Р’ работе\"")
+		return nil, fmt.Errorf("архивный тикет можно вернуть только в статус \"В работе\"")
 	}
 
 	oldStatus := ticket.Status
 	if oldStatus == status {
-		return ticket, nil // Статус РЅРµ изменился
+		return ticket, nil // Статус не изменился
 	}
 
 	comment = strings.TrimSpace(comment)
@@ -345,10 +345,10 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 
-	// Запись РІ историю
+	// Запись в историю
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
 
-	// Отчёт РїСЂРё смене статуса сохраняем как обычный комментарий РІ тикете.
+	// Отчёт о смене статуса сохраняем как обычный комментарий в тикете.
 	if comment != "" {
 		authorName := "Сотрудник"
 		u, uErr := s.userRepo.GetByID(ctx, userID)
@@ -387,7 +387,7 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	var oldAssigneeName, newAssigneeName string
@@ -402,7 +402,7 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	if assigneeID != nil {
 		newAssignee, err := s.userRepo.GetByID(ctx, *assigneeID)
 		if err != nil || newAssignee == nil {
-			return nil, fmt.Errorf("пользователь-исполнитель РЅРµ найден")
+			return nil, fmt.Errorf("пользователь-исполнитель не найден")
 		}
 		newAssigneeName = newAssignee.FullName
 	} else {
@@ -423,14 +423,14 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	return ticket, nil
 }
 
-// ChangeCompany меняет компанию РІ тикете Рё пересчитывает РґРѕРіРѕРІРѕСЂ.
+// ChangeCompany меняет компанию в тикете и пересчитывает.
 func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	targetCompany, err := s.companyRepo.GetByID(ctx, companyID)
@@ -438,7 +438,7 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 		return nil, err
 	}
 	if targetCompany == nil {
-		return nil, fmt.Errorf("компания РЅРµ найдена")
+		return nil, fmt.Errorf("компания не найдена")
 	}
 
 	if ticket.CompanyID == companyID {
@@ -489,7 +489,7 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	nextTitle := strings.TrimSpace(bitrixDealTitle)
@@ -734,7 +734,7 @@ func (s *ticketServiceImpl) RecordConnectionCopy(
 		return err
 	}
 	if ticket == nil {
-		return fmt.Errorf("заявка РЅРµ найдена")
+		return fmt.Errorf("заявка не найдена")
 	}
 
 	line := strings.TrimSpace(label)
@@ -762,7 +762,7 @@ func (s *ticketServiceImpl) GetConnectionCopyStats(ctx context.Context, ticketID
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 	if s.ownerHistoryRepo == nil {
 		return []tickets.ConnectionCopyStat{}, nil
@@ -954,7 +954,6 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		sdData, err := s.sdClient.FetchEntityDetails(ctx, ticket.ServiceDeskUUID, "Ticket")
 		if err == nil {
 			if desc, ok := sdData["descriptionRTF"].(string); ok {
-				// Р’ идеале description должен быть РІ БД, РЅРѕ для легаси берем из SD
 				if ticket.Description == "" {
 					details.Metadata.Description = s.processHtmlContent(ticket.ServiceDeskUUID, desc)
 				}
@@ -1020,7 +1019,7 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 
 	oldValue := ticket.Description
@@ -1044,7 +1043,7 @@ func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, 
 		return 0, err
 	}
 	if ticket == nil {
-		return 0, fmt.Errorf("заявка РЅРµ найдена")
+		return 0, fmt.Errorf("заявка не найдена")
 	}
 	if strings.TrimSpace(ticket.ServiceDeskUUID) == "" {
 		return 0, nil
@@ -1117,7 +1116,7 @@ func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID stri
 		return nil, err
 	}
 	if ticket == nil {
-		return nil, fmt.Errorf("заявка РЅРµ найдена")
+		return nil, fmt.Errorf("заявка не найдена")
 	}
 	if len(files) == 0 {
 		return []tickets.Attachment{}, nil
@@ -1211,13 +1210,13 @@ func (s *ticketServiceImpl) isCommonContractID(contractID *string) bool {
 }
 
 func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error {
-	// 1. Получаем заявку, чтобы узнать, какой компании РѕРЅР° принадлежит
+	// 1. Получаем заявку, чтобы узнать, какой компании принадлежит
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return fmt.Errorf("failed to get ticket: %w", err)
 	}
 	if ticket == nil {
-		return fmt.Errorf("заявка РЅРµ найдена")
+		return fmt.Errorf("заявка не найдена")
 	}
 
 	// 2. Проверяем существование актива Рё совпадение владельца
@@ -1227,21 +1226,21 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 	case tickets.AssetTypeServer:
 		asset, err := s.serverRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("сервер РЅРµ найден")
+			return fmt.Errorf("сервер не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeFiscalRegister:
 		asset, err := s.frRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("фискальный регистратор РЅРµ найден")
+			return fmt.Errorf("фискальный регистратор не найден")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
 	case tickets.AssetTypeWorkstation:
 		asset, err := s.workstationRepo.GetByID(ctx, assetID)
 		if err != nil || asset == nil {
-			return fmt.Errorf("рабочая станция РЅРµ найдена")
+			return fmt.Errorf("рабочая станция не найдена")
 		}
 		assetOwnerID = utils.SafeStringDereference(asset.OwnerID)
 
@@ -1307,7 +1306,7 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 	ticketDir := filepath.Join(s.cfg.TicketStoragePath, sdUUID)
 	if err := os.MkdirAll(ticketDir, 0755); err != nil {
 		s.logger.Error("Failed to create storage dir for ticket", "dir", ticketDir, "error", err)
-		return htmlContent // Возвращаем как есть, если РЅРµ можем сохранить
+		return htmlContent // Возвращаем как есть, если не можем сохранить
 	}
 
 	for _, match := range matches {
@@ -1325,7 +1324,7 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 			err := s.downloadFileFromNaumen(fileUUID, localFilePath)
 			if err != nil {
 				s.logger.Error("Failed to download file from Naumen", "fileUUID", fileUUID, "error", err)
-				continue // Пропускаем замену, если РЅРµ удалось скачать
+				continue // Пропускаем замену, если не удалось скачать
 			}
 		}
 

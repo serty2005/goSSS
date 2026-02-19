@@ -44,7 +44,7 @@ const { Text, Paragraph } = Typography;
 
 const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
   { value: 'new', label: 'Новая', color: 'blue' },
-  { value: 'in_progress', label: 'Р’ работе', color: 'processing' },
+  { value: 'in_progress', label: 'В работе', color: 'processing' },
   { value: 'pending', label: 'Ожидание', color: 'orange' },
   { value: 'deferred', label: 'Отложено', color: 'orange' },
   { value: 'onsite', label: 'На выезд', color: 'cyan' },
@@ -562,7 +562,7 @@ const TicketsPage: React.FC = () => {
       visibleTickets.map((ticket) => ({
         ...ticket,
         subject: resolveTicketSubjectFromDescription(ticket.description),
-        company_display: ticket.company_name || ticket.company_id || 'Компания РЅРµ указана',
+        company_display: ticket.company_name || ticket.company_id || 'Компания не указана',
         last_comment_display: normalizeDescription(ticket.last_comment),
         assignee_display: ticket.assignee?.full_name || 'Не назначен',
         reporter_display: ticket.reporter_name || 'Сотрудник',

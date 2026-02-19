@@ -83,7 +83,7 @@ const ServerDetails: React.FC = () => {
   })).filter((item) => item.value && item.title), [companiesRes?.data]);
 
   if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
-  if (!server) return <div>Сервер РЅРµ найден</div>;
+  if (!server) return <div>Сервер не найден</div>;
 
   const saveField = (field: keyof UpdateServerPayload, value: string) => {
     if (!canEdit) return;
@@ -162,6 +162,15 @@ const ServerDetails: React.FC = () => {
             <Descriptions.Item label="CRM ID">
               <InlineFieldEditor value={server.crm_id} editable={canEdit} onSave={(v) => saveField('crm_id', v)} saving={updateMutation.isPending && activeField === 'crm_id'} />
             </Descriptions.Item>
+            <Descriptions.Item label="Партнёрский портал" span={2}>
+              <InlineFieldEditor
+                value={server.partners_link || server.cabinet_link}
+                placeholder="Вставьте ссылку партнёрского портала или ID клиента"
+                editable={canEdit}
+                onSave={(v) => saveField('cabinet_link', v)}
+                saving={updateMutation.isPending && activeField === 'cabinet_link'}
+              />
+            </Descriptions.Item>
             <Descriptions.Item label="Версия сервера">
               <InlineFieldEditor value={server.server_version} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />
             </Descriptions.Item>
@@ -228,4 +237,3 @@ const ServerDetails: React.FC = () => {
 };
 
 export default ServerDetails;
-
