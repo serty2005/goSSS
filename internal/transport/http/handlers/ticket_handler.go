@@ -47,6 +47,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/{id}/comments", h.AddComment)
 	r.Post("/{id}/refresh-comments", h.RefreshCommentsFromServiceDesk)
 	r.Post("/{id}/connection-copy", h.RecordConnectionCopy)
+	r.Get("/{id}/connection-stats", h.GetConnectionCopyStats)
 	r.Patch("/{id}/status", h.ChangeStatus)
 	r.Patch("/{id}/description", h.UpdateDescription)
 	r.Patch("/{id}/assign", h.Assign)
@@ -192,8 +193,11 @@ func (h *TicketHandler) RefreshCommentsFromServiceDesk(w http.ResponseWriter, r 
 func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto struct {
-		Label string `json:"label"`
-		Value string `json:"value"`
+		Label           string `json:"label"`
+		Value           string `json:"value"`
+		EntityType      string `json:"entity_type"`
+		EntityID        string `json:"entity_id"`
+		ConnectionField string `json:"connection_field"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
@@ -210,12 +214,31 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := h.service.RecordConnectionCopy(r.Context(), id, dto.Label, dto.Value, userID); err != nil {
+	if err := h.service.RecordConnectionCopy(
+		r.Context(),
+		id,
+		dto.Label,
+		dto.Value,
+		dto.EntityType,
+		dto.EntityID,
+		dto.ConnectionField,
+		userID,
+	); err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.publishTicketUpdated(id, "ticket_connection_copied", "ui", "Скопированы данные подключения")
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (h *TicketHandler) GetConnectionCopyStats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	stats, err := h.service.GetConnectionCopyStats(r.Context(), id)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, stats)
 }
 
 // UpdateDescription обновляет описание тикета.

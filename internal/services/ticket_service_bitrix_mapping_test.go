@@ -84,6 +84,7 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 	)
 
 	dto := api.TicketCreateInternalDTO{

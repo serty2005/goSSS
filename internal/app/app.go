@@ -344,7 +344,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
 		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
 		EntityMatcherService:    services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo),
+		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo, repos.OwnerHistoryRepo),
 		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
 		ContractService:         contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),

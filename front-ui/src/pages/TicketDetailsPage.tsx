@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, Col, Descriptions, Empty, Input, List, Modal, Row, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Button, Card, Checkbox, Descriptions, Empty, Input, List, Modal, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -9,12 +9,14 @@ import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
-import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { equipmentApi } from '@/api/equipment';
+import { CompanyModel, ConnectionCopyStatDTO, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { SafeHtmlContent } from '@/utils/safeHtml';
+import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 
 const { Title, Text, Paragraph } = Typography;
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -382,39 +384,99 @@ const TicketDetailsPage: React.FC = () => {
     return options;
   }, [companiesData?.data, metadata, companyTitle]);
 
-  const connectionCards = useMemo(() => {
-    return infrastructure
-      .map((item) => {
-        if (item.entity_type !== 'Server' && item.entity_type !== 'Workstation') {
-          return null;
-        }
-        const dataRow = item.data as Record<string, string | undefined>;
-        const rows = [
-          ...(item.entity_type === 'Server' ? [{ label: 'IP', value: dataRow.ip }] : []),
-          { label: 'AnyDesk', value: dataRow.anydesk },
-          { label: 'TeamViewer', value: dataRow.teamviewer },
-          { label: 'rdp', value: dataRow.rdp },
-          { label: 'LM', value: dataRow.litemanager },
-        ].filter((entry) => entry.value);
-        if (rows.length === 0) return null;
+  const serverItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Server'), [infrastructure]);
+  const workstationItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Workstation'), [infrastructure]);
+  const fiscalItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'FiscalRegister'), [infrastructure]);
 
+  const { data: connectionStatsResponse } = useQuery({
+    queryKey: ['ticket-connection-stats', id],
+    queryFn: () => ticketsApi.getConnectionCopyStats(id),
+    enabled: Boolean(id) && Boolean(metadata?.company_id),
+    staleTime: 15_000,
+  });
+
+  const connectionStatsMap = useMemo(() => {
+    const map = new Map<string, { count: number; lastCopiedAt: number }>();
+    (connectionStatsResponse?.data || []).forEach((item: ConnectionCopyStatDTO) => {
+      const entityType = String(item.entity_type || '').trim();
+      const entityID = String(item.entity_id || '').trim();
+      if (!entityType || !entityID) return;
+      const key = `${entityType}:${entityID}`;
+      map.set(key, {
+        count: Number(item.copy_count || 0),
+        lastCopiedAt: item.last_copied_at ? dayjs(item.last_copied_at).valueOf() : 0,
+      });
+    });
+    return map;
+  }, [connectionStatsResponse?.data]);
+
+  const connectionCards = useMemo(() => {
+    const serverCards = serverItems
+      .map((item) => {
+        const dataRow = item.data as Record<string, string | undefined>;
+        const entityID = String(dataRow.uuid || '').trim();
+        const address = String(dataRow.ip || '').trim();
+        if (!entityID || !address) return null;
+        const stats = connectionStatsMap.get(`Server:${entityID}`);
         return {
-          key: `${item.entity_type}-${dataRow.uuid || resolveEntityTitle(item)}`,
+          key: `Server-${entityID}`,
+          entityType: 'Server' as const,
+          entityID,
           title: resolveEntityTitle(item),
-          path: resolveEntityPath(item),
+          statsCount: stats?.count || 0,
+          rows: [{ label: 'Адрес сервера', field: 'ip', value: address }],
+        };
+      })
+      .filter(Boolean) as Array<{
+      key: string;
+      entityType: 'Server';
+      entityID: string;
+      title: string;
+      statsCount: number;
+      rows: Array<{ label: string; field: string; value: string }>;
+    }>;
+
+    const workstationCards = workstationItems
+      .map((item) => {
+        const dataRow = item.data as Record<string, string | undefined>;
+        const entityID = String(dataRow.uuid || '').trim();
+        if (!entityID) return null;
+        const rows = [
+          { label: 'AnyDesk', field: 'anydesk', value: String(dataRow.anydesk || '').trim() },
+          { label: 'TeamViewer', field: 'teamviewer', value: String(dataRow.teamviewer || '').trim() },
+          { label: 'LiteManager', field: 'litemanager', value: String(dataRow.litemanager || '').trim() },
+          { label: 'RDP', field: 'rdp', value: String(dataRow.rdp || '').trim() },
+        ].filter((row) => row.value);
+        if (rows.length === 0) return null;
+        const stats = connectionStatsMap.get(`Workstation:${entityID}`);
+        return {
+          key: `Workstation-${entityID}`,
+          entityType: 'Workstation' as const,
+          entityID,
+          title: resolveEntityTitle(item),
+          statsCount: stats?.count || 0,
+          statsLastCopiedAt: stats?.lastCopiedAt || 0,
           rows,
         };
       })
       .filter(Boolean) as Array<{
       key: string;
+      entityType: 'Workstation';
+      entityID: string;
       title: string;
-      path: string;
-      rows: Array<{ label: string; value?: string }>;
+      statsCount: number;
+      statsLastCopiedAt: number;
+      rows: Array<{ label: string; field: string; value: string }>;
     }>;
-  }, [infrastructure]);
 
-  const serverItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Server'), [infrastructure]);
-  const fiscalItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'FiscalRegister'), [infrastructure]);
+    workstationCards.sort((a, b) => {
+      if (b.statsCount !== a.statsCount) return b.statsCount - a.statsCount;
+      if (b.statsLastCopiedAt !== a.statsLastCopiedAt) return b.statsLastCopiedAt - a.statsLastCopiedAt;
+      return a.title.localeCompare(b.title, 'ru');
+    });
+
+    return [...serverCards, ...workstationCards];
+  }, [serverItems, workstationItems, connectionStatsMap]);
 
   const attachments = useMemo(() => {
     return (details?.attachments || [])
@@ -538,10 +600,36 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось обновить поля Bitrix24'),
   });
 
+  const updateWorkstationNameMutation = useMutation({
+    mutationFn: async (payload: { workstationID: string; deviceName: string }) => {
+      return equipmentApi.updateWorkstation(payload.workstationID, { device_name: payload.deviceName });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['company-infra', metadata?.company_id] });
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+    },
+  });
+
   const copyConnectionMutation = useMutation({
-    mutationFn: async (payload: { label: string; value: string }) => {
+    mutationFn: async (payload: {
+      label: string;
+      value: string;
+      entityType?: 'Server' | 'Workstation';
+      entityID?: string;
+      connectionField?: string;
+    }) => {
       if (!id) return;
-      return ticketsApi.recordConnectionCopy(id, payload.label, payload.value);
+      return ticketsApi.recordConnectionCopy(
+        id,
+        payload.label,
+        payload.value,
+        payload.entityType,
+        payload.entityID,
+        payload.connectionField,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ticket-connection-stats', id] });
     },
   });
 
@@ -591,555 +679,619 @@ const TicketDetailsPage: React.FC = () => {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Space direction="vertical" size={0}>
-            <Space align="center" size={8}>
-              <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
-              <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
-            </Space>
-            <Text type="secondary">
-              Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}
-              {' • '}
-              {metadata.reporter_name || 'Сотрудник'}
-              {' • '}
-              {historySourceLabel(resolveTicketCreatedSource(metadata))}
-            </Text>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+        <Space direction="vertical" size={0}>
+          <Space align="center" size={8}>
+            <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
+            <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
           </Space>
+          <Text type="secondary">
+            Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}
+            {' • '}
+            {metadata.reporter_name || 'Сотрудник'}
+            {' • '}
+            {historySourceLabel(resolveTicketCreatedSource(metadata))}
+          </Text>
+        </Space>
 
-          <Space>
-            {metadata.is_common_contract && <Tag color="gold">Платный</Tag>}
-            <div style={highlightedFields.status ? fieldHighlightStyle : undefined}>
-              {metadata.is_archived ? (
-                <Button
-                  type="primary"
-                  loading={changeStatusMutation.isPending}
-                  onClick={() => {
-                    if (!id) return;
-                    changeStatusMutation.mutate({ id, status: 'in_progress' });
-                  }}
-                >
-                  Вернуть в работу
-                </Button>
-              ) : (
-                <Select
-                  value={metadata.status}
-                  options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
-                  style={{ width: 180 }}
-                  onChange={(nextStatus: TicketStatus) => {
-                    if (!id || nextStatus === metadata.status) return;
-                    if (nextStatus === 'resolved') {
-                      const hasComments = (details?.comments || []).length > 0;
-                      if (!hasComments) {
-                        setPendingStatus(nextStatus);
-                        return;
-                      }
-                      changeStatusMutation.mutate({ id, status: nextStatus });
+        <Space>
+          {metadata.is_common_contract && <Tag color="gold">Платный</Tag>}
+          <div style={highlightedFields.status ? fieldHighlightStyle : undefined}>
+            {metadata.is_archived ? (
+              <Button
+                type="primary"
+                loading={changeStatusMutation.isPending}
+                onClick={() => {
+                  if (!id) return;
+                  changeStatusMutation.mutate({ id, status: 'in_progress' });
+                }}
+              >
+                Вернуть в работу
+              </Button>
+            ) : (
+              <Select
+                value={metadata.status}
+                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                style={{ width: 180 }}
+                onChange={(nextStatus: TicketStatus) => {
+                  if (!id || nextStatus === metadata.status) return;
+                  if (nextStatus === 'resolved') {
+                    const hasComments = (details?.comments || []).length > 0;
+                    if (!hasComments) {
+                      setPendingStatus(nextStatus);
                       return;
                     }
                     changeStatusMutation.mutate({ id, status: nextStatus });
-                  }}
-                />
-              )}
-            </div>
-            {!metadata.sync_with_bitrix && (
-              <Button onClick={openBitrixSyncModal}>
-                Синхронизировать с Битрикс24
-              </Button>
+                    return;
+                  }
+                  changeStatusMutation.mutate({ id, status: nextStatus });
+                }}
+              />
             )}
-            <Button onClick={() => navigate('/tickets')}>К списку</Button>
-          </Space>
+          </div>
+          {!metadata.sync_with_bitrix && (
+            <Button onClick={openBitrixSyncModal}>
+              Синхронизировать с Битрикс24
+            </Button>
+          )}
+          <Button onClick={() => navigate('/tickets')}>К списку</Button>
         </Space>
+      </Space>
 
-        <Descriptions style={{ marginTop: 16 }} column={2} bordered size="small">
-          <Descriptions.Item label="Компания">
-            <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
-              {!isCompanyEditMode ? (
-              <Space>
-                {metadata.company_id ? (
-                  <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
-                ) : (
-                  companyTitle || '-'
-                )}
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setDraftCompanyID(metadata.company_id);
-                    setCompanySearch('');
-                    setIsCompanyEditMode(true);
-                  }}
-                />
-              </Space>
-              ) : (
-              <Space>
-                <Select
-                  showSearch
-                  value={draftCompanyID || metadata.company_id}
-                  placeholder="Выберите компанию"
-                  style={{ width: 320, maxWidth: '100%' }}
-                  options={companySelectOptions}
-                  optionLabelProp="selectedLabel"
-                  filterOption={false}
-                  loading={isCompaniesLoading || changeCompanyMutation.isPending}
-                  onSearch={(value) => setCompanySearch(value)}
-                  onChange={(nextCompanyID) => setDraftCompanyID(String(nextCompanyID))}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CheckOutlined />}
-                  loading={changeCompanyMutation.isPending}
-                  onClick={() => {
-                    const nextCompanyID = draftCompanyID || metadata.company_id;
-                    if (!nextCompanyID || nextCompanyID === metadata.company_id) {
-                      setIsCompanyEditMode(false);
-                      return;
-                    }
-                    changeCompanyMutation.mutate(nextCompanyID);
-                  }}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  onClick={() => {
-                    setDraftCompanyID(metadata.company_id);
-                    setCompanySearch('');
-                    setIsCompanyEditMode(false);
-                  }}
-                />
-              </Space>
-              )}
-            </div>
-          </Descriptions.Item>
-          <Descriptions.Item label="Контракт">
-            <Space direction="vertical" size={0}>
-              <Text>{metadata.is_common_contract ? 'Общий контракт' : (metadata.contract_id || '-')}</Text>
-              <Text type="secondary">Тип: {contractType}</Text>
-            </Space>
-          </Descriptions.Item>
-          <Descriptions.Item label="Исполнитель">
-            <div style={highlightedFields.assignee ? fieldHighlightStyle : undefined}>
-              <Select
-                allowClear
-                placeholder="Не назначен"
-                style={{ width: 260, maxWidth: '100%' }}
-                options={assigneeOptions}
-                value={metadata.assignee?.id}
-                loading={assignMutation.isPending}
-                onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
-              />
-            </div>
-          </Descriptions.Item>
-          <Descriptions.Item label="Обновлена">
-            {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
-          </Descriptions.Item>
-          {metadata.sync_with_bitrix && (
-          <Descriptions.Item label="Заголовок сделки B24">
-            <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
-              {!isBitrixEditMode ? (
-              <Space>
-                <Text>{metadata.bitrix_deal_title || '-'}</Text>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
-                    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
-                    setIsBitrixEditMode(true);
-                  }}
-                />
-              </Space>
-              ) : (
-              <Input
-                value={draftBitrixDealTitle}
-                placeholder="Заголовок сделки в Bitrix24"
-                onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
-              />
-              )}
-            </div>
-          </Descriptions.Item>
-          )}
-          {metadata.sync_with_bitrix && (
-          <Descriptions.Item label="Точка обслуживания B24">
-            <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
-              {!isBitrixEditMode ? (
-              bitrixPointName
-              ) : (
-              <Space>
-                <Select
-                  showSearch
-                  value={draftBitrixPointID}
-                  placeholder="Выберите точку обслуживания"
-                  style={{ width: 320, maxWidth: '100%' }}
-                  options={bitrixServicePoints.map((item) => ({
-                    value: item.b24_element_id,
-                    label: item.name,
-                  }))}
-                  optionFilterProp="label"
-                  onChange={(value) => setDraftBitrixPointID(value)}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CheckOutlined />}
-                  loading={updateBitrixMutation.isPending}
-                  disabled={!draftBitrixPointID || !draftBitrixDealTitle.trim()}
-                  onClick={() => updateBitrixMutation.mutate()}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  onClick={() => {
-                    setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
-                    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
-                    setIsBitrixEditMode(false);
-                  }}
-                />
-              </Space>
-              )}
-            </div>
-          </Descriptions.Item>
-          )}
-        </Descriptions>
-      </Card>
-
-      <Tabs
-        items={[
-          {
-            key: 'overview',
-            label: 'Обзор',
-            children: (
-              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                <Card size="small" title="Описание">
-                  <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
-                    {!isDescriptionEditMode ? (
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <SafeHtmlContent
-                          html={metadata.description || '<span>Нет описания</span>'}
-                          onClick={handleDescriptionClick}
-                          style={{ whiteSpace: 'pre-wrap' }}
-                        />
-                        <Button
-                          size="small"
-                          icon={<EditOutlined />}
-                          onClick={() => {
-                            setDescriptionDraft(metadata.description || '');
-                            setIsDescriptionEditMode(true);
-                          }}
-                        >
-                          Редактировать описание
-                        </Button>
-                      </Space>
-                    ) : (
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <SmartTicketEditor
-                          value={descriptionDraft}
-                          onChange={setDescriptionDraft}
-                          placeholder="Введите описание тикета"
-                          mentions={mentionOptions}
-                          onImageUpload={uploadInlineImage}
-                        />
-                        <Space>
-                          <Button
-                            type="primary"
-                            loading={updateDescriptionMutation.isPending}
-                            onClick={() => updateDescriptionMutation.mutate()}
-                          >
-                            Сохранить
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              setDescriptionDraft(metadata.description || '');
-                              setIsDescriptionEditMode(false);
-                            }}
-                          >
-                            Отмена
-                          </Button>
-                        </Space>
-                      </Space>
-                    )}
-                  </div>
-                </Card>
-
-                {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
-                  <Card size="small" title="Результат">
-                    <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
-                      <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
-                    </div>
-                  </Card>
-                )}
-
-                <Card
-                  size="small"
-                  title="Комментарии"
-                >
-                  {details.comments?.length ? (
-                    <List
-                      dataSource={details.comments}
-                      renderItem={(item) => (
-                        <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
-                          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                            <Space size={8}>
-                              <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
-                              {item.is_private && <Tag color="orange">Приватный</Tag>}
-                            </Space>
-                            <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+      <div className="ticket-overview-layout">
+        <div className="ticket-overview-main">
+                  <Card size="small" className="ticket-overview-service-card" title="Служебная информация">
+                    <Descriptions column={2} bordered size="small">
+                      <Descriptions.Item label="Компания">
+                        <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
+                          {!isCompanyEditMode ? (
+                          <Space>
+                            {metadata.company_id ? (
+                              <Link to={`/companies/${metadata.company_id}`}>{companyTitle}</Link>
+                            ) : (
+                              companyTitle || '-'
+                            )}
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<EditOutlined />}
+                              onClick={() => {
+                                setDraftCompanyID(metadata.company_id);
+                                setCompanySearch('');
+                                setIsCompanyEditMode(true);
+                              }}
+                            />
                           </Space>
-                        </List.Item>
+                          ) : (
+                          <Space>
+                            <Select
+                              showSearch
+                              value={draftCompanyID || metadata.company_id}
+                              placeholder="Выберите компанию"
+                              style={{ width: 320, maxWidth: '100%' }}
+                              options={companySelectOptions}
+                              optionLabelProp="selectedLabel"
+                              filterOption={false}
+                              loading={isCompaniesLoading || changeCompanyMutation.isPending}
+                              onSearch={(value) => setCompanySearch(value)}
+                              onChange={(nextCompanyID) => setDraftCompanyID(String(nextCompanyID))}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CheckOutlined />}
+                              loading={changeCompanyMutation.isPending}
+                              onClick={() => {
+                                const nextCompanyID = draftCompanyID || metadata.company_id;
+                                if (!nextCompanyID || nextCompanyID === metadata.company_id) {
+                                  setIsCompanyEditMode(false);
+                                  return;
+                                }
+                                changeCompanyMutation.mutate(nextCompanyID);
+                              }}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CloseOutlined />}
+                              onClick={() => {
+                                setDraftCompanyID(metadata.company_id);
+                                setCompanySearch('');
+                                setIsCompanyEditMode(false);
+                              }}
+                            />
+                          </Space>
+                          )}
+                        </div>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Контракт">
+                        <Space direction="vertical" size={0}>
+                          <Text>{metadata.is_common_contract ? 'Общий контракт' : (metadata.contract_id || '-')}</Text>
+                          <Text type="secondary">Тип: {contractType}</Text>
+                        </Space>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Исполнитель">
+                        <div style={highlightedFields.assignee ? fieldHighlightStyle : undefined}>
+                          <Select
+                            allowClear
+                            placeholder="Не назначен"
+                            style={{ width: 260, maxWidth: '100%' }}
+                            options={assigneeOptions}
+                            value={metadata.assignee?.id}
+                            loading={assignMutation.isPending}
+                            onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
+                          />
+                        </div>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Обновлена">
+                        {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
+                      </Descriptions.Item>
+                      {metadata.sync_with_bitrix && (
+                      <Descriptions.Item label="Заголовок сделки B24">
+                        <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
+                          {!isBitrixEditMode ? (
+                          <Space>
+                            <Text>{metadata.bitrix_deal_title || '-'}</Text>
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<EditOutlined />}
+                              onClick={() => {
+                                setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+                                setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+                                setIsBitrixEditMode(true);
+                              }}
+                            />
+                          </Space>
+                          ) : (
+                          <Input
+                            value={draftBitrixDealTitle}
+                            placeholder="Заголовок сделки в Bitrix24"
+                            onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
+                          />
+                          )}
+                        </div>
+                      </Descriptions.Item>
                       )}
-                    />
-                  ) : (
-                    <Empty description="Комментариев нет" />
-                  )}
-
-                  <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
-                    <SmartTicketEditor
-                      value={commentDraft}
-                      onChange={setCommentDraft}
-                      placeholder="Добавьте комментарий"
-                      mentions={mentionOptions}
-                      onImageUpload={uploadInlineImage}
-                      minHeight={100}
-                    />
-                    <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
-                      Приватный комментарий (не синхронизировать во внешние системы)
-                    </Checkbox>
-                    <Space>
-                      <Button
-                        type="primary"
-                        loading={addCommentMutation.isPending}
-                        disabled={!commentDraft.trim()}
-                        onClick={() => addCommentMutation.mutate()}
-                      >
-                        Отправить
-                      </Button>
-                    </Space>
-                  </Space>
-                </Card>
-              </Space>
-            ),
-          },
-          {
-            key: 'history',
-            label: 'История',
-            children: (
-              <Card size="small" title="История изменений">
-                <Text type="secondary">
-                  Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')} • {metadata.reporter_name || 'Сотрудник'} • {historySourceLabel(resolveTicketCreatedSource(metadata))}
-                </Text>
-                {(details.history || []).length === 0 ? (
-                  <Empty description="История пока пуста" />
-                ) : (
-                  <List
-                    dataSource={(details.history || []).slice().sort((a, b) => dayjs(b.created_at).valueOf() - dayjs(a.created_at).valueOf())}
-                    renderItem={(item) => (
-                      <List.Item key={`${item.id}-${item.created_at}`}>
-                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                          <Text strong>{historyLabel(item)}</Text>
-                          <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} в {historySourceLabel(item.source)}</Text>
-                          {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
-                          {item.new_value && (
-                            item.action === 'connection_copied' ?
-                              <Text>Скопировано: {item.new_value}</Text> :
-                              <Text>Стало: {item.new_value}</Text>
-                          )}
-                        </Space>
-                      </List.Item>
-                    )}
-                  />
-                )}
-              </Card>
-            ),
-          },
-          {
-            key: 'attachments',
-            label: 'Вложения',
-            children: (
-              <Card
-                size="small"
-                title={`Вложения (${attachments.length})`}
-                extra={(
-                  <Upload
-                    showUploadList={false}
-                    customRequest={uploadAttachmentsRequest}
-                    multiple
-                  >
-                    <Button icon={<PaperClipOutlined />} loading={uploadAttachmentsMutation.isPending}>
-                      Прикрепить
-                    </Button>
-                  </Upload>
-                )}
-              >
-                <Upload.Dragger
-                  name="files"
-                  multiple
-                  showUploadList={false}
-                  customRequest={uploadAttachmentsRequest}
-                  style={{ marginBottom: 12 }}
-                >
-                  <p style={{ marginBottom: 4 }}>Перетащите файлы сюда или нажмите для выбора</p>
-                  <Text type="secondary">Поддерживается множественная загрузка</Text>
-                </Upload.Dragger>
-                {attachments.length === 0 ? (
-                  <Empty description="Вложений нет" />
-                ) : (
-                  <List
-                    dataSource={attachments}
-                    renderItem={(item) => (
-                      <List.Item key={item.id || item.filePath}>
-                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                          <a href={item.filePath} target="_blank" rel="noreferrer">{item.fileName}</a>
-                          {item.mimeType.startsWith('image/') && (
-                            <a href={item.filePath} target="_blank" rel="noreferrer">
-                              <img
-                                src={item.filePath}
-                                alt={item.fileName}
-                                style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 8 }}
-                              />
-                            </a>
-                          )}
-                        </Space>
-                      </List.Item>
-                    )}
-                  />
-                )}
-              </Card>
-            ),
-          },
-          {
-            key: 'connections',
-            label: 'Подключения',
-            children: (
-              <Card size="small" title="Подключения">
-                {isInfraLoading ? (
-                  <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                ) : connectionCards.length === 0 ? (
-                  <Empty description="Подключения не найдены" />
-                ) : (
-                  <Row gutter={[12, 12]}>
-                    {connectionCards.map((group) => (
-                      <Col key={group.key} xs={24} md={12} xl={8}>
-                        <Card
-                          hoverable
-                          className="glass-panel"
-                          onClick={() => {
-                            if (!group.path) return;
-                            navigate(group.path, { state: { backTo: `${location.pathname}${location.search}` } });
-                          }}
-                        >
-                          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                            <Text strong>{group.title}</Text>
-                            {group.rows.map((row) => (
-                              <Paragraph
-                                key={`${group.key}-${row.label}-${row.value}`}
-                                style={{ margin: 0 }}
-                                copyable={row.value ? {
-                                  text: row.value,
-                                  onCopy: () => {
-                                    if (!row.value) return;
-                                    copyConnectionMutation.mutate({ label: row.label, value: row.value });
-                                  },
-                                } : false}
-                              >
-                                <Text type="secondary">{row.label}:</Text> {row.value}
-                              </Paragraph>
-                            ))}
+                      {metadata.sync_with_bitrix && (
+                      <Descriptions.Item label="Точка обслуживания B24">
+                        <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
+                          {!isBitrixEditMode ? (
+                          bitrixPointName
+                          ) : (
+                          <Space>
+                            <Select
+                              showSearch
+                              value={draftBitrixPointID}
+                              placeholder="Выберите точку обслуживания"
+                              style={{ width: 320, maxWidth: '100%' }}
+                              options={bitrixServicePoints.map((item) => ({
+                                value: item.b24_element_id,
+                                label: item.name,
+                              }))}
+                              optionFilterProp="label"
+                              onChange={(value) => setDraftBitrixPointID(value)}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CheckOutlined />}
+                              loading={updateBitrixMutation.isPending}
+                              disabled={!draftBitrixPointID || !draftBitrixDealTitle.trim()}
+                              onClick={() => updateBitrixMutation.mutate()}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CloseOutlined />}
+                              onClick={() => {
+                                setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+                                setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+                                setIsBitrixEditMode(false);
+                              }}
+                            />
                           </Space>
-                        </Card>
-                      </Col>
-                    ))}
-                  </Row>
-                )}
-              </Card>
-            ),
-          },
-          {
-            key: 'servers',
-            label: 'Серверы',
-            children: (
-              <Card size="small" title="Серверы компании">
-                {isInfraLoading ? (
-                  <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                ) : serverItems.length === 0 ? (
-                  <Empty description="Серверы не найдены" />
-                ) : (
-                  <Row gutter={[12, 12]}>
-                    {serverItems.map((item) => {
-                      const dataRow = item.data as Record<string, string | undefined>;
-                      const path = resolveEntityPath(item);
-                      return (
-                        <Col key={dataRow.uuid || dataRow.server_name || dataRow.device_name} xs={24} md={12} xl={8}>
-                          <Card
-                            hoverable
-                            className="glass-panel"
-                            onClick={() => {
-                              if (!path) return;
-                              navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                            }}
-                          >
-                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                              <Text strong>{resolveEntityTitle(item)}</Text>
-                              <Text type="secondary">IP: {dataRow.ip || '-'}</Text>
-                              <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
-                              <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
+                          )}
+                        </div>
+                      </Descriptions.Item>
+                      )}
+                    </Descriptions>
+
+                    <div style={{ marginTop: 16 }}>
+                      <Text strong style={{ display: 'block', marginBottom: 8 }}>Описание</Text>
+                      <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
+                        {!isDescriptionEditMode ? (
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <SafeHtmlContent
+                              html={metadata.description || '<span>Нет описания</span>'}
+                              onClick={handleDescriptionClick}
+                              style={{ whiteSpace: 'pre-wrap' }}
+                            />
+                            <Button
+                              size="small"
+                              icon={<EditOutlined />}
+                              onClick={() => {
+                                setDescriptionDraft(metadata.description || '');
+                                setIsDescriptionEditMode(true);
+                              }}
+                            >
+                              Редактировать описание
+                            </Button>
+                          </Space>
+                        ) : (
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <SmartTicketEditor
+                              value={descriptionDraft}
+                              onChange={setDescriptionDraft}
+                              placeholder="Введите описание тикета"
+                              mentions={mentionOptions}
+                              onImageUpload={uploadInlineImage}
+                            />
+                            <Space>
+                              <Button
+                                type="primary"
+                                loading={updateDescriptionMutation.isPending}
+                                onClick={() => updateDescriptionMutation.mutate()}
+                              >
+                                Сохранить
+                              </Button>
+                              <Button
+                                onClick={() => {
+                                  setDescriptionDraft(metadata.description || '');
+                                  setIsDescriptionEditMode(false);
+                                }}
+                              >
+                                Отмена
+                              </Button>
                             </Space>
-                          </Card>
-                        </Col>
-                      );
-                    })}
-                  </Row>
-                )}
-              </Card>
-            ),
-          },
-          {
-            key: 'fiscals',
-            label: 'Фискальники',
-            children: (
-              <Card size="small" title="Фискальные регистраторы">
-                {isInfraLoading ? (
-                  <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                ) : fiscalItems.length === 0 ? (
-                  <Empty description="Фискальные регистраторы не найдены" />
-                ) : (
-                  <Row gutter={[12, 12]}>
-                    {fiscalItems.map((item) => {
-                      const dataRow = item.data as Record<string, string | undefined>;
-                      const path = resolveEntityPath(item);
-                      return (
-                        <Col key={dataRow.uuid || dataRow.serial_number || dataRow.rn_kkt} xs={24} md={12} xl={8}>
-                          <Card
-                            hoverable
-                            className="glass-panel"
-                            onClick={() => {
-                              if (!path) return;
-                              navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                            }}
-                          >
-                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                              <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
-                              <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
-                              <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
+                          </Space>
+                        )}
+                      </div>
+                    </div>
+
+                    {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
+                      <div style={{ marginTop: 16 }}>
+                        <Text strong style={{ display: 'block', marginBottom: 8 }}>Результат</Text>
+                        <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
+                          <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card size="small" className="ticket-overview-comments-card" title="Обзор">
+                    <Tabs
+                      defaultActiveKey="comments"
+                      items={[
+                        {
+                          key: 'comments',
+                          label: 'Комментарии',
+                          children: (
+                            <>
+                              {details.comments?.length ? (
+                                <List
+                                  dataSource={details.comments}
+                                  renderItem={(item) => (
+                                    <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
+                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                        <Space size={8}>
+                                          <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
+                                          {item.is_private && <Tag color="orange">Приватный</Tag>}
+                                        </Space>
+                                        <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              ) : (
+                                <Empty description="Комментариев нет" />
+                              )}
+
+                              <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
+                                <SmartTicketEditor
+                                  value={commentDraft}
+                                  onChange={setCommentDraft}
+                                  placeholder="Добавьте комментарий"
+                                  mentions={mentionOptions}
+                                  onImageUpload={uploadInlineImage}
+                                  minHeight={100}
+                                />
+                                <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
+                                  Приватный комментарий (не синхронизировать во внешние системы)
+                                </Checkbox>
+                                <Space>
+                                  <Button
+                                    type="primary"
+                                    loading={addCommentMutation.isPending}
+                                    disabled={!commentDraft.trim()}
+                                    onClick={() => addCommentMutation.mutate()}
+                                  >
+                                    Отправить
+                                  </Button>
+                                </Space>
+                              </Space>
+                            </>
+                          ),
+                        },
+                        {
+                          key: 'attachments',
+                          label: `Вложения (${attachments.length})`,
+                          children: (
+                            <>
+                              <div style={{ marginBottom: 12 }}>
+                                <Upload
+                                  showUploadList={false}
+                                  customRequest={uploadAttachmentsRequest}
+                                  multiple
+                                >
+                                  <Button icon={<PaperClipOutlined />} loading={uploadAttachmentsMutation.isPending}>
+                                    Прикрепить
+                                  </Button>
+                                </Upload>
+                              </div>
+                              <Upload.Dragger
+                                name="files"
+                                multiple
+                                showUploadList={false}
+                                customRequest={uploadAttachmentsRequest}
+                                style={{ marginBottom: 12 }}
+                              >
+                                <p style={{ marginBottom: 4 }}>Перетащите файлы сюда или нажмите для выбора</p>
+                                <Text type="secondary">Поддерживается множественная загрузка</Text>
+                              </Upload.Dragger>
+                              {attachments.length === 0 ? (
+                                <Empty description="Вложений нет" />
+                              ) : (
+                                <List
+                                  dataSource={attachments}
+                                  renderItem={(item) => (
+                                    <List.Item key={item.id || item.filePath}>
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <a href={item.filePath} target="_blank" rel="noreferrer">{item.fileName}</a>
+                                        {item.mimeType.startsWith('image/') && (
+                                          <a href={item.filePath} target="_blank" rel="noreferrer">
+                                            <img
+                                              src={item.filePath}
+                                              alt={item.fileName}
+                                              style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 8 }}
+                                            />
+                                          </a>
+                                        )}
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              )}
+                            </>
+                          ),
+                        },
+                        {
+                          key: 'history',
+                          label: 'История',
+                          children: (
+                            <>
                               <Text type="secondary">
-                                ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
+                                Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')} • {metadata.reporter_name || 'Сотрудник'} • {historySourceLabel(resolveTicketCreatedSource(metadata))}
                               </Text>
+                              {(details.history || []).length === 0 ? (
+                                <Empty description="История пока пуста" />
+                              ) : (
+                                <List
+                                  style={{ marginTop: 12 }}
+                                  dataSource={(details.history || []).slice().sort((a, b) => dayjs(b.created_at).valueOf() - dayjs(a.created_at).valueOf())}
+                                  renderItem={(item) => (
+                                    <List.Item key={`${item.id}-${item.created_at}`}>
+                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                        <Text strong>{historyLabel(item)}</Text>
+                                        <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} в {historySourceLabel(item.source)}</Text>
+                                        {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
+                                        {item.new_value && (
+                                          item.action === 'connection_copied' ?
+                                            <Text>Скопировано: {item.new_value}</Text> :
+                                            <Text>Стало: {item.new_value}</Text>
+                                        )}
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              )}
+                            </>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Card>
+                </div>
+
+                <Card size="small" className="ticket-overview-side-card" title="Подключения и оборудование">
+                  <Tabs
+                    size="small"
+                    items={[
+                      {
+                        key: 'overview-connections',
+                        label: 'Подключения',
+                        children: (
+                          isInfraLoading ? (
+                            <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
+                          ) : connectionCards.length === 0 ? (
+                            <Empty description="Подключения не найдены" />
+                          ) : (
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              {connectionCards.map((group) => (
+                                <Card key={group.key} size="small" className="glass-panel">
+                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                    <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                                      <Text strong>{group.title}</Text>
+                                      <Tag color={group.entityType === 'Server' ? 'geekblue' : 'cyan'}>
+                                        {group.entityType === 'Server' ? 'Сервер' : 'Станция'}
+                                      </Tag>
+                                    </Space>
+                                    {group.rows.map((row) => (
+                                      <Paragraph
+                                        key={`${group.key}-${row.field}-${row.value}`}
+                                        style={{ margin: 0 }}
+                                        copyable={{
+                                          text: row.value,
+                                          onCopy: () => {
+                                            copyConnectionMutation.mutate({
+                                              label: row.label,
+                                              value: row.value,
+                                              entityType: group.entityType,
+                                              entityID: group.entityID,
+                                              connectionField: row.field,
+                                            });
+                                          },
+                                        }}
+                                      >
+                                        <Text type="secondary">{row.label}:</Text> {row.value}
+                                      </Paragraph>
+                                    ))}
+                                  </Space>
+                                </Card>
+                              ))}
                             </Space>
-                          </Card>
-                        </Col>
-                      );
-                    })}
-                  </Row>
-                )}
-              </Card>
-            ),
-          },
-        ]}
-      />
+                          )
+                        ),
+                      },
+                      {
+                        key: 'overview-equipment',
+                        label: 'Оборудование',
+                        children: (
+                          isInfraLoading ? (
+                            <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
+                          ) : (
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              {serverItems.length > 0 && (
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Text strong>Серверы</Text>
+                                  {serverItems.map((item) => {
+                                    const dataRow = item.data as Record<string, string | undefined>;
+                                    const path = resolveEntityPath(item);
+                                    return (
+                                      <Card
+                                        key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
+                                        size="small"
+                                        hoverable
+                                        className="glass-panel"
+                                        onClick={() => {
+                                          if (!path) return;
+                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                        }}
+                                      >
+                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                            <Text strong>{resolveEntityTitle(item)}</Text>
+                                            <Tag color="geekblue">Сервер</Tag>
+                                          </Space>
+                                          {dataRow.partners_link && (
+                                            <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                                              Партнёрский портал
+                                            </a>
+                                          )}
+                                          <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
+                                            <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
+                                          </Paragraph>
+                                          <Paragraph copyable={dataRow.server_version ? { text: dataRow.server_version } : false} style={{ margin: 0 }}>
+                                            <Text type="secondary">Версия:</Text> {dataRow.server_version || '-'}
+                                          </Paragraph>
+                                          <Paragraph copyable={dataRow.ip ? { text: dataRow.ip } : false} style={{ margin: 0 }}>
+                                            <Text type="secondary">Адрес:</Text> {dataRow.ip || '-'}
+                                          </Paragraph>
+                                        </Space>
+                                      </Card>
+                                    );
+                                  })}
+                                </Space>
+                              )}
+
+                              {workstationItems.length > 0 && (
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Text strong>Рабочие станции</Text>
+                                  {workstationItems.map((item) => {
+                                    const dataRow = item.data as Record<string, string | undefined>;
+                                    const path = resolveEntityPath(item);
+                                    const workstationID = String(dataRow.uuid || '').trim();
+                                    return (
+                                      <Card
+                                        key={`equip-workstation-${workstationID || resolveEntityTitle(item)}`}
+                                        size="small"
+                                        hoverable
+                                        className="glass-panel"
+                                        onClick={() => {
+                                          if (!path) return;
+                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                        }}
+                                      >
+                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                            <Text strong>Рабочая станция</Text>
+                                            <Tag color="cyan">РС</Tag>
+                                          </Space>
+                                          <div onClick={(event) => event.stopPropagation()}>
+                                            <InlineFieldEditor
+                                              value={dataRow.device_name || workstationID || 'Рабочая станция'}
+                                              onSave={(value) => {
+                                                if (!workstationID) return;
+                                                updateWorkstationNameMutation.mutate({ workstationID, deviceName: value });
+                                              }}
+                                              saving={updateWorkstationNameMutation.isPending}
+                                            />
+                                          </div>
+                                          <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
+                                          <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
+                                          <Text type="secondary">LiteManager: {dataRow.litemanager || '-'}</Text>
+                                        </Space>
+                                      </Card>
+                                    );
+                                  })}
+                                </Space>
+                              )}
+
+                              {fiscalItems.length > 0 && (
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Text strong>Фискальные регистраторы</Text>
+                                  {fiscalItems.map((item) => {
+                                    const dataRow = item.data as Record<string, string | undefined>;
+                                    const path = resolveEntityPath(item);
+                                    return (
+                                      <Card
+                                        key={`equip-fiscal-${dataRow.uuid || dataRow.serial_number || dataRow.rn_kkt}`}
+                                        size="small"
+                                        hoverable
+                                        className="glass-panel"
+                                        onClick={() => {
+                                          if (!path) return;
+                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                        }}
+                                      >
+                                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                            <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
+                                            <Tag color="gold">ФР</Tag>
+                                          </Space>
+                                          <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
+                                          <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
+                                          <Text type="secondary">
+                                            ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
+                                          </Text>
+                                        </Space>
+                                      </Card>
+                                    );
+                                  })}
+                                </Space>
+                              )}
+
+                              {serverItems.length === 0 && workstationItems.length === 0 && fiscalItems.length === 0 && (
+                                <Empty description="Оборудование не найдено" />
+                              )}
+                            </Space>
+                          )
+                        ),
+                      },
+                    ]}
+                  />
+                </Card>
+      </div>
 
       <Modal
         open={isBitrixSyncModalOpen}

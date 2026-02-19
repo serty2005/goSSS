@@ -11,6 +11,8 @@ import (
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/models"
+	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
@@ -44,12 +46,22 @@ type TicketService interface {
 	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
+	GetConnectionCopyStats(ctx context.Context, ticketID string) ([]tickets.ConnectionCopyStat, error)
 
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
 	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
-	RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error
+	RecordConnectionCopy(
+		ctx context.Context,
+		ticketID string,
+		label string,
+		value string,
+		entityType string,
+		entityID string,
+		connectionField string,
+		userID uint,
+	) error
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
 	UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error)
@@ -61,18 +73,19 @@ type TicketService interface {
 }
 
 type ticketServiceImpl struct {
-	logger          logger.LoggerInterface
-	ticketRepo      tickets.TicketRepository
-	historyWriter   TicketHistoryWriter
-	userRepo        user.Repository
-	companyRepo     company.Repository
-	contractRepo    contract.Repository
-	sdClient        external.ExternalSystemClient
-	cfg             *config.Config
-	serverRepo      server.Repository
-	workstationRepo workstation.Repository
-	frRepo          fiscal.Repository
-	bitrixRepo      bitrix.Repository
+	logger           logger.LoggerInterface
+	ticketRepo       tickets.TicketRepository
+	historyWriter    TicketHistoryWriter
+	userRepo         user.Repository
+	companyRepo      company.Repository
+	contractRepo     contract.Repository
+	sdClient         external.ExternalSystemClient
+	cfg              *config.Config
+	serverRepo       server.Repository
+	workstationRepo  workstation.Repository
+	frRepo           fiscal.Repository
+	bitrixRepo       bitrix.Repository
+	ownerHistoryRepo domainrepos.OwnerHistoryRepo
 }
 
 var ErrReporterNotFound = errors.New("пользователь-автор не найден")
@@ -89,20 +102,22 @@ func NewTicketService(
 	workstationRepo workstation.Repository,
 	frRepo fiscal.Repository,
 	bitrixRepo bitrix.Repository,
+	ownerHistoryRepo domainrepos.OwnerHistoryRepo,
 ) TicketService {
 	return &ticketServiceImpl{
-		logger:          logger,
-		ticketRepo:      ticketRepo,
-		historyWriter:   NewTicketHistoryWriter(ticketRepo, logger),
-		userRepo:        userRepo,
-		companyRepo:     companyRepo,
-		contractRepo:    contractRepo,
-		sdClient:        sdClient,
-		cfg:             cfg,
-		serverRepo:      serverRepo,
-		workstationRepo: workstationRepo,
-		frRepo:          frRepo,
-		bitrixRepo:      bitrixRepo,
+		logger:           logger,
+		ticketRepo:       ticketRepo,
+		historyWriter:    NewTicketHistoryWriter(ticketRepo, logger),
+		userRepo:         userRepo,
+		companyRepo:      companyRepo,
+		contractRepo:     contractRepo,
+		sdClient:         sdClient,
+		cfg:              cfg,
+		serverRepo:       serverRepo,
+		workstationRepo:  workstationRepo,
+		frRepo:           frRepo,
+		bitrixRepo:       bitrixRepo,
+		ownerHistoryRepo: ownerHistoryRepo,
 	}
 }
 
@@ -577,7 +592,16 @@ func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, thresh
 	return closed, nil
 }
 
-func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID string, label string, value string, userID uint) error {
+func (s *ticketServiceImpl) RecordConnectionCopy(
+	ctx context.Context,
+	ticketID string,
+	label string,
+	value string,
+	entityType string,
+	entityID string,
+	connectionField string,
+	userID uint,
+) error {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return err
@@ -595,8 +619,162 @@ func (s *ticketServiceImpl) RecordConnectionCopy(ctx context.Context, ticketID s
 		return fmt.Errorf("значение подключения пустое")
 	}
 
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, tickets.HistorySourceUI, "", line+": "+val, nil)
+	meta := map[string]interface{}{
+		"entity_type": strings.TrimSpace(entityType),
+		"entity_id":   strings.TrimSpace(entityID),
+		"field":       strings.TrimSpace(connectionField),
+	}
+	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionConnectionCopied, tickets.HistoryFieldConnection, tickets.HistorySourceUI, "", line+": "+val, meta)
+	s.recordEntityConnectionCopy(ctx, entityType, entityID, connectionField, userID)
 	return nil
+}
+
+func (s *ticketServiceImpl) GetConnectionCopyStats(ctx context.Context, ticketID string) ([]tickets.ConnectionCopyStat, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if s.ownerHistoryRepo == nil {
+		return []tickets.ConnectionCopyStat{}, nil
+	}
+
+	entityTypes := []string{tickets.AssetTypeServer, tickets.AssetTypeWorkstation}
+	entityIDs := make([]string, 0, 256)
+	seen := make(map[string]struct{}, 256)
+	appendID := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, exists := seen[value]; exists {
+			return
+		}
+		seen[value] = struct{}{}
+		entityIDs = append(entityIDs, value)
+	}
+
+	if strings.TrimSpace(ticket.CompanyID) != "" {
+		ownerIDs := []string{ticket.CompanyID}
+		servers, serverErr := s.serverRepo.FindByOwnerIDs(ctx, ownerIDs)
+		if serverErr == nil {
+			for _, item := range servers {
+				appendID(item.ID)
+			}
+		}
+		workstations, wsErr := s.workstationRepo.FindByOwnerIDs(ctx, ownerIDs)
+		if wsErr == nil {
+			for _, item := range workstations {
+				appendID(item.ID)
+			}
+		}
+	}
+
+	if len(entityIDs) == 0 {
+		return []tickets.ConnectionCopyStat{}, nil
+	}
+
+	events, err := s.ownerHistoryRepo.ListByEntitiesAndSources(
+		ctx,
+		entityTypes,
+		entityIDs,
+		[]string{
+			models.OwnerChangeSourceConnCopyRemoteID,
+			models.OwnerChangeSourceConnCopyServerIP,
+		},
+		5000,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	statsMap := make(map[string]*tickets.ConnectionCopyStat, len(entityIDs))
+	for _, event := range events {
+		entityType := strings.TrimSpace(event.EntityType)
+		entityID := strings.TrimSpace(event.EntityID)
+		if entityType == "" || entityID == "" {
+			continue
+		}
+		key := entityType + ":" + entityID
+		row, exists := statsMap[key]
+		if !exists {
+			row = &tickets.ConnectionCopyStat{
+				EntityType: entityType,
+				EntityID:   entityID,
+			}
+			statsMap[key] = row
+		}
+		row.CopyCount++
+		if row.LastCopiedAt == nil || event.CreatedAt.After(*row.LastCopiedAt) {
+			ts := event.CreatedAt
+			row.LastCopiedAt = &ts
+		}
+	}
+
+	result := make([]tickets.ConnectionCopyStat, 0, len(statsMap))
+	for _, item := range statsMap {
+		result = append(result, *item)
+	}
+	return result, nil
+}
+
+func (s *ticketServiceImpl) recordEntityConnectionCopy(
+	ctx context.Context,
+	entityType string,
+	entityID string,
+	connectionField string,
+	userID uint,
+) {
+	entityType = strings.TrimSpace(entityType)
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "" || entityID == "" || s.ownerHistoryRepo == nil {
+		return
+	}
+	if entityType != tickets.AssetTypeServer && entityType != tickets.AssetTypeWorkstation {
+		return
+	}
+
+	normalizedField := strings.ToLower(strings.TrimSpace(connectionField))
+	source := models.OwnerChangeSourceConnCopyRemoteID
+	comment := "Копирование ID удалённого подключения"
+	if entityType == tickets.AssetTypeServer && (normalizedField == "ip" || normalizedField == "address") {
+		source = models.OwnerChangeSourceConnCopyServerIP
+		comment = "Копирование адреса сервера"
+	}
+	if normalizedField != "" {
+		comment = comment + ": " + normalizedField
+	}
+
+	var ownerID string
+	switch entityType {
+	case tickets.AssetTypeServer:
+		srv, err := s.serverRepo.GetByID(ctx, entityID)
+		if err != nil || srv == nil || srv.OwnerID == nil {
+			return
+		}
+		ownerID = strings.TrimSpace(*srv.OwnerID)
+	case tickets.AssetTypeWorkstation:
+		ws, err := s.workstationRepo.GetByID(ctx, entityID)
+		if err != nil || ws == nil || ws.OwnerID == nil {
+			return
+		}
+		ownerID = strings.TrimSpace(*ws.OwnerID)
+	}
+	if ownerID == "" {
+		return
+	}
+
+	userIDText := fmt.Sprintf("%d", userID)
+	_ = s.ownerHistoryRepo.Create(ctx, &models.OwnerChangeHistory{
+		EntityType:      entityType,
+		EntityID:        entityID,
+		ToOwnerID:       ownerID,
+		ChangeSource:    source,
+		ChangedByUserID: &userIDText,
+		Comment:         &comment,
+	})
 }
 
 // GetDetails возвращает детали тикета, историю и вложения.

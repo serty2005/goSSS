@@ -46,6 +46,9 @@ func (h *OwnerHistoryHandler) ListByEntity(w http.ResponseWriter, r *http.Reques
 	out := make([]map[string]interface{}, 0, len(records))
 	for i := range records {
 		item := records[i]
+		if item.ChangeSource == models.OwnerChangeSourceConnCopyRemoteID || item.ChangeSource == models.OwnerChangeSourceConnCopyServerIP {
+			continue
+		}
 		actorType := "system"
 		if item.ChangedByUserID != nil && strings.TrimSpace(*item.ChangedByUserID) != "" {
 			actorType = "user"

@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, BitrixServicePointDTO, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
 
 export const ticketsApi = {
   getTickets: async (params: TicketListParams = {}) => {
@@ -106,11 +106,26 @@ export const ticketsApi = {
     return response.data;
   },
 
-  recordConnectionCopy: async (id: number | string, label: string, value: string) => {
+  recordConnectionCopy: async (
+    id: number | string,
+    label: string,
+    value: string,
+    entityType?: 'Server' | 'Workstation',
+    entityID?: string,
+    connectionField?: string,
+  ) => {
     const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/connection-copy`, {
       label,
       value,
+      entity_type: entityType,
+      entity_id: entityID,
+      connection_field: connectionField,
     });
+    return response.data;
+  },
+
+  getConnectionCopyStats: async (id: number | string) => {
+    const response = await apiClient.get<ApiResponse<ConnectionCopyStatDTO[]>>(`/tickets/${id}/connection-stats`);
     return response.data;
   },
 

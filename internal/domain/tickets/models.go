@@ -142,6 +142,13 @@ type LastCommentInfo struct {
 	IsPrivate  bool   `json:"is_private"`
 }
 
+type ConnectionCopyStat struct {
+	EntityType   string     `json:"entity_type"`
+	EntityID     string     `json:"entity_id"`
+	CopyCount    int        `json:"copy_count"`
+	LastCopiedAt *time.Time `json:"last_copied_at,omitempty"`
+}
+
 func (c *TicketComment) BeforeCreate(tx *gorm.DB) (err error) {
 	if c.ID == "" {
 		c.ID = uuid.New().String()

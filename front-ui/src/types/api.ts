@@ -367,6 +367,13 @@ export interface TicketHistoryDTO {
   created_at: string;
 }
 
+export interface ConnectionCopyStatDTO {
+  entity_type: 'Server' | 'Workstation' | string;
+  entity_id: string;
+  copy_count: number;
+  last_copied_at?: string;
+}
+
 export interface TicketCommentDTO {
   uuid: string;
   text: string;

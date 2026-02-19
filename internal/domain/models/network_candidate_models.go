@@ -36,6 +36,8 @@ const (
 	OwnerChangeSourceNetworkConflict  = "network_conflict"
 	OwnerChangeSourceCandidateApprove = "candidate_approve"
 	OwnerChangeSourceAgentDataUpdate  = "agent_data_update"
+	OwnerChangeSourceConnCopyRemoteID = "connection_copy_remote_id"
+	OwnerChangeSourceConnCopyServerIP = "connection_copy_server_address"
 )
 
 type OwnerChangeHistory struct {

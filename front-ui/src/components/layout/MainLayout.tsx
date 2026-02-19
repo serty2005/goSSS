@@ -93,7 +93,6 @@ const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
 };
 
 const MainLayout: React.FC = () => {
-  const [collapsed, setCollapsed] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
@@ -114,6 +113,8 @@ const MainLayout: React.FC = () => {
 
   const themeMode = useUiStore((state) => state.themeMode);
   const setTheme = useUiStore((state) => state.setTheme);
+  const sidebarCollapsedPreference = useUiStore((state) => state.sidebarCollapsed);
+  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
 
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
@@ -143,11 +144,7 @@ const MainLayout: React.FC = () => {
   }, [user?.profile_config]);
 
   const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
-  const sidebarCollapsed = !screens.lg || collapsed;
-
-  useEffect(() => {
-    setCollapsed(!screens.lg);
-  }, [screens.lg]);
+  const sidebarCollapsed = !screens.lg || sidebarCollapsedPreference;
 
   useEffect(() => {
     if (!notificationsOpen) {
@@ -442,7 +439,7 @@ const MainLayout: React.FC = () => {
         <div style={{ height: 64, margin: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div
             style={{
-              width: collapsed ? 32 : '100%',
+              width: sidebarCollapsed ? 32 : '100%',
               height: 32,
               background: token.colorPrimary,
               borderRadius: 6,
@@ -454,7 +451,7 @@ const MainLayout: React.FC = () => {
               fontWeight: 'bold',
             }}
           >
-            {collapsed ? 'XD' : 'MyHoreca XenionDesk'}
+            {sidebarCollapsed ? 'XD' : 'MyHoreca XenionDesk'}
           </div>
         </div>
         <Menu
@@ -486,7 +483,7 @@ const MainLayout: React.FC = () => {
               icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
               onClick={() => {
                 if (!screens.lg) return;
-                setCollapsed(!collapsed);
+                setSidebarCollapsed(!sidebarCollapsedPreference);
               }}
               style={{ fontSize: '16px', width: 64, height: 64 }}
             />
