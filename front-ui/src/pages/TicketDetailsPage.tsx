@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, Descriptions, Empty, Input, List, Modal, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Button, Card, Checkbox, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -14,9 +14,11 @@ import { CompanyModel, ConnectionCopyStatDTO, InfrastructureItem, TicketDetailsD
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
+import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
+import { useAuthStore } from '@/store/authStore';
 
 const { Title, Text, Paragraph } = Typography;
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -129,6 +131,8 @@ const TicketDetailsPage: React.FC = () => {
 
   const [commentDraft, setCommentDraft] = useState('');
   const [commentIsPrivate, setCommentIsPrivate] = useState(false);
+  const [editingCommentUUID, setEditingCommentUUID] = useState('');
+  const [editingCommentDraft, setEditingCommentDraft] = useState('');
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [companySearch, setCompanySearch] = useState('');
@@ -148,6 +152,7 @@ const TicketDetailsPage: React.FC = () => {
   const clearFieldTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const clearCommentTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const createParam = searchParams.get('create') || '';
+  const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
     if (createParam === '1') {
@@ -163,6 +168,12 @@ const TicketDetailsPage: React.FC = () => {
 
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
+  const userRoles = user?.roles || [];
+  const isAdminRole = userRoles.includes('admin');
+  const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
+  const isCommentAuthor = (authorName?: string) => String(authorName || '').trim() === String(user?.full_name || '').trim();
+  const canManageComment = (authorName?: string) => isAdminRole || isCommentAuthor(authorName);
+  const canDeleteComment = (authorName?: string) => isAdminRole || (!isDeleteBlockedRole && isCommentAuthor(authorName));
 
   const markFieldChanged = (field: string) => {
     setHighlightedFields((prev) => ({ ...prev, [field]: true }));
@@ -235,6 +246,15 @@ const TicketDetailsPage: React.FC = () => {
     previousCommentsRef.current = comments;
   }, [details?.comments]);
 
+  useEffect(() => {
+    if (!editingCommentUUID) return;
+    const current = (details?.comments || []).find((item) => item.uuid === editingCommentUUID);
+    if (!current) {
+      setEditingCommentUUID('');
+      setEditingCommentDraft('');
+    }
+  }, [details?.comments, editingCommentUUID]);
+
   useEffect(() => () => {
     Object.values(clearFieldTimersRef.current).forEach((timer) => clearTimeout(timer));
     Object.values(clearCommentTimersRef.current).forEach((timer) => clearTimeout(timer));
@@ -302,7 +322,6 @@ const TicketDetailsPage: React.FC = () => {
     () => assigneeOptions.map((item) => ({ id: Number(item.value), label: String(item.label) })),
     [assigneeOptions],
   );
-
   const { data: bitrixServicePoints = [] } = useQuery({
     queryKey: ['bitrix-service-points'],
     queryFn: () => ticketsApi.getBitrixServicePoints(),
@@ -496,8 +515,8 @@ const TicketDetailsPage: React.FC = () => {
 
   const addCommentMutation = useMutation({
     mutationFn: async () => {
-      if (!id || !commentDraft.trim()) return;
-      return ticketsApi.addComment(id, commentDraft.trim(), commentIsPrivate);
+      if (!id || !hasEditorContent(commentDraft)) return;
+      return ticketsApi.addComment(id, commentDraft, commentIsPrivate);
     },
     onSuccess: () => {
       message.success('Комментарий добавлен');
@@ -507,6 +526,36 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
     onError: () => message.error('Не удалось добавить комментарий'),
+  });
+
+  const updateCommentMutation = useMutation({
+    mutationFn: async () => {
+      if (!id || !editingCommentUUID || !hasEditorContent(editingCommentDraft)) return;
+      return ticketsApi.updateComment(id, editingCommentUUID, editingCommentDraft);
+    },
+    onSuccess: () => {
+      message.success('Комментарий обновлён');
+      setEditingCommentUUID('');
+      setEditingCommentDraft('');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось обновить комментарий'),
+  });
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: async (commentUUID: string) => {
+      if (!id || !commentUUID) return;
+      return ticketsApi.deleteComment(id, commentUUID);
+    },
+    onSuccess: () => {
+      message.success('Комментарий удалён');
+      setEditingCommentUUID('');
+      setEditingCommentDraft('');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось удалить комментарий'),
   });
 
   const updateDescriptionMutation = useMutation({
@@ -974,18 +1023,73 @@ const TicketDetailsPage: React.FC = () => {
                                   renderItem={(item) => (
                                     <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
                                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                        <Space size={8}>
+                                        <Space size={8} style={{ justifyContent: 'space-between', width: '100%' }} wrap>
                                           <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
-                                          {item.is_private && <Tag color="orange">Приватный</Tag>}
+                                          <Space size={8}>
+                                            {item.is_private && <Tag color="orange">Приватный</Tag>}
+                                            {canManageComment(item.author_name) && (
+                                              <Button
+                                                type="link"
+                                                size="small"
+                                                onClick={() => {
+                                                  setEditingCommentUUID(item.uuid);
+                                                  setEditingCommentDraft(item.text || '');
+                                                }}
+                                              >
+                                                Редактировать
+                                              </Button>
+                                            )}
+                                            {canDeleteComment(item.author_name) && (
+                                              <Popconfirm
+                                                title="Удалить комментарий?"
+                                                okText="Удалить"
+                                                cancelText="Отмена"
+                                                onConfirm={() => deleteCommentMutation.mutate(item.uuid)}
+                                              >
+                                                <Button type="link" size="small" danger loading={deleteCommentMutation.isPending}>
+                                                  Удалить
+                                                </Button>
+                                              </Popconfirm>
+                                            )}
+                                          </Space>
                                         </Space>
-                                        <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+                                        {editingCommentUUID === item.uuid ? (
+                                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                            <SmartTicketEditor
+                                              value={editingCommentDraft}
+                                              onChange={setEditingCommentDraft}
+                                              placeholder="Измените комментарий"
+                                              mentions={mentionOptions}
+                                              onImageUpload={uploadInlineImage}
+                                              minHeight={100}
+                                            />
+                                            <Space>
+                                              <Button
+                                                type="primary"
+                                                loading={updateCommentMutation.isPending}
+                                                disabled={!hasEditorContent(editingCommentDraft)}
+                                                onClick={() => updateCommentMutation.mutate()}
+                                              >
+                                                Сохранить
+                                              </Button>
+                                              <Button
+                                                onClick={() => {
+                                                  setEditingCommentUUID('');
+                                                  setEditingCommentDraft('');
+                                                }}
+                                              >
+                                                Отмена
+                                              </Button>
+                                            </Space>
+                                          </Space>
+                                        ) : (
+                                          <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+                                        )}
                                       </Space>
                                     </List.Item>
                                   )}
                                 />
-                              ) : (
-                                <Empty description="Комментариев нет" />
-                              )}
+                              ) : null}
 
                               <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
                                 <SmartTicketEditor
@@ -1003,7 +1107,7 @@ const TicketDetailsPage: React.FC = () => {
                                   <Button
                                     type="primary"
                                     loading={addCommentMutation.isPending}
-                                    disabled={!commentDraft.trim()}
+                                    disabled={!hasEditorContent(commentDraft)}
                                     onClick={() => addCommentMutation.mutate()}
                                   >
                                     Отправить
@@ -1040,7 +1144,7 @@ const TicketDetailsPage: React.FC = () => {
                                 <Text type="secondary">Поддерживается множественная загрузка</Text>
                               </Upload.Dragger>
                               {attachments.length === 0 ? (
-                                <Empty description="Вложений нет" />
+                                null
                               ) : (
                                 <List
                                   dataSource={attachments}
@@ -1116,7 +1220,7 @@ const TicketDetailsPage: React.FC = () => {
                           ) : connectionCards.length === 0 ? (
                             <Empty description="Подключения не найдены" />
                           ) : (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <div className="ticket-overview-connection-grid">
                               {connectionCards.map((group) => (
                                 <Card key={group.key} size="small" className="glass-panel">
                                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -1149,7 +1253,7 @@ const TicketDetailsPage: React.FC = () => {
                                   </Space>
                                 </Card>
                               ))}
-                            </Space>
+                            </div>
                           )
                         ),
                       },
@@ -1164,120 +1268,126 @@ const TicketDetailsPage: React.FC = () => {
                               {serverItems.length > 0 && (
                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                   <Text strong>Серверы</Text>
-                                  {serverItems.map((item) => {
-                                    const dataRow = item.data as Record<string, string | undefined>;
-                                    const path = resolveEntityPath(item);
-                                    return (
-                                      <Card
-                                        key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
-                                        size="small"
-                                        hoverable
-                                        className="glass-panel"
-                                        onClick={() => {
-                                          if (!path) return;
-                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                        }}
-                                      >
-                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                            <Text strong>{resolveEntityTitle(item)}</Text>
-                                            <Tag color="geekblue">Сервер</Tag>
+                                  <div className="ticket-overview-equipment-grid">
+                                    {serverItems.map((item) => {
+                                      const dataRow = item.data as Record<string, string | undefined>;
+                                      const path = resolveEntityPath(item);
+                                      return (
+                                        <Card
+                                          key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
+                                          size="small"
+                                          hoverable
+                                          className="glass-panel"
+                                          onClick={() => {
+                                            if (!path) return;
+                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                          }}
+                                        >
+                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                              <Text strong>{resolveEntityTitle(item)}</Text>
+                                              <Tag color="geekblue">Сервер</Tag>
+                                            </Space>
+                                            {dataRow.partners_link && (
+                                              <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                                                Партнёрский портал
+                                              </a>
+                                            )}
+                                            <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
+                                              <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
+                                            </Paragraph>
+                                            <Paragraph copyable={dataRow.server_version ? { text: dataRow.server_version } : false} style={{ margin: 0 }}>
+                                              <Text type="secondary">Версия:</Text> {dataRow.server_version || '-'}
+                                            </Paragraph>
+                                            <Paragraph copyable={dataRow.ip ? { text: dataRow.ip } : false} style={{ margin: 0 }}>
+                                              <Text type="secondary">Адрес:</Text> {dataRow.ip || '-'}
+                                            </Paragraph>
                                           </Space>
-                                          {dataRow.partners_link && (
-                                            <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-                                              Партнёрский портал
-                                            </a>
-                                          )}
-                                          <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
-                                            <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
-                                          </Paragraph>
-                                          <Paragraph copyable={dataRow.server_version ? { text: dataRow.server_version } : false} style={{ margin: 0 }}>
-                                            <Text type="secondary">Версия:</Text> {dataRow.server_version || '-'}
-                                          </Paragraph>
-                                          <Paragraph copyable={dataRow.ip ? { text: dataRow.ip } : false} style={{ margin: 0 }}>
-                                            <Text type="secondary">Адрес:</Text> {dataRow.ip || '-'}
-                                          </Paragraph>
-                                        </Space>
-                                      </Card>
-                                    );
-                                  })}
+                                        </Card>
+                                      );
+                                    })}
+                                  </div>
                                 </Space>
                               )}
 
                               {workstationItems.length > 0 && (
                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                   <Text strong>Рабочие станции</Text>
-                                  {workstationItems.map((item) => {
-                                    const dataRow = item.data as Record<string, string | undefined>;
-                                    const path = resolveEntityPath(item);
-                                    const workstationID = String(dataRow.uuid || '').trim();
-                                    return (
-                                      <Card
-                                        key={`equip-workstation-${workstationID || resolveEntityTitle(item)}`}
-                                        size="small"
-                                        hoverable
-                                        className="glass-panel"
-                                        onClick={() => {
-                                          if (!path) return;
-                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                        }}
-                                      >
-                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                            <Text strong>Рабочая станция</Text>
-                                            <Tag color="cyan">РС</Tag>
+                                  <div className="ticket-overview-equipment-grid">
+                                    {workstationItems.map((item) => {
+                                      const dataRow = item.data as Record<string, string | undefined>;
+                                      const path = resolveEntityPath(item);
+                                      const workstationID = String(dataRow.uuid || '').trim();
+                                      return (
+                                        <Card
+                                          key={`equip-workstation-${workstationID || resolveEntityTitle(item)}`}
+                                          size="small"
+                                          hoverable
+                                          className="glass-panel"
+                                          onClick={() => {
+                                            if (!path) return;
+                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                          }}
+                                        >
+                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                              <Text strong>Рабочая станция</Text>
+                                              <Tag color="cyan">РС</Tag>
+                                            </Space>
+                                            <div onClick={(event) => event.stopPropagation()}>
+                                              <InlineFieldEditor
+                                                value={dataRow.device_name || workstationID || 'Рабочая станция'}
+                                                onSave={(value) => {
+                                                  if (!workstationID) return;
+                                                  updateWorkstationNameMutation.mutate({ workstationID, deviceName: value });
+                                                }}
+                                                saving={updateWorkstationNameMutation.isPending}
+                                              />
+                                            </div>
+                                            <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
+                                            <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
+                                            <Text type="secondary">LiteManager: {dataRow.litemanager || '-'}</Text>
                                           </Space>
-                                          <div onClick={(event) => event.stopPropagation()}>
-                                            <InlineFieldEditor
-                                              value={dataRow.device_name || workstationID || 'Рабочая станция'}
-                                              onSave={(value) => {
-                                                if (!workstationID) return;
-                                                updateWorkstationNameMutation.mutate({ workstationID, deviceName: value });
-                                              }}
-                                              saving={updateWorkstationNameMutation.isPending}
-                                            />
-                                          </div>
-                                          <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
-                                          <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
-                                          <Text type="secondary">LiteManager: {dataRow.litemanager || '-'}</Text>
-                                        </Space>
-                                      </Card>
-                                    );
-                                  })}
+                                        </Card>
+                                      );
+                                    })}
+                                  </div>
                                 </Space>
                               )}
 
                               {fiscalItems.length > 0 && (
                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                   <Text strong>Фискальные регистраторы</Text>
-                                  {fiscalItems.map((item) => {
-                                    const dataRow = item.data as Record<string, string | undefined>;
-                                    const path = resolveEntityPath(item);
-                                    return (
-                                      <Card
-                                        key={`equip-fiscal-${dataRow.uuid || dataRow.serial_number || dataRow.rn_kkt}`}
-                                        size="small"
-                                        hoverable
-                                        className="glass-panel"
-                                        onClick={() => {
-                                          if (!path) return;
-                                          navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                        }}
-                                      >
-                                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                            <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
-                                            <Tag color="gold">ФР</Tag>
+                                  <div className="ticket-overview-equipment-grid">
+                                    {fiscalItems.map((item) => {
+                                      const dataRow = item.data as Record<string, string | undefined>;
+                                      const path = resolveEntityPath(item);
+                                      return (
+                                        <Card
+                                          key={`equip-fiscal-${dataRow.uuid || dataRow.serial_number || dataRow.rn_kkt}`}
+                                          size="small"
+                                          hoverable
+                                          className="glass-panel"
+                                          onClick={() => {
+                                            if (!path) return;
+                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
+                                          }}
+                                        >
+                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                              <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
+                                              <Tag color="gold">ФР</Tag>
+                                            </Space>
+                                            <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
+                                            <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
+                                            <Text type="secondary">
+                                              ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
+                                            </Text>
                                           </Space>
-                                          <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
-                                          <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
-                                          <Text type="secondary">
-                                            ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
-                                          </Text>
-                                        </Space>
-                                      </Card>
-                                    );
-                                  })}
+                                        </Card>
+                                      );
+                                    })}
+                                  </div>
                                 </Space>
                               )}
 

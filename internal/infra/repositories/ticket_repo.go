@@ -314,6 +314,77 @@ func (r *ticketRepo) GetComments(ctx context.Context, ticketID string) ([]ticket
 	return comments, err
 }
 
+func (r *ticketRepo) GetCommentByUUID(ctx context.Context, ticketID string, commentUUID string) (*tickets.TicketComment, error) {
+	id := strings.TrimSpace(commentUUID)
+	if id == "" {
+		return nil, nil
+	}
+
+	var comment tickets.TicketComment
+	err := r.db.WithContext(ctx).
+		Where("ticket_id = ?", ticketID).
+		Where("deleted_in_bitrix = false").
+		Where("(id = ? OR service_desk_uuid = ?)", id, id).
+		First(&comment).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &comment, nil
+}
+
+func (r *ticketRepo) UpdateCommentText(ctx context.Context, ticketID string, commentUUID string, text string) (*tickets.TicketComment, error) {
+	comment, err := r.GetCommentByUUID(ctx, ticketID, commentUUID)
+	if err != nil || comment == nil {
+		return comment, err
+	}
+
+	if err := r.db.WithContext(ctx).
+		Model(&tickets.TicketComment{}).
+		Where("id = ?", comment.ID).
+		Update("text", text).Error; err != nil {
+		return nil, err
+	}
+	comment.Text = text
+	return comment, nil
+}
+
+func (r *ticketRepo) SoftDeleteComment(ctx context.Context, ticketID string, commentUUID string, deletedAt time.Time) (*tickets.TicketComment, error) {
+	comment, err := r.GetCommentByUUID(ctx, ticketID, commentUUID)
+	if err != nil || comment == nil {
+		return comment, err
+	}
+
+	if err := r.db.WithContext(ctx).
+		Model(&tickets.TicketComment{}).
+		Where("id = ?", comment.ID).
+		Updates(map[string]interface{}{
+			"deleted_in_bitrix":    true,
+			"deleted_in_bitrix_at": deletedAt,
+		}).Error; err != nil {
+		return nil, err
+	}
+	comment.DeletedInBitrix = true
+	comment.DeletedInBitrixAt = &deletedAt
+	return comment, nil
+}
+
+func (r *ticketRepo) HardDeleteComment(ctx context.Context, ticketID string, commentUUID string) (*tickets.TicketComment, error) {
+	comment, err := r.GetCommentByUUID(ctx, ticketID, commentUUID)
+	if err != nil || comment == nil {
+		return comment, err
+	}
+
+	if err := r.db.WithContext(ctx).
+		Where("id = ?", comment.ID).
+		Delete(&tickets.TicketComment{}).Error; err != nil {
+		return nil, err
+	}
+	return comment, nil
+}
+
 func (r *ticketRepo) UpdateCommentFromBitrix(ctx context.Context, commentID string, text string, authorName string) error {
 	updates := map[string]interface{}{
 		"text":                 text,

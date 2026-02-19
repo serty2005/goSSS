@@ -1,5 +1,5 @@
 const allowedTags = new Set([
-  'A', 'B', 'I', 'S', 'STRONG', 'EM', 'U', 'P', 'BR', 'DIV', 'SPAN', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'IMG',
+  'A', 'B', 'I', 'S', 'STRONG', 'EM', 'U', 'P', 'BR', 'DIV', 'SPAN', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'IMG', 'PRE', 'CODE',
 ]);
 
 const sanitizeURL = (value: string) => {

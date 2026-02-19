@@ -16,6 +16,8 @@ export default defineConfig(({ mode }) => {
     server: {
       // Важно для Docker/Remote контейнеров: слушать все интерфейсы
       host: true,
+      // Разрешаем доступ из контейнера Playwright (MCP)
+      allowedHosts: ['host.docker.internal', 'localhost', '127.0.0.1'],
       // Явно задаем порт
       port: 5173,
       // Если порт занят, Vite выйдет с ошибкой, а не будет искать следующий

@@ -45,6 +45,8 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/{id}/link", h.LinkAsset)
 	r.Post("/{id}/attachments", h.UploadAttachments)
 	r.Post("/{id}/comments", h.AddComment)
+	r.Patch("/{id}/comments/{comment_uuid}", h.UpdateComment)
+	r.Delete("/{id}/comments/{comment_uuid}", h.DeleteComment)
 	r.Post("/{id}/refresh-comments", h.RefreshCommentsFromServiceDesk)
 	r.Post("/{id}/connection-copy", h.RecordConnectionCopy)
 	r.Get("/{id}/connection-stats", h.GetConnectionCopyStats)
@@ -139,6 +141,82 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 	h.publishBitrixCommentSync(id, *comment, userID)
 	h.publishTicketUpdated(id, "ticket_comment_added", "ui", "Добавлен комментарий")
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
+	ticketID := chi.URLParam(r, "id")
+	commentUUID := strings.TrimSpace(chi.URLParam(r, "comment_uuid"))
+	if commentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "ID комментария обязателен")
+		return
+	}
+
+	var dto api.TicketUpdateCommentDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		return
+	}
+	if strings.TrimSpace(dto.Comment) == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Комментарий обязателен")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		return
+	}
+
+	_, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, userID, getUserRolesFromContext(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrTicketNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
+		case errors.Is(err, services.ErrCommentNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Комментарий не найден")
+		case errors.Is(err, services.ErrCommentForbidden):
+			response.RespondWithError(w, http.StatusForbidden, "Недостаточно прав")
+		default:
+			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	h.publishTicketUpdated(ticketID, "ticket_comment_updated", "ui", "Комментарий изменён")
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *TicketHandler) DeleteComment(w http.ResponseWriter, r *http.Request) {
+	ticketID := chi.URLParam(r, "id")
+	commentUUID := strings.TrimSpace(chi.URLParam(r, "comment_uuid"))
+	if commentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "ID комментария обязателен")
+		return
+	}
+
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		return
+	}
+
+	err := h.service.DeleteComment(r.Context(), ticketID, commentUUID, userID, getUserRolesFromContext(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrTicketNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
+		case errors.Is(err, services.ErrCommentNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Комментарий не найден")
+		case errors.Is(err, services.ErrCommentForbidden):
+			response.RespondWithError(w, http.StatusForbidden, "Недостаточно прав")
+		default:
+			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	h.publishTicketUpdated(ticketID, "ticket_comment_deleted", "ui", "Комментарий удалён")
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request) {
@@ -814,4 +892,9 @@ func getUserIDFromContext(r *http.Request) uint {
 	}
 	id, _ := strconv.ParseUint(userIDStr, 10, 32)
 	return uint(id)
+}
+
+func getUserRolesFromContext(r *http.Request) []string {
+	roles, _ := r.Context().Value(contextkeys.UserRolesContextKey).([]string)
+	return roles
 }

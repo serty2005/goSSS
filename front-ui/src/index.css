@@ -225,22 +225,43 @@ body {
 
 .ticket-overview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  width: 100%;
+  grid-template-columns: minmax(0, 2.33fr) minmax(320px, 1fr);
+  grid-template-areas: "main side";
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
+}
+
+.ticket-overview-layout > * {
+  min-width: 0;
 }
 
 .ticket-overview-main {
+  grid-area: main;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr;
   gap: 12px;
   min-height: calc(100vh - 220px);
+  min-width: 0;
 }
 
 .ticket-overview-service-card,
 .ticket-overview-comments-card,
 .ticket-overview-side-card {
   height: 100%;
+}
+
+.ticket-overview-side-card {
+  grid-area: side;
+  min-width: 0;
+}
+
+.ticket-overview-connection-grid,
+.ticket-overview-equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 @media (max-width: 992px) {
@@ -301,35 +322,30 @@ body {
 
 @media (max-width: 1600px) {
   .ticket-overview-layout {
+    grid-template-columns: minmax(320px, 1fr) minmax(0, 1.7fr);
+  }
+}
+
+@media (max-width: 1400px) {
+  .ticket-overview-connection-grid,
+  .ticket-overview-equipment-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1200px) {
+  .ticket-overview-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-  }
-
-  .ticket-overview-main {
-    display: contents;
-    min-height: 0;
-  }
-
-  .ticket-overview-service-card {
-    grid-column: 1 / -1;
-  }
-
-  .ticket-overview-comments-card {
-    grid-column: 1;
-  }
-
-  .ticket-overview-side-card {
-    grid-column: 2;
+    grid-template-areas: "main side";
   }
 }
 
 @media (max-width: 1100px) {
   .ticket-overview-layout {
     grid-template-columns: 1fr;
-  }
-
-  .ticket-overview-main {
-    display: contents;
+    grid-template-areas:
+      "main"
+      "side";
   }
 
   .ticket-overview-service-card,

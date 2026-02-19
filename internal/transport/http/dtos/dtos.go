@@ -239,6 +239,10 @@ type TicketAddCommentDTO struct {
 	IsPrivate bool   `json:"is_private"`
 }
 
+type TicketUpdateCommentDTO struct {
+	Comment string `json:"comment"`
+}
+
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
 func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	// Сначала парсим JSON в map для доступа к сырым значениям

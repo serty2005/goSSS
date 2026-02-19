@@ -86,6 +86,18 @@ export const ticketsApi = {
     return response.data;
   },
 
+  updateComment: async (id: number | string, commentUUID: string, comment: string) => {
+    const response = await apiClient.patch<ApiResponse<{ status: string }>>(`/tickets/${id}/comments/${commentUUID}`, {
+      comment,
+    });
+    return response.data;
+  },
+
+  deleteComment: async (id: number | string, commentUUID: string) => {
+    const response = await apiClient.delete<ApiResponse<{ status: string }>>(`/tickets/${id}/comments/${commentUUID}`);
+    return response.data;
+  },
+
   getBitrixServicePoints: async (params?: { term?: string; limit?: number; offset?: number; random_if_empty?: boolean }) => {
     const response = await apiClient.get<BitrixServicePointDTO[] | ApiResponse<BitrixServicePointDTO[]>>('/bitrix/service-points', {
       params,
