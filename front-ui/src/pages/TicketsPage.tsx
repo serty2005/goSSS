@@ -72,6 +72,11 @@ type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & {
 };
 
 const normalizeDescription = (value?: string) => {
+  const normalized = normalizeDescriptionMultiline(value);
+  return normalized.replace(/\s+/g, ' ').trim();
+};
+
+const normalizeDescriptionMultiline = (value?: string) => {
   if (!value) return '';
   return value
     .replace(/<\s*br\s*\/?>/gi, '\n')
@@ -84,7 +89,10 @@ const normalizeDescription = (value?: string) => {
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 };
 
@@ -111,6 +119,10 @@ const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bit
 type TableColumnKey = (typeof TABLE_COLUMN_KEYS)[number];
 type TableSortKey = 'number' | 'assignee_display' | 'created_at' | 'last_activity';
 type TableSortOrder = 'asc' | 'desc';
+const COLUMN_MAX_WIDTH: Partial<Record<TableColumnKey, number>> = {
+  subject: 500,
+  last_comment: 500,
+};
 
 const formatDateStamp = (value?: string) => ({
   date: value ? dayjs(value).format('DD.MM.YYYY') : '-',
@@ -159,8 +171,18 @@ const BitrixSyncIndicator: React.FC<{
 };
 
 const estimateHeaderMinWidth = (title: string) => {
-  // Базовая оценка: ширина текста заголовка + отступы + иконка drag-handle.
-  return Math.max(70, title.length * 8 + 20);
+  // Минимальная ширина: текст заголовка + внутренние отступы + область drag-handle.
+  return Math.max(70, title.length * 8 + 44);
+};
+
+const clampColumnWidth = (key: string, width: number, minWidth: number) => {
+  const min = minWidth || 90;
+  const max = COLUMN_MAX_WIDTH[key as TableColumnKey];
+  const bounded = Math.max(width, min);
+  if (typeof max === 'number') {
+    return Math.min(bounded, max);
+  }
+  return bounded;
 };
 
 const ResizableHeaderCell = React.forwardRef<HTMLTableCellElement, HeaderCellProps>((props, ref) => {
@@ -630,6 +652,9 @@ const TicketsPage: React.FC = () => {
       if (target?.closest('.ant-drawer')) {
         return;
       }
+      if (target?.closest('.ant-image-preview-root, .ant-image-preview')) {
+        return;
+      }
       closeQuickModal();
     };
     document.addEventListener('mousedown', onMouseDown);
@@ -661,8 +686,10 @@ const TicketsPage: React.FC = () => {
       visibleTickets.map((ticket) => ({
         ...ticket,
         subject: resolveTicketSubjectFromDescription(ticket.description),
+        subject_multiline: normalizeDescriptionMultiline(ticket.description) || 'Без описания',
         company_display: ticket.company_name || ticket.company_id || 'Компания не указана',
         last_comment_display: normalizeDescription(ticket.last_comment),
+        last_comment_multiline: normalizeDescriptionMultiline(ticket.last_comment),
         assignee_display: ticket.assignee?.full_name || 'Не назначен',
         reporter_display: ticket.reporter_name || 'Сотрудник',
       })),
@@ -757,11 +784,15 @@ const TicketsPage: React.FC = () => {
       },
       {
         title: 'Описание',
-        dataIndex: 'subject',
+        dataIndex: 'subject_multiline',
         key: 'subject',
         width: 260,
         minWidth: estimateHeaderMinWidth('Описание'),
-        ellipsis: true,
+        render: (value: string) => (
+          <div className="tickets-table-multiline-cell" title={value}>
+            {value}
+          </div>
+        ),
       },
       {
         title: 'Заголовок Bitrix24',
@@ -774,15 +805,14 @@ const TicketsPage: React.FC = () => {
       },
       {
         title: 'Последний комментарий',
-        dataIndex: 'last_comment_display',
+        dataIndex: 'last_comment_multiline',
         key: 'last_comment',
         width: 260,
         minWidth: estimateHeaderMinWidth('Последний комментарий'),
-        ellipsis: true,
         render: (value: string) => (
-          <Text type="secondary" ellipsis style={{ width: '100%', display: 'block' }}>
+          <div className="tickets-table-multiline-cell tickets-table-multiline-cell-secondary" title={value || '-'}>
             {value || '-'}
-          </Text>
+          </div>
         ),
       },
       {
@@ -837,6 +867,7 @@ const TicketsPage: React.FC = () => {
   );
 
   const [tableColumnsState, setTableColumnsState] = useState<ColumnsType<TableRow>>(tableColumnsBase);
+  const [isTableLayoutHydrated, setIsTableLayoutHydrated] = useState(false);
 
   const tableLayoutStorageKey = useMemo(() => {
     const userKey = user?.id ? String(user.id) : 'guest';
@@ -844,9 +875,11 @@ const TicketsPage: React.FC = () => {
   }, [user?.id]);
 
   useEffect(() => {
+    setIsTableLayoutHydrated(false);
     const raw = localStorage.getItem(tableLayoutStorageKey);
     if (!raw) {
       setTableColumnsState(tableColumnsBase);
+      setIsTableLayoutHydrated(true);
       return;
     }
     try {
@@ -858,9 +891,15 @@ const TicketsPage: React.FC = () => {
       for (const entry of parsed) {
         const base = baseByKey.get(entry.key);
         if (!base) continue;
+        const minWidth = (base as { minWidth?: number }).minWidth || 90;
+        const nextWidth = clampColumnWidth(
+          String(base.key),
+          entry.width ?? (base.width as number),
+          minWidth,
+        );
         next.push({
           ...base,
-          width: Math.max(entry.width ?? (base.width as number), (base as { minWidth?: number }).minWidth || 90),
+          width: nextWidth,
         });
         seen.add(entry.key);
       }
@@ -870,28 +909,32 @@ const TicketsPage: React.FC = () => {
         next.push(col);
       }
       setTableColumnsState(next.length ? next : tableColumnsBase);
+      setIsTableLayoutHydrated(true);
     } catch {
       setTableColumnsState(tableColumnsBase);
+      setIsTableLayoutHydrated(true);
     }
   }, [tableColumnsBase, tableLayoutStorageKey]);
 
   useEffect(() => {
+    if (!isTableLayoutHydrated) return;
     if (!tableColumnsState.length) return;
     const payload = tableColumnsState.map((col) => ({
       key: col.key as string,
       width: col.width as number | undefined,
     }));
     localStorage.setItem(tableLayoutStorageKey, JSON.stringify(payload));
-  }, [tableColumnsState, tableLayoutStorageKey]);
+  }, [isTableLayoutHydrated, tableColumnsState, tableLayoutStorageKey]);
 
   const handleResize =
     (index: number) => (_event: React.SyntheticEvent, data: { size: { width: number } }) => {
       setTableColumnsState((columns) => {
         const nextColumns = [...columns];
         const minWidth = (nextColumns[index] as { minWidth?: number }).minWidth || 90;
+        const columnKey = String(nextColumns[index]?.key || '');
         nextColumns[index] = {
           ...nextColumns[index],
-          width: Math.max(data.size.width, minWidth),
+          width: clampColumnWidth(columnKey, data.size.width, minWidth),
         };
         return nextColumns;
       });
@@ -1010,6 +1053,13 @@ const TicketsPage: React.FC = () => {
       ),
     } as any);
   }
+
+  const tableScrollX = useMemo(() => {
+    return tableColumns.reduce((sum, col) => {
+      const width = Number(col.width ?? (col as { minWidth?: number }).minWidth ?? 90);
+      return sum + (Number.isFinite(width) ? width : 90);
+    }, 0);
+  }, [tableColumns]);
 
   const applyAssigneeFilter = (assigneeID?: number) => {
     if (!assigneeID) return;
@@ -1265,7 +1315,8 @@ const TicketsPage: React.FC = () => {
                 bordered
                 className="tickets-table"
                 style={{ width: '100%' }}
-                scroll={{ x: 'max-content' }}
+                tableLayout="fixed"
+                scroll={{ x: tableScrollX }}
                 pagination={false}
                 components={{
                   header: {

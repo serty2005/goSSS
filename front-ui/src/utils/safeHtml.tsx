@@ -221,6 +221,9 @@ export const SafeHtmlContent: React.FC<SafeHtmlContentProps> = ({ html, onClick,
           preview={{
             open: previewIndex >= 0,
             current: previewIndex >= 0 ? previewIndex : 0,
+            onChange: (current) => {
+              setPreviewIndex(current);
+            },
             onOpenChange: (open) => {
               if (!open) {
                 setPreviewIndex(-1);
@@ -228,9 +231,9 @@ export const SafeHtmlContent: React.FC<SafeHtmlContentProps> = ({ html, onClick,
             },
           }}
         >
-          {images.map((src) => (
+          {images.map((src, index) => (
             <Image
-              key={src}
+              key={`${src}-${index}`}
               src={src}
               alt=""
               style={{ display: 'none' }}

@@ -41,14 +41,40 @@ body {
 }
 
 .tickets-table .ant-table-container table {
-  width: 100%;
-  min-width: max-content;
+  width: max-content;
+  min-width: 100%;
 }
 
 .tickets-table .ant-table-container table > thead > tr > th,
 .tickets-table .ant-table-container table > tbody > tr > td {
   border-right: 1.5px solid var(--app-color-border-strong);
   border-bottom: 1.5px solid var(--app-color-border-strong);
+}
+
+.tickets-table .ant-table-tbody > tr > td {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tickets-table .ant-table-cell-ellipsis .ant-typography {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tickets-table-multiline-cell {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  white-space: pre-line;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tickets-table-multiline-cell-secondary {
+  color: var(--app-color-muted-text);
 }
 
 .tickets-table .ant-table-container table > thead > tr > th:last-child,
