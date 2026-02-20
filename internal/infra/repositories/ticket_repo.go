@@ -32,7 +32,19 @@ func (r *ticketRepo) Create(ctx context.Context, ticket *tickets.Ticket) error {
 		}
 		ticket.Number = nextNumber
 	}
-	return r.db.WithContext(ctx).Create(ticket).Error
+	desiredSyncWithBitrix := ticket.SyncWithBitrix
+	if err := r.db.WithContext(ctx).Create(ticket).Error; err != nil {
+		return err
+	}
+	if !desiredSyncWithBitrix {
+		if err := r.db.WithContext(ctx).
+			Model(&tickets.Ticket{}).
+			Where("id = ?", ticket.ID).
+			UpdateColumn("sync_with_bitrix", false).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ticketRepo) Update(ctx context.Context, ticket *tickets.Ticket) error {

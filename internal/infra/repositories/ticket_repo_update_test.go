@@ -69,3 +69,37 @@ func TestTicketRepoUpdate_DoesNotOverrideAssigneeByLoadedAssociation(t *testing.
 		t.Fatalf("ожидался assignee_id=%d, получен assignee_id=%d", newAssignee.ID, *stored.AssigneeID)
 	}
 }
+
+func TestTicketRepoCreate_PersistsSyncWithBitrixFalse(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(&tickets.Ticket{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := context.Background()
+	ticketRepo := NewTicketRepo(db)
+
+	ticket := &tickets.Ticket{
+		Subject:        "Тест sync_with_bitrix=false",
+		Status:         tickets.StatusNew,
+		SyncWithBitrix: false,
+	}
+	if err := ticketRepo.Create(ctx, ticket); err != nil {
+		t.Fatalf("не удалось создать тикет: %v", err)
+	}
+
+	stored, err := ticketRepo.GetByID(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать тикет: %v", err)
+	}
+	if stored == nil {
+		t.Fatalf("тикет не найден после создания")
+	}
+	if stored.SyncWithBitrix {
+		t.Fatalf("ожидался sync_with_bitrix=false, получен true")
+	}
+}
