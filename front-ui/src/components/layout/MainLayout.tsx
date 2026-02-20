@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Badge, Drawer, List, Tag } from 'antd';
+import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Tag } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
@@ -13,7 +13,7 @@ import {
   MenuUnfoldOutlined,
   SunOutlined,
   MoonOutlined,
-  BellOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import HeaderSearch from '@/components/common/HeaderSearch';
@@ -37,12 +37,6 @@ type TicketNotificationItem = {
   action: string;
   source: string;
   message: string;
-  occurredAt: string;
-};
-
-type PersonalHeaderNotice = {
-  id: string;
-  text: string;
   occurredAt: string;
 };
 
@@ -101,12 +95,8 @@ const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
 
 const MainLayout: React.FC = () => {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [headerConfig, setHeaderConfig] = useState<ReportHeaderConfig | null>(null);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
-  const [personalNotice, setPersonalNotice] = useState<PersonalHeaderNotice | null>(null);
-  const notificationsOpenRef = useRef(false);
   const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
     primary: null,
     bgLayout: null,
@@ -185,17 +175,6 @@ const MainLayout: React.FC = () => {
   const isReportHeader = headerConfig?.mode === 'reports';
 
   useEffect(() => {
-    if (!notificationsOpen) {
-      return;
-    }
-    setUnreadNotifications(0);
-  }, [notificationsOpen]);
-
-  useEffect(() => {
-    notificationsOpenRef.current = notificationsOpen;
-  }, [notificationsOpen]);
-
-  useEffect(() => {
     if (!location.pathname.startsWith('/reports/')) {
       setHeaderConfig(null);
     }
@@ -228,41 +207,29 @@ const MainLayout: React.FC = () => {
       occurredAt: String(payload.occurred_at || new Date().toISOString()),
     };
 
-    if (isPersonalRecipient && notificationsConfig.personalEnabled) {
-      setPersonalNotice({
-        id: item.id,
-        text: renderTicketNotificationTitle(item),
-        occurredAt: item.occurredAt,
-      });
-    }
-
     const allowCommonByType = isDeferredDue
       ? notificationsConfig.commonDeferredDue
       : notificationsConfig.commonTicketUpdates;
-    if (!notificationsConfig.commonEnabled || !allowCommonByType || !isSubscriptionMatch || (isTicketUpdateAction && isActorSelf)) {
+    const shouldShowPersonal = isPersonalRecipient && notificationsConfig.personalEnabled;
+    const shouldShowCommon =
+      notificationsConfig.commonEnabled
+      && allowCommonByType
+      && isSubscriptionMatch
+      && !(isTicketUpdateAction && isActorSelf);
+
+    if (shouldShowPersonal || shouldShowCommon) {
+      setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
+    }
+
+    if (!shouldShowCommon) {
       void queryClient.invalidateQueries({ queryKey: ['tickets'] });
       void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
       return;
     }
 
-    setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
-    if (!notificationsOpenRef.current) {
-      setUnreadNotifications((value) => value + 1);
-    }
-
     void queryClient.invalidateQueries({ queryKey: ['tickets'] });
     void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
   }, [notificationsConfig, queryClient, user?.id]);
-
-  useEffect(() => {
-    if (!personalNotice) {
-      return;
-    }
-    const timerID = window.setTimeout(() => {
-      setPersonalNotice((prev) => (prev?.id === personalNotice.id ? null : prev));
-    }, 8000);
-    return () => window.clearTimeout(timerID);
-  }, [personalNotice]);
 
   useTicketRealtime(pushNotification);
 
@@ -329,6 +296,10 @@ const MainLayout: React.FC = () => {
     logout();
     navigate('/login');
   };
+
+  const dismissNotification = useCallback((id: string) => {
+    setTicketNotifications((prev) => prev.filter((item) => item.id !== id));
+  }, []);
 
   const userMenu = {
     items: [
@@ -579,16 +550,6 @@ const MainLayout: React.FC = () => {
           </div>
 
           <Space size="middle">
-            <Button
-              shape="circle"
-              icon={(
-                <Badge count={unreadNotifications} size="small" offset={[2, -2]}>
-                  <BellOutlined />
-                </Badge>
-              )}
-              onClick={() => setNotificationsOpen(true)}
-            />
-
             <Popover
               trigger="click"
               placement="leftTop"
@@ -613,69 +574,56 @@ const MainLayout: React.FC = () => {
             </Dropdown>
           </Space>
         </Header>
-        {personalNotice && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 24px',
-              background: token.colorFillSecondary,
-              borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            }}
-          >
-            <Tag color="processing" style={{ marginInlineEnd: 0 }}>Личное</Tag>
-            <Text>{personalNotice.text}</Text>
-            <Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
-              {new Date(personalNotice.occurredAt).toLocaleString()}
-            </Text>
-          </div>
-        )}
-        <Drawer
-          title="Общие уведомления"
-          placement="right"
-          width={420}
-          onClose={() => setNotificationsOpen(false)}
-          open={notificationsOpen}
-        >
-          <List
-            dataSource={ticketNotifications}
-            locale={{ emptyText: 'Уведомлений пока нет' }}
-            renderItem={(item) => (
-              <List.Item
-                key={item.id}
-                style={{ cursor: 'pointer' }}
-                onClick={() => {
-                  setNotificationsOpen(false);
-                  navigate(`/tickets/${item.ticketID}`);
-                }}
-              >
-                <List.Item.Meta
-                  title={`Тикет ${item.ticketID}`}
-                  description={(
-                    <Space direction="vertical" size={0}>
-                      <Text>{renderTicketNotificationTitle(item)}</Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {new Date(item.occurredAt).toLocaleString()} • {item.source || 'system'}
-                      </Text>
-                    </Space>
-                  )}
-                />
-              </List.Item>
-            )}
-          />
-        </Drawer>
         <Content
           style={{
             margin: '24px 16px',
             padding: 24,
             minHeight: 280,
             overflow: 'initial',
+            position: 'relative',
           }}
         >
           <LayoutHeaderContext.Provider value={{ headerConfig, setHeaderConfig }}>
             <Outlet />
           </LayoutHeaderContext.Provider>
+          <div id="inline-message-host" aria-live="polite" />
+          {ticketNotifications.length > 0 && (
+            <div className="inline-notification-stack" aria-live="polite">
+              {ticketNotifications.slice(0, 6).map((item) => (
+                <article
+                  key={item.id}
+                  className="inline-notification-card"
+                  onClick={() => navigate(`/tickets/${item.ticketID}`)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      navigate(`/tickets/${item.ticketID}`);
+                    }
+                  }}
+                >
+                  <div className="inline-notification-card__head">
+                    <Tag color="processing" style={{ marginInlineEnd: 0 }}>{`\u0422\u0438\u043a\u0435\u0442 ${item.ticketID}`}</Tag>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CloseOutlined />}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        dismissNotification(item.id);
+                      }}
+                      aria-label={'\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435'}
+                    />
+                  </div>
+                  <Text className="inline-notification-card__text">{renderTicketNotificationTitle(item)}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {new Date(item.occurredAt).toLocaleString()} - {item.source || 'system'}
+                  </Text>
+                </article>
+              ))}
+            </div>
+          )}
         </Content>
       </Layout>
     </Layout>
@@ -683,4 +631,3 @@ const MainLayout: React.FC = () => {
 };
 
 export default MainLayout;
-

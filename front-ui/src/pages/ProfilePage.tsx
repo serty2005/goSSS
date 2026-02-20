@@ -448,7 +448,7 @@ const ProfilePage: React.FC = () => {
               <Card size="small" title="Настройки оповещений" style={{ height: '100%' }}>
                 <Form.Item
                   name="notifications_personal_enabled"
-                  label="Личные уведомления в строке Header"
+                  label="Личные уведомления в ленте снизу слева"
                   valuePropName="checked"
                   style={{ marginBottom: 12 }}
                 >

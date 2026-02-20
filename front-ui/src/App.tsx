@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { App as AntdApp, ConfigProvider } from 'antd';
+import React, { useCallback, useEffect } from 'react';
+import { App as AntdApp, ConfigProvider, message } from 'antd';
 import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ruRU from 'antd/locale/ru_RU';
@@ -43,6 +43,10 @@ const queryClient = new QueryClient({
   },
 });
 
+const INLINE_MESSAGE_HOST_ID = 'inline-message-host';
+
+const resolveInlineMessageHost = () => document.getElementById(INLINE_MESSAGE_HOST_ID) || document.body;
+
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   if (!isAuthenticated) {
@@ -74,6 +78,7 @@ const App: React.FC = () => {
   const profileConfig = useAuthStore((state) => state.user?.profile_config);
   const paletteByMode = paletteFromProfileConfig(profileConfig, themeMode);
   const resolvedPalette = resolveThemePalette(themeMode, paletteByMode);
+  const getInlineMessageContainer = useCallback(() => resolveInlineMessageHost(), []);
 
   useEffect(() => {
     document.body.style.backgroundColor = resolvedPalette.bgLayout;
@@ -87,10 +92,26 @@ const App: React.FC = () => {
     });
   }, [themeMode, paletteByMode]);
 
+  useEffect(() => {
+    message.config({
+      duration: 5,
+      maxCount: 6,
+      top: 0,
+      getContainer: getInlineMessageContainer,
+    });
+  }, [getInlineMessageContainer]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode, paletteByMode)}>
-        <AntdApp>
+        <AntdApp
+          message={{
+            duration: 5,
+            maxCount: 6,
+            top: 0,
+            getContainer: getInlineMessageContainer,
+          }}
+        >
           <BrowserRouter>
             <SSEProvider>
               <Routes>
