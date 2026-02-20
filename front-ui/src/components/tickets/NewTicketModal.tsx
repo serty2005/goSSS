@@ -363,7 +363,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       width={selectedCompanyId ? 980 : 640}
       footer={(
         <Row justify="space-between">
-          <Button onClick={handleCancel}>Отмена</Button>
+          <Button onClick={() => form.submit()} loading={createMutation.isPending}>Тоже создать</Button>
           <Button type="primary" onClick={() => form.submit()} loading={createMutation.isPending}>
             Создать
           </Button>

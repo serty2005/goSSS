@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
@@ -35,7 +35,6 @@ import { companiesApi } from '@/api/companies';
 import { usersApi } from '@/api/users';
 import { profileApi } from '@/api/profile';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
-import NewTicketModal from '@/components/tickets/NewTicketModal';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
@@ -44,6 +43,7 @@ import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 
 const { Text, Paragraph } = Typography;
+const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 
 const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
   { value: 'new', label: 'Новая', color: 'blue' },
@@ -1576,16 +1576,19 @@ const TicketsPage: React.FC = () => {
           </Button>
         </Space>
       </Drawer>
-
-      <NewTicketModal
-        open={isCreateOpen}
-        onClose={() => {
-          setIsCreateOpen(false);
-        }}
-        onCreated={() => {
-          queryClient.invalidateQueries({ queryKey: ['tickets'] });
-        }}
-      />
+      {isCreateOpen && (
+        <Suspense fallback={null}>
+          <LazyNewTicketModal
+            open={isCreateOpen}
+            onClose={() => {
+              setIsCreateOpen(false);
+            }}
+            onCreated={() => {
+              queryClient.invalidateQueries({ queryKey: ['tickets'] });
+            }}
+          />
+        </Suspense>
+      )}
     </Space>
   );
 };

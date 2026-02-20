@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react';
+﻿import React, { Suspense, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Typography, Spin, Empty, Space, Button, Tag, Grid } from 'antd';
@@ -9,11 +9,11 @@ import { SearchFoundEntity, ServerEntity, WorkstationEntity, FiscalEntity } from
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
-import NewTicketModal from '@/components/tickets/NewTicketModal';
 import { useAuthStore } from '@/store/authStore';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
+const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 
 const SearchPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -139,13 +139,16 @@ const SearchPage: React.FC = () => {
           ))}
         </Space>
       )}
-
-      <NewTicketModal
-        open={isCreateOpen}
-        onClose={() => setIsCreateOpen(false)}
-        presetCompany={presetCompany}
-        onCreated={() => {}}
-      />
+      {isCreateOpen && (
+        <Suspense fallback={null}>
+          <LazyNewTicketModal
+            open={isCreateOpen}
+            onClose={() => setIsCreateOpen(false)}
+            presetCompany={presetCompany}
+            onCreated={() => {}}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

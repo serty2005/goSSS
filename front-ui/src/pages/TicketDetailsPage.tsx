@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Checkbox, DatePicker, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
@@ -13,7 +13,6 @@ import { usersApi } from '@/api/users';
 import { equipmentApi } from '@/api/equipment';
 import { CompanyModel, ConnectionCopyStatDTO, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
-import NewTicketModal from '@/components/tickets/NewTicketModal';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
@@ -22,6 +21,7 @@ import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 
 const { Title, Text, Paragraph } = Typography;
+const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
 const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
@@ -1641,22 +1641,25 @@ const TicketDetailsPage: React.FC = () => {
           />
         )}
       </Modal>
-
-      <NewTicketModal
-        open={isCreateOpen}
-        onClose={() => {
-          setIsCreateOpen(false);
-          const next = new URLSearchParams(searchParams);
-          next.delete('create');
-          setSearchParams(next);
-        }}
-        onCreated={() => {
-          const next = new URLSearchParams(searchParams);
-          next.delete('create');
-          setSearchParams(next);
-          queryClient.invalidateQueries({ queryKey: ['tickets'] });
-        }}
-      />
+      {isCreateOpen && (
+        <Suspense fallback={null}>
+          <LazyNewTicketModal
+            open={isCreateOpen}
+            onClose={() => {
+              setIsCreateOpen(false);
+              const next = new URLSearchParams(searchParams);
+              next.delete('create');
+              setSearchParams(next);
+            }}
+            onCreated={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('create');
+              setSearchParams(next);
+              queryClient.invalidateQueries({ queryKey: ['tickets'] });
+            }}
+          />
+        </Suspense>
+      )}
     </Space>
   );
 };
