@@ -822,6 +822,32 @@ const TicketDetailsPage: React.FC = () => {
       .replace(/^\/static\//, '/api/static/')
       .replace(/^static\//, '/api/static/');
   };
+  const commentComposer = (
+    <Space direction="vertical" size="small" style={{ width: '100%', marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}>
+      <SmartTicketEditor
+        value={commentDraft}
+        onChange={setCommentDraft}
+        placeholder="Добавьте комментарий"
+        mentions={mentionOptions}
+        onImageUpload={uploadInlineImage}
+        onFileUpload={uploadInlineFile}
+        minHeight={100}
+      />
+      <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
+        Приватный комментарий (не синхронизировать во внешние системы)
+      </Checkbox>
+      <Space>
+        <Button
+          type="primary"
+          loading={addCommentMutation.isPending}
+          disabled={!hasEditorContent(commentDraft)}
+          onClick={() => addCommentMutation.mutate()}
+        >
+          Отправить
+        </Button>
+      </Space>
+    </Space>
+  );
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -1132,6 +1158,7 @@ const TicketDetailsPage: React.FC = () => {
                           label: 'Комментарии',
                           children: (
                             <>
+                              {commentsNewFirst && commentComposer}
                               {commentsOrdered.length ? (
                                 <List
                                   dataSource={commentsOrdered}
@@ -1206,31 +1233,7 @@ const TicketDetailsPage: React.FC = () => {
                                   )}
                                 />
                               ) : null}
-
-                              <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
-                                <SmartTicketEditor
-                                  value={commentDraft}
-                                  onChange={setCommentDraft}
-                                  placeholder="Добавьте комментарий"
-                                  mentions={mentionOptions}
-                                  onImageUpload={uploadInlineImage}
-                                  onFileUpload={uploadInlineFile}
-                                  minHeight={100}
-                                />
-                                <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
-                                  Приватный комментарий (не синхронизировать во внешние системы)
-                                </Checkbox>
-                                <Space>
-                                  <Button
-                                    type="primary"
-                                    loading={addCommentMutation.isPending}
-                                    disabled={!hasEditorContent(commentDraft)}
-                                    onClick={() => addCommentMutation.mutate()}
-                                  >
-                                    Отправить
-                                  </Button>
-                                </Space>
-                              </Space>
+                              {!commentsNewFirst && commentComposer}
                             </>
                           ),
                         },

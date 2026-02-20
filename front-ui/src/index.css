@@ -277,7 +277,7 @@ body {
 #inline-message-host {
   position: absolute;
   left: 224px;
-  bottom: 24px;
+  bottom: 14px;
   width: min(420px, calc(100% - 48px));
   max-width: calc(100% - 48px);
   overflow: visible;
@@ -323,7 +323,7 @@ body {
 .inline-notification-stack {
   position: absolute;
   left: 24px;
-  bottom: 186px;
+  bottom: 86px;
   width: min(420px, calc(100% - 48px));
   max-height: min(50vh, calc(100% - 48px));
   overflow-y: auto;

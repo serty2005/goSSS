@@ -1055,6 +1055,38 @@ const TicketsPage: React.FC = () => {
     }
     setSelectedTicketId(ticketID);
   };
+  const commentComposer = (
+    <Space direction="vertical" size="small" style={{ width: '100%', marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}>
+      <SmartTicketEditor
+        value={commentDraft}
+        onChange={setCommentDraft}
+        placeholder="Добавьте комментарий"
+        mentions={mentionOptions}
+        onImageUpload={uploadInlineImage}
+        onFileUpload={uploadInlineFile}
+        minHeight={96}
+      />
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorTextSecondary }}>
+        <input
+          type="checkbox"
+          checked={commentIsPrivate}
+          onChange={(event) => setCommentIsPrivate(event.target.checked)}
+        />
+        Приватный (Только в Xenion)
+      </label>
+      <Button
+        type="primary"
+        loading={addCommentMutation.isPending}
+        disabled={!hasEditorContent(commentDraft) || !selectedTicketId}
+        onClick={() => {
+          if (!selectedTicketId) return;
+          addCommentMutation.mutate({ id: selectedTicketId, comment: commentDraft, isPrivate: commentIsPrivate });
+        }}
+      >
+        Отправить
+      </Button>
+    </Space>
+  );
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -1403,6 +1435,7 @@ const TicketsPage: React.FC = () => {
               size="small"
               title="Комментарии"
             >
+              {commentsNewFirst && commentComposer}
               {comments.length > 0 && (
                 <List
                   dataSource={comments}
@@ -1489,37 +1522,7 @@ const TicketsPage: React.FC = () => {
                   )}
                 />
               )}
-
-              <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 12 }}>
-                <SmartTicketEditor
-                  value={commentDraft}
-                  onChange={setCommentDraft}
-                  placeholder="Добавьте комментарий"
-                  mentions={mentionOptions}
-                  onImageUpload={uploadInlineImage}
-                  onFileUpload={uploadInlineFile}
-                  minHeight={96}
-                />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorTextSecondary }}>
-                  <input
-                    type="checkbox"
-                    checked={commentIsPrivate}
-                    onChange={(event) => setCommentIsPrivate(event.target.checked)}
-                  />
-                  Приватный (Только в Xenion)
-                </label>
-                <Button
-                  type="primary"
-                  loading={addCommentMutation.isPending}
-                  disabled={!hasEditorContent(commentDraft) || !selectedTicketId}
-                  onClick={() => {
-                    if (!selectedTicketId) return;
-                    addCommentMutation.mutate({ id: selectedTicketId, comment: commentDraft, isPrivate: commentIsPrivate });
-                  }}
-                >
-                  Отправить
-                </Button>
-              </Space>
+              {!commentsNewFirst && commentComposer}
             </Card>
           </Space>
         )}
