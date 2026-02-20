@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/user"
+	"etalon-server/internal/infra/config"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -20,10 +21,11 @@ import (
 type UserHandler struct {
 	userRepo   user.Repository
 	bitrixRepo bitrix.Repository
+	cfg        *config.Config
 }
 
-func NewUserHandler(userRepo user.Repository, bitrixRepo bitrix.Repository) *UserHandler {
-	return &UserHandler{userRepo: userRepo, bitrixRepo: bitrixRepo}
+func NewUserHandler(userRepo user.Repository, bitrixRepo bitrix.Repository, cfg *config.Config) *UserHandler {
+	return &UserHandler{userRepo: userRepo, bitrixRepo: bitrixRepo, cfg: cfg}
 }
 
 func (h *UserHandler) RegisterRoutes(r chi.Router) {
@@ -614,6 +616,7 @@ func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCa
 		LastName:         u.LastName,
 		Position:         u.Position,
 		Roles:            roles,
+		BitrixEnabled:    h.cfg != nil && h.cfg.EnableBitrixGateway,
 		ExternalSystemID: u.ExternalID,
 		ExternalType:     u.ExternalType,
 		ScheduleType:     u.ScheduleType,

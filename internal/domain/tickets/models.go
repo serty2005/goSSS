@@ -61,10 +61,12 @@ type Ticket struct {
 	Result      string `json:"result" gorm:"type:text"`
 
 	// Workflow и SLA
-	Status     string     `json:"status" gorm:"type:varchar(50);default:'new';index"`
-	Priority   string     `json:"priority" gorm:"type:varchar(20);default:'medium'"`
-	Type       string     `json:"type" gorm:"type:varchar(50);default:'incident'"`
-	DeadlineAt *time.Time `json:"deadline_at" gorm:"index"`
+	Status        string     `json:"status" gorm:"type:varchar(50);default:'new';index"`
+	Priority      string     `json:"priority" gorm:"type:varchar(20);default:'medium'"`
+	Type          string     `json:"type" gorm:"type:varchar(50);default:'incident'"`
+	DeadlineAt    *time.Time `json:"deadline_at" gorm:"index"`
+	DeferredUntil *time.Time `json:"deferred_until,omitempty" gorm:"index"`
+	DeferredByID  *uint      `json:"deferred_by_id,omitempty" gorm:"index"`
 
 	// Связи с Пользователями
 	AssigneeID *uint      `json:"assignee_id" gorm:"index"`

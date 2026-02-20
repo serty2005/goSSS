@@ -7,6 +7,8 @@ export type TicketRealtimePayload = {
   source?: string;
   message?: string;
   occurred_at?: string;
+  recipient_user_id?: number;
+  actor_user_id?: number;
 };
 
 export const useTicketRealtime = (onEvent: (payload: TicketRealtimePayload) => void) => {
@@ -24,4 +26,3 @@ export const useTicketRealtime = (onEvent: (payload: TicketRealtimePayload) => v
     return unsubscribe;
   }, [onEvent, subscribe]);
 };
-

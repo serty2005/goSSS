@@ -42,6 +42,7 @@ import { AcceptanceForm } from '@/components/candidates/AcceptanceForm';
 import { StagedAgentEntities } from '@/components/candidates/StagedAgentEntities';
 import { CompanySearchOption } from '@/components/companies/CompanySearchSelect';
 import { CandidateWorkstationDraft } from '@/components/candidates/StagedWorkstations';
+import { useAuthStore } from '@/store/authStore';
 
 const { Title } = Typography;
 type CandidateFilter = 'ACTIVE' | CandidateStatus | 'ALL';
@@ -227,6 +228,8 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
 
 const AcceptancePage: React.FC = () => {
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const isBitrixEnabledGlobal = user?.bitrix_enabled === true;
 
   const [status, setStatus] = useState<CandidateFilter>('ACTIVE');
   const [selectedCandidateID, setSelectedCandidateID] = useState<number | null>(null);
@@ -286,7 +289,7 @@ const AcceptancePage: React.FC = () => {
   const { data: bitrixServicePoints = [], isLoading: isBitrixServicePointsLoading } = useQuery({
     queryKey: ['bitrix-service-points', 'acceptance'],
     queryFn: () => ticketsApi.getBitrixServicePoints(),
-    enabled: drawerOpen,
+    enabled: drawerOpen && isBitrixEnabledGlobal,
     staleTime: 30_000,
   });
 
@@ -587,7 +590,7 @@ const AcceptancePage: React.FC = () => {
       label: point.name,
     }));
   }, [bitrixServicePoints]);
-  const isBitrixEnabled = bitrixServicePointOptions.length > 0;
+  const isBitrixEnabled = isBitrixEnabledGlobal && bitrixServicePointOptions.length > 0;
 
   useEffect(() => {
     if (!isBitrixEnabled) {

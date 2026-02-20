@@ -36,10 +36,11 @@ export const ticketsApi = {
     return response.data;
   },
 
-  changeStatus: async (id: number | string, status: string, comment?: string) => {
+  changeStatus: async (id: number | string, status: string, comment?: string, deferredUntil?: string) => {
     const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/status`, {
       status,
       comment,
+      deferred_until: deferredUntil,
     });
     return response.data;
   },

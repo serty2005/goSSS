@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/contextkeys"
@@ -91,8 +92,8 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Failed to create ticket")
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_created")
-	h.publishTicketUpdated(ticket.ID, "ticket_created", "ui", "Создан новый тикет")
+	h.publishBitrixTicketSyncForTicket(ticket, "ticket_created")
+	h.publishTicketUpdated(ticket.ID, "ticket_created", "ui", "Создан новый тикет", userID, nil)
 	response.RespondWithJSON(w, http.StatusCreated, ticket)
 }
 
@@ -105,13 +106,20 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := getUserIDFromContext(r)
-	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, userID)
+	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, dto.DeferredUntil, userID)
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_status_changed")
-	h.publishTicketUpdated(ticket.ID, "ticket_status_changed", "ui", "Изменён статус тикета")
+	h.publishBitrixTicketSyncForTicket(ticket, "ticket_status_changed")
+	h.publishTicketUpdated(
+		ticket.ID,
+		"ticket_status_changed",
+		"ui",
+		"Изменён статус тикета",
+		userID,
+		resolveAssigneeRecipient(ticket.AssigneeID, userID),
+	)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
@@ -138,8 +146,15 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishBitrixCommentSync(id, *comment, userID)
-	h.publishTicketUpdated(id, "ticket_comment_added", "ui", "Добавлен комментарий")
+	h.publishBitrixCommentSyncForTicket(r.Context(), id, *comment, userID)
+	h.publishTicketUpdated(
+		id,
+		"ticket_comment_added",
+		"ui",
+		"Добавлен комментарий",
+		userID,
+		h.resolveTicketAssigneeRecipient(r.Context(), id, userID),
+	)
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
@@ -183,9 +198,16 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if updatedComment != nil && !updatedComment.IsPrivate {
-		h.publishBitrixCommentSync(ticketID, *updatedComment, userID)
+		h.publishBitrixCommentSyncForTicket(r.Context(), ticketID, *updatedComment, userID)
 	}
-	h.publishTicketUpdated(ticketID, "ticket_comment_updated", "ui", "Комментарий изменён")
+	h.publishTicketUpdated(
+		ticketID,
+		"ticket_comment_updated",
+		"ui",
+		"Комментарий изменён",
+		userID,
+		h.resolveTicketAssigneeRecipient(r.Context(), ticketID, userID),
+	)
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -218,7 +240,14 @@ func (h *TicketHandler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.publishTicketUpdated(ticketID, "ticket_comment_deleted", "ui", "Комментарий удалён")
+	h.publishTicketUpdated(
+		ticketID,
+		"ticket_comment_deleted",
+		"ui",
+		"Комментарий удалён",
+		userID,
+		h.resolveTicketAssigneeRecipient(r.Context(), ticketID, userID),
+	)
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -267,7 +296,14 @@ func (h *TicketHandler) RefreshCommentsFromServiceDesk(w http.ResponseWriter, r 
 		"added":  added,
 	})
 	if added > 0 {
-		h.publishTicketUpdated(id, "ticket_comments_refreshed", "servicedesk", "Обновлены комментарии тикета")
+		h.publishTicketUpdated(
+			id,
+			"ticket_comments_refreshed",
+			"servicedesk",
+			"Обновлены комментарии тикета",
+			0,
+			h.resolveTicketAssigneeRecipient(r.Context(), id, 0),
+		)
 	}
 }
 
@@ -308,7 +344,7 @@ func (h *TicketHandler) RecordConnectionCopy(w http.ResponseWriter, r *http.Requ
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishTicketUpdated(id, "ticket_connection_copied", "ui", "Скопированы данные подключения")
+	h.publishTicketUpdated(id, "ticket_connection_copied", "ui", "Скопированы данные подключения", userID, nil)
 	response.RespondWithJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
@@ -348,8 +384,15 @@ func (h *TicketHandler) UpdateDescription(w http.ResponseWriter, r *http.Request
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_description_updated")
-	h.publishTicketUpdated(ticket.ID, "ticket_description_updated", "ui", "Обновлено описание тикета")
+	h.publishBitrixTicketSyncForTicket(ticket, "ticket_description_updated")
+	h.publishTicketUpdated(
+		ticket.ID,
+		"ticket_description_updated",
+		"ui",
+		"Обновлено описание тикета",
+		userID,
+		resolveAssigneeRecipient(ticket.AssigneeID, userID),
+	)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
@@ -367,8 +410,8 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_assignee_updated")
-	h.publishTicketUpdated(ticket.ID, "ticket_assignee_updated", "ui", "Изменён исполнитель тикета")
+	h.publishBitrixTicketSyncForTicket(ticket, "ticket_assignee_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_assignee_updated", "ui", "Изменён исполнитель тикета", userID, nil)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
@@ -401,7 +444,7 @@ func (h *TicketHandler) ChangeCompany(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.publishTicketUpdated(ticket.ID, "ticket_company_updated", "ui", "Изменена компания тикета")
+	h.publishTicketUpdated(ticket.ID, "ticket_company_updated", "ui", "Изменена компания тикета", userID, nil)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
 
@@ -428,8 +471,8 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.publishBitrixTicketSync(ticket.ID, "ticket_bitrix_fields_updated")
-	h.publishTicketUpdated(ticket.ID, "ticket_bitrix_fields_updated", "ui", "Обновлены поля интеграции Bitrix24")
+	h.publishBitrixTicketSyncForTicket(ticket, "ticket_bitrix_fields_updated")
+	h.publishTicketUpdated(ticket.ID, "ticket_bitrix_fields_updated", "ui", "Обновлены поля интеграции Bitrix24", userID, nil)
 
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
@@ -447,6 +490,13 @@ func (h *TicketHandler) publishBitrixTicketSync(ticketID string, reason string) 
 	})
 }
 
+func (h *TicketHandler) publishBitrixTicketSyncForTicket(ticket *tickets.Ticket, reason string) {
+	if ticket == nil || !ticket.SyncWithBitrix {
+		return
+	}
+	h.publishBitrixTicketSync(ticket.ID, reason)
+}
+
 func (h *TicketHandler) publishBitrixCommentSync(ticketID string, comment tickets.TicketComment, etalonUserID uint) {
 	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" || strings.TrimSpace(comment.ID) == "" {
 		return
@@ -461,20 +511,77 @@ func (h *TicketHandler) publishBitrixCommentSync(ticketID string, comment ticket
 	})
 }
 
-func (h *TicketHandler) publishTicketUpdated(ticketID, action, source, message string) {
+func (h *TicketHandler) publishBitrixCommentSyncForTicket(ctx context.Context, ticketID string, comment tickets.TicketComment, etalonUserID uint) {
+	if comment.IsPrivate || !h.isBitrixSyncEnabledForTicket(ctx, ticketID) {
+		return
+	}
+	h.publishBitrixCommentSync(ticketID, comment, etalonUserID)
+}
+
+func (h *TicketHandler) isBitrixSyncEnabledForTicket(ctx context.Context, ticketID string) bool {
+	if h.service == nil || strings.TrimSpace(ticketID) == "" {
+		return false
+	}
+	details, err := h.service.GetDetails(ctx, ticketID)
+	if err != nil || details == nil {
+		return false
+	}
+	if !details.Metadata.SyncWithBitrix {
+		return false
+	}
+	return details.Metadata.BitrixServicePointID != nil && *details.Metadata.BitrixServicePointID > 0
+}
+
+func (h *TicketHandler) publishTicketUpdated(
+	ticketID string,
+	action string,
+	source string,
+	message string,
+	actorUserID uint,
+	recipientUserID *uint,
+) {
 	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" {
 		return
+	}
+	var actorUserIDPtr *uint
+	if actorUserID > 0 {
+		actorID := actorUserID
+		actorUserIDPtr = &actorID
 	}
 	h.eventBus.Publish(eventbus.Event{
 		Type: events.TicketUpdated,
 		Payload: events.TicketUpdatedPayload{
-			TicketID:   ticketID,
-			Action:     strings.TrimSpace(action),
-			Source:     strings.TrimSpace(source),
-			Message:    strings.TrimSpace(message),
-			OccurredAt: time.Now(),
+			TicketID:        ticketID,
+			Action:          strings.TrimSpace(action),
+			Source:          strings.TrimSpace(source),
+			Message:         strings.TrimSpace(message),
+			OccurredAt:      time.Now(),
+			RecipientUserID: recipientUserID,
+			ActorUserID:     actorUserIDPtr,
 		},
 	})
+}
+
+func (h *TicketHandler) resolveTicketAssigneeRecipient(ctx context.Context, ticketID string, actorUserID uint) *uint {
+	if h.service == nil || strings.TrimSpace(ticketID) == "" {
+		return nil
+	}
+	details, err := h.service.GetDetails(ctx, ticketID)
+	if err != nil || details == nil {
+		return nil
+	}
+	return resolveAssigneeRecipient(details.Metadata.AssigneeID, actorUserID)
+}
+
+func resolveAssigneeRecipient(assigneeID *uint, actorUserID uint) *uint {
+	if assigneeID == nil || *assigneeID == 0 {
+		return nil
+	}
+	if actorUserID > 0 && *assigneeID == actorUserID {
+		return nil
+	}
+	recipient := *assigneeID
+	return &recipient
 }
 
 // List возвращает список заявок с фильтрацией.
@@ -578,6 +685,8 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			BitrixDealTitle:      item.BitrixDealTitle,
 			BitrixDealID:         item.BitrixDealID,
 			BitrixDealURL:        item.BitrixDealURL,
+			DeferredUntil:        item.DeferredUntil,
+			DeferredByID:         item.DeferredByID,
 			Assignee:             assignee,
 			// LastActivityDate is basically UpdatedAt or CreatedAt
 			LastActivityDate: item.UpdatedAt,
@@ -693,19 +802,21 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type safeMetadataDTO struct {
-		ID          string     `json:"id"`
-		CreatedAt   time.Time  `json:"created_at"`
-		UpdatedAt   time.Time  `json:"updated_at"`
-		Number      int        `json:"number"`
-		Subject     string     `json:"subject"`
-		Description string     `json:"description"`
-		Result      string     `json:"result"`
-		Status      string     `json:"status"`
-		Priority    string     `json:"priority"`
-		Type        string     `json:"type"`
-		DeadlineAt  *time.Time `json:"deadline_at"`
-		AssigneeID  *uint      `json:"assignee_id"`
-		Assignee    *struct {
+		ID            string     `json:"id"`
+		CreatedAt     time.Time  `json:"created_at"`
+		UpdatedAt     time.Time  `json:"updated_at"`
+		Number        int        `json:"number"`
+		Subject       string     `json:"subject"`
+		Description   string     `json:"description"`
+		Result        string     `json:"result"`
+		Status        string     `json:"status"`
+		Priority      string     `json:"priority"`
+		Type          string     `json:"type"`
+		DeadlineAt    *time.Time `json:"deadline_at"`
+		DeferredUntil *time.Time `json:"deferred_until,omitempty"`
+		DeferredByID  *uint      `json:"deferred_by_id,omitempty"`
+		AssigneeID    *uint      `json:"assignee_id"`
+		Assignee      *struct {
 			ID       uint   `json:"id"`
 			FullName string `json:"full_name"`
 		} `json:"assignee,omitempty"`
@@ -760,6 +871,8 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			Priority:             details.Metadata.Priority,
 			Type:                 details.Metadata.Type,
 			DeadlineAt:           details.Metadata.DeadlineAt,
+			DeferredUntil:        details.Metadata.DeferredUntil,
+			DeferredByID:         details.Metadata.DeferredByID,
 			AssigneeID:           details.Metadata.AssigneeID,
 			Assignee:             assignee,
 			ReporterID:           details.Metadata.ReporterID,

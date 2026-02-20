@@ -20,6 +20,7 @@ const CompaniesListPage: React.FC = () => {
   const term = (searchParams.get('q') || '').trim();
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
   const isAdminUser = isAdmin(user?.roles);
 
   const [companyLookupTerm, setCompanyLookupTerm] = useState('');
@@ -45,7 +46,7 @@ const CompaniesListPage: React.FC = () => {
   const { data: mappingsData, isLoading: isMappingsLoading } = useQuery({
     queryKey: ['companies', 'bitrix-mappings', term],
     queryFn: () => companiesApi.getBitrixMappings(term, 200, 0),
-    enabled: isAdminUser,
+    enabled: isAdminUser && isBitrixEnabled,
     staleTime: 15_000,
   });
 
@@ -57,7 +58,7 @@ const CompaniesListPage: React.FC = () => {
       offset: 0,
       random_if_empty: true,
     }),
-    enabled: isAdminUser,
+    enabled: isAdminUser && isBitrixEnabled,
     staleTime: 15_000,
   });
 
@@ -375,7 +376,7 @@ const CompaniesListPage: React.FC = () => {
     { key: 'companies', label: 'Компании', children: listContent },
   ];
 
-  if (isAdminUser) {
+  if (isAdminUser && isBitrixEnabled) {
     tabItems.push({ key: 'mappings', label: 'Сопоставление с B24', children: mappingContent });
   }
 

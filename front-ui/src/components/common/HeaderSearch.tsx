@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AutoComplete, Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
@@ -30,6 +30,7 @@ const ACTIVE_STATUS_VALUES = ['new', 'in_progress', 'pending', 'deferred', 'onsi
 const LONGEST_STATUS_LABEL_WIDTH = 260;
 const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
+  { value: 'selection', label: 'Выбор' },
   { value: 'number', label: 'Номер' },
   { value: 'status', label: 'Статус' },
   { value: 'company_display', label: 'Компания' },
@@ -43,7 +44,7 @@ const TABLE_COLUMN_OPTIONS = [
   { value: 'sync_with_bitrix', label: 'B24' },
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
-const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title');
+const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'selection');
 const TICKET_STATE_PARAM_KEYS = [
   'preset_id',
   'q',
@@ -84,6 +85,7 @@ type TicketPreset = {
 };
 
 const HeaderSearch: React.FC = () => {
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -92,6 +94,7 @@ const HeaderSearch: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState(currentTerm);
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
 
   useEffect(() => {
     setSearchTerm(currentTerm);
@@ -137,6 +140,8 @@ const HeaderSearch: React.FC = () => {
   const ticketParamsRaw = useTicketParamsStore((state) => state.ticketParams);
   const setTicketParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
   const requestCreateTicket = useTicketParamsStore((state) => state.requestCreateTicket);
+  const selectedTicketIDs = useTicketParamsStore((state) => state.selectedTicketIDs);
+  const clearSelectedTicketIDs = useTicketParamsStore((state) => state.clearSelectedTicketIDs);
   const ticketParams = useMemo(() => new URLSearchParams(ticketParamsRaw), [ticketParamsRaw]);
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
   const [presetName, setPresetName] = useState('');
@@ -169,6 +174,12 @@ const HeaderSearch: React.FC = () => {
   }, [isTicketsPage, location.pathname, location.search, navigate]);
 
   useEffect(() => {
+    if (!isTicketsPage && selectedTicketIDs.length > 0) {
+      clearSelectedTicketIDs();
+    }
+  }, [clearSelectedTicketIDs, isTicketsPage, selectedTicketIDs.length]);
+
+  useEffect(() => {
     setTicketTerm(new URLSearchParams(ticketParamsRaw).get('q') || '');
   }, [ticketParamsRaw]);
 
@@ -187,12 +198,27 @@ const HeaderSearch: React.FC = () => {
   const ownAssigneeID = user?.id ? String(user.id) : '';
   const isMineOnly = Boolean(ownAssigneeID) && assigneeValues.length === 1 && assigneeValues[0] === ownAssigneeID;
   const selectedTableColumns = useMemo(() => {
+    const availableTableColumnKeys = isBitrixEnabled
+      ? TABLE_COLUMN_KEYS
+      : TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
+    const defaultTableColumns = isBitrixEnabled
+      ? DEFAULT_TABLE_COLUMN_KEYS
+      : DEFAULT_TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
     if (!ticketTableColumns) {
-      return DEFAULT_TABLE_COLUMN_KEYS;
+      return defaultTableColumns;
     }
-    const values = ticketTableColumns.split(',').filter((value) => TABLE_COLUMN_KEYS.includes(value));
-    return values.length ? values : DEFAULT_TABLE_COLUMN_KEYS;
-  }, [ticketTableColumns]);
+    const values = ticketTableColumns.split(',').filter((value) => availableTableColumnKeys.includes(value));
+    return values.length ? values : defaultTableColumns;
+  }, [isBitrixEnabled, ticketTableColumns]);
+
+  const tableColumnOptions = useMemo(
+    () => (isBitrixEnabled ? TABLE_COLUMN_OPTIONS : TABLE_COLUMN_OPTIONS.filter((item) => item.value !== 'bitrix_deal_title' && item.value !== 'sync_with_bitrix')),
+    [isBitrixEnabled],
+  );
+  const tableColumnOrder = useMemo(
+    () => tableColumnOptions.map((item) => item.value),
+    [tableColumnOptions],
+  );
 
   const { data: filterRes, isFetching: isFiltersLoading } = useQuery({
     queryKey: ['ticket-filters', archiveMode, appliedSearch, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
@@ -256,6 +282,18 @@ const HeaderSearch: React.FC = () => {
     })),
     [assigneesRes],
   );
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: async (payload: { ids: string[]; assigneeID: number }) => {
+      await Promise.all(payload.ids.map((id) => ticketsApi.assign(id, payload.assigneeID)));
+    },
+    onSuccess: () => {
+      message.success('Исполнитель назначен');
+      clearSelectedTicketIDs();
+      void queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось выполнить массовое назначение'),
+  });
 
   const presets = useMemo<TicketPreset[]>(() => {
     const raw = (user?.profile_config as { tickets?: { filters?: { presets?: TicketPreset[] } } } | undefined)?.tickets?.filters?.presets;
@@ -647,10 +685,13 @@ const HeaderSearch: React.FC = () => {
             <Select
               mode="multiple"
               value={selectedTableColumns}
-              onChange={(values) => updateTicketParams({
-                table_columns: values.length && values.length < TABLE_COLUMN_KEYS.length ? values.join(',') : undefined,
-              })}
-              options={TABLE_COLUMN_OPTIONS}
+              onChange={(values) => {
+                const normalized = tableColumnOrder.filter((key) => values.includes(key));
+                updateTicketParams({
+                  table_columns: normalized.length ? normalized.join(',') : undefined,
+                });
+              }}
+              options={tableColumnOptions}
               style={{ flex: 1, minWidth: 0 }}
             />
           )}
@@ -769,6 +810,19 @@ const HeaderSearch: React.FC = () => {
 
     return (
       <Space size="small" wrap style={{ justifyContent: 'center' }}>
+        {selectedTicketIDs.length >= 1 && archiveMode !== 'archive' && (
+          <Select
+            placeholder={`Исполнитель (${selectedTicketIDs.length})`}
+            options={assigneeOptions}
+            loading={!assigneesRes || bulkAssignMutation.isPending}
+            style={{ width: isCompact ? 190 : 230 }}
+            onChange={(value) => {
+              const next = Number(value);
+              if (!next || selectedTicketIDs.length === 0) return;
+              bulkAssignMutation.mutate({ ids: selectedTicketIDs, assigneeID: next });
+            }}
+          />
+        )}
         <Segmented
           value={archiveMode}
           options={[

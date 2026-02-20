@@ -531,3 +531,25 @@ func (r *ticketRepo) ListResolvedForAutoClose(ctx context.Context, threshold tim
 	}
 	return items, nil
 }
+
+func (r *ticketRepo) ListExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]tickets.Ticket, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	var items []tickets.Ticket
+	err := r.db.WithContext(ctx).
+		Where("status = ?", tickets.StatusDeferred).
+		Where("deferred_until IS NOT NULL").
+		Where("deferred_until <= ?", now).
+		Order("deferred_until ASC").
+		Limit(limit).
+		Find(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}

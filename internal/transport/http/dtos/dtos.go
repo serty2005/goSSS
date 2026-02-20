@@ -190,6 +190,8 @@ type TicketListDTO struct {
 	BitrixDealTitle      string     `json:"bitrix_deal_title"`
 	BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
 	BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
+	DeferredUntil        *time.Time `json:"deferred_until,omitempty"`
+	DeferredByID         *uint      `json:"deferred_by_id,omitempty"`
 	Assignee             *struct {
 		ID       uint   `json:"id"`
 		FullName string `json:"full_name"`
@@ -210,8 +212,9 @@ type TicketChangeCompanyDTO struct {
 
 // TicketStatusChangeDTO - запрос на смену статуса.
 type TicketStatusChangeDTO struct {
-	Status  string `json:"status" validate:"required"`
-	Comment string `json:"comment"` // Опциональный комментарий при смене статуса
+	Status        string `json:"status" validate:"required"`
+	Comment       string `json:"comment"` // Опциональный комментарий при смене статуса
+	DeferredUntil string `json:"deferred_until"`
 }
 
 // TicketCreateInternalDTO - создание тикета вручную (через API).
@@ -397,6 +400,7 @@ type UserDTO struct {
 	LastName         string                   `json:"last_name"`
 	Position         string                   `json:"position"`
 	Roles            []string                 `json:"roles"`
+	BitrixEnabled    bool                     `json:"bitrix_enabled"`
 	ExternalSystemID *string                  `json:"external_system_id,omitempty"`
 	ExternalType     *string                  `json:"external_type,omitempty"`
 	ScheduleType     string                   `json:"schedule_type"`

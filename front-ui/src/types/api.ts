@@ -248,6 +248,8 @@ export interface TicketListItemDTO {
   bitrix_deal_title?: string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
+  deferred_until?: string;
+  deferred_by_id?: number;
   assignee?: {
     id: number;
     full_name: string;
@@ -283,6 +285,8 @@ export interface TicketDTO {
   bitrix_deal_title?: string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
+  deferred_until?: string;
+  deferred_by_id?: number;
 }
 
 export interface TicketCreatePayload {
@@ -455,6 +459,7 @@ export interface UserAdminDTO {
   last_name: string;
   position: UserPosition;
   roles: string[];
+  bitrix_enabled?: boolean;
   external_system_id?: string;
   external_type?: string;
   schedule_type: UserSchedule;
@@ -498,6 +503,27 @@ export interface UserInterfaceConfigDTO {
 
 export interface UserProfileConfigDTO {
   interface?: UserInterfaceConfigDTO;
+  notifications?: {
+    personal_enabled?: boolean;
+    common_enabled?: boolean;
+    common_ticket_updates?: boolean;
+    common_equipment_updates?: boolean;
+    common_comments?: boolean;
+    common_deferred_due?: boolean;
+    ticket_subscriptions_only?: boolean;
+  };
+  tickets?: {
+    comments_new_first?: boolean;
+    subscriptions?: string[];
+    filters?: {
+      presets?: Array<{
+        id: string;
+        name: string;
+        values: Record<string, string>;
+      }>;
+      last_state?: Record<string, string>;
+    };
+  };
   [key: string]: unknown;
 }
 

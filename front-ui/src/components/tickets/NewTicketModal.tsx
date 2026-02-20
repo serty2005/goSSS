@@ -19,6 +19,8 @@ interface Props {
   onCreated?: () => void;
 }
 
+const ACTIVE_TICKET_STATUSES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
+
 const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreated }) => {
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
@@ -29,7 +31,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
   const syncWithBitrix = Form.useWatch('sync_with_bitrix', form) as boolean | undefined;
   const user = useAuthStore((state) => state.user);
-  const canDisableBitrixSync = isAdmin(user?.roles);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
+  const canDisableBitrixSync = isBitrixEnabled && isAdmin(user?.roles);
 
   const renderCompanyOptionLabel = (title: string, parentTitle?: string) => {
     const parts = getCompanyHierarchyParts(title, parentTitle);
@@ -110,7 +113,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue({
-      sync_with_bitrix: true,
+      sync_with_bitrix: isBitrixEnabled,
       assignee_id: user?.id,
     });
     if (presetCompany?.id) {
@@ -124,7 +127,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       form.setFieldsValue({ company_id: presetCompany.id });
     }
 
-  }, [open, presetCompany, form, user?.id]);
+  }, [open, presetCompany, form, isBitrixEnabled, user?.id]);
 
   useEffect(() => {
     if (syncWithBitrix === false) {
@@ -151,7 +154,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const { data: bitrixServicePoints = [], isLoading: isBitrixPointsLoading } = useQuery({
     queryKey: ['bitrix-service-points'],
     queryFn: () => ticketsApi.getBitrixServicePoints(),
-    enabled: open,
+    enabled: open && isBitrixEnabled,
     staleTime: 5 * 60_000,
   });
   const bitrixPointsOptions = useMemo(() => {
@@ -301,10 +304,23 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     [assigneesResponse?.data],
   );
 
+  const { data: activeTicketsResponse, isLoading: isActiveTicketsLoading } = useQuery({
+    queryKey: ['company-active-tickets', selectedCompanyId],
+    queryFn: () => ticketsApi.getTickets({
+      company_id: selectedCompanyId,
+      status: ACTIVE_TICKET_STATUSES.join(','),
+      limit: 20,
+      archive_mode: 'active',
+    }),
+    enabled: open && Boolean(selectedCompanyId),
+    staleTime: 20_000,
+  });
+  const activeTickets = useMemo(() => activeTicketsResponse?.data || [], [activeTicketsResponse?.data]);
+
   const createMutation = useMutation({
     mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; bitrix_deal_title?: string }) => {
       const description = values.description.trim();
-      const effectiveSyncWithBitrix = canDisableBitrixSync ? values.sync_with_bitrix !== false : true;
+      const effectiveSyncWithBitrix = isBitrixEnabled && (canDisableBitrixSync ? values.sync_with_bitrix !== false : true);
       return ticketsApi.createTicket({
         company_id: values.company_id,
         type: values.type,
@@ -432,6 +448,30 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
               </div>
             )}
 
+            {selectedCompanyId && (
+              <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
+                {isActiveTicketsLoading ? (
+                  <div style={{ textAlign: 'center', padding: 16 }}>
+                    <Spin />
+                  </div>
+                ) : activeTickets.length === 0 ? (
+                  <Empty description="Активных тикетов нет" />
+                ) : (
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    {activeTickets.map((ticket) => (
+                      <Card key={ticket.id} size="small" className="glass-panel">
+                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                          <Text strong>#{ticket.number} • {ticket.status}</Text>
+                          <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
+                          <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                        </Space>
+                      </Card>
+                    ))}
+                  </Space>
+                )}
+              </Card>
+            )}
+
             <Form.Item
               name="type"
               label="Тип заявки"
@@ -462,58 +502,62 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
               />
             </Form.Item>
 
-            <Form.Item
-              name="sync_with_bitrix"
-              valuePropName="checked"
-              tooltip={canDisableBitrixSync ? undefined : 'Только администратор может отключить синхронизацию'}
-            >
-              <Checkbox disabled={!canDisableBitrixSync}>
-                Синхронизировать с B24
-              </Checkbox>
-            </Form.Item>
+            {isBitrixEnabled && (
+              <>
+                <Form.Item
+                  name="sync_with_bitrix"
+                  valuePropName="checked"
+                  tooltip={canDisableBitrixSync ? undefined : 'Только администратор может отключить синхронизацию'}
+                >
+                  <Checkbox disabled={!canDisableBitrixSync}>
+                    Синхронизировать с B24
+                  </Checkbox>
+                </Form.Item>
 
-            <Form.Item
-              name="bitrix_service_point_id"
-              label="Точка обслуживания (Bitrix24)"
-              rules={[
-                {
-                  validator: (_, value) => {
-                    if (syncWithBitrix === false) return Promise.resolve();
-                    if (value === undefined || value === null || value === '') {
-                      return Promise.reject(new Error('Выберите точку обслуживания Bitrix24'));
-                    }
-                    return Promise.resolve();
-                  },
-                },
-              ]}
-            >
-              <Select
-                showSearch
-                placeholder="Выберите точку обслуживания"
-                loading={isBitrixPointsLoading}
-                optionFilterProp="label"
-                options={bitrixPointsOptions}
-                disabled={syncWithBitrix === false}
-              />
-            </Form.Item>
+                <Form.Item
+                  name="bitrix_service_point_id"
+                  label="Точка обслуживания (Bitrix24)"
+                  rules={[
+                    {
+                      validator: (_, value) => {
+                        if (syncWithBitrix === false) return Promise.resolve();
+                        if (value === undefined || value === null || value === '') {
+                          return Promise.reject(new Error('Выберите точку обслуживания Bitrix24'));
+                        }
+                        return Promise.resolve();
+                      },
+                    },
+                  ]}
+                >
+                  <Select
+                    showSearch
+                    placeholder="Выберите точку обслуживания"
+                    loading={isBitrixPointsLoading}
+                    optionFilterProp="label"
+                    options={bitrixPointsOptions}
+                    disabled={syncWithBitrix === false}
+                  />
+                </Form.Item>
 
-            <Form.Item
-              name="bitrix_deal_title"
-              label="Заголовок сделки (Bitrix24)"
-              rules={[
-                {
-                  validator: (_, value) => {
-                    if (syncWithBitrix === false) return Promise.resolve();
-                    if (!String(value || '').trim()) {
-                      return Promise.reject(new Error('Заполните заголовок сделки Bitrix24'));
-                    }
-                    return Promise.resolve();
-                  },
-                },
-              ]}
-            >
-              <Input placeholder="Введите заголовок сделки для Bitrix24" disabled={syncWithBitrix === false} />
-            </Form.Item>
+                <Form.Item
+                  name="bitrix_deal_title"
+                  label="Заголовок сделки (Bitrix24)"
+                  rules={[
+                    {
+                      validator: (_, value) => {
+                        if (syncWithBitrix === false) return Promise.resolve();
+                        if (!String(value || '').trim()) {
+                          return Promise.reject(new Error('Заполните заголовок сделки Bitrix24'));
+                        }
+                        return Promise.resolve();
+                      },
+                    },
+                  ]}
+                >
+                  <Input placeholder="Введите заголовок сделки для Bitrix24" disabled={syncWithBitrix === false} />
+                </Form.Item>
+              </>
+            )}
 
             <Form.Item
               name="description"

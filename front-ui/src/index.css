@@ -40,6 +40,11 @@ body {
   border: 1.5px solid var(--app-color-border-strong);
 }
 
+.tickets-table .ant-table-container table {
+  width: 100%;
+  min-width: max-content;
+}
+
 .tickets-table .ant-table-container table > thead > tr > th,
 .tickets-table .ant-table-container table > tbody > tr > td {
   border-right: 1.5px solid var(--app-color-border-strong);
@@ -250,6 +255,23 @@ body {
 .ticket-overview-comments-card,
 .ticket-overview-side-card {
   height: 100%;
+}
+
+.profile-notification-advanced {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-8px);
+  transform-origin: top;
+  pointer-events: none;
+  transition: max-height 0.28s ease, opacity 0.22s ease, transform 0.22s ease;
+}
+
+.profile-notification-advanced.is-open {
+  max-height: 220px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .ticket-overview-side-card {

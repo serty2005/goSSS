@@ -78,6 +78,7 @@ type TicketRepository interface {
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
 	ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]Ticket, error)
+	ListExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]Ticket, error)
 	ArchiveStale(ctx context.Context, threshold time.Duration) (int64, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error

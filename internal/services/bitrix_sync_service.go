@@ -197,6 +197,9 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 	if ticket == nil || ticket.IsArchived || !ticket.SyncWithBitrix {
 		return nil
 	}
+	if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID <= 0 {
+		return nil
+	}
 
 	link, err := s.repo.GetDealLinkByTicketID(ctx, ticketID)
 	if err != nil {

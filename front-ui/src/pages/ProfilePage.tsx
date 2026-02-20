@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { App as AntdApp, Button, Card, Form, Input, Select, Space, Typography } from 'antd';
+import {
+  App as AntdApp,
+  Button,
+  Card,
+  Col,
+  Divider,
+  Form,
+  Input,
+  Row,
+  Select,
+  Space,
+  Switch,
+  Typography,
+} from 'antd';
 import { profileApi } from '@/api/profile';
 import { useAuthStore } from '@/store/authStore';
 
@@ -11,7 +24,18 @@ type CredentialsForm = {
   password?: string;
   confirmPassword?: string;
   cards_columns?: number;
-  integrations?: Array<{ integration_type?: string; external_id?: string; is_locked?: boolean; is_verified?: boolean; verified_name?: string }>;
+  notifications_personal_enabled?: boolean;
+  notifications_common_enabled?: boolean;
+  notifications_common_ticket_updates?: boolean;
+  notifications_common_deferred_due?: boolean;
+  comments_new_first?: boolean;
+  integrations?: Array<{
+    integration_type?: string;
+    external_id?: string;
+    is_locked?: boolean;
+    is_verified?: boolean;
+    verified_name?: string;
+  }>;
 };
 
 const integrationOptions = [
@@ -24,7 +48,12 @@ const ProfilePage: React.FC = () => {
   const { message } = AntdApp.useApp();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
   const [form] = Form.useForm<CredentialsForm>();
+  const availableIntegrationOptions = useMemo(
+    () => (isBitrixEnabled ? integrationOptions : integrationOptions.filter((item) => item.value !== 'bitrix24')),
+    [isBitrixEnabled],
+  );
 
   const profileQuery = useQuery({
     queryKey: ['profile-me'],
@@ -40,22 +69,62 @@ const ProfilePage: React.FC = () => {
   }, [profileQuery.data?.data, setUser]);
 
   const initialIntegrations = useMemo(() => {
-    return (user?.integrations || []).map((item) => ({
+    return (user?.integrations || [])
+      .filter((item) => isBitrixEnabled || item.integration_type !== 'bitrix24')
+      .map((item) => ({
       integration_type: item.integration_type,
       external_id: item.external_id,
       is_locked: item.is_locked,
       is_verified: item.is_verified,
       verified_name: item.verified_name,
     }));
-  }, [user?.integrations]);
+  }, [isBitrixEnabled, user?.integrations]);
+
+  const notificationsConfig = useMemo(() => {
+    const cfg = (user?.profile_config || {}) as {
+      notifications?: {
+        personal_enabled?: boolean;
+        common_enabled?: boolean;
+        common_ticket_updates?: boolean;
+        common_comments?: boolean;
+        common_deferred_due?: boolean;
+        ticket_subscriptions_only?: boolean;
+      };
+      tickets?: {
+        comments_new_first?: boolean;
+      };
+      interface?: {
+        search?: {
+          cards_columns?: number;
+        };
+      };
+    };
+
+    return {
+      cardsColumns: Number(cfg.interface?.search?.cards_columns ?? 5),
+      personalEnabled: cfg.notifications?.personal_enabled !== false,
+      commonEnabled: cfg.notifications?.common_enabled !== false,
+      commonTicketUpdates:
+        cfg.notifications?.common_ticket_updates !== false
+        || cfg.notifications?.common_comments !== false
+        || cfg.notifications?.ticket_subscriptions_only === true,
+      commonDeferredDue: cfg.notifications?.common_deferred_due !== false,
+      commentsNewFirst: cfg.tickets?.comments_new_first !== false,
+    };
+  }, [user?.profile_config]);
 
   useEffect(() => {
     form.setFieldsValue({
       username: user?.username || '',
       integrations: initialIntegrations,
-      cards_columns: Number(user?.profile_config?.interface?.search?.cards_columns ?? 5),
+      cards_columns: notificationsConfig.cardsColumns,
+      notifications_personal_enabled: notificationsConfig.personalEnabled,
+      notifications_common_enabled: notificationsConfig.commonEnabled,
+      notifications_common_ticket_updates: notificationsConfig.commonTicketUpdates,
+      notifications_common_deferred_due: notificationsConfig.commonDeferredDue,
+      comments_new_first: notificationsConfig.commentsNewFirst,
     });
-  }, [form, initialIntegrations, user?.profile_config?.interface?.search?.cards_columns, user?.username]);
+  }, [form, initialIntegrations, notificationsConfig, user?.username]);
 
   const updateCredentialsMutation = useMutation({
     mutationFn: (payload: { username?: string; password?: string }) => profileApi.updateCredentials(payload),
@@ -104,11 +173,23 @@ const ProfilePage: React.FC = () => {
         external_id: String(item.external_id || '').trim(),
       }))
       .filter((item) => item.integration_type && item.external_id);
+    const hiddenBitrixIntegrations = isBitrixEnabled
+      ? []
+      : (user.integrations || [])
+        .filter((item) => item.integration_type === 'bitrix24' && String(item.external_id || '').trim())
+        .map((item) => ({
+          integration_type: item.integration_type,
+          external_id: item.external_id,
+        }));
+    const nextIntegrationsPayload = [...normalizedIntegrations, ...hiddenBitrixIntegrations];
 
-    const currentIntegrations = (user.integrations || [])
+    const currentIntegrations = ((isBitrixEnabled
+      ? (user.integrations || [])
+      : (user.integrations || []).filter((item) => item.integration_type !== 'bitrix24'))
+    )
       .map((item) => `${item.integration_type}:${item.external_id}`)
       .sort();
-    const nextIntegrations = normalizedIntegrations
+    const nextIntegrations = nextIntegrationsPayload
       .map((item) => `${item.integration_type}:${item.external_id}`)
       .sort();
     const integrationsChanged = currentIntegrations.join('|') !== nextIntegrations.join('|');
@@ -121,9 +202,48 @@ const ProfilePage: React.FC = () => {
     const nextColumns = Number.isFinite(nextColumnsRaw)
       ? Math.max(1, Math.min(5, Math.round(nextColumnsRaw)))
       : currentColumns;
-    const columnsChanged = nextColumns !== currentColumns;
 
-    if (!credentialsPayload.username && !credentialsPayload.password && !integrationsChanged && !columnsChanged) {
+    const currentNotifications = {
+      personal_enabled: (user.profile_config as any)?.notifications?.personal_enabled !== false,
+      common_enabled: (user.profile_config as any)?.notifications?.common_enabled !== false,
+      common_ticket_updates: (user.profile_config as any)?.notifications?.common_ticket_updates !== false,
+      common_deferred_due: (user.profile_config as any)?.notifications?.common_deferred_due !== false,
+    };
+
+    const nextNotifications = {
+      personal_enabled: values.notifications_personal_enabled !== false,
+      common_enabled: values.notifications_common_enabled !== false,
+      common_ticket_updates: values.notifications_common_ticket_updates !== false,
+      common_deferred_due: values.notifications_common_deferred_due !== false,
+      common_comments: values.notifications_common_ticket_updates !== false,
+      ticket_subscriptions_only: values.notifications_common_ticket_updates !== false,
+      common_equipment_updates: false,
+    };
+
+    const currentTicketsConfig = {
+      comments_new_first: (user.profile_config as any)?.tickets?.comments_new_first !== false,
+    };
+
+    const nextTicketsConfig = {
+      comments_new_first: values.comments_new_first !== false,
+    };
+
+    const configChanged = (
+      nextColumns !== currentColumns
+      || JSON.stringify(currentNotifications) !== JSON.stringify(nextNotifications)
+      || JSON.stringify(currentTicketsConfig) !== JSON.stringify(nextTicketsConfig)
+    );
+    const configFieldsTouched = form.isFieldsTouched([
+      'cards_columns',
+      'comments_new_first',
+      'notifications_personal_enabled',
+      'notifications_common_enabled',
+      'notifications_common_ticket_updates',
+      'notifications_common_deferred_due',
+    ], false);
+    const configNeedsSave = configChanged || configFieldsTouched;
+
+    if (!credentialsPayload.username && !credentialsPayload.password && !integrationsChanged && !configNeedsSave) {
       message.info('Нет изменений для сохранения');
       return;
     }
@@ -135,14 +255,14 @@ const ProfilePage: React.FC = () => {
 
       let updatedUser = user;
       if (integrationsChanged) {
-        const response = await updateIntegrationsMutation.mutateAsync({ integrations: normalizedIntegrations });
+        const response = await updateIntegrationsMutation.mutateAsync({ integrations: nextIntegrationsPayload });
         const dtoUser = (response as any)?.data;
         if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
           updatedUser = { ...updatedUser, ...dtoUser };
         } else {
           updatedUser = {
             ...updatedUser,
-            integrations: normalizedIntegrations.map((item, index) => ({
+            integrations: nextIntegrationsPayload.map((item, index) => ({
               id: index + 1,
               integration_type: item.integration_type,
               external_id: item.external_id,
@@ -152,7 +272,7 @@ const ProfilePage: React.FC = () => {
         }
       }
 
-      if (columnsChanged) {
+      if (configNeedsSave) {
         const nextConfig = {
           ...(updatedUser.profile_config || {}),
           interface: {
@@ -161,6 +281,14 @@ const ProfilePage: React.FC = () => {
               ...((updatedUser.profile_config || {}).interface?.search || {}),
               cards_columns: nextColumns,
             },
+          },
+          notifications: {
+            ...((updatedUser.profile_config || {}).notifications || {}),
+            ...nextNotifications,
+          },
+          tickets: {
+            ...((updatedUser.profile_config || {}).tickets || {}),
+            ...nextTicketsConfig,
           },
         };
         const configResponse = await updateConfigMutation.mutateAsync({ profile_config: nextConfig });
@@ -185,18 +313,20 @@ const ProfilePage: React.FC = () => {
     }
   };
 
+  const commonEnabled = Form.useWatch('notifications_common_enabled', form);
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card className="glass-panel">
         <Title level={4} style={{ marginBottom: 0 }}>Профиль</Title>
-        <Text type="secondary">Логин, пароль и внешние интеграции</Text>
+        <Text type="secondary">Логин, пароль, интеграции и персональные настройки интерфейса</Text>
       </Card>
 
-      {user?.bitrix_suggestion && (
+      {isBitrixEnabled && user?.bitrix_suggestion && (
         <Card className="glass-panel">
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space direction="vertical" size={0}>
-              <Text strong>Есть пользователь в Битрикс - Синхронизировать?</Text>
+              <Text strong>Найден пользователь в Bitrix24. Синхронизировать?</Text>
               <Text type="secondary">{user.bitrix_suggestion.name} (ID: {user.bitrix_suggestion.b24_user_id})</Text>
             </Space>
             <Button type="primary" onClick={() => applySuggestionMutation.mutate()} loading={applySuggestionMutation.isPending}>
@@ -206,95 +336,156 @@ const ProfilePage: React.FC = () => {
         </Card>
       )}
 
-      <Card className="glass-panel" title="Учётные данные и интеграции" loading={profileQuery.isLoading}>
+      <Card className="glass-panel" loading={profileQuery.isLoading}>
         <Form<CredentialsForm>
           form={form}
           layout="vertical"
           initialValues={{
             username: user?.username || '',
             integrations: initialIntegrations,
-            cards_columns: Number(user?.profile_config?.interface?.search?.cards_columns ?? 5),
           }}
           onFinish={onFinish}
         >
-          <Form.Item name="username" label="Логин" rules={[{ required: true, message: 'Введите логин' }]}>
-            <Input placeholder="Логин" />
-          </Form.Item>
+          <Row gutter={[16, 16]} align="stretch">
+            <Col xs={24} xl={16}>
+              <Card size="small" title="Логин, пароль и интеграции" style={{ height: '100%' }}>
+                <Form.Item name="username" label="Логин" rules={[{ required: true, message: 'Введите логин' }]}>
+                  <Input placeholder="Логин" />
+                </Form.Item>
 
-          <Form.Item name="password" label="Новый пароль" rules={[{ min: 6, message: 'Минимум 6 символов' }]}>
-            <Input.Password placeholder="Оставьте пустым, если без изменений" />
-          </Form.Item>
+                <Form.Item name="password" label="Новый пароль" rules={[{ min: 6, message: 'Минимум 6 символов' }]}>
+                  <Input.Password placeholder="Оставьте пустым, если без изменений" />
+                </Form.Item>
 
-          <Form.Item
-            name="confirmPassword"
-            label="Подтверждение пароля"
-            dependencies={['password']}
-            rules={[
-              ({ getFieldValue }) => ({
-                validator(_, value) {
-                  if (!getFieldValue('password') || !value || getFieldValue('password') === value) {
-                    return Promise.resolve();
-                  }
-                  return Promise.reject(new Error('Пароли не совпадают'));
-                },
-              }),
-            ]}
-          >
-            <Input.Password placeholder="Повторите пароль" />
-          </Form.Item>
+                <Form.Item
+                  name="confirmPassword"
+                  label="Подтверждение пароля"
+                  dependencies={['password']}
+                  rules={[
+                    ({ getFieldValue }) => ({
+                      validator(_, value) {
+                        if (!getFieldValue('password') || !value || getFieldValue('password') === value) {
+                          return Promise.resolve();
+                        }
+                        return Promise.reject(new Error('Пароли не совпадают'));
+                      },
+                    }),
+                  ]}
+                >
+                  <Input.Password placeholder="Повторите пароль" />
+                </Form.Item>
 
-          <Form.List name="integrations">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Text strong>Интеграции</Text>
-                {fields.map((field) => (
-                  <Space key={field.key} style={{ display: 'flex', width: '100%' }} align="start">
-                    <Form.Item
-                      name={[field.name, 'integration_type']}
-                      label="Система"
-                      rules={[{ required: true, message: 'Выберите систему' }]}
-                      style={{ minWidth: 180, marginBottom: 0 }}
-                    >
-                      <Select options={integrationOptions} placeholder="Система" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, 'external_id']}
-                      label="ID"
-                      rules={[{ required: true, message: 'Введите ID' }]}
-                      style={{ flex: 1, marginBottom: 0 }}
-                    >
-                      <Input placeholder="ID во внешней системе" disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))} />
-                    </Form.Item>
-                    <Button onClick={() => remove(field.name)} danger style={{ marginTop: 30 }}>
-                      Удалить
-                    </Button>
-                  </Space>
-                ))}
-                <Button onClick={() => add()} type="dashed" block>
-                  + Добавить интеграцию
-                </Button>
-              </Space>
-            )}
-          </Form.List>
+                <Form.List name="integrations">
+                  {(fields, { add, remove }) => (
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <Text strong>Интеграции</Text>
+                      {fields.map((field) => (
+                        <Space key={field.key} style={{ display: 'flex', width: '100%' }} align="start">
+                          <Form.Item
+                            name={[field.name, 'integration_type']}
+                            label="Система"
+                            rules={[{ required: true, message: 'Выберите систему' }]}
+                            style={{ minWidth: 180, marginBottom: 0 }}
+                          >
+                            <Select
+                              options={availableIntegrationOptions}
+                              placeholder="Система"
+                              disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))}
+                            />
+                          </Form.Item>
+                          <Form.Item
+                            name={[field.name, 'external_id']}
+                            label="ID"
+                            rules={[{ required: true, message: 'Введите ID' }]}
+                            style={{ flex: 1, marginBottom: 0 }}
+                          >
+                            <Input
+                              placeholder="Внешний ID"
+                              disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))}
+                            />
+                          </Form.Item>
+                          <Button
+                            danger
+                            onClick={() => remove(field.name)}
+                            disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))}
+                          >
+                            Удалить
+                          </Button>
+                        </Space>
+                      ))}
+                      <Button onClick={() => add({ integration_type: undefined, external_id: '' })}>Добавить интеграцию</Button>
+                    </Space>
+                  )}
+                </Form.List>
 
-          <Form.Item name="cards_columns" label="Количество колонок карточек в поиске">
-            <Select
-              options={[
-                { value: 1, label: '1 колонка' },
-                { value: 2, label: '2 колонки' },
-                { value: 3, label: '3 колонки' },
-                { value: 4, label: '4 колонки' },
-                { value: 5, label: '5 колонок' },
-              ]}
-              style={{ maxWidth: 220 }}
-            />
-          </Form.Item>
+                <Divider />
+
+                <Text strong>Интерфейс</Text>
+                <Form.Item name="cards_columns" label="Колонок карточек в поиске" style={{ marginTop: 12 }}>
+                  <Select
+                    options={[
+                      { value: 1, label: '1' },
+                      { value: 2, label: '2' },
+                      { value: 3, label: '3' },
+                      { value: 4, label: '4' },
+                      { value: 5, label: '5' },
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  name="comments_new_first"
+                  label="Комментарии в тикете: новые сверху"
+                  valuePropName="checked"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Switch />
+                </Form.Item>
+              </Card>
+            </Col>
+
+            <Col xs={24} xl={8}>
+              <Card size="small" title="Настройки оповещений" style={{ height: '100%' }}>
+                <Form.Item
+                  name="notifications_personal_enabled"
+                  label="Личные уведомления в строке Header"
+                  valuePropName="checked"
+                  style={{ marginBottom: 12 }}
+                >
+                  <Switch />
+                </Form.Item>
+
+                <Form.Item name="notifications_common_enabled" label="Общие уведомления включены" valuePropName="checked" style={{ marginBottom: 12 }}>
+                  <Switch />
+                </Form.Item>
+
+                <div className={`profile-notification-advanced ${commonEnabled ? 'is-open' : ''}`}>
+                  <Form.Item
+                    name="notifications_common_ticket_updates"
+                    label="Уведомления по тикетам (описание, статус, комментарии, подписки)"
+                    valuePropName="checked"
+                    style={{ marginBottom: 12 }}
+                  >
+                    <Switch disabled={!commonEnabled} />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="notifications_common_deferred_due"
+                    label="Срабатывание статуса «Отложено»"
+                    valuePropName="checked"
+                    style={{ marginBottom: 0 }}
+                  >
+                    <Switch disabled={!commonEnabled} />
+                  </Form.Item>
+                </div>
+              </Card>
+            </Col>
+          </Row>
 
           <Button
             type="primary"
             htmlType="submit"
             loading={updateCredentialsMutation.isPending || updateIntegrationsMutation.isPending || updateConfigMutation.isPending}
-            style={{ marginTop: 16 }}
           >
             Сохранить
           </Button>

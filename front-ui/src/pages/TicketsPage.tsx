@@ -5,6 +5,7 @@ import {
   Card,
   Col,
   Drawer,
+  DatePicker,
   Input,
   List,
   Popconfirm,
@@ -14,6 +15,7 @@ import {
   Space,
   Spin,
   Table,
+  Checkbox,
   Tag,
   Tooltip,
   Typography,
@@ -31,6 +33,7 @@ import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
 import { usersApi } from '@/api/users';
+import { profileApi } from '@/api/profile';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
 import NewTicketModal from '@/components/tickets/NewTicketModal';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
@@ -61,6 +64,7 @@ type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & {
   id?: string;
   width?: number;
   minWidth?: number;
+  isDragDisabled?: boolean;
   onResize?: (event: React.SyntheticEvent, data: { size: { width: number; height: number } }) => void;
   onResizeStart?: () => void;
   onResizeStop?: () => void;
@@ -102,8 +106,8 @@ const isClosedLikeStatus = (status?: string) => status === 'resolved' || status 
 const ACTIVE_STATUS_VALUES: TicketStatus[] = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const DATE_STAMP_MIN_WIDTH = '10ch';
 const TIME_STAMP_MIN_WIDTH = '5ch';
-const TABLE_COLUMN_KEYS = ['number', 'status', 'company_display', 'assignee_display', 'reporter_display', 'subject', 'bitrix_deal_title', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
-const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title');
+const TABLE_COLUMN_KEYS = ['selection', 'number', 'status', 'company_display', 'assignee_display', 'reporter_display', 'subject', 'bitrix_deal_title', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
+const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'selection');
 type TableColumnKey = (typeof TABLE_COLUMN_KEYS)[number];
 type TableSortKey = 'number' | 'assignee_display' | 'created_at' | 'last_activity';
 type TableSortOrder = 'asc' | 'desc';
@@ -112,6 +116,13 @@ const formatDateStamp = (value?: string) => ({
   date: value ? dayjs(value).format('DD.MM.YYYY') : '-',
   time: value ? dayjs(value).format('HH:mm') : '--:--',
 });
+
+const formatDeferredTooltip = (value?: string) => {
+  if (!value) return '';
+  const dt = dayjs(value);
+  if (!dt.isValid()) return '';
+  return `Отложено до ${dt.format('DD.MM.YYYY HH:mm')}`;
+};
 
 const TicketDateStamp: React.FC<{ label: string; value?: string }> = ({ label, value }) => {
   const stamp = formatDateStamp(value);
@@ -132,14 +143,11 @@ const BitrixSyncIndicator: React.FC<{
   compact?: boolean;
   onClick?: (event: React.MouseEvent) => void;
 }> = ({ sync, dealURL, compact, onClick }) => {
-  if (!sync) {
+  if (!sync || !dealURL) {
     return null;
   }
-  if (!dealURL) {
-    return <Tag color="processing">B24</Tag>;
-  }
   return (
-    <Tooltip title="Открыть сделку РІ Bitrix24">
+    <Tooltip title="Открыть сделку в Bitrix24">
       <a href={dealURL} target="_blank" rel="noreferrer" onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
         <Tag color="success" style={{ marginInlineEnd: 0 }}>
           {compact ? 'B24' : 'Синхронизировано B24'}
@@ -151,13 +159,13 @@ const BitrixSyncIndicator: React.FC<{
 };
 
 const estimateHeaderMinWidth = (title: string) => {
-  // Базовая оценка: ширина текста заголовка + отступы + РёРєРѕРЅРєР° drag-handle.
+  // Базовая оценка: ширина текста заголовка + отступы + иконка drag-handle.
   return Math.max(70, title.length * 8 + 20);
 };
 
 const ResizableHeaderCell = React.forwardRef<HTMLTableCellElement, HeaderCellProps>((props, ref) => {
   const { onResize, onResizeStart, onResizeStop, width, minWidth, children, ...rest } = props;
-  if (!width) {
+  if (!width || !onResize) {
     return (
       <th ref={ref} {...rest}>
         {children}
@@ -190,7 +198,8 @@ const ResizableHeaderCell = React.forwardRef<HTMLTableCellElement, HeaderCellPro
 
 ResizableHeaderCell.displayName = 'ResizableHeaderCell';
 
-const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing, children, ...rest }) => {
+const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing, isDragDisabled, children, ...rest }) => {
+  const sortableDisabled = Boolean(isResizing || isDragDisabled || !id);
   const {
     attributes,
     listeners,
@@ -199,13 +208,13 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing,
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: id || '', disabled: Boolean(isResizing) });
+  } = useSortable({ id: id || '', disabled: sortableDisabled });
 
   const mergedStyle: React.CSSProperties = {
     ...style,
     transform: CSS.Transform.toString(transform),
     transition,
-    cursor: 'move',
+    cursor: sortableDisabled ? 'default' : 'move',
     ...(isDragging ? { position: 'relative', zIndex: 2 } : {}),
   };
 
@@ -218,16 +227,18 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing,
     >
       <div className="tickets-table-header">
         <span className="tickets-table-header-title">{children}</span>
-        <span
-          ref={setActivatorNodeRef}
-          className={`tickets-table-drag-handle${isResizing ? ' is-disabled' : ''}`}
-          {...listeners}
-          onClick={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-          onTouchStart={(event) => event.stopPropagation()}
-        >
-          <MenuOutlined />
-        </span>
+        {!sortableDisabled && (
+          <span
+            ref={setActivatorNodeRef}
+            className={`tickets-table-drag-handle${isResizing ? ' is-disabled' : ''}`}
+            {...listeners}
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+          >
+            <MenuOutlined />
+          </span>
+        )}
       </div>
     </ResizableHeaderCell>
   );
@@ -239,10 +250,14 @@ const TicketsPage: React.FC = () => {
   const setSearchParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
   const createTicketRequestID = useTicketParamsStore((state) => state.createTicketRequestID);
   const clearCreateTicketRequest = useTicketParamsStore((state) => state.clearCreateTicketRequest);
+  const selectedTicketIDs = useTicketParamsStore((state) => state.selectedTicketIDs);
+  const setSelectedTicketIDs = useTicketParamsStore((state) => state.setSelectedTicketIDs);
   const searchParams = useMemo(() => new URLSearchParams(searchParamsRaw), [searchParamsRaw]);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
   const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
@@ -258,6 +273,7 @@ const TicketsPage: React.FC = () => {
   const [editingCommentDraft, setEditingCommentDraft] = useState('');
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const [pendingDeferredAt, setPendingDeferredAt] = useState<string>('');
   const [isResizingColumn, setIsResizingColumn] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -297,14 +313,20 @@ const TicketsPage: React.FC = () => {
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const effectiveStatus = effectiveStatusValues.join(',');
   const selectedTableColumnKeys = useMemo<TableColumnKey[]>(() => {
+    const allowedColumnKeys = isBitrixEnabled
+      ? TABLE_COLUMN_KEYS
+      : TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
+    const defaultColumnKeys = isBitrixEnabled
+      ? DEFAULT_TABLE_COLUMN_KEYS
+      : TABLE_COLUMN_KEYS.filter((key) => key !== 'selection' && key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
     if (!tableColumnsParam) {
-      return [...DEFAULT_TABLE_COLUMN_KEYS];
+      return [...defaultColumnKeys];
     }
     const values = tableColumnsParam
       .split(',')
-      .filter((value): value is TableColumnKey => (TABLE_COLUMN_KEYS as readonly string[]).includes(value));
-    return values.length ? values : [...DEFAULT_TABLE_COLUMN_KEYS];
-  }, [tableColumnsParam]);
+      .filter((value): value is TableColumnKey => (allowedColumnKeys as readonly string[]).includes(value));
+    return values.length ? values : [...defaultColumnKeys];
+  }, [isBitrixEnabled, tableColumnsParam]);
   const tableSort = useMemo<{ key: TableSortKey; order: TableSortOrder } | null>(() => {
     if (!tableSortParam) {
       return null;
@@ -318,6 +340,12 @@ const TicketsPage: React.FC = () => {
     }
     return null;
   }, [tableSortParam]);
+  const commentsNewFirst = ((user?.profile_config as any)?.tickets?.comments_new_first) !== false;
+  const ticketSubscriptions = useMemo<string[]>(() => {
+    const list = (user?.profile_config as any)?.tickets?.subscriptions;
+    if (!Array.isArray(list)) return [];
+    return list.map((item: unknown) => String(item).trim()).filter(Boolean);
+  }, [user?.profile_config]);
 
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
     queryKey: ['tickets', {
@@ -441,25 +469,31 @@ const TicketsPage: React.FC = () => {
   }, [infrastructure]);
 
   const comments = useMemo(
-    () =>
-      (details?.comments || []).map((item) => ({
+    () => {
+      const sorted = [...(details?.comments || [])].sort((a, b) => {
+        const delta = dayjs(a.creation_date).valueOf() - dayjs(b.creation_date).valueOf();
+        return commentsNewFirst ? -delta : delta;
+      });
+      return sorted.map((item) => ({
         id: item.uuid,
         author: item.author_name || 'Сотрудник',
         authorRaw: item.author_name || '',
         date: dayjs(item.creation_date).format('DD.MM.YYYY HH:mm'),
         text: item.text,
         isPrivate: item.is_private ?? false,
-      })),
-    [details?.comments],
+      }));
+    },
+    [commentsNewFirst, details?.comments],
   );
 
   const changeStatusMutation = useMutation({
-    mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string }) =>
-      ticketsApi.changeStatus(payload.id, payload.status, payload.comment),
+    mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string; deferredUntil?: string }) =>
+      ticketsApi.changeStatus(payload.id, payload.status, payload.comment, payload.deferredUntil),
     onSuccess: () => {
       message.success('Статус обновлён');
       setPendingStatus(null);
       setStatusComment('');
+      setPendingDeferredAt('');
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['ticket', selectedTicketId] });
     },
@@ -505,6 +539,17 @@ const TicketsPage: React.FC = () => {
     onError: () => message.error('Не удалось удалить комментарий'),
   });
 
+  const updateProfileConfigMutation = useMutation({
+    mutationFn: (config: Record<string, unknown>) => profileApi.updateConfig({ profile_config: config as any }),
+    onSuccess: (response) => {
+      const dtoUser = (response as any)?.data;
+      if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
+        setUser(dtoUser as any);
+      }
+    },
+  });
+
+
   const copyConnectionMutation = useMutation({
     mutationFn: async (payload: { id: string; label: string; value: string }) =>
       ticketsApi.recordConnectionCopy(payload.id, payload.label, payload.value),
@@ -548,6 +593,7 @@ const TicketsPage: React.FC = () => {
     setEditingCommentDraft('');
     setPendingStatus(null);
     setStatusComment('');
+    setPendingDeferredAt('');
   };
 
   useEffect(() => {
@@ -566,6 +612,29 @@ const TicketsPage: React.FC = () => {
       setEditingCommentDraft('');
     }
   }, [details?.comments, editingCommentID]);
+
+  useEffect(() => {
+    const visibleSet = new Set(visibleTickets.map((item) => item.id));
+    const next = selectedTicketIDs.filter((id) => visibleSet.has(id));
+    if (next.length !== selectedTicketIDs.length) {
+      setSelectedTicketIDs(next);
+    }
+  }, [selectedTicketIDs, setSelectedTicketIDs, visibleTickets]);
+
+  useEffect(() => {
+    if (!selectedTicketId) {
+      return;
+    }
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.ant-drawer')) {
+        return;
+      }
+      closeQuickModal();
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [selectedTicketId]);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -647,9 +716,11 @@ const TicketsPage: React.FC = () => {
         minWidth: estimateHeaderMinWidth('Статус'),
         render: (value: TicketStatus, row) => {
           const meta = statusMeta(value);
+          const deferredTitle = value === 'deferred' ? formatDeferredTooltip(row.deferred_until) : '';
+          const statusTag = <Tag color={meta.color}>{meta.label}</Tag>;
           return (
             <Space size={4}>
-              <Tag color={meta.color}>{meta.label}</Tag>
+              {deferredTitle ? <Tooltip title={deferredTitle}>{statusTag}</Tooltip> : statusTag}
               {row.is_common_contract && <Tag color="gold">Платный</Tag>}
             </Space>
           );
@@ -830,6 +901,7 @@ const TicketsPage: React.FC = () => {
     if (!over || active.id === over.id) return;
     const activeID = String(active.id);
     const overID = String(over.id);
+    if (activeID === 'selection' || overID === 'selection') return;
     setTableColumnsState((columns) => {
       const oldIndex = columns.findIndex((col) => col.key === activeID);
       const newIndex = columns.findIndex((col) => col.key === overID);
@@ -893,6 +965,7 @@ const TicketsPage: React.FC = () => {
         id: col.key as string,
         width: col.width,
         minWidth: (col as { minWidth?: number }).minWidth || 90,
+        isDragDisabled: columnKey === 'selection',
         onResize: handleResize(stateIndex),
         onResizeStart: () => setIsResizingColumn(true),
         onResizeStop: () => setIsResizingColumn(false),
@@ -900,6 +973,43 @@ const TicketsPage: React.FC = () => {
       }),
     };
   });
+  if (selectedTableColumnKeys.includes('selection')) {
+    tableColumns.unshift({
+      key: 'selection',
+      title: (
+        <Checkbox
+          checked={tableData.length > 0 && selectedTicketIDs.length === tableData.length}
+          indeterminate={selectedTicketIDs.length > 0 && selectedTicketIDs.length < tableData.length}
+          onChange={(event) => {
+            if (event.target.checked) {
+              setSelectedTicketIDs(tableData.map((item) => item.id));
+            } else {
+              setSelectedTicketIDs([]);
+            }
+          }}
+        />
+      ),
+      width: 44,
+      onHeaderCell: () => ({
+        id: 'selection',
+        width: 44,
+        minWidth: 44,
+        isDragDisabled: true,
+      }),
+      render: (_value: unknown, row: TableRow) => (
+        <Checkbox
+          checked={selectedTicketIDs.includes(row.id)}
+          onChange={() => {
+            const next = selectedTicketIDs.includes(row.id)
+              ? selectedTicketIDs.filter((item) => item !== row.id)
+              : [...selectedTicketIDs, row.id];
+            setSelectedTicketIDs(next);
+          }}
+          onClick={(event) => event.stopPropagation()}
+        />
+      ),
+    } as any);
+  }
 
   const applyAssigneeFilter = (assigneeID?: number) => {
     if (!assigneeID) return;
@@ -907,6 +1017,43 @@ const TicketsPage: React.FC = () => {
     params.set('assignee_ids', String(assigneeID));
     params.set('page', '1');
     setSearchParamsRaw(params.toString());
+  };
+
+  const toggleTicketSubscription = async () => {
+    if (!user || !selectedTicketId) {
+      return;
+    }
+    const current = ticketSubscriptions;
+    const exists = current.includes(selectedTicketId);
+    const nextSubscriptions = exists
+      ? current.filter((item) => item !== selectedTicketId)
+      : [...current, selectedTicketId];
+    const nextConfig = {
+      ...(user.profile_config || {}),
+      tickets: {
+        ...((user.profile_config || {}).tickets || {}),
+        subscriptions: nextSubscriptions,
+      },
+    };
+    setUser({ ...user, profile_config: nextConfig as any });
+    try {
+      await updateProfileConfigMutation.mutateAsync(nextConfig as any);
+      message.success(exists ? 'Подписка на тикет отключена' : 'Подписка на тикет включена');
+    } catch {
+      setUser(user);
+      message.error('Не удалось изменить подписку на тикет');
+    }
+  };
+
+  const onTicketRowClick = (ticketID: string, event?: React.MouseEvent) => {
+    if (event?.ctrlKey || event?.metaKey) {
+      const next = selectedTicketIDs.includes(ticketID)
+        ? selectedTicketIDs.filter((item) => item !== ticketID)
+        : [...selectedTicketIDs, ticketID];
+      setSelectedTicketIDs(next);
+      return;
+    }
+    setSelectedTicketId(ticketID);
   };
 
   return (
@@ -918,8 +1065,13 @@ const TicketsPage: React.FC = () => {
             dataSource={visibleTickets}
             renderItem={(item) => {
               const meta = statusMeta(item.status);
+              const deferredTitle = item.status === 'deferred' ? formatDeferredTooltip(item.deferred_until) : '';
               return (
-                <List.Item key={item.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedTicketId(item.id)}>
+                <List.Item
+                  key={item.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={(event) => onTicketRowClick(item.id, event as unknown as React.MouseEvent)}
+                >
                   <Space className="ticket-list-item-wrap">
                     <Space direction="vertical" size={0} className="ticket-list-main">
                       <Text className="ticket-company-centered" strong>{item.company_name || item.company_id}</Text>
@@ -930,14 +1082,16 @@ const TicketsPage: React.FC = () => {
                         >
                           <Text strong>#{item.number}</Text>
                         </Link>
-                        <Tag color={meta.color}>{meta.label}</Tag>
+                        {deferredTitle ? <Tooltip title={deferredTitle}><Tag color={meta.color}>{meta.label}</Tag></Tooltip> : <Tag color={meta.color}>{meta.label}</Tag>}
                         {item.is_common_contract && <Tag color="gold">Платный</Tag>}
-                        <BitrixSyncIndicator
-                          sync={item.sync_with_bitrix}
-                          dealURL={item.bitrix_deal_url}
-                          compact
-                          onClick={(event) => event.stopPropagation()}
-                        />
+                        {isBitrixEnabled && (
+                          <BitrixSyncIndicator
+                            sync={item.sync_with_bitrix}
+                            dealURL={item.bitrix_deal_url}
+                            compact
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        )}
                       </Space>
                       <Text>{resolveTicketSubjectFromDescription(item.description)}</Text>
                       {item.last_comment && (
@@ -965,9 +1119,14 @@ const TicketsPage: React.FC = () => {
           <Row gutter={[12, 12]}>
             {visibleTickets.map((item) => {
               const meta = statusMeta(item.status);
+              const deferredTitle = item.status === 'deferred' ? formatDeferredTooltip(item.deferred_until) : '';
               return (
                 <Col key={item.id} xs={24} md={12} xl={8}>
-                  <Card hoverable className="glass-panel" onClick={() => setSelectedTicketId(item.id)}>
+                  <Card
+                    hoverable
+                    className="glass-panel"
+                    onClick={(event) => onTicketRowClick(item.id, event as unknown as React.MouseEvent)}
+                  >
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <div className="ticket-card-top">
                         <div className="ticket-card-left">
@@ -977,12 +1136,14 @@ const TicketsPage: React.FC = () => {
                           >
                             <Text strong className="ticket-card-number">#{item.number}</Text>
                           </Link>
-                          <BitrixSyncIndicator
-                            sync={item.sync_with_bitrix}
-                            dealURL={item.bitrix_deal_url}
-                            compact
-                            onClick={(event) => event.stopPropagation()}
-                          />
+                          {isBitrixEnabled && (
+                            <BitrixSyncIndicator
+                              sync={item.sync_with_bitrix}
+                              dealURL={item.bitrix_deal_url}
+                              compact
+                              onClick={(event) => event.stopPropagation()}
+                            />
+                          )}
                         </div>
                         <div className="ticket-company-centered ticket-company-top">
                           {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
@@ -1000,7 +1161,7 @@ const TicketsPage: React.FC = () => {
                         </div>
                         <div className="ticket-card-right">
                           <Space size={4} className="ticket-card-status-wrap">
-                            <Tag color={meta.color}>{meta.label}</Tag>
+                            {deferredTitle ? <Tooltip title={deferredTitle}><Tag color={meta.color}>{meta.label}</Tag></Tooltip> : <Tag color={meta.color}>{meta.label}</Tag>}
                             {item.is_common_contract && <Tag color="gold">Платный</Tag>}
                           </Space>
                           <div className="ticket-card-assignee-right">
@@ -1071,14 +1232,17 @@ const TicketsPage: React.FC = () => {
                 size="small"
                 bordered
                 className="tickets-table"
+                style={{ width: '100%' }}
+                scroll={{ x: 'max-content' }}
                 pagination={false}
                 components={{
                   header: {
                     cell: DraggableHeaderCell,
                   },
                 }}
+                rowClassName={(record) => (selectedTicketIDs.includes(record.id) ? 'ant-table-row-selected' : '')}
                 onRow={(record) => ({
-                  onClick: () => setSelectedTicketId(record.id),
+                  onClick: (event) => onTicketRowClick(record.id, event),
                   style: { cursor: 'pointer' },
                 })}
               />
@@ -1097,6 +1261,7 @@ const TicketsPage: React.FC = () => {
       <Drawer
         open={Boolean(selectedTicketId)}
         onClose={closeQuickModal}
+        closable={false}
         width={656}
         title={
           metadata ? (
@@ -1134,7 +1299,7 @@ const TicketsPage: React.FC = () => {
                     changeStatusMutation.mutate({ id: selectedTicketId, status: 'in_progress' });
                   }}
                 >
-                  Вернуть РІ работу
+                  Вернуть в работу
                 </Button>
               ) : (
                 <Select
@@ -1143,6 +1308,11 @@ const TicketsPage: React.FC = () => {
                   style={{ width: 220 }}
                   onChange={(nextStatus: TicketStatus) => {
                     if (!selectedTicketId || nextStatus === metadata.status) {
+                      return;
+                    }
+                    if (nextStatus === 'deferred') {
+                      setPendingStatus(nextStatus);
+                      setPendingDeferredAt(dayjs().add(1, 'hour').toISOString());
                       return;
                     }
                     if (nextStatus === 'resolved') {
@@ -1158,8 +1328,16 @@ const TicketsPage: React.FC = () => {
                   }}
                 />
               )}
-              <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
+              {isBitrixEnabled && <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />}
+              {metadata.status === 'deferred' && metadata.deferred_until && (
+                <Tooltip title={formatDeferredTooltip(metadata.deferred_until)}>
+                  <Tag color="orange">Отложено</Tag>
+                </Tooltip>
+              )}
               <Text type="secondary">Исполнитель: {metadata.assignee?.full_name || 'Не назначен'}</Text>
+              <Button onClick={() => void toggleTicketSubscription()}>
+                {ticketSubscriptions.includes(String(metadata.id)) ? 'Отписаться' : 'Подписаться на тикет'}
+              </Button>
               <Button
                 onClick={() => {
                   if (!selectedTicketId) return;
@@ -1352,28 +1530,46 @@ const TicketsPage: React.FC = () => {
         onClose={() => {
           setPendingStatus(null);
           setStatusComment('');
+          setPendingDeferredAt('');
         }}
         width={420}
-        title="Завершение заявки"
+        title={pendingStatus === 'deferred' ? 'Отложить заявку' : 'Завершение заявки'}
         placement="right"
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Input.TextArea
-            rows={4}
-            value={statusComment}
-            onChange={(event) => setStatusComment(event.target.value)}
-            placeholder="Опишите итог выполнения заявки"
-          />
+          {pendingStatus === 'deferred' ? (
+            <DatePicker
+              showTime
+              style={{ width: '100%' }}
+              format="DD.MM.YYYY HH:mm"
+              value={pendingDeferredAt ? dayjs(pendingDeferredAt) : null}
+              onChange={(value) => setPendingDeferredAt(value ? value.toISOString() : '')}
+              placeholder="Выберите дату и время"
+            />
+          ) : (
+            <Input.TextArea
+              rows={4}
+              value={statusComment}
+              onChange={(event) => setStatusComment(event.target.value)}
+              placeholder="Опишите итог выполнения заявки"
+            />
+          )}
           <Button
             type="primary"
             loading={changeStatusMutation.isPending}
-            disabled={!statusComment.trim()}
+            disabled={pendingStatus === 'deferred' ? !pendingDeferredAt : !statusComment.trim()}
             onClick={() => {
-              if (!selectedTicketId || !pendingStatus || !statusComment.trim()) return;
+              if (!selectedTicketId || !pendingStatus) return;
+              if (pendingStatus === 'deferred') {
+                if (!pendingDeferredAt) return;
+                changeStatusMutation.mutate({ id: selectedTicketId, status: pendingStatus, deferredUntil: pendingDeferredAt });
+                return;
+              }
+              if (!statusComment.trim()) return;
               changeStatusMutation.mutate({ id: selectedTicketId, status: pendingStatus, comment: statusComment.trim() });
             }}
           >
-            Завершить заявку
+            {pendingStatus === 'deferred' ? 'Отложить' : 'Завершить заявку'}
           </Button>
         </Space>
       </Drawer>

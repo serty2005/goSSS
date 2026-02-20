@@ -79,7 +79,7 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 		companyRepo,
 		contractRepo,
 		nil,
-		&config.Config{CommonContractID: "common-contract"},
+		&config.Config{CommonContractID: "common-contract", EnableBitrixGateway: true},
 		nil,
 		nil,
 		nil,

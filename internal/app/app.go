@@ -71,6 +71,7 @@ type Application struct {
 	FRUpdateFounder       workers.FRUpdateFounder
 	SDEditor              workers.SDEditorWorker
 	StatusActualityWorker workers.StatusActualityWorker
+	DeferredTicketWorker  workers.DeferredTicketWorker
 	TicketGateway         gateways.TicketGateway
 	ContractGateway       gateways.ContractGateway
 	BitrixModule          *bitrixModule
@@ -390,6 +391,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, app.IntegrationManager)
 	app.SDEditor = workers.NewSDEditorWorker(app.Logger.With("component", "sdesk_editor_worker"), app.DB, app.EventBus, app.IntegrationManager, repos.TaskRepo, repos.LinkRepo, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
+	app.DeferredTicketWorker = workers.NewDeferredTicketWorker(app.Logger.With("component", "deferred_ticket_worker"), srvs.TicketService, app.EventBus, time.Minute)
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
 	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
 }
@@ -406,7 +408,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
-	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo)
+	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo, app.Config)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus)
@@ -639,6 +641,10 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 		go func() { defer wg.Done(); a.StatusActualityWorker.Start(ctx) }()
 	} else {
 		a.Logger.Info("Проверка актуальности статусов отключена.")
+	}
+	if a.DeferredTicketWorker != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.DeferredTicketWorker.Start(ctx) }()
 	}
 	if a.BitrixModule != nil {
 		a.BitrixModule.start(ctx, wg)

@@ -50,7 +50,7 @@ type TicketService interface {
 
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
-	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error)
+	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error)
 	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
 	UpdateComment(ctx context.Context, ticketID string, commentUUID string, comment string, userID uint, roles []string) (*tickets.TicketComment, error)
 	DeleteComment(ctx context.Context, ticketID string, commentUUID string, userID uint, roles []string) error
@@ -71,7 +71,13 @@ type TicketService interface {
 	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
 	UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error)
 	AutoCloseResolvedTickets(ctx context.Context, threshold time.Duration) (int, error)
+	ProcessExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]DeferredStatusActivation, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
+}
+
+type DeferredStatusActivation struct {
+	TicketID        string
+	RecipientUserID uint
 }
 
 type ticketServiceImpl struct {
@@ -196,8 +202,11 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if dto.SyncWithBitrix != nil {
 		syncWithBitrix = *dto.SyncWithBitrix
 	}
-	if !isAdminUser(author) {
+	if dto.SyncWithBitrix == nil && !isAdminUser(author) {
 		syncWithBitrix = true
+	}
+	if s.cfg == nil || !s.cfg.EnableBitrixGateway {
+		syncWithBitrix = false
 	}
 	resolvedBitrixServicePointID := dto.BitrixServicePointID
 	if syncWithBitrix && (resolvedBitrixServicePointID == nil || *resolvedBitrixServicePointID <= 0) {
@@ -305,7 +314,7 @@ func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*con
 }
 
 // ChangeStatus меняет статус тикета Рё пишет историю.
-func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, userID uint) (*tickets.Ticket, error) {
+func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error) {
 	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
@@ -335,11 +344,26 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		}
 	}
 
+	nextDeferredUntil := ticket.DeferredUntil
+	nextDeferredByID := ticket.DeferredByID
+	if status == tickets.StatusDeferred {
+		deferredUntil, parseErr := parseDeferredUntil(deferredUntilRaw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		nextDeferredUntil = &deferredUntil
+		nextDeferredByID = &userID
+	} else {
+		nextDeferredUntil = nil
+		nextDeferredByID = nil
+	}
+
 	ticket.Status = status
+	ticket.DeferredUntil = nextDeferredUntil
+	ticket.DeferredByID = nextDeferredByID
 	if ticket.IsArchived && status == tickets.StatusInProgress {
 		ticket.IsArchived = false
 		ticket.ArchivedAt = nil
-		ticket.SyncWithBitrix = true
 	}
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
@@ -484,6 +508,10 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 }
 
 func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error) {
+	if s.cfg == nil || !s.cfg.EnableBitrixGateway {
+		return nil, fmt.Errorf("интеграция Bitrix24 отключена")
+	}
+
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
@@ -717,6 +745,93 @@ func (s *ticketServiceImpl) AutoCloseResolvedTickets(ctx context.Context, thresh
 		closed++
 	}
 	return closed, nil
+}
+
+func (s *ticketServiceImpl) ProcessExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]DeferredStatusActivation, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	items, err := s.ticketRepo.ListExpiredDeferred(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	result := make([]DeferredStatusActivation, 0, len(items))
+	for i := range items {
+		ticket := items[i]
+		if strings.TrimSpace(ticket.Status) != tickets.StatusDeferred {
+			continue
+		}
+
+		recipientID := uint(0)
+		if ticket.DeferredByID != nil {
+			recipientID = *ticket.DeferredByID
+		}
+
+		ticket.Status = tickets.StatusInProgress
+		ticket.DeferredUntil = nil
+		ticket.DeferredByID = nil
+		if err := s.ticketRepo.Update(ctx, &ticket); err != nil {
+			s.logger.Error("Не удалось перевести отложенный тикет в работу", "ticket_id", ticket.ID, "error", err)
+			continue
+		}
+
+		s.recordHistory(
+			ctx,
+			ticket.ID,
+			nil,
+			tickets.HistoryActionFieldChanged,
+			tickets.HistoryFieldStatus,
+			tickets.HistorySourceSystem,
+			tickets.StatusDeferred,
+			tickets.StatusInProgress,
+			map[string]interface{}{"reason": "deferred_timeout"},
+		)
+
+		if recipientID > 0 {
+			result = append(result, DeferredStatusActivation{
+				TicketID:        ticket.ID,
+				RecipientUserID: recipientID,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+func parseDeferredUntil(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("для статуса \"Отложено\" необходимо указать дату и время")
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04",
+	}
+
+	var parsed time.Time
+	var err error
+	for _, layout := range layouts {
+		parsed, err = time.Parse(layout, value)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("некорректный формат deferred_until")
+	}
+	if parsed.Before(time.Now().Add(-10 * time.Second)) {
+		return time.Time{}, fmt.Errorf("время отложенного статуса должно быть в будущем")
+	}
+
+	return parsed.UTC(), nil
 }
 
 func (s *ticketServiceImpl) RecordConnectionCopy(
@@ -1440,6 +1555,9 @@ func isPathReferencedInTexts(path string, texts []string) bool {
 func isAdminUser(u *user.User) bool {
 	if u == nil {
 		return false
+	}
+	if strings.TrimSpace(u.Position) == user.RoleAdmin {
+		return true
 	}
 	for _, role := range u.Roles {
 		if strings.TrimSpace(role.Name) == user.RoleAdmin {

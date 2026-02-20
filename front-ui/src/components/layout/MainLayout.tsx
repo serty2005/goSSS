@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Badge, Drawer, List, notification } from 'antd';
+import { Layout, Menu, Button, Dropdown, Avatar, theme as antTheme, Typography, Space, Popover, Divider, message, Segmented, Grid, Badge, Drawer, List, Tag } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   SearchOutlined,
@@ -37,6 +37,12 @@ type TicketNotificationItem = {
   action: string;
   source: string;
   message: string;
+  occurredAt: string;
+};
+
+type PersonalHeaderNotice = {
+  id: string;
+  text: string;
   occurredAt: string;
 };
 
@@ -99,6 +105,7 @@ const MainLayout: React.FC = () => {
   const [headerConfig, setHeaderConfig] = useState<ReportHeaderConfig | null>(null);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [personalNotice, setPersonalNotice] = useState<PersonalHeaderNotice | null>(null);
   const notificationsOpenRef = useRef(false);
   const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
     primary: null,
@@ -124,6 +131,34 @@ const MainLayout: React.FC = () => {
 
   const isAdmin = Boolean(user?.roles?.includes('admin'));
   const canAccessAcceptance = Boolean(user?.roles?.includes('admin') || user?.roles?.includes('support_specialist'));
+  const notificationsConfig = useMemo(() => {
+    const cfg = (user?.profile_config || {}) as {
+      notifications?: {
+        personal_enabled?: boolean;
+        common_enabled?: boolean;
+        common_ticket_updates?: boolean;
+        common_comments?: boolean;
+        common_deferred_due?: boolean;
+        ticket_subscriptions_only?: boolean;
+      };
+      tickets?: {
+        subscriptions?: string[];
+      };
+    };
+    const subscriptions = Array.isArray(cfg.tickets?.subscriptions)
+      ? cfg.tickets?.subscriptions.map((item) => String(item).trim()).filter(Boolean)
+      : [];
+    return {
+      personalEnabled: cfg.notifications?.personal_enabled !== false,
+      commonEnabled: cfg.notifications?.common_enabled !== false,
+      commonTicketUpdates:
+        cfg.notifications?.common_ticket_updates !== false
+        || cfg.notifications?.common_comments !== false
+        || cfg.notifications?.ticket_subscriptions_only === true,
+      commonDeferredDue: cfg.notifications?.common_deferred_due !== false,
+      subscriptions,
+    };
+  }, [user?.profile_config]);
 
   const lightPalette = useMemo(() => {
     const palette = paletteFromProfileConfig(user?.profile_config, 'light');
@@ -172,30 +207,62 @@ const MainLayout: React.FC = () => {
       return;
     }
 
+    const action = String(payload.action || '').trim();
+    const recipientUserID = Number(payload.recipient_user_id || 0);
+    const actorUserID = Number(payload.actor_user_id || 0);
+    const isPersonalRecipient = Boolean(user?.id && recipientUserID > 0 && Number(user.id) === recipientUserID);
+    const isTicketUpdateAction =
+      action.includes('status')
+      || action.includes('description')
+      || action.includes('comment');
+    const isDeferredDue = action === 'ticket_deferred_due';
+    const isSubscriptionMatch = notificationsConfig.subscriptions.includes(ticketID);
+    const isActorSelf = Boolean(user?.id && actorUserID > 0 && Number(user.id) === actorUserID);
+
     const item: TicketNotificationItem = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       ticketID,
-      action: String(payload.action || '').trim(),
+      action,
       source: String(payload.source || '').trim() || 'system',
       message: String(payload.message || '').trim(),
       occurredAt: String(payload.occurred_at || new Date().toISOString()),
     };
+
+    if (isPersonalRecipient && notificationsConfig.personalEnabled) {
+      setPersonalNotice({
+        id: item.id,
+        text: renderTicketNotificationTitle(item),
+        occurredAt: item.occurredAt,
+      });
+    }
+
+    const allowCommonByType = isDeferredDue
+      ? notificationsConfig.commonDeferredDue
+      : notificationsConfig.commonTicketUpdates;
+    if (!notificationsConfig.commonEnabled || !allowCommonByType || !isSubscriptionMatch || (isTicketUpdateAction && isActorSelf)) {
+      void queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
+      return;
+    }
 
     setTicketNotifications((prev) => [item, ...prev].slice(0, MAX_TICKET_NOTIFICATIONS));
     if (!notificationsOpenRef.current) {
       setUnreadNotifications((value) => value + 1);
     }
 
-    notification.info({
-      message: `Тикет #${ticketID}`,
-      description: renderTicketNotificationTitle(item),
-      placement: 'topRight',
-      duration: 3,
-    });
-
     void queryClient.invalidateQueries({ queryKey: ['tickets'] });
     void queryClient.invalidateQueries({ queryKey: ['ticket', ticketID] });
-  }, [queryClient]);
+  }, [notificationsConfig, queryClient, user?.id]);
+
+  useEffect(() => {
+    if (!personalNotice) {
+      return;
+    }
+    const timerID = window.setTimeout(() => {
+      setPersonalNotice((prev) => (prev?.id === personalNotice.id ? null : prev));
+    }, 8000);
+    return () => window.clearTimeout(timerID);
+  }, [personalNotice]);
 
   useTicketRealtime(pushNotification);
 
@@ -546,8 +613,26 @@ const MainLayout: React.FC = () => {
             </Dropdown>
           </Space>
         </Header>
+        {personalNotice && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 24px',
+              background: token.colorFillSecondary,
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            <Tag color="processing" style={{ marginInlineEnd: 0 }}>Личное</Tag>
+            <Text>{personalNotice.text}</Text>
+            <Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+              {new Date(personalNotice.occurredAt).toLocaleString()}
+            </Text>
+          </div>
+        )}
         <Drawer
-          title="Последние уведомления"
+          title="Общие уведомления"
           placement="right"
           width={420}
           onClose={() => setNotificationsOpen(false)}

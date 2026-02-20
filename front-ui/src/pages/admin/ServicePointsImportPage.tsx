@@ -20,6 +20,7 @@ import { ArrowLeftOutlined, InboxOutlined, PlayCircleOutlined, SyncOutlined } fr
 import type { UploadFile, UploadProps } from 'antd/es/upload/interface';
 import { useNavigate } from 'react-router-dom';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
+import { useAuthStore } from '@/store/authStore';
 import type {
   ServicePointImportColumnDTO,
   ServicePointImportPreviewDTO,
@@ -82,6 +83,8 @@ const recomputeSyncPreview = (preview: ServicePointSyncPreviewDTO): ServicePoint
 };
 
 const ServicePointsImportPage: React.FC = () => {
+  const user = useAuthStore((state) => state.user);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
   const [file, setFile] = useState<File | null>(null);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [preview, setPreview] = useState<ServicePointImportPreviewDTO | null>(null);
@@ -92,6 +95,22 @@ const ServicePointsImportPage: React.FC = () => {
   const [rowApplyState, setRowApplyState] = useState<Record<number, 'error'>>({});
   const [mapping, setMapping] = useState<{ code_column?: string; name_column?: string; contract_column?: string }>({});
   const navigate = useNavigate();
+
+  if (!isBitrixEnabled) {
+    return (
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/users')}>
+          Назад к сотрудникам
+        </Button>
+        <Alert
+          type="warning"
+          showIcon
+          message="Интеграция Bitrix24 отключена"
+          description="Импорт точек обслуживания недоступен, пока ENABLE_BITRIX_GATEWAY=false."
+        />
+      </Space>
+    );
+  }
 
   const previewMutation = useMutation({
     mutationFn: (targetFile: File) => bitrixAdminApi.previewServicePointsImport(targetFile),

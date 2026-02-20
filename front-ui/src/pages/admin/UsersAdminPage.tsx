@@ -73,7 +73,12 @@ const UsersAdminPage: React.FC = () => {
   const [editForm] = Form.useForm<UserUpdatePayload>();
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
+  const isBitrixEnabled = currentUser?.bitrix_enabled === true;
   const navigate = useNavigate();
+  const availableExternalTypeOptions = useMemo(
+    () => (isBitrixEnabled ? externalTypeOptions : externalTypeOptions.filter((item) => item.value !== 'bitrix24')),
+    [isBitrixEnabled],
+  );
 
   const watchedCreateExternalType = Form.useWatch('external_type', createForm);
   const watchedEditExternalType = Form.useWatch('external_type', editForm);
@@ -168,11 +173,15 @@ const UsersAdminPage: React.FC = () => {
       external_system_id: user.external_system_id,
       password: undefined,
     });
-    setEditSuggestion(user.bitrix_suggestion || null);
+    setEditSuggestion(isBitrixEnabled ? (user.bitrix_suggestion || null) : null);
     setIsEditOpen(true);
-  }, [editForm]);
+  }, [editForm, isBitrixEnabled]);
 
   useEffect(() => {
+    if (!isBitrixEnabled) {
+      setCreateSuggestion(null);
+      return;
+    }
     const firstName = String(watchedCreateFirstName || '').trim();
     const lastName = String(watchedCreateLastName || '').trim();
     if (!firstName || !lastName) {
@@ -188,9 +197,13 @@ const UsersAdminPage: React.FC = () => {
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [watchedCreateFirstName, watchedCreateLastName]);
+  }, [isBitrixEnabled, watchedCreateFirstName, watchedCreateLastName]);
 
   useEffect(() => {
+    if (!isBitrixEnabled) {
+      setEditSuggestion(null);
+      return;
+    }
     const firstName = String(watchedEditFirstName || '').trim();
     const lastName = String(watchedEditLastName || '').trim();
     if (!firstName || !lastName || !isEditOpen) {
@@ -208,7 +221,7 @@ const UsersAdminPage: React.FC = () => {
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [isEditOpen, watchedEditFirstName, watchedEditLastName]);
+  }, [isBitrixEnabled, isEditOpen, watchedEditFirstName, watchedEditLastName]);
 
   const columns: ColumnsType<UserAdminDTO> = useMemo(
     () => [
@@ -276,7 +289,7 @@ const UsersAdminPage: React.FC = () => {
               <Button icon={<EditOutlined />} onClick={() => openEditModal(record)}>
                 Редактировать
               </Button>
-              {record.bitrix_suggestion && (
+              {isBitrixEnabled && record.bitrix_suggestion && (
                 <Button
                   type="primary"
                   onClick={() => applySuggestionMutation.mutate(record.id)}
@@ -313,7 +326,7 @@ const UsersAdminPage: React.FC = () => {
         },
       },
     ],
-    [applySuggestionMutation, currentUser?.id, openEditModal, statusMutation]
+    [applySuggestionMutation, currentUser?.id, isBitrixEnabled, openEditModal, statusMutation]
   );
 
   const normalizePayload = (values: UserCreatePayload | UserUpdatePayload) => ({
@@ -353,9 +366,11 @@ const UsersAdminPage: React.FC = () => {
             <Text type="secondary">Создание, редактирование и блокировка учетных записей сотрудников</Text>
           </div>
           <Space>
-            <Button onClick={() => refreshBitrixUsersMutation.mutate()} loading={refreshBitrixUsersMutation.isPending}>
-              Обновить пользователей Битрикс24
-            </Button>
+            {isBitrixEnabled && (
+              <Button onClick={() => refreshBitrixUsersMutation.mutate()} loading={refreshBitrixUsersMutation.isPending}>
+                Обновить пользователей Битрикс24
+              </Button>
+            )}
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
               Добавить сотрудника
             </Button>
@@ -373,17 +388,19 @@ const UsersAdminPage: React.FC = () => {
         />
       </Card>
 
-      <Card className="glass-panel" style={{ marginTop: 16 }}>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <div>
-            <Title level={5} style={{ marginBottom: 0 }}>Импорт точек обслуживания из 1С</Title>
-            <Text type="secondary">Загрузка XLS/XLSX и привязка кодов 1С к существующим точкам Bitrix24</Text>
-          </div>
-          <Button type="primary" onClick={() => navigate('/admin/service-points-import')}>
-            Открыть форму импорта
-          </Button>
-        </Space>
-      </Card>
+      {isBitrixEnabled && (
+        <Card className="glass-panel" style={{ marginTop: 16 }}>
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <div>
+              <Title level={5} style={{ marginBottom: 0 }}>Импорт точек обслуживания из 1С</Title>
+              <Text type="secondary">Загрузка XLS/XLSX и привязка кодов 1С к существующим точкам Bitrix24</Text>
+            </div>
+            <Button type="primary" onClick={() => navigate('/admin/service-points-import')}>
+              Открыть форму импорта
+            </Button>
+          </Space>
+        </Card>
+      )}
       <Modal
         title="Новый сотрудник"
         open={isCreateOpen}
@@ -418,7 +435,7 @@ const UsersAdminPage: React.FC = () => {
             <Input placeholder="Фамилия" />
           </Form.Item>
 
-          {createSuggestion && (
+          {isBitrixEnabled && createSuggestion && (
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                 <Space direction="vertical" size={0}>
@@ -451,7 +468,7 @@ const UsersAdminPage: React.FC = () => {
           <Row gutter={12}>
             <Col span={10}>
               <Form.Item name="external_type" label="Внешняя система">
-                <Select allowClear options={externalTypeOptions} placeholder="Выберите" />
+                <Select allowClear options={availableExternalTypeOptions} placeholder="Выберите" />
               </Form.Item>
             </Col>
             <Col span={14}>
@@ -501,7 +518,7 @@ const UsersAdminPage: React.FC = () => {
             <Input placeholder="Фамилия" />
           </Form.Item>
 
-          {editSuggestion && (
+          {isBitrixEnabled && editSuggestion && (
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                 <Space direction="vertical" size={0}>
@@ -534,7 +551,7 @@ const UsersAdminPage: React.FC = () => {
           <Row gutter={12}>
             <Col span={10}>
               <Form.Item name="external_type" label="Внешняя система">
-                <Select allowClear options={externalTypeOptions} placeholder="Выберите" />
+                <Select allowClear options={availableExternalTypeOptions} placeholder="Выберите" />
               </Form.Item>
             </Col>
             <Col span={14}>

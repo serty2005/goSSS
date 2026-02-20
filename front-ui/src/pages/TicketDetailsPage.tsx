@@ -1,11 +1,12 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Button, Card, Checkbox, DatePicker, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
+import { profileApi } from '@/api/profile';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
@@ -106,11 +107,8 @@ const resolveEntityPath = (item: InfrastructureItem) => {
 };
 
 const BitrixSyncIndicator: React.FC<{ sync?: boolean; dealURL?: string }> = ({ sync, dealURL }) => {
-  if (!sync) {
+  if (!sync || !dealURL) {
     return null;
-  }
-  if (!dealURL) {
-    return <Tag color="processing">B24</Tag>;
   }
   return (
     <Tooltip title="Открыть сделку в Bitrix24">
@@ -135,6 +133,7 @@ const TicketDetailsPage: React.FC = () => {
   const [editingCommentDraft, setEditingCommentDraft] = useState('');
   const [statusComment, setStatusComment] = useState('');
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const [pendingDeferredAt, setPendingDeferredAt] = useState('');
   const [companySearch, setCompanySearch] = useState('');
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
@@ -153,6 +152,14 @@ const TicketDetailsPage: React.FC = () => {
   const clearCommentTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const createParam = searchParams.get('create') || '';
   const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
+  const commentsNewFirst = ((user?.profile_config as any)?.tickets?.comments_new_first) !== false;
+  const ticketSubscriptions = useMemo<string[]>(() => {
+    const list = (user?.profile_config as any)?.tickets?.subscriptions;
+    if (!Array.isArray(list)) return [];
+    return list.map((item: unknown) => String(item).trim()).filter(Boolean);
+  }, [user?.profile_config]);
 
   useEffect(() => {
     if (createParam === '1') {
@@ -343,6 +350,7 @@ const TicketDetailsPage: React.FC = () => {
   const { data: bitrixServicePoints = [] } = useQuery({
     queryKey: ['bitrix-service-points'],
     queryFn: () => ticketsApi.getBitrixServicePoints(),
+    enabled: isBitrixEnabled,
     staleTime: 5 * 60_000,
   });
 
@@ -351,6 +359,15 @@ const TicketDetailsPage: React.FC = () => {
     const point = bitrixServicePoints.find((item) => item.b24_element_id === metadata.bitrix_service_point_id);
     return point?.name || String(metadata.bitrix_service_point_id);
   }, [bitrixServicePoints, metadata?.bitrix_service_point_id]);
+
+  const commentsOrdered = useMemo(() => {
+    const source = [...(details?.comments || [])];
+    source.sort((a, b) => {
+      const delta = dayjs(a.creation_date).valueOf() - dayjs(b.creation_date).valueOf();
+      return commentsNewFirst ? -delta : delta;
+    });
+    return source;
+  }, [commentsNewFirst, details?.comments]);
 
   const openBitrixSyncModal = () => {
     if (!metadata) {
@@ -617,12 +634,13 @@ const TicketDetailsPage: React.FC = () => {
   });
 
   const changeStatusMutation = useMutation({
-    mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string }) =>
-      ticketsApi.changeStatus(payload.id, payload.status, payload.comment),
+    mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string; deferredUntil?: string }) =>
+      ticketsApi.changeStatus(payload.id, payload.status, payload.comment, payload.deferredUntil),
     onSuccess: () => {
       message.success('Статус обновлён');
       setPendingStatus(null);
       setStatusComment('');
+      setPendingDeferredAt('');
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
@@ -659,6 +677,42 @@ const TicketDetailsPage: React.FC = () => {
     },
     onError: () => message.error('Не удалось обновить исполнителя'),
   });
+
+  const updateProfileConfigMutation = useMutation({
+    mutationFn: (config: Record<string, unknown>) => profileApi.updateConfig({ profile_config: config as any }),
+    onSuccess: (response) => {
+      const dtoUser = (response as any)?.data;
+      if (dtoUser && typeof dtoUser === 'object' && 'id' in dtoUser) {
+        setUser(dtoUser as any);
+      }
+    },
+  });
+
+  const toggleTicketSubscription = async () => {
+    if (!user || !id) {
+      return;
+    }
+    const current = ticketSubscriptions;
+    const exists = current.includes(id);
+    const nextSubscriptions = exists
+      ? current.filter((item) => item !== id)
+      : [...current, id];
+    const nextConfig = {
+      ...(user.profile_config || {}),
+      tickets: {
+        ...((user.profile_config || {}).tickets || {}),
+        subscriptions: nextSubscriptions,
+      },
+    };
+    setUser({ ...user, profile_config: nextConfig as any });
+    try {
+      await updateProfileConfigMutation.mutateAsync(nextConfig as any);
+      message.success(exists ? 'Подписка на тикет отключена' : 'Подписка на тикет включена');
+    } catch {
+      setUser(user);
+      message.error('Не удалось изменить подписку на тикет');
+    }
+  };
 
   const updateBitrixMutation = useMutation({
     mutationFn: async () => {
@@ -729,6 +783,9 @@ const TicketDetailsPage: React.FC = () => {
     return <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>;
   }
 
+  const hasBitrixLink = Boolean(String(metadata.bitrix_deal_url || '').trim());
+  const canPushToBitrix = Boolean(metadata.bitrix_service_point_id) && Boolean(String(metadata.bitrix_deal_title || '').trim());
+
   const uploadAttachmentsRequest = async (options: UploadRequestOption) => {
     const source = options.file as File;
     try {
@@ -772,7 +829,7 @@ const TicketDetailsPage: React.FC = () => {
         <Space direction="vertical" size={0}>
           <Space align="center" size={8}>
             <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
-            <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />
+            {isBitrixEnabled && <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />}
           </Space>
           <Text type="secondary">
             Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}
@@ -804,6 +861,11 @@ const TicketDetailsPage: React.FC = () => {
                 style={{ width: 180 }}
                 onChange={(nextStatus: TicketStatus) => {
                   if (!id || nextStatus === metadata.status) return;
+                  if (nextStatus === 'deferred') {
+                    setPendingStatus(nextStatus);
+                    setPendingDeferredAt(dayjs().add(1, 'hour').toISOString());
+                    return;
+                  }
                   if (nextStatus === 'resolved') {
                     const hasComments = (details?.comments || []).length > 0;
                     if (!hasComments) {
@@ -818,11 +880,23 @@ const TicketDetailsPage: React.FC = () => {
               />
             )}
           </div>
-          {!metadata.sync_with_bitrix && (
-            <Button onClick={openBitrixSyncModal}>
-              Синхронизировать с Битрикс24
+          {isBitrixEnabled && !hasBitrixLink && (
+            <Button
+              loading={updateBitrixMutation.isPending}
+              onClick={() => {
+                if (!metadata.sync_with_bitrix || !canPushToBitrix) {
+                  openBitrixSyncModal();
+                  return;
+                }
+                updateBitrixMutation.mutate();
+              }}
+            >
+              {metadata.sync_with_bitrix ? 'Выгрузить в Битрикс24' : 'Включить синхронизацию с Битрикс24'}
             </Button>
           )}
+          <Button onClick={() => void toggleTicketSubscription()}>
+            {ticketSubscriptions.includes(id) ? 'Отписаться' : 'Подписаться на тикет'}
+          </Button>
           <Button onClick={() => navigate('/tickets')}>К списку</Button>
         </Space>
       </Space>
@@ -915,7 +989,7 @@ const TicketDetailsPage: React.FC = () => {
                       <Descriptions.Item label="Обновлена">
                         {dayjs(metadata.updated_at).format('DD.MM.YYYY HH:mm')}
                       </Descriptions.Item>
-                      {metadata.sync_with_bitrix && (
+                      {isBitrixEnabled && metadata.sync_with_bitrix && (
                       <Descriptions.Item label="Заголовок сделки B24">
                         <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
                           {!isBitrixEditMode ? (
@@ -942,7 +1016,7 @@ const TicketDetailsPage: React.FC = () => {
                         </div>
                       </Descriptions.Item>
                       )}
-                      {metadata.sync_with_bitrix && (
+                      {isBitrixEnabled && metadata.sync_with_bitrix && (
                       <Descriptions.Item label="Точка обслуживания B24">
                         <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
                           {!isBitrixEditMode ? (
@@ -1058,9 +1132,9 @@ const TicketDetailsPage: React.FC = () => {
                           label: 'Комментарии',
                           children: (
                             <>
-                              {details.comments?.length ? (
+                              {commentsOrdered.length ? (
                                 <List
-                                  dataSource={details.comments}
+                                  dataSource={commentsOrdered}
                                   renderItem={(item) => (
                                     <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
                                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -1490,59 +1564,79 @@ const TicketDetailsPage: React.FC = () => {
                 </Card>
       </div>
 
-      <Modal
-        open={isBitrixSyncModalOpen}
-        title="Синхронизация с Битрикс24"
-        okText="Сохранить и синхронизировать"
-        cancelText="Отмена"
-        onCancel={() => setIsBitrixSyncModalOpen(false)}
-        confirmLoading={updateBitrixMutation.isPending}
-        okButtonProps={{ disabled: !draftBitrixPointID || !draftBitrixDealTitle.trim() }}
-        onOk={() => updateBitrixMutation.mutate()}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Select
-            showSearch
-            value={draftBitrixPointID}
-            placeholder="Выберите точку обслуживания"
-            style={{ width: '100%' }}
-            options={bitrixServicePoints.map((item) => ({
-              value: item.b24_element_id,
-              label: item.name,
-            }))}
-            optionFilterProp="label"
-            onChange={(value) => setDraftBitrixPointID(value)}
-          />
-          <Input
-            value={draftBitrixDealTitle}
-            placeholder="Заголовок сделки в Bitrix24"
-            onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
-          />
-        </Space>
-      </Modal>
+      {isBitrixEnabled && (
+        <Modal
+          open={isBitrixSyncModalOpen}
+          title="Синхронизация с Битрикс24"
+          okText="Сохранить и синхронизировать"
+          cancelText="Отмена"
+          onCancel={() => setIsBitrixSyncModalOpen(false)}
+          confirmLoading={updateBitrixMutation.isPending}
+          okButtonProps={{ disabled: !draftBitrixPointID || !draftBitrixDealTitle.trim() }}
+          onOk={() => updateBitrixMutation.mutate()}
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Select
+              showSearch
+              value={draftBitrixPointID}
+              placeholder="Выберите точку обслуживания"
+              style={{ width: '100%' }}
+              options={bitrixServicePoints.map((item) => ({
+                value: item.b24_element_id,
+                label: item.name,
+              }))}
+              optionFilterProp="label"
+              onChange={(value) => setDraftBitrixPointID(value)}
+            />
+            <Input
+              value={draftBitrixDealTitle}
+              placeholder="Заголовок сделки в Bitrix24"
+              onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
+            />
+          </Space>
+        </Modal>
+      )}
 
       <Modal
         open={Boolean(pendingStatus)}
-        title="Отчёт по заявке"
-        okText="Завершить заявку"
+        title={pendingStatus === 'deferred' ? 'Отложить заявку' : 'Отчёт по заявке'}
+        okText={pendingStatus === 'deferred' ? 'Отложить' : 'Завершить заявку'}
         cancelText="Отмена"
         onCancel={() => {
           setPendingStatus(null);
           setStatusComment('');
+          setPendingDeferredAt('');
         }}
         confirmLoading={changeStatusMutation.isPending}
-        okButtonProps={{ disabled: !statusComment.trim() }}
+        okButtonProps={{ disabled: pendingStatus === 'deferred' ? !pendingDeferredAt : !statusComment.trim() }}
         onOk={() => {
-          if (!id || !pendingStatus || !statusComment.trim()) return;
+          if (!id || !pendingStatus) return;
+          if (pendingStatus === 'deferred') {
+            if (!pendingDeferredAt) return;
+            changeStatusMutation.mutate({ id, status: pendingStatus, deferredUntil: pendingDeferredAt });
+            return;
+          }
+          if (!statusComment.trim()) return;
           changeStatusMutation.mutate({ id, status: pendingStatus, comment: statusComment.trim() });
         }}
       >
-        <Input.TextArea
-          rows={4}
-          value={statusComment}
-          onChange={(event) => setStatusComment(event.target.value)}
-          placeholder="Добавьте отчёт по выполнению"
-        />
+        {pendingStatus === 'deferred' ? (
+          <DatePicker
+            showTime
+            style={{ width: '100%' }}
+            format="DD.MM.YYYY HH:mm"
+            value={pendingDeferredAt ? dayjs(pendingDeferredAt) : null}
+            onChange={(value) => setPendingDeferredAt(value ? value.toISOString() : '')}
+            placeholder="Выберите дату и время"
+          />
+        ) : (
+          <Input.TextArea
+            rows={4}
+            value={statusComment}
+            onChange={(event) => setStatusComment(event.target.value)}
+            placeholder="Добавьте отчёт по выполнению"
+          />
+        )}
       </Modal>
 
       <NewTicketModal

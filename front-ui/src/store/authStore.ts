@@ -11,6 +11,7 @@ export interface User {
   last_name: string;
   position: string;
   roles: string[];
+  bitrix_enabled?: boolean;
   external_system_id?: string;
   external_type?: string;
   integrations?: UserIntegrationDTO[];
