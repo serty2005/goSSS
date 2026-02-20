@@ -5,6 +5,7 @@ export interface CompanyContractsReportFilters {
   statuses?: string[];
   contract_types?: string[];
   company_ids?: string[];
+  search_terms?: string[];
 }
 
 const joinMulti = (values?: string[]) => (values && values.length > 0 ? values.join(',') : undefined);
@@ -16,6 +17,7 @@ export const reportsApi = {
         statuses: joinMulti(filters.statuses),
         contract_types: joinMulti(filters.contract_types),
         company_ids: joinMulti(filters.company_ids),
+        search_terms: joinMulti(filters.search_terms),
       },
     });
     return response.data;
@@ -27,6 +29,7 @@ export const reportsApi = {
         statuses: joinMulti(filters.statuses),
         contract_types: joinMulti(filters.contract_types),
         company_ids: joinMulti(filters.company_ids),
+        search_terms: joinMulti(filters.search_terms),
       },
       responseType: 'blob',
     });
@@ -37,4 +40,3 @@ export const reportsApi = {
     };
   },
 };
-

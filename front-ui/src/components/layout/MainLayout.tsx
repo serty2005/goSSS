@@ -501,9 +501,8 @@ const MainLayout: React.FC = () => {
 
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
             {isReportHeader ? (
-              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
-                <Text strong ellipsis style={{ margin: 0, minWidth: 120 }}>{headerConfig?.title}</Text>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: 1, minWidth: 0, overflowX: 'auto' }}>
+              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, maxWidth: '100%', minWidth: 0, overflowX: 'auto' }}>
                   {headerConfig?.controls}
                 </div>
               </div>

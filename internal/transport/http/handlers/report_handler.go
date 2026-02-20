@@ -48,6 +48,7 @@ type reportFilters struct {
 	Statuses      []string
 	ContractTypes []string
 	CompanyIDs    []string
+	SearchTerms   []string
 }
 
 func (h *ReportHandler) CompaniesContracts(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +158,22 @@ func (h *ReportHandler) getCompaniesContractsReport(params url.Values) ([]compan
 		}
 	}
 
+	for _, rawTerm := range filters.SearchTerms {
+		term := strings.TrimSpace(rawTerm)
+		if term == "" {
+			continue
+		}
+
+		companyLike := "%" + strings.ToLower(term) + "%"
+		query = query.Where(`
+			(
+				LOWER(COALESCE(latest.contract_id, '')) = LOWER(?)
+				OR LOWER(COALESCE(NULLIF(BTRIM(companies.title), ''), companies.id)) LIKE ?
+				OR LOWER(COALESCE(companies.additional_name, '')) LIKE ?
+			)
+		`, term, companyLike, companyLike)
+	}
+
 	query = query.Order("company_title ASC")
 
 	var rows []companiesContractsReportRow
@@ -172,6 +189,7 @@ func parseReportFilters(params url.Values) reportFilters {
 		Statuses:      parseCSVParams(params, "statuses"),
 		ContractTypes: parseCSVParams(params, "contract_types"),
 		CompanyIDs:    parseCSVParams(params, "company_ids"),
+		SearchTerms:   parseCSVParams(params, "search_terms"),
 	}
 }
 

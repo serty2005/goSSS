@@ -18,14 +18,16 @@ const CompanyContractsReportPage: React.FC = () => {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [contractTypes, setContractTypes] = useState<string[]>([]);
   const [companyIDs, setCompanyIDs] = useState<string[]>([]);
+  const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [companySearch, setCompanySearch] = useState('');
 
   const reportQuery = useQuery({
-    queryKey: ['report', 'companies-contracts', statuses, contractTypes, companyIDs],
+    queryKey: ['report', 'companies-contracts', statuses, contractTypes, companyIDs, searchTerms],
     queryFn: () => reportsApi.getCompanyContractsReport({
       statuses,
       contract_types: contractTypes,
       company_ids: companyIDs,
+      search_terms: searchTerms,
     }),
     staleTime: 30_000,
   });
@@ -47,6 +49,7 @@ const CompanyContractsReportPage: React.FC = () => {
       statuses,
       contract_types: contractTypes,
       company_ids: companyIDs,
+      search_terms: searchTerms,
     }),
     onSuccess: (payload) => {
       const fromHeader = extractFileNameFromContentDisposition(payload.contentDisposition);
@@ -164,6 +167,15 @@ const CompanyContractsReportPage: React.FC = () => {
   const headerControls = useMemo(() => (
     <Space wrap size={8}>
       <Select
+        mode="tags"
+        allowClear
+        placeholder="Поиск: UUID контракта / название компании"
+        value={searchTerms}
+        tokenSeparators={[',', ';']}
+        style={{ minWidth: 320 }}
+        onChange={(values) => setSearchTerms(values.map((item) => String(item).trim()).filter(Boolean))}
+      />
+      <Select
         mode="multiple"
         allowClear
         placeholder="Статусы контрактов"
@@ -204,6 +216,7 @@ const CompanyContractsReportPage: React.FC = () => {
     </Space>
   ), [
     statuses,
+    searchTerms,
     statusOptions,
     contractTypes,
     contractTypeOptions,
