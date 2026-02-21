@@ -64,14 +64,27 @@ func (w *deferredTicketWorkerImpl) runCycle(ctx context.Context) {
 		return
 	}
 	for _, item := range activations {
-		if strings.TrimSpace(item.TicketID) == "" || item.RecipientUserID == 0 || w.bus == nil {
+		ticketID := strings.TrimSpace(item.TicketID)
+		if ticketID == "" || w.bus == nil {
+			continue
+		}
+
+		w.bus.Publish(eventbus.Event{
+			Type: events.BitrixTicketSyncRequested,
+			Payload: events.BitrixSyncEntityPayload{
+				TicketID: ticketID,
+				Reason:   "ticket_deferred_due",
+			},
+		})
+
+		if item.RecipientUserID == 0 {
 			continue
 		}
 		recipientID := item.RecipientUserID
 		w.bus.Publish(eventbus.Event{
 			Type: events.TicketUpdated,
 			Payload: events.TicketUpdatedPayload{
-				TicketID:        item.TicketID,
+				TicketID:        ticketID,
 				Action:          "ticket_deferred_due",
 				Source:          "system",
 				Message:         "Истекло время статуса \"Отложено\", тикет переведён в работу",
