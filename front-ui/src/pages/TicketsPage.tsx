@@ -647,12 +647,21 @@ const TicketsPage: React.FC = () => {
     if (!selectedTicketId) {
       return;
     }
+    const interactiveOverlaySelector = [
+      '.ant-select-dropdown',
+      '.ant-popover',
+      '.ant-picker-dropdown',
+      '.ant-dropdown',
+      '.ant-modal-root',
+      '.ant-image-preview-root',
+      '.ant-image-preview',
+    ].join(', ');
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('.ant-drawer')) {
         return;
       }
-      if (target?.closest('.ant-image-preview-root, .ant-image-preview')) {
+      if (target?.closest(interactiveOverlaySelector)) {
         return;
       }
       closeQuickModal();
