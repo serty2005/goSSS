@@ -9,6 +9,7 @@ import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, 
 import { normalizeServerAddress } from '@/utils/formatters';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
+import { getTicketStatusMeta } from '@/constants/ticketStatus';
 
 const { Text, Paragraph } = Typography;
 
@@ -20,6 +21,8 @@ interface Props {
 }
 
 const ACTIVE_TICKET_STATUSES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
+const RESOLVED_OR_CLOSED_TICKET_STATUSES = ['resolved', 'closed'];
+const MODAL_BODY_MAX_HEIGHT = 'calc(100vh - 240px)';
 
 const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreated }) => {
   const queryClient = useQueryClient();
@@ -316,6 +319,26 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     staleTime: 20_000,
   });
   const activeTickets = useMemo(() => activeTicketsResponse?.data || [], [activeTicketsResponse?.data]);
+  const { data: resolvedOrClosedTicketsResponse, isLoading: isResolvedOrClosedTicketsLoading } = useQuery({
+    queryKey: ['company-resolved-or-closed-tickets', selectedCompanyId],
+    queryFn: () => ticketsApi.getTickets({
+      company_id: selectedCompanyId,
+      status: RESOLVED_OR_CLOSED_TICKET_STATUSES.join(','),
+      limit: 10,
+      archive_mode: 'all',
+    }),
+    enabled: open && Boolean(selectedCompanyId),
+    staleTime: 20_000,
+  });
+  const resolvedOrClosedTickets = useMemo(
+    () => resolvedOrClosedTicketsResponse?.data || [],
+    [resolvedOrClosedTicketsResponse?.data],
+  );
+
+  const openTicketInNewTab = (ticketID: string) => {
+    const targetURL = `${window.location.origin}/tickets/${ticketID}`;
+    window.open(targetURL, '_blank', 'noopener,noreferrer');
+  };
 
   const createMutation = useMutation({
     mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; bitrix_deal_title?: string }) => {
@@ -361,6 +384,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       title="Новая заявка"
       destroyOnHidden
       width={selectedCompanyId ? 980 : 640}
+      styles={{
+        body: {
+          maxHeight: MODAL_BODY_MAX_HEIGHT,
+          overflow: 'hidden',
+        },
+      }}
       footer={(
         <Row justify="space-between">
           <Button onClick={() => form.submit()} loading={createMutation.isPending}>Тоже создать</Button>
@@ -389,8 +418,78 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           createMutation.mutate(values);
         }}
       >
-        <Row gutter={24}>
-          <Col xs={24} md={selectedCompanyId ? 12 : 24}>
+        <Row gutter={24} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
+          {selectedCompanyId && (
+            <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
+              <div style={{ maxHeight: '100%', overflowY: 'auto', paddingRight: 4 }}>
+                <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
+                  {isActiveTicketsLoading ? (
+                    <div style={{ textAlign: 'center', padding: 16 }}>
+                      <Spin />
+                    </div>
+                  ) : activeTickets.length === 0 ? (
+                    <Empty description="Активных тикетов нет" />
+                  ) : (
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      {activeTickets.map((ticket) => {
+                        const statusMeta = getTicketStatusMeta(ticket.status);
+                        return (
+                          <Card
+                            key={ticket.id}
+                            size="small"
+                            className="glass-panel"
+                            hoverable
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => openTicketInNewTab(ticket.id)}
+                          >
+                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                              <Space size={6} wrap>
+                                <Text strong>#{ticket.number}</Text>
+                                <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                              </Space>
+                              <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
+                              <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                            </Space>
+                          </Card>
+                        );
+                      })}
+                    </Space>
+                  )}
+                </Card>
+
+                {!isResolvedOrClosedTicketsLoading && resolvedOrClosedTickets.length > 0 && (
+                  <Card size="small" title="Последние 10 тикетов">
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      {resolvedOrClosedTickets.map((ticket) => {
+                        const statusMeta = getTicketStatusMeta(ticket.status);
+                        return (
+                          <Card
+                            key={ticket.id}
+                            size="small"
+                            className="glass-panel"
+                            hoverable
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => openTicketInNewTab(ticket.id)}
+                          >
+                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                              <Space size={6} wrap>
+                                <Text strong>#{ticket.number}</Text>
+                                <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                              </Space>
+                              <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
+                              <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                            </Space>
+                          </Card>
+                        );
+                      })}
+                    </Space>
+                  </Card>
+                )}
+              </div>
+            </Col>
+          )}
+
+          <Col xs={24} md={selectedCompanyId ? 8 : 24} xl={selectedCompanyId ? 10 : 24} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT, overflowY: 'auto' }}>
             <Form.Item
               name="company_id"
               label="Компания"
@@ -446,30 +545,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                   </Text>
                 )}
               </div>
-            )}
-
-            {selectedCompanyId && (
-              <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
-                {isActiveTicketsLoading ? (
-                  <div style={{ textAlign: 'center', padding: 16 }}>
-                    <Spin />
-                  </div>
-                ) : activeTickets.length === 0 ? (
-                  <Empty description="Активных тикетов нет" />
-                ) : (
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                    {activeTickets.map((ticket) => (
-                      <Card key={ticket.id} size="small" className="glass-panel">
-                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                          <Text strong>#{ticket.number} • {ticket.status}</Text>
-                          <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
-                          <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
-                        </Space>
-                      </Card>
-                    ))}
-                  </Space>
-                )}
-              </Card>
             )}
 
             <Form.Item
@@ -570,8 +645,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           </Col>
 
           {selectedCompanyId && (
-            <Col xs={24} md={12}>
-              <Card size="small" title="Подключения">
+            <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
+              <Card size="small" title="Подключения" bodyStyle={{ maxHeight: `calc(${MODAL_BODY_MAX_HEIGHT} - 56px)`, overflowY: 'auto' }}>
                 {isInfrastructureLoading || isParentInfrastructureLoading ? (
                   <div style={{ textAlign: 'center', padding: 16 }}>
                     <Spin />

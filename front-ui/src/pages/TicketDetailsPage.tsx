@@ -19,25 +19,12 @@ import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
+import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 
 const { Title, Text, Paragraph } = Typography;
 const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
-const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
-  { value: 'new', label: 'Новая', color: 'blue' },
-  { value: 'in_progress', label: 'В работе', color: 'processing' },
-  { value: 'pending', label: 'Ожидание', color: 'orange' },
-  { value: 'deferred', label: 'Отложено', color: 'orange' },
-  { value: 'onsite', label: 'На выезд', color: 'cyan' },
-  { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
-  { value: 'resolved', label: 'Решена', color: 'green' },
-  { value: 'spam', label: 'Спам', color: 'red' },
-  { value: 'execution', label: 'Реализация', color: 'magenta' },
-  { value: 'closed', label: 'Закрыта', color: 'default' },
-];
-
-const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
 const formatDeferredDateTime = (value?: string) => {
   if (!value) return '';
   const dt = dayjs(value);
@@ -889,7 +876,7 @@ const TicketDetailsPage: React.FC = () => {
             ) : (
               <Select
                 value={metadata.status}
-                options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                options={TICKET_STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
                 style={{ width: 180 }}
                 onChange={(nextStatus: TicketStatus) => {
                   if (!id || nextStatus === metadata.status) return;
@@ -1160,7 +1147,7 @@ const TicketDetailsPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
+                    {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
                       <div style={{ marginTop: 16 }}>
                         <Text strong style={{ display: 'block', marginBottom: 8 }}>Результат</Text>
                         <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>

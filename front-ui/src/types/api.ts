@@ -427,6 +427,7 @@ export interface DashboardStatsDTO {
 
 export interface TicketListParams {
   company_id?: string;
+  company_ids?: string | string[];
   limit?: number;
   offset?: number;
   status?: string | string[];
@@ -434,6 +435,10 @@ export interface TicketListParams {
   archive_mode?: 'active' | 'archive' | 'all';
   period_from?: string;
   period_to?: string;
+  created_from?: string;
+  created_to?: string;
+  closed_from?: string;
+  closed_to?: string;
   assignee_ids?: string | string[];
 }
 

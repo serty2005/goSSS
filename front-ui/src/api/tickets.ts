@@ -6,6 +6,7 @@ export const ticketsApi = {
     const normalizedParams = {
       ...params,
       status: Array.isArray(params.status) ? params.status.join(',') : params.status,
+      company_ids: Array.isArray(params.company_ids) ? params.company_ids.join(',') : params.company_ids,
       assignee_ids: Array.isArray(params.assignee_ids) ? params.assignee_ids.join(',') : params.assignee_ids,
     };
     const response = await apiClient.get<ApiResponse<TicketListItemDTO[]>>('/tickets', {
@@ -18,6 +19,7 @@ export const ticketsApi = {
     const normalizedParams = {
       ...params,
       status: Array.isArray(params.status) ? params.status.join(',') : params.status,
+      company_ids: Array.isArray(params.company_ids) ? params.company_ids.join(',') : params.company_ids,
       assignee_ids: Array.isArray(params.assignee_ids) ? params.assignee_ids.join(',') : params.assignee_ids,
     };
     const response = await apiClient.get<ApiResponse<TicketFiltersResponse>>('/tickets/filters', {

@@ -10,23 +10,11 @@ import { profileApi } from '@/api/profile';
 import { useAuthStore } from '@/store/authStore';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
+import { TICKET_ACTIVE_STATUS_VALUES, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 
 const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
-const TICKET_STATUS_OPTIONS = [
-  { value: 'new', label: 'Новая' },
-  { value: 'in_progress', label: 'В работе' },
-  { value: 'pending', label: 'Ожидание' },
-  { value: 'deferred', label: 'Отложено' },
-  { value: 'onsite', label: 'На выезд' },
-  { value: 'to_manager', label: 'Передать менеджеру' },
-  { value: 'resolved', label: 'Решена' },
-  { value: 'spam', label: 'Спам' },
-  { value: 'execution', label: 'Реализация' },
-  { value: 'closed', label: 'Закрыта' },
-];
-const ACTIVE_STATUS_VALUES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const LONGEST_STATUS_LABEL_WIDTH = 260;
 const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
@@ -191,8 +179,11 @@ const HeaderSearch: React.FC = () => {
     if (!onlyActiveStatuses) {
       return statusValues;
     }
-    const filtered = statusValues.filter((value) => ACTIVE_STATUS_VALUES.includes(value));
-    return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
+    const filtered = statusValues.filter(
+      (value): value is (typeof TICKET_ACTIVE_STATUS_VALUES)[number] =>
+        TICKET_ACTIVE_STATUS_VALUES.includes(value as (typeof TICKET_ACTIVE_STATUS_VALUES)[number]),
+    );
+    return filtered.length ? filtered : TICKET_ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const assigneeValues = useMemo(() => (ticketAssigneeIDs ? ticketAssigneeIDs.split(',').filter(Boolean) : []), [ticketAssigneeIDs]);
   const ownAssigneeID = user?.id ? String(user.id) : '';

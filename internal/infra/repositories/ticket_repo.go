@@ -166,6 +166,31 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	if filter.UpdatedTo != nil {
 		query = query.Where("updated_at <= ?", *filter.UpdatedTo)
 	}
+	if filter.CreatedFrom != nil {
+		query = query.Where("tickets.created_at >= ?", *filter.CreatedFrom)
+	}
+	if filter.CreatedTo != nil {
+		query = query.Where("tickets.created_at <= ?", *filter.CreatedTo)
+	}
+	if filter.ResolvedFrom != nil || filter.ResolvedTo != nil {
+		resolvedFilterQuery := `EXISTS (
+			SELECT 1
+			FROM ticket_histories th
+			WHERE th.ticket_id = tickets.id
+				AND th.field = ?
+				AND th.new_value = ?`
+		args := []interface{}{tickets.HistoryFieldStatus, tickets.StatusResolved}
+		if filter.ResolvedFrom != nil {
+			resolvedFilterQuery += " AND th.created_at >= ?"
+			args = append(args, *filter.ResolvedFrom)
+		}
+		if filter.ResolvedTo != nil {
+			resolvedFilterQuery += " AND th.created_at <= ?"
+			args = append(args, *filter.ResolvedTo)
+		}
+		resolvedFilterQuery += ")"
+		query = query.Where(resolvedFilterQuery, args...)
+	}
 	if len(filter.AssigneeIDs) > 0 {
 		query = query.Where("assignee_id IN ?", filter.AssigneeIDs)
 	}

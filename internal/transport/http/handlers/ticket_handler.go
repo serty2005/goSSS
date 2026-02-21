@@ -603,6 +603,7 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 		Limit:       limit,
 		Offset:      offset,
 		CompanyID:   r.URL.Query().Get("company_id"),
+		CompanyIDs:  parseStringCSV(r.URL.Query().Get("company_ids")),
 		SearchQuery: r.URL.Query().Get("search"),
 		SortBy:      r.URL.Query().Get("sort_by"),
 		ArchiveMode: strings.TrimSpace(r.URL.Query().Get("archive_mode")),
@@ -623,6 +624,18 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	if periodTo := parseDateTimeParam(r.URL.Query().Get("period_to"), true); periodTo != nil {
 		filter.UpdatedTo = periodTo
+	}
+	if createdFrom := parseDateTimeParam(r.URL.Query().Get("created_from"), false); createdFrom != nil {
+		filter.CreatedFrom = createdFrom
+	}
+	if createdTo := parseDateTimeParam(r.URL.Query().Get("created_to"), true); createdTo != nil {
+		filter.CreatedTo = createdTo
+	}
+	if closedFrom := parseDateTimeParam(r.URL.Query().Get("closed_from"), false); closedFrom != nil {
+		filter.ResolvedFrom = closedFrom
+	}
+	if closedTo := parseDateTimeParam(r.URL.Query().Get("closed_to"), true); closedTo != nil {
+		filter.ResolvedTo = closedTo
 	}
 	if assetID := r.URL.Query().Get("asset_id"); assetID != "" {
 		filter.AssetID = &assetID
@@ -945,6 +958,27 @@ func parseUintCSV(raw string) []uint {
 		}
 		seen[item] = struct{}{}
 		out = append(out, item)
+	}
+	return out
+}
+
+func parseStringCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }

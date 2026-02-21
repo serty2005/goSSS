@@ -25,6 +25,10 @@ type TicketFilter struct {
 	Statuses        []string
 	ExcludeStatuses []string
 	ArchiveMode     string
+	CreatedFrom     *time.Time
+	CreatedTo       *time.Time
+	ResolvedFrom    *time.Time
+	ResolvedTo      *time.Time
 	UpdatedFrom     *time.Time
 	UpdatedTo       *time.Time
 	AssigneeIDs     []uint

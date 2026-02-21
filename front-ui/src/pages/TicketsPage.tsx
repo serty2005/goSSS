@@ -41,22 +41,15 @@ import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { useAuthStore } from '@/store/authStore';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { SafeHtmlContent } from '@/utils/safeHtml';
+import {
+  getTicketStatusMeta,
+  isClosedLikeTicketStatus,
+  TICKET_ACTIVE_STATUS_VALUES,
+  TICKET_STATUS_OPTIONS,
+} from '@/constants/ticketStatus';
 
 const { Text, Paragraph } = Typography;
 const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
-
-const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string }> = [
-  { value: 'new', label: 'Новая', color: 'blue' },
-  { value: 'in_progress', label: 'В работе', color: 'processing' },
-  { value: 'pending', label: 'Ожидание', color: 'orange' },
-  { value: 'deferred', label: 'Отложено', color: 'orange' },
-  { value: 'onsite', label: 'На выезд', color: 'cyan' },
-  { value: 'to_manager', label: 'Передать менеджеру', color: 'purple' },
-  { value: 'resolved', label: 'Решена', color: 'green' },
-  { value: 'spam', label: 'Спам', color: 'red' },
-  { value: 'execution', label: 'Реализация', color: 'magenta' },
-  { value: 'closed', label: 'Закрыта', color: 'default' },
-];
 
 type ViewMode = 'list' | 'cards' | 'table';
 
@@ -109,9 +102,6 @@ const resolveTicketCreatedSourceLabel = (source?: string) => {
   return 'Неизвестно';
 };
 
-const statusMeta = (status?: string) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
-const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
-const ACTIVE_STATUS_VALUES: TicketStatus[] = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
 const DATE_STAMP_MIN_WIDTH = '10ch';
 const TIME_STAMP_MIN_WIDTH = '5ch';
 const TABLE_COLUMN_KEYS = ['selection', 'number', 'status', 'company_display', 'assignee_display', 'reporter_display', 'subject', 'bitrix_deal_title', 'last_comment', 'created_at', 'last_activity', 'sync_with_bitrix'] as const;
@@ -335,8 +325,8 @@ const TicketsPage: React.FC = () => {
     if (!onlyActiveStatuses) {
       return statusValues;
     }
-    const filtered = statusValues.filter((value) => ACTIVE_STATUS_VALUES.includes(value));
-    return filtered.length ? filtered : ACTIVE_STATUS_VALUES;
+    const filtered = statusValues.filter((value) => TICKET_ACTIVE_STATUS_VALUES.includes(value));
+    return filtered.length ? filtered : TICKET_ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const effectiveStatus = effectiveStatusValues.join(',');
   const selectedTableColumnKeys = useMemo<TableColumnKey[]>(() => {
@@ -756,7 +746,7 @@ const TicketsPage: React.FC = () => {
         width: 140,
         minWidth: estimateHeaderMinWidth('Статус'),
         render: (value: TicketStatus, row) => {
-          const meta = statusMeta(value);
+          const meta = getTicketStatusMeta(value);
           const deferredTitle = value === 'deferred' ? formatDeferredTooltip(row.deferred_until) : '';
           const statusTag = <Tag color={meta.color}>{meta.label}</Tag>;
           return (
@@ -1160,7 +1150,7 @@ const TicketsPage: React.FC = () => {
             loading={isLoading}
             dataSource={visibleTickets}
             renderItem={(item) => {
-              const meta = statusMeta(item.status);
+              const meta = getTicketStatusMeta(item.status);
               const deferredTitle = item.status === 'deferred' ? formatDeferredTooltip(item.deferred_until) : '';
               return (
                 <List.Item
@@ -1214,7 +1204,7 @@ const TicketsPage: React.FC = () => {
         {viewMode === 'cards' && (
           <Row gutter={[12, 12]}>
             {visibleTickets.map((item) => {
-              const meta = statusMeta(item.status);
+              const meta = getTicketStatusMeta(item.status);
               const deferredTitle = item.status === 'deferred' ? formatDeferredTooltip(item.deferred_until) : '';
               return (
                 <Col key={item.id} xs={24} md={12} xl={8}>
@@ -1401,7 +1391,7 @@ const TicketsPage: React.FC = () => {
               ) : (
                 <Select
                   value={metadata.status}
-                  options={STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
+                  options={TICKET_STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
                   style={{ width: 220 }}
                   onChange={(nextStatus: TicketStatus) => {
                     if (!selectedTicketId || nextStatus === metadata.status) {
@@ -1462,7 +1452,7 @@ const TicketsPage: React.FC = () => {
               <SafeHtmlContent html={metadata.description || '<span>Нет описания</span>'} style={{ whiteSpace: 'pre-wrap' }} />
             </Card>
 
-            {isClosedLikeStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
+            {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
               <Card size="small" title="Результат">
                 <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
               </Card>

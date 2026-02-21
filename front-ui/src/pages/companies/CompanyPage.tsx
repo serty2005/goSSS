@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, theme as antTheme } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
@@ -38,6 +38,7 @@ const CompanyPage: React.FC = () => {
   const queryClient = useQueryClient();
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
+  const [ticketScope, setTicketScope] = useState<'own' | 'with_children'>('own');
   const [companyForm] = Form.useForm<{ title: string; address: string }>();
   const [contractForm] = Form.useForm<{ contract_type: string; contract_state: 'active' | 'inactive' }>();
   const user = useAuthStore((state) => state.user);
@@ -54,6 +55,39 @@ const CompanyPage: React.FC = () => {
     queryKey: ['company', id, 'infra'],
     queryFn: () => companiesApi.getInfrastructure(id!),
     enabled: !!id,
+  });
+
+  const { data: companyChildrenIDs = [], isLoading: loadingCompanyChildren } = useQuery({
+    queryKey: ['company', id, 'children-tree'],
+    enabled: !!id,
+    queryFn: async () => {
+      const rootID = String(id || '').trim();
+      if (!rootID) {
+        return [] as string[];
+      }
+
+      const visited = new Set<string>([rootID]);
+      const childIDs: string[] = [];
+      const queue: string[] = [rootID];
+
+      while (queue.length > 0) {
+        const parentID = queue.shift()!;
+        const response = await companiesApi.getChildren(parentID);
+        const items = response?.data || [];
+        items.forEach((item) => {
+          const childID = String(item.id || '').trim();
+          if (!childID || visited.has(childID)) {
+            return;
+          }
+          visited.add(childID);
+          childIDs.push(childID);
+          queue.push(childID);
+        });
+      }
+
+      return childIDs;
+    },
+    staleTime: 60_000,
   });
 
   const company = companyRes?.data;
@@ -137,6 +171,12 @@ const CompanyPage: React.FC = () => {
     return { servers, workstations, fiscals };
   }, [infraRes?.data]);
 
+  useEffect(() => {
+    if (companyChildrenIDs.length === 0 && ticketScope !== 'own') {
+      setTicketScope('own');
+    }
+  }, [companyChildrenIDs.length, ticketScope]);
+
   if (loadingCompany) {
     return (
       <div style={{ padding: 50, textAlign: 'center' }}>
@@ -147,6 +187,10 @@ const CompanyPage: React.FC = () => {
 
   if (!company) return <Empty description="Компания не найдена" />;
   const companyID = resolveCompanyID(company) || company.id || '';
+  const hasChildCompanies = companyChildrenIDs.length > 0;
+  const ticketCompanyIDs = ticketScope === 'with_children' && hasChildCompanies
+    ? [companyID, ...companyChildrenIDs]
+    : [companyID];
 
   const parentTitle = company.parent_title;
 
@@ -239,12 +283,28 @@ const CompanyPage: React.FC = () => {
       label: 'Тикеты',
       children: (
         <div style={{ marginTop: 10 }}>
-          <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <Space size={8} wrap>
+              {hasChildCompanies && (
+                <Segmented
+                  size="small"
+                  value={ticketScope}
+                  onChange={(value) => setTicketScope(value as 'own' | 'with_children')}
+                  options={[
+                    { label: 'Только текущая', value: 'own' },
+                    { label: 'Текущая + дочерние', value: 'with_children' },
+                  ]}
+                />
+              )}
+              {loadingCompanyChildren && (
+                <Text type="secondary">Загрузка дочерних компаний...</Text>
+              )}
+            </Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => console.log('Create Ticket')}>
               Создать тикет
             </Button>
           </div>
-          <TicketTable companyId={companyID} limit={10} />
+          <TicketTable companyIds={ticketCompanyIDs} limit={10} />
         </div>
       ),
     },
