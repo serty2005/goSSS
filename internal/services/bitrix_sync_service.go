@@ -1491,7 +1491,7 @@ func mapStageToTicketStatus(stageID string) string {
 	case "PREPARATION":
 		return tickets.StatusInProgress
 	case "PREPAYMENT_INVOIC":
-		return tickets.StatusDeferred
+		return tickets.StatusPending
 	case "EXECUTING":
 		return tickets.StatusOnsite
 	case "FINAL_INVOICE":

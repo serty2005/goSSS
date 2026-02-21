@@ -129,11 +129,16 @@ const formatDateStamp = (value?: string) => ({
   time: value ? dayjs(value).format('HH:mm') : '--:--',
 });
 
-const formatDeferredTooltip = (value?: string) => {
+const formatDeferredDateTime = (value?: string) => {
   if (!value) return '';
   const dt = dayjs(value);
   if (!dt.isValid()) return '';
-  return `Отложено до ${dt.format('DD.MM.YYYY HH:mm')}`;
+  return dt.format('DD.MM.YYYY HH:mm');
+};
+
+const formatDeferredTooltip = (value?: string) => {
+  const formatted = formatDeferredDateTime(value);
+  return formatted ? `Отложено до ${formatted}` : '';
 };
 
 const TicketDateStamp: React.FC<{ label: string; value?: string }> = ({ label, value }) => {
@@ -1421,10 +1426,22 @@ const TicketsPage: React.FC = () => {
                 />
               )}
               {isBitrixEnabled && <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />}
-              {metadata.status === 'deferred' && metadata.deferred_until && (
-                <Tooltip title={formatDeferredTooltip(metadata.deferred_until)}>
-                  <Tag color="orange">Отложено</Tag>
-                </Tooltip>
+              {metadata.status === 'deferred' && (
+                <Space size={4}>
+                  <Tooltip title={formatDeferredTooltip(metadata.deferred_until)}>
+                  </Tooltip>
+                  <Button
+                    type="link"
+                    size="small"
+                    style={{ paddingInline: 0 }}
+                    onClick={() => {
+                      setPendingStatus('deferred');
+                      setPendingDeferredAt(metadata.deferred_until || dayjs().add(1, 'hour').toISOString());
+                    }}
+                  >
+                    {metadata.deferred_until ? `до ${formatDeferredDateTime(metadata.deferred_until)}` : 'установить время'}
+                  </Button>
+                </Space>
               )}
               <Text type="secondary">Исполнитель: {metadata.assignee?.full_name || 'Не назначен'}</Text>
               <Button onClick={() => void toggleTicketSubscription()}>

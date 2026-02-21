@@ -38,6 +38,12 @@ const STATUS_OPTIONS: Array<{ value: TicketStatus; label: string; color: string 
 ];
 
 const isClosedLikeStatus = (status?: string) => status === 'resolved' || status === 'closed' || status === 'spam' || status === 'execution';
+const formatDeferredDateTime = (value?: string) => {
+  if (!value) return '';
+  const dt = dayjs(value);
+  if (!dt.isValid()) return '';
+  return dt.format('DD.MM.YYYY HH:mm');
+};
 const FIELD_HIGHLIGHT_MS = 2600;
 const fieldHighlightStyle: React.CSSProperties = {
   background: 'rgba(250, 173, 20, 0.22)',
@@ -906,6 +912,21 @@ const TicketDetailsPage: React.FC = () => {
               />
             )}
           </div>
+          {metadata.status === 'deferred' && (
+            <Space size={4}>
+              <Button
+                type="link"
+                size="small"
+                style={{ paddingInline: 0 }}
+                onClick={() => {
+                  setPendingStatus('deferred');
+                  setPendingDeferredAt(metadata.deferred_until || dayjs().add(1, 'hour').toISOString());
+                }}
+              >
+                {metadata.deferred_until ? `до ${formatDeferredDateTime(metadata.deferred_until)}` : 'установить время'}
+              </Button>
+            </Space>
+          )}
           {isBitrixEnabled && !hasBitrixLink && (
             <Button
               loading={updateBitrixMutation.isPending}

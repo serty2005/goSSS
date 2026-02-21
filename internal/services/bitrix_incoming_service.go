@@ -967,9 +967,16 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		changed = true
 	}
 	nextStatus := mapStageToTicketStatus(deal.StageID)
-	if nextStatus != "" && strings.TrimSpace(ticket.Status) != nextStatus {
-		ticket.Status = nextStatus
-		changed = true
+	if nextStatus != "" {
+		if strings.TrimSpace(ticket.Status) != nextStatus {
+			ticket.Status = nextStatus
+			changed = true
+		}
+		if nextStatus != tickets.StatusDeferred && (ticket.DeferredUntil != nil || ticket.DeferredByID != nil) {
+			ticket.DeferredUntil = nil
+			ticket.DeferredByID = nil
+			changed = true
+		}
 	}
 	pointID := int64FromAny(deal.Raw["UF_CRM_1766062398"])
 	if pointID > 0 {
