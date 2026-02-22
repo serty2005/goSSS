@@ -258,7 +258,7 @@ func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, "Некорректный multipart запрос")
 		return
 	}
