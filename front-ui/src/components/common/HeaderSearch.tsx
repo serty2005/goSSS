@@ -124,6 +124,8 @@ const HeaderSearch: React.FC = () => {
   const isSectionSearchPage = isCompaniesPage || isServersPage || isWorkstationsPage || isFiscalsPage;
   const screens = useBreakpoint();
   const isCompact = !screens.xl;
+  const isHeaderNarrow = !screens.xxl;
+  const isHeaderMobile = !screens.md;
 
   const ticketParamsRaw = useTicketParamsStore((state) => state.ticketParams);
   const setTicketParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
@@ -660,7 +662,47 @@ const HeaderSearch: React.FC = () => {
   if (isTicketsPage) {
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
     const filterContent = (
-      <Space direction="vertical" size="small" style={{ width: 420 }}>
+      <Space direction="vertical" size="small" style={{ width: 420, maxWidth: 'min(420px, calc(100vw - 40px))' }}>
+        {isHeaderNarrow && (
+          <div className="ticket-filter-popover-mobile-only">
+            <Text type="secondary" style={{ fontSize: 12 }}>Режим списка</Text>
+            <div style={{ marginTop: 6 }}>
+              <Segmented
+                block
+                value={archiveMode}
+                options={[
+                  { value: 'active', label: 'В работе' },
+                  { value: 'archive', label: 'Архив' },
+                ]}
+                onChange={(value) => {
+                  const nextMode = value as 'active' | 'archive';
+                  updateTicketParams({ archive_mode: nextMode });
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isHeaderNarrow && archiveMode !== 'archive' && (
+          <div className="ticket-filter-popover-mobile-only">
+            <Text type="secondary" style={{ fontSize: 12 }}>Сохранённый фильтр</Text>
+            <Select
+              allowClear
+              placeholder="Сохранённый фильтр"
+              value={selectedPresetID}
+              options={presets.map((item) => ({ value: item.id, label: item.name }))}
+              onChange={(value) => {
+                if (!value) {
+                  updateTicketParams({ preset_id: undefined });
+                  return;
+                }
+                applyPreset(value);
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+        )}
+
         <Space style={{ width: '100%' }} align="start">
           <Select
             value={ticketView}
@@ -800,7 +842,7 @@ const HeaderSearch: React.FC = () => {
     );
 
     return (
-      <Space size="small" wrap style={{ justifyContent: 'center' }}>
+      <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
         {selectedTicketIDs.length >= 1 && archiveMode !== 'archive' && (
           <Select
             placeholder={`Исполнитель (${selectedTicketIDs.length})`}
@@ -814,27 +856,31 @@ const HeaderSearch: React.FC = () => {
             }}
           />
         )}
-        <Segmented
-          value={archiveMode}
-          options={[
-            { value: 'active', label: 'В работе' },
-            { value: 'archive', label: 'Архив' },
-          ]}
-          onChange={(value) => {
-            const nextMode = value as 'active' | 'archive';
-            updateTicketParams({ archive_mode: nextMode });
-          }}
-        />
+        {!isHeaderNarrow && (
+          <Segmented
+            className="ticket-header-inline-archive"
+            value={archiveMode}
+            options={[
+              { value: 'active', label: 'В работе' },
+              { value: 'archive', label: 'Архив' },
+            ]}
+            onChange={(value) => {
+              const nextMode = value as 'active' | 'archive';
+              updateTicketParams({ archive_mode: nextMode });
+            }}
+          />
+        )}
         <Input.Search
           placeholder="Поиск по заявкам..."
           allowClear
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
-          style={{ width: isCompact ? 240 : 320 }}
+          style={{ width: isHeaderMobile ? 200 : (isCompact ? 240 : 320) }}
         />
-        {archiveMode !== 'archive' && (
+        {!isHeaderNarrow && archiveMode !== 'archive' && (
           <Select
+            className="ticket-header-inline-preset"
             allowClear
             placeholder="Сохранённый фильтр"
             value={selectedPresetID}
@@ -853,8 +899,11 @@ const HeaderSearch: React.FC = () => {
           <Button shape="circle" icon={<SettingOutlined />} />
         </Popover>
         <Button
+          className="ticket-header-new-ticket"
           type="primary"
           icon={<PlusOutlined />}
+          aria-label="Новая заявка"
+          style={isHeaderNarrow ? { width: 40, minWidth: 40, paddingInline: 0 } : undefined}
           onClick={() => {
             if (isTicketsListPage) {
               requestCreateTicket();
@@ -864,7 +913,7 @@ const HeaderSearch: React.FC = () => {
             navigate('/tickets');
           }}
         >
-          Новая заявка
+          {!isHeaderNarrow && <span className="ticket-header-new-ticket-label">Новая заявка</span>}
         </Button>
       </Space>
     );

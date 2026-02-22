@@ -512,8 +512,9 @@ const MainLayout: React.FC = () => {
       </Sider>
       <Layout>
         <Header
+          className="app-main-header"
           style={{
-            padding: '0 24px',
+            padding: screens.md ? '0 24px' : '0 12px',
             background: token.colorBgContainer,
             backdropFilter: 'blur(10px)',
             display: 'flex',
@@ -525,7 +526,7 @@ const MainLayout: React.FC = () => {
             zIndex: 10,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div className="app-header-left" style={{ display: 'flex', alignItems: 'center' }}>
             <Button
               type="text"
               icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -537,7 +538,7 @@ const MainLayout: React.FC = () => {
             />
           </div>
 
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+          <div className="app-header-center" style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
             {isReportHeader ? (
               <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, maxWidth: '100%', minWidth: 0, overflowX: 'auto' }}>
@@ -549,7 +550,7 @@ const MainLayout: React.FC = () => {
             )}
           </div>
 
-          <Space size="middle">
+          <Space size={screens.md ? 'middle' : 'small'} className="app-header-right" style={{ minWidth: 0 }}>
             <Popover
               trigger="click"
               placement="leftTop"
@@ -563,9 +564,9 @@ const MainLayout: React.FC = () => {
             </Popover>
 
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
-              <Space style={{ cursor: 'pointer' }}>
+              <Space className="app-header-user-trigger" style={{ cursor: 'pointer', minWidth: 0 }}>
                 {user && (
-                  <Text>{user.first_name} {user.last_name} • {user.schedule_type}</Text>
+                  <Text className="app-header-user-text">{user.first_name} {user.last_name} • {user.schedule_type}</Text>
                 )}
                 <Avatar style={{ backgroundColor: token.colorPrimary }}>
                   {user?.full_name?.[0] || 'A'}

@@ -1,6 +1,6 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, DatePicker, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -22,6 +22,7 @@ import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 
 const { Title, Text, Paragraph } = Typography;
+const { useBreakpoint } = Grid;
 const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
@@ -114,6 +115,7 @@ const BitrixSyncIndicator: React.FC<{ sync?: boolean; dealURL?: string }> = ({ s
 };
 
 const TicketDetailsPage: React.FC = () => {
+  const screens = useBreakpoint();
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -168,6 +170,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
+  const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
   const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
@@ -938,7 +941,7 @@ const TicketDetailsPage: React.FC = () => {
       <div className="ticket-overview-layout">
         <div className="ticket-overview-main">
                   <Card size="small" className="ticket-overview-service-card" title="Служебная информация">
-                    <Descriptions column={2} bordered size="small">
+                    <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
                       <Descriptions.Item label="Компания">
                         <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
                           {!isCompanyEditMode ? (
