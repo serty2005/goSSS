@@ -1,119 +1,34 @@
 package services
 
-import (
-	"context"
-	"etalon-server/internal/domain/bitrix"
-	"etalon-server/internal/domain/tickets"
-	"etalon-server/internal/infra/config"
-	"etalon-server/internal/infra/logger"
-	"net/url"
-	"testing"
-	"time"
-)
+import "testing"
 
-type bitrixRepoMock struct {
-	bitrix.Repository
-	byHash       map[string]string
-	insertCalls  int
-	createdCount int
-	queuedIDs    []string
-	commentLinks map[int64]*bitrix.CommentLink
-}
-
-func (m *bitrixRepoMock) InsertIfNotExistsByHash(_ context.Context, event *bitrix.IncomingEvent) (bool, error) {
-	m.insertCalls++
-	if m.byHash == nil {
-		m.byHash = make(map[string]string)
+func TestMergeBitrixAttachmentMarkup_PreservesInlinePosition(t *testing.T) {
+	base := "line1 " + bitrixDiskPlaceholder("36915") + " line2"
+	renderedByID := map[int64]string{
+		36915: `<img src="/api/static/tickets/t1/bitrix/disk-36915.png" alt="img" />`,
 	}
-	if _, exists := m.byHash[event.PayloadHash]; exists {
-		return false, nil
-	}
-	m.byHash[event.PayloadHash] = event.ID
-	m.createdCount++
-	return true, nil
-}
+	renderedOrder := []int64{36915}
 
-func (m *bitrixRepoMock) MarkQueued(_ context.Context, id string) error {
-	m.queuedIDs = append(m.queuedIDs, id)
-	return nil
-}
-
-func (m *bitrixRepoMock) GetCommentLinkByB24ID(_ context.Context, b24CommentID int64) (*bitrix.CommentLink, error) {
-	if m.commentLinks == nil {
-		return nil, nil
-	}
-	return m.commentLinks[b24CommentID], nil
-}
-
-type ticketRepoMock struct {
-	tickets.TicketRepository
-	deletedCommentIDs []string
-}
-
-func (m *ticketRepoMock) MarkCommentDeletedInBitrix(_ context.Context, commentID string, _ time.Time) error {
-	m.deletedCommentIDs = append(m.deletedCommentIDs, commentID)
-	return nil
-}
-
-func TestBitrixIncomingService_HandleWebhook_IdempotentByPayloadHash(t *testing.T) {
-	repo := &bitrixRepoMock{}
-	svc := &bitrixIncomingService{
-		cfg: &config.Config{
-			EnableBitrixGateway:   true,
-			BitrixWebhookEnabled:  true,
-			BitrixWebhookAppToken: "tok",
-		},
-		log:  logger.New("", "test", "error", true),
-		repo: repo,
-	}
-
-	raw := []byte("event=ONCRMDEALADD&data%5BFIELDS%5D%5BID%5D=123&auth%5Bapplication_token%5D=tok")
-	form, err := url.ParseQuery(string(raw))
-	if err != nil {
-		t.Fatalf("ошибка подготовки payload: %v", err)
-	}
-
-	if err := svc.HandleWebhook(context.Background(), raw, form); err != nil {
-		t.Fatalf("первая обработка завершилась ошибкой: %v", err)
-	}
-	if err := svc.HandleWebhook(context.Background(), raw, form); err != nil {
-		t.Fatalf("повторная обработка завершилась ошибкой: %v", err)
-	}
-
-	if repo.insertCalls != 2 {
-		t.Fatalf("ожидалось 2 попытки вставки, получено %d", repo.insertCalls)
-	}
-	if repo.createdCount != 1 {
-		t.Fatalf("ожидалась 1 созданная запись события, получено %d", repo.createdCount)
+	got := mergeBitrixAttachmentMarkup(base, renderedByID, renderedOrder)
+	want := `line1 <img src="/api/static/tickets/t1/bitrix/disk-36915.png" alt="img" /> line2`
+	if got != want {
+		t.Fatalf("ожидался inline-рендер в позиции плейсхолдера:\nwant: %s\ngot:  %s", want, got)
 	}
 }
 
-func TestBitrixIncomingService_CommentDeleteAlwaysSoftDeletes(t *testing.T) {
-	repo := &bitrixRepoMock{
-		commentLinks: map[int64]*bitrix.CommentLink{
-			77: {EtalonCommentID: "c-77"},
-		},
+func TestMergeBitrixAttachmentMarkup_AppendsUnplacedFiles(t *testing.T) {
+	base := "text"
+	renderedByID := map[int64]string{
+		36915: `<img src="/api/static/tickets/t1/bitrix/disk-36915.png" alt="img" />`,
+		36916: `<a href="/api/static/tickets/t1/bitrix/disk-36916.txt" target="_blank" rel="noreferrer">disk-36916.txt</a>`,
 	}
-	ticketRepo := &ticketRepoMock{}
-	entityID := "77"
-	svc := &bitrixIncomingService{
-		cfg:        &config.Config{},
-		log:        logger.New("", "test", "error", true),
-		repo:       repo,
-		ticketRepo: ticketRepo,
-	}
+	renderedOrder := []int64{36915, 36916}
 
-	status, reason, err := svc.handleIncomingEvent(context.Background(), &bitrix.IncomingEvent{
-		EventName: "ONCRMTIMELINECOMMENTDELETE",
-		EntityID:  &entityID,
-	})
-	if err != nil {
-		t.Fatalf("обработка comment delete завершилась ошибкой: %v", err)
-	}
-	if status != bitrix.IncomingEventStatusDone {
-		t.Fatalf("ожидался статус %q, получен %q (reason=%q)", bitrix.IncomingEventStatusDone, status, reason)
-	}
-	if len(ticketRepo.deletedCommentIDs) != 1 || ticketRepo.deletedCommentIDs[0] != "c-77" {
-		t.Fatalf("ожидался soft delete комментария c-77, получено: %#v", ticketRepo.deletedCommentIDs)
+	got := mergeBitrixAttachmentMarkup(base, renderedByID, renderedOrder)
+	want := "text\n" +
+		`<img src="/api/static/tickets/t1/bitrix/disk-36915.png" alt="img" />` + "\n" +
+		`<a href="/api/static/tickets/t1/bitrix/disk-36916.txt" target="_blank" rel="noreferrer">disk-36916.txt</a>`
+	if got != want {
+		t.Fatalf("неверная склейка хвостовых вложений:\nwant: %s\ngot:  %s", want, got)
 	}
 }

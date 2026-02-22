@@ -36,6 +36,29 @@ const getImageSources = (html: string): string[] => {
     .filter(Boolean);
 };
 
+const normalizeImageSourceForCompare = (value: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const normalizePathLike = (input: string) => {
+    const normalizedStatic = input
+      .replace(/^\/static\//i, '/api/static/')
+      .replace(/^static\//i, '/api/static/');
+    try {
+      return decodeURIComponent(normalizedStatic);
+    } catch {
+      return normalizedStatic;
+    }
+  };
+
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    return normalizePathLike(`${parsed.pathname}${parsed.search}`);
+  } catch {
+    return normalizePathLike(raw);
+  }
+};
+
 const detectLanguage = (source: string): CodeLanguage => {
   const normalized = String(source || '').trim();
 
@@ -205,8 +228,11 @@ export const SafeHtmlContent: React.FC<SafeHtmlContentProps> = ({ html, onClick,
         onClick={(event) => {
           const target = event.target as HTMLElement | null;
           if (target && target.tagName === 'IMG') {
-            const src = String((target as HTMLImageElement).src || '').trim();
-            const index = images.findIndex((item) => item === src || src.endsWith(item));
+            const src = normalizeImageSourceForCompare(String((target as HTMLImageElement).src || '').trim());
+            const index = images.findIndex((item) => {
+              const candidate = normalizeImageSourceForCompare(item);
+              return candidate === src || candidate.endsWith(src) || src.endsWith(candidate);
+            });
             if (index >= 0) {
               setPreviewIndex(index);
             }

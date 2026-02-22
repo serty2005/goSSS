@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,7 +13,14 @@ var (
 	bitrixUserTagRe        = regexp.MustCompile(`(?is)\[USER=(\d+)\](.*?)\[/USER\]`)
 	bitrixLeadingUserTagRe = regexp.MustCompile(`(?is)^\s*\[USER=\d+\].*?\[/USER\]\s*`)
 	bitrixLeadingUserIDRe  = regexp.MustCompile(`(?is)^\s*\[USER=(\d+)\].*?\[/USER\]\s*`)
-	bitrixAnyTagRe         = regexp.MustCompile(`(?is)\[[^\]]+\]`)
+	bitrixAnyTagRe         = regexp.MustCompile(`(?is)\[/?[A-Z][A-Z0-9_]*(?:=[^\]]+)?\]`)
+	bitrixURLTagRe         = regexp.MustCompile(`(?is)\[URL=([^\]]+)\](.*?)\[/URL\]`)
+	bitrixURLSimpleTagRe   = regexp.MustCompile(`(?is)\[URL\](.*?)\[/URL\]`)
+	bitrixIMGTagRe         = regexp.MustCompile(`(?is)\[IMG\](.*?)\[/IMG\]`)
+	bitrixDiskTagRe        = regexp.MustCompile(`(?is)\[DISK FILE ID=n?\d+\]`)
+	bitrixDiskTagIDRe      = regexp.MustCompile(`(?is)\[DISK FILE ID=n?(\d+)\]`)
+	bitrixParagraphTagRe   = regexp.MustCompile(`(?is)\[(?:/)?P(?:=[^\]]+)?\]`)
+	bitrixBreakTagRe       = regexp.MustCompile(`(?is)\[BR\]`)
 	etalonMentionLinkRe    = regexp.MustCompile(`(?is)<a[^>]*class=["'][^"']*etalon-user-link[^"']*["'][^>]*>(.*?)</a>`)
 	htmlDataUserIDRe       = regexp.MustCompile(`(?is)data-etalon-user-id=["']([^"']+)["']`)
 	htmlDataUserNameRe     = regexp.MustCompile(`(?is)data-etalon-user-name=["']([^"']+)["']`)
@@ -31,13 +39,15 @@ var (
 	multiBreakRe           = regexp.MustCompile(`\n{3,}`)
 )
 
+const bitrixDiskPlaceholderPrefix = "__B24_DISK_"
+
 func normalizeBitrixCommentForEtalon(raw string, bitrixAuthorID *int64, integrationUserID int64) (string, *int64) {
 	text := strings.TrimSpace(raw)
 	if text == "" {
 		return "", nil
 	}
 	if integrationUserID <= 0 || bitrixAuthorID == nil || *bitrixAuthorID != integrationUserID {
-		return text, nil
+		return convertBitrixMarkupForEtalon(text), nil
 	}
 
 	var extractedAuthorID *int64
@@ -55,51 +65,11 @@ func normalizeBitrixCommentForEtalon(raw string, bitrixAuthorID *int64, integrat
 		}
 		text = next
 	}
-	return text, extractedAuthorID
+	return convertBitrixMarkupForEtalon(text), extractedAuthorID
 }
 
 func convertBitrixDescriptionForEtalon(raw string) string {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return ""
-	}
-
-	matches := bitrixUserTagRe.FindAllStringSubmatchIndex(text, -1)
-	if len(matches) == 0 {
-		return html.EscapeString(text)
-	}
-
-	var builder strings.Builder
-	last := 0
-	for _, match := range matches {
-		if len(match) < 6 {
-			continue
-		}
-		if match[0] > last {
-			builder.WriteString(html.EscapeString(text[last:match[0]]))
-		}
-
-		userID := strings.TrimSpace(text[match[2]:match[3]])
-		userName := strings.TrimSpace(bitrixAnyTagRe.ReplaceAllString(text[match[4]:match[5]], ""))
-		if userName == "" {
-			userName = fmt.Sprintf("Пользователь #%s", userID)
-		}
-
-		builder.WriteString(
-			fmt.Sprintf(
-				`<a href="#" class="etalon-user-link" data-etalon-user-id="%s" data-etalon-user-name="%s">%s</a>`,
-				html.EscapeString(userID),
-				html.EscapeString(userName),
-				html.EscapeString(userName),
-			),
-		)
-		last = match[1]
-	}
-	if last < len(text) {
-		builder.WriteString(html.EscapeString(text[last:]))
-	}
-
-	return builder.String()
+	return convertBitrixMarkupForEtalon(raw)
 }
 
 type mentionResolver func(etalonUserID uint) (*int64, bool)
@@ -153,9 +123,9 @@ func convertEtalonHTMLToBitrix(raw string, resolve mentionResolver) string {
 	text = htmlQuoteRe.ReplaceAllString(text, "[QUOTE]$1[/QUOTE]")
 
 	text = htmlBrRe.ReplaceAllString(text, "\n")
-	text = htmlParagraphOpenRe.ReplaceAllString(text, "\n")
+	text = htmlParagraphOpenRe.ReplaceAllString(text, "")
 	text = htmlParagraphCloseRe.ReplaceAllString(text, "\n")
-	text = htmlDivOpenRe.ReplaceAllString(text, "\n")
+	text = htmlDivOpenRe.ReplaceAllString(text, "")
 	text = htmlDivCloseRe.ReplaceAllString(text, "\n")
 	text = stripHTMLTags(text)
 	text = html.UnescapeString(text)
@@ -163,6 +133,131 @@ func convertEtalonHTMLToBitrix(raw string, resolve mentionResolver) string {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = multiBreakRe.ReplaceAllString(text, "\n\n")
 	return strings.TrimSpace(text)
+}
+
+func convertBitrixMarkupForEtalon(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = html.UnescapeString(text)
+	text = html.EscapeString(text)
+	text = bitrixParagraphTagRe.ReplaceAllString(text, "\n")
+	text = bitrixBreakTagRe.ReplaceAllString(text, "\n")
+
+	text = bitrixUserTagRe.ReplaceAllStringFunc(text, func(token string) string {
+		match := bitrixUserTagRe.FindStringSubmatch(token)
+		if len(match) < 3 {
+			return token
+		}
+		userID := strings.TrimSpace(html.UnescapeString(match[1]))
+		userName := strings.TrimSpace(bitrixAnyTagRe.ReplaceAllString(html.UnescapeString(match[2]), ""))
+		if userName == "" {
+			userName = fmt.Sprintf("Пользователь #%s", userID)
+		}
+		return fmt.Sprintf(
+			`<a href="#" class="etalon-user-link" data-etalon-user-id="%s" data-etalon-user-name="%s">%s</a>`,
+			html.EscapeString(userID),
+			html.EscapeString(userName),
+			html.EscapeString(userName),
+		)
+	})
+
+	text = bitrixURLTagRe.ReplaceAllStringFunc(text, func(token string) string {
+		match := bitrixURLTagRe.FindStringSubmatch(token)
+		if len(match) < 3 {
+			return token
+		}
+		href := sanitizeBitrixURLForEtalon(html.UnescapeString(match[1]))
+		label := strings.TrimSpace(bitrixAnyTagRe.ReplaceAllString(html.UnescapeString(match[2]), ""))
+		if label == "" {
+			label = href
+		}
+		if href == "" {
+			return html.EscapeString(label)
+		}
+		return fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">%s</a>`, html.EscapeString(href), html.EscapeString(label))
+	})
+
+	text = bitrixURLSimpleTagRe.ReplaceAllStringFunc(text, func(token string) string {
+		match := bitrixURLSimpleTagRe.FindStringSubmatch(token)
+		if len(match) < 2 {
+			return token
+		}
+		href := sanitizeBitrixURLForEtalon(html.UnescapeString(match[1]))
+		if href == "" {
+			return html.EscapeString(strings.TrimSpace(html.UnescapeString(match[1])))
+		}
+		return fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">%s</a>`, html.EscapeString(href), html.EscapeString(href))
+	})
+
+	text = bitrixIMGTagRe.ReplaceAllStringFunc(text, func(token string) string {
+		match := bitrixIMGTagRe.FindStringSubmatch(token)
+		if len(match) < 2 {
+			return token
+		}
+		srcRaw := strings.TrimSpace(html.UnescapeString(match[1]))
+		if srcRaw == "" {
+			return ""
+		}
+		if diskMatch := bitrixDiskTagIDRe.FindStringSubmatch(srcRaw); len(diskMatch) >= 2 {
+			return bitrixDiskPlaceholder(diskMatch[1])
+		}
+		if bitrixDiskTagRe.MatchString(srcRaw) {
+			return ""
+		}
+		src := sanitizeBitrixURLForEtalon(srcRaw)
+		if src == "" {
+			return ""
+		}
+		return fmt.Sprintf(`<img src="%s" alt="Изображение" />`, html.EscapeString(src))
+	})
+
+	text = bitrixDiskTagIDRe.ReplaceAllStringFunc(text, func(token string) string {
+		match := bitrixDiskTagIDRe.FindStringSubmatch(token)
+		if len(match) < 2 {
+			return ""
+		}
+		return bitrixDiskPlaceholder(match[1])
+	})
+	text = bitrixDiskTagRe.ReplaceAllString(text, "")
+	text = bitrixAnyTagRe.ReplaceAllString(text, "")
+	text = strings.ReplaceAll(text, "\n", "<br />")
+	text = strings.ReplaceAll(text, "&lt;br /&gt;", "<br />")
+	return strings.TrimSpace(text)
+}
+
+func bitrixDiskPlaceholder(id string) string {
+	value := strings.TrimSpace(id)
+	if value == "" {
+		return ""
+	}
+	return bitrixDiskPlaceholderPrefix + value + "__"
+}
+
+func sanitizeBitrixURLForEtalon(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, "\\/", "/")
+	if strings.HasPrefix(value, "/") {
+		return value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	switch scheme {
+	case "http", "https", "mailto", "tel":
+		return value
+	default:
+		return ""
+	}
 }
 
 func extractAttribute(value string, pattern *regexp.Regexp) string {
@@ -185,6 +280,3 @@ func extractInnerHTML(tag string) string {
 	}
 	return html.UnescapeString(tag[start+1 : end])
 }
-
-// TODO: Для умного редактора комментариев расширить обработку BBCode:
-// распознавать вложения изображений и файлов в унифицированный HTML-формат Etalon.

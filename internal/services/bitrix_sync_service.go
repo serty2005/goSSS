@@ -40,6 +40,9 @@ var bitrixServicePointSelectFields = []string{
 }
 
 var bitrixImageTagRe = regexp.MustCompile(`(?is)\[IMG\].*?\[/IMG\]`)
+var bitrixStaticFileURLTagRe = regexp.MustCompile(`(?is)\[URL=[^\]]*(?:/api/static/|/static/)[^\]]*\].*?\[/URL\]`)
+var bitrixStaticFileSimpleURLTagRe = regexp.MustCompile(`(?is)\[URL\]\s*(?:https?://[^\s\]]+)?(?:/api/static/|/static/)[^\]]*\[/URL\]`)
+var bitrixInlineStaticRefRe = regexp.MustCompile(`(?is)\[IMG\].*?\[/IMG\]|\[URL=[^\]]*(?:/api/static/|/static/)[^\]]*\].*?\[/URL\]|\[URL\]\s*(?:https?://[^\s\]]+)?(?:/api/static/|/static/)[^\]]*\[/URL\]`)
 
 type BitrixSyncService interface {
 	IsEnabled() bool
@@ -436,6 +439,18 @@ func (s *bitrixSyncService) syncPendingComments(ctx context.Context, ticket *tic
 			return err
 		}
 		s.setCommentSuppress(ctx, b24ID)
+		if len(files) > 0 {
+			finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, b24ID, message, files)
+			if textErr != nil {
+				return textErr
+			}
+			if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
+				if err := s.client.TimelineCommentUpdateWithFiles(ctx, b24ID, finalText, nil); err != nil {
+					return err
+				}
+				s.setCommentSuppress(ctx, b24ID)
+			}
+		}
 		if err := s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
 			EtalonCommentID: comment.ID,
 			B24CommentID:    b24ID,
@@ -1058,6 +1073,11 @@ func (s *bitrixSyncService) rewriteCommentForBitrixImagePreview(
 	if commentID <= 0 || len(files) == 0 {
 		return commentText, nil
 	}
+	if len(bitrixImageTagRe.FindAllString(commentText, -1)) == 0 &&
+		len(bitrixStaticFileURLTagRe.FindAllString(commentText, -1)) == 0 &&
+		len(bitrixStaticFileSimpleURLTagRe.FindAllString(commentText, -1)) == 0 {
+		return commentText, nil
+	}
 	item, err := s.client.TimelineCommentGet(ctx, commentID)
 	if err != nil {
 		return commentText, err
@@ -1065,11 +1085,14 @@ func (s *bitrixSyncService) rewriteCommentForBitrixImagePreview(
 	if item == nil || len(item.Raw) == 0 {
 		return commentText, nil
 	}
-	imageIDs := matchImageDiskFileIDsByName(item.Raw, files)
-	if len(imageIDs) == 0 {
+	diskIDs := matchImageDiskFileIDsByName(item.Raw, files)
+	if len(diskIDs) == 0 {
+		diskIDs = b24.ExtractTimelineCommentDiskFileIDs(item.Raw)
+	}
+	if len(diskIDs) == 0 {
 		return commentText, nil
 	}
-	return replaceBitrixImageTagsWithDiskMarkers(commentText, imageIDs), nil
+	return replaceBitrixInlineFileReferencesWithDiskMarkers(commentText, diskIDs), nil
 }
 
 func matchImageDiskFileIDsByName(raw map[string]interface{}, files []b24.FileToUpload) []int64 {
@@ -1148,7 +1171,7 @@ func extractImageEntriesFromRawFiles(filesRaw interface{}) []struct {
 			if !ok {
 				continue
 			}
-			if !boolFromAny(m["image"]) {
+			if !isImageFileEntry(m) {
 				continue
 			}
 			id := int64FromAny(m["id"])
@@ -1175,7 +1198,7 @@ func extractImageEntriesFromRawFiles(filesRaw interface{}) []struct {
 			if !ok {
 				continue
 			}
-			if !boolFromAny(m["image"]) {
+			if !isImageFileEntry(m) {
 				continue
 			}
 			id := int64FromAny(m["id"])
@@ -1197,6 +1220,51 @@ func extractImageEntriesFromRawFiles(filesRaw interface{}) []struct {
 	return out
 }
 
+func isImageFileEntry(raw map[string]interface{}) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if hasImageMarker(raw["image"]) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(toString(raw["type"])), "image") {
+		return true
+	}
+	contentType := strings.ToLower(strings.TrimSpace(toString(raw["contentType"])))
+	if strings.HasPrefix(contentType, "image/") {
+		return true
+	}
+	contentType = strings.ToLower(strings.TrimSpace(toString(raw["CONTENT_TYPE"])))
+	if strings.HasPrefix(contentType, "image/") {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(toString(raw["name"])))
+	if name == "" {
+		name = strings.ToLower(strings.TrimSpace(toString(raw["NAME"])))
+	}
+	return strings.HasSuffix(name, ".png") ||
+		strings.HasSuffix(name, ".jpg") ||
+		strings.HasSuffix(name, ".jpeg") ||
+		strings.HasSuffix(name, ".webp") ||
+		strings.HasSuffix(name, ".gif") ||
+		strings.HasSuffix(name, ".bmp") ||
+		strings.HasSuffix(name, ".svg")
+}
+
+func hasImageMarker(value interface{}) bool {
+	if boolFromAny(value) {
+		return true
+	}
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return len(typed) > 0
+	case []interface{}:
+		return len(typed) > 0
+	default:
+		return false
+	}
+}
+
 func replaceBitrixImageTagsWithDiskMarkers(comment string, imageDiskIDs []int64) string {
 	if len(imageDiskIDs) == 0 {
 		return comment
@@ -1212,10 +1280,38 @@ func replaceBitrixImageTagsWithDiskMarkers(comment string, imageDiskIDs []int64)
 		}
 		id := imageDiskIDs[index]
 		index++
-		return fmt.Sprintf("[IMG][DISK FILE ID=n%d][/IMG]", id)
+		return fmt.Sprintf("[DISK FILE ID=n%d]", id)
 	})
 	for ; index < len(imageDiskIDs); index++ {
-		result = strings.TrimSpace(result + "\n" + fmt.Sprintf("[IMG][DISK FILE ID=n%d][/IMG]", imageDiskIDs[index]))
+		result = strings.TrimSpace(result + "\n" + fmt.Sprintf("[DISK FILE ID=n%d]", imageDiskIDs[index]))
+	}
+	return strings.TrimSpace(result)
+}
+
+func replaceBitrixInlineFileReferencesWithDiskMarkers(comment string, diskIDs []int64) string {
+	if len(diskIDs) == 0 {
+		return comment
+	}
+	text := strings.TrimSpace(comment)
+	if text == "" {
+		return comment
+	}
+
+	index := 0
+	replaceNext := func() string {
+		if index >= len(diskIDs) {
+			return ""
+		}
+		id := diskIDs[index]
+		index++
+		return fmt.Sprintf("[DISK FILE ID=n%d]", id)
+	}
+
+	result := bitrixInlineStaticRefRe.ReplaceAllStringFunc(text, func(_ string) string {
+		return replaceNext()
+	})
+	for ; index < len(diskIDs); index++ {
+		result = strings.TrimSpace(result + "\n" + fmt.Sprintf("[DISK FILE ID=n%d]", diskIDs[index]))
 	}
 	return strings.TrimSpace(result)
 }

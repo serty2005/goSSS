@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
+
+var bitrixDiskPlaceholderRe = regexp.MustCompile(regexp.QuoteMeta(bitrixDiskPlaceholderPrefix) + `([0-9]+)__`)
 
 var (
 	ErrBitrixWebhookUnauthorized = errors.New("неверный application_token вебхука Bitrix24")
@@ -678,7 +681,8 @@ func (s *bitrixIncomingService) enrichCommentWithBitrixAttachments(
 		return baseText, nil
 	}
 
-	rendered := make([]string, 0, len(diskIDs))
+	renderedByID := make(map[int64]string, len(diskIDs))
+	renderedOrder := make([]int64, 0, len(diskIDs))
 	for _, diskID := range diskIDs {
 		meta, err := s.client.DiskFileGet(ctx, diskID)
 		if err != nil {
@@ -699,17 +703,58 @@ func (s *bitrixIncomingService) enrichCommentWithBitrixAttachments(
 		if publicURL == "" {
 			continue
 		}
-		rendered = append(rendered, renderBitrixAttachmentHTML(publicURL, fileName, mimeType))
+		renderedByID[diskID] = renderBitrixAttachmentHTML(publicURL, fileName, mimeType)
+		renderedOrder = append(renderedOrder, diskID)
 	}
-	if len(rendered) == 0 {
+	if len(renderedOrder) == 0 {
 		return baseText, nil
 	}
 
 	text := strings.TrimSpace(baseText)
-	if text == "" {
-		return strings.Join(rendered, "\n"), nil
+	return mergeBitrixAttachmentMarkup(text, renderedByID, renderedOrder), nil
+}
+
+func mergeBitrixAttachmentMarkup(baseText string, renderedByID map[int64]string, renderedOrder []int64) string {
+	text := strings.TrimSpace(baseText)
+	used := make(map[int64]struct{}, len(renderedOrder))
+	if text != "" {
+		text = bitrixDiskPlaceholderRe.ReplaceAllStringFunc(text, func(token string) string {
+			match := bitrixDiskPlaceholderRe.FindStringSubmatch(token)
+			if len(match) < 2 {
+				return ""
+			}
+			id, convErr := strconv.ParseInt(strings.TrimSpace(match[1]), 10, 64)
+			if convErr != nil || id <= 0 {
+				return ""
+			}
+			rendered, ok := renderedByID[id]
+			if !ok || strings.TrimSpace(rendered) == "" {
+				return ""
+			}
+			used[id] = struct{}{}
+			return rendered
+		})
+		text = strings.TrimSpace(text)
 	}
-	return text + "\n" + strings.Join(rendered, "\n"), nil
+
+	tail := make([]string, 0, len(renderedOrder))
+	for _, id := range renderedOrder {
+		if _, exists := used[id]; exists {
+			continue
+		}
+		rendered := strings.TrimSpace(renderedByID[id])
+		if rendered == "" {
+			continue
+		}
+		tail = append(tail, rendered)
+	}
+	if text == "" {
+		return strings.Join(tail, "\n")
+	}
+	if len(tail) == 0 {
+		return text
+	}
+	return text + "\n" + strings.Join(tail, "\n")
 }
 
 func (s *bitrixIncomingService) persistBitrixCommentAttachment(
