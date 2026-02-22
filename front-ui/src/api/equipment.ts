@@ -12,9 +12,14 @@ import {
 
 export const equipmentApi = {
   // --- Servers ---
-  listServers: async (term = '', limit = 50, offset = 0) => {
+  listServers: async (term = '', limit = 50, offset = 0, companyIDs: string[] = []) => {
     const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/servers', {
-      params: { term, limit, offset },
+      params: {
+        term,
+        limit,
+        offset,
+        ...(companyIDs.length > 0 ? { company_ids: companyIDs.join(',') } : {}),
+      },
     });
     return response.data;
   },

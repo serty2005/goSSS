@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/domain/server"
 	infraDB "etalon-server/internal/infra/db"
 	"time"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -19,6 +20,31 @@ type serverRepo struct {
 
 func NewServerRepo(db *gorm.DB) server.Repository {
 	return &serverRepo{db: db}
+}
+
+func (r *serverRepo) listBaseQuery(ctx context.Context) *gorm.DB {
+	return r.dbOrTx(ctx, nil).WithContext(ctx).
+		Model(&server.Server{}).
+		Joins("LEFT JOIN companies owner_comp ON owner_comp.id = servers.owner_id").
+		Joins("LEFT JOIN companies owner_parent ON owner_parent.id = owner_comp.parent_id")
+}
+
+func (r *serverRepo) applyCompanyFilter(query *gorm.DB, companyIDs []string) *gorm.DB {
+	cleanIDs := make([]string, 0, len(companyIDs))
+	for _, id := range companyIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" {
+			cleanIDs = append(cleanIDs, trimmed)
+		}
+	}
+	if len(cleanIDs) == 0 {
+		return query
+	}
+	return query.Where("(servers.owner_id IN ? OR owner_comp.parent_id IN ?)", cleanIDs, cleanIDs)
+}
+
+func (r *serverRepo) applyServerListSelect(query *gorm.DB) *gorm.DB {
+	return query.Select("servers.*, owner_comp.title AS owner_title, owner_comp.parent_id AS owner_parent_id, owner_parent.title AS owner_parent_title")
 }
 
 func (r *serverRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
@@ -96,27 +122,34 @@ func (r *serverRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*server.
 	return serverMap, nil
 }
 
-func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int) ([]server.Server, error) {
+func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]server.Server, error) {
 	var servers []server.Server
-	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
-		Limit(limit).Offset(offset).Find(&servers).Error
+	pattern := "%" + term + "%"
+	query := r.listBaseQuery(ctx)
+	query = r.applyCompanyFilter(query, companyIDs)
+	query = query.Where("servers.id::text ILIKE ? OR servers.device_name ILIKE ? OR servers.ip ILIKE ? OR servers.unique_id ILIKE ? OR servers.description ILIKE ? OR servers.server_name ILIKE ? OR servers.crm_id ILIKE ?",
+		pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+	err := r.applyServerListSelect(query).
+		Limit(limit).
+		Offset(offset).
+		Order("servers.updated_at DESC").
+		Find(&servers).Error
 	return servers, err
 }
 
-func (r *serverRepo) List(ctx context.Context, limit, offset int) ([]server.Server, int64, error) {
+func (r *serverRepo) List(ctx context.Context, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
 	var total int64
-	query := r.dbOrTx(ctx, nil).WithContext(ctx).Model(&server.Server{})
+	query := r.listBaseQuery(ctx)
+	query = r.applyCompanyFilter(query, companyIDs)
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var servers []server.Server
-	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+	if err := r.applyServerListSelect(r.applyCompanyFilter(r.listBaseQuery(ctx), companyIDs)).
 		Limit(limit).
 		Offset(offset).
-		Order("updated_at DESC").
+		Order("servers.updated_at DESC").
 		Find(&servers).Error; err != nil {
 		return nil, 0, err
 	}
@@ -124,11 +157,11 @@ func (r *serverRepo) List(ctx context.Context, limit, offset int) ([]server.Serv
 	return servers, total, nil
 }
 
-func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]server.Server, int64, error) {
+func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
 	pattern := "%" + term + "%"
-	base := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Model(&server.Server{}).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
+	base := r.listBaseQuery(ctx)
+	base = r.applyCompanyFilter(base, companyIDs)
+	base = base.Where("servers.id::text ILIKE ? OR servers.device_name ILIKE ? OR servers.ip ILIKE ? OR servers.unique_id ILIKE ? OR servers.description ILIKE ? OR servers.server_name ILIKE ? OR servers.crm_id ILIKE ?",
 			pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 
 	var total int64
@@ -137,12 +170,10 @@ func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, of
 	}
 
 	var servers []server.Server
-	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR ip ILIKE ? OR unique_id ILIKE ? OR description ILIKE ? OR server_name ILIKE ? OR crm_id ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern, pattern).
+	if err := r.applyServerListSelect(base.Session(&gorm.Session{})).
 		Limit(limit).
 		Offset(offset).
-		Order("updated_at DESC").
+		Order("servers.updated_at DESC").
 		Find(&servers).Error; err != nil {
 		return nil, 0, err
 	}

@@ -40,6 +40,11 @@ type Server struct {
 	HealthStatus           string         `gorm:"type:varchar(50);default:'ok';index"` // Статус состояния (ok, attention_required)
 	HealthStatusBeforeLock *string        `gorm:"type:varchar(50)"`
 	StatusDetails          datatypes.JSON `gorm:"type:jsonb"`
+
+	// Поля только для списков (заполняются JOIN-ами, не хранятся в таблице servers)
+	OwnerTitle       *string `gorm:"->;column:owner_title" json:"owner_title,omitempty"`
+	OwnerParentID    *string `gorm:"->;column:owner_parent_id" json:"owner_parent_id,omitempty"`
+	OwnerParentTitle *string `gorm:"->;column:owner_parent_title" json:"owner_parent_title,omitempty"`
 }
 
 func (s *Server) BeforeCreate(tx *gorm.DB) (err error) {

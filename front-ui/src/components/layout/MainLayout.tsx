@@ -96,6 +96,7 @@ const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
 const MainLayout: React.FC = () => {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [headerConfig, setHeaderConfig] = useState<ReportHeaderConfig | null>(null);
+  const [headerAddon, setHeaderAddon] = useState<React.ReactNode | null>(null);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
   const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
     primary: null,
@@ -178,6 +179,10 @@ const MainLayout: React.FC = () => {
     if (!location.pathname.startsWith('/reports/')) {
       setHeaderConfig(null);
     }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    setHeaderAddon(null);
   }, [location.pathname]);
 
   const pushNotification = useCallback((payload: TicketRealtimePayload) => {
@@ -511,21 +516,26 @@ const MainLayout: React.FC = () => {
         />
       </Sider>
       <Layout>
-        <Header
-          className="app-main-header"
+        <div
           style={{
-            padding: screens.md ? '0 24px' : '0 12px',
-            background: token.colorBgContainer,
-            backdropFilter: 'blur(10px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
             position: 'sticky',
             top: 0,
             zIndex: 10,
+            background: token.colorBgContainer,
+            backdropFilter: 'blur(10px)',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
+          <Header
+            className="app-main-header"
+            style={{
+              padding: screens.md ? '0 24px' : '0 12px',
+              background: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
           <div className="app-header-left" style={{ display: 'flex', alignItems: 'center' }}>
             <Button
               type="text"
@@ -574,7 +584,18 @@ const MainLayout: React.FC = () => {
               </Space>
             </Dropdown>
           </Space>
-        </Header>
+          </Header>
+          {headerAddon ? (
+            <div
+              style={{
+                padding: screens.md ? '8px 24px 12px' : '8px 12px 12px',
+                borderTop: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <div style={{ maxWidth: '100%' }}>{headerAddon}</div>
+            </div>
+          ) : null}
+        </div>
         <Content
           style={{
             margin: '24px 16px',
@@ -584,7 +605,7 @@ const MainLayout: React.FC = () => {
             position: 'relative',
           }}
         >
-          <LayoutHeaderContext.Provider value={{ headerConfig, setHeaderConfig }}>
+          <LayoutHeaderContext.Provider value={{ headerConfig, setHeaderConfig, headerAddon, setHeaderAddon }}>
             <Outlet />
           </LayoutHeaderContext.Provider>
           <div id="inline-message-host" aria-live="polite" />

@@ -17,9 +17,9 @@ type Repository interface {
 	GetByIDUnscoped(ctx context.Context, internalID string) (*Server, error)
 
 	GetAllIDsAndDates(ctx context.Context) (map[string]*Server, error)
-	List(ctx context.Context, limit, offset int) ([]Server, int64, error)
-	Search(ctx context.Context, term string, limit, offset int) ([]Server, error)
-	SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]Server, int64, error)
+	List(ctx context.Context, limit, offset int, companyIDs []string) ([]Server, int64, error)
+	Search(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]Server, error)
+	SearchWithTotal(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]Server, int64, error)
 
 	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*Server, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]Server, error)

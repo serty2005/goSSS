@@ -12,6 +12,7 @@ import (
 	"etalon-server/internal/transport/http/validators"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -47,6 +48,7 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	term := r.URL.Query().Get("term")
+	companyIDs := parseCSVQuery(r.URL.Query().Get("company_ids"))
 	if limit <= 0 {
 		limit = 50
 	}
@@ -60,9 +62,9 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 		err   error
 	)
 	if term != "" {
-		items, total, err = h.service.Search(r.Context(), term, limit, offset)
+		items, total, err = h.service.Search(r.Context(), term, limit, offset, companyIDs)
 	} else {
-		items, total, err = h.service.List(r.Context(), limit, offset)
+		items, total, err = h.service.List(r.Context(), limit, offset, companyIDs)
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -198,6 +200,9 @@ func toServerResponse(item server.Server) map[string]interface{} {
 		"server_version":     item.ServerVersion,
 		"description":        item.Description,
 		"owner_id":           item.OwnerID,
+		"owner_title":        item.OwnerTitle,
+		"owner_parent_id":    item.OwnerParentID,
+		"owner_parent_title": item.OwnerParentTitle,
 		"owner_binding_mode": item.OwnerBindingMode,
 		"additional_owners":  item.AdditionalOwners,
 		"server_name":        item.ServerName,
@@ -211,4 +216,19 @@ func toServerResponse(item server.Server) map[string]interface{} {
 		"teamviewer":         item.Teamviewer,
 		"anydesk":            item.Anydesk,
 	}
+}
+
+func parseCSVQuery(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

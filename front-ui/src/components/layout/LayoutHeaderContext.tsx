@@ -9,6 +9,8 @@ export type ReportHeaderConfig = {
 type LayoutHeaderContextValue = {
   headerConfig: ReportHeaderConfig | null;
   setHeaderConfig: (config: ReportHeaderConfig | null) => void;
+  headerAddon: React.ReactNode | null;
+  setHeaderAddon: (node: React.ReactNode | null) => void;
 };
 
 export const LayoutHeaderContext = createContext<LayoutHeaderContextValue | null>(null);
@@ -20,4 +22,3 @@ export const useLayoutHeader = () => {
   }
   return context;
 };
-

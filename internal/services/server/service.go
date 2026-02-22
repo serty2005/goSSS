@@ -165,12 +165,12 @@ func (s *serviceImpl) Get(ctx context.Context, id string) (*server.Server, error
 	return s.repo.GetByID(ctx, id)
 }
 
-func (s *serviceImpl) List(ctx context.Context, limit, offset int) ([]server.Server, int64, error) {
-	return s.repo.List(ctx, limit, offset)
+func (s *serviceImpl) List(ctx context.Context, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
+	return s.repo.List(ctx, limit, offset, companyIDs)
 }
 
-func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]server.Server, int64, error) {
-	return s.repo.SearchWithTotal(ctx, term, limit, offset)
+func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
+	return s.repo.SearchWithTotal(ctx, term, limit, offset, companyIDs)
 }
 
 func cleanData(data map[string]interface{}) {
