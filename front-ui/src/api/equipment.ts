@@ -39,6 +39,11 @@ export const equipmentApi = {
     return response.data;
   },
 
+  deleteServer: async (uuid: string) => {
+    const response = await apiClient.delete<ApiResponse<unknown>>(`/servers/${uuid}`);
+    return response.data;
+  },
+
   // --- Workstations ---
   listWorkstations: async (term = '', limit = 50, offset = 0) => {
     const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/workstations', {
@@ -54,6 +59,11 @@ export const equipmentApi = {
 
   updateWorkstation: async (uuid: string, data: UpdateWorkstationPayload) => {
     const response = await apiClient.put<ApiResponse<WorkstationDetailDTO>>(`/workstations/${uuid}`, data);
+    return response.data;
+  },
+
+  deleteWorkstation: async (uuid: string) => {
+    const response = await apiClient.delete<ApiResponse<unknown>>(`/workstations/${uuid}`);
     return response.data;
   },
 
@@ -76,7 +86,8 @@ export const equipmentApi = {
   },
 
   deleteFiscal: async (uuid: string) => {
-    await apiClient.delete(`/fiscals/${uuid}`);
+    const response = await apiClient.delete<ApiResponse<unknown>>(`/fiscals/${uuid}`);
+    return response.data;
   },
 
   getOwnerHistory: async (entityType: 'Server' | 'Workstation' | 'FiscalRegister', entityID: string, limit = 100) => {

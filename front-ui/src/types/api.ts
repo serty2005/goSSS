@@ -926,6 +926,64 @@ export interface EntityOwnerHistoryItemDTO {
   is_agent_update?: boolean;
 }
 
+export type EntityDeletionCandidateStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED';
+
+export interface EntityDeletionCandidateDTO {
+  id: number;
+  entity_type: 'Server' | 'Workstation' | 'FiscalRegister' | string;
+  entity_id: string;
+  entity_display_name?: string;
+  status: EntityDeletionCandidateStatus;
+  reason?: string;
+  source: 'manual' | 'duplicate_worker' | string;
+  comment?: string;
+  requested_by_user_id?: string;
+  requested_at: string;
+  confirmed_by_user_id?: string;
+  confirmed_at?: string;
+  duplicate_of_entity_id?: string;
+  duplicate_field?: string;
+  duplicate_value?: string;
+  meta?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntityDeletionReplayRequestDTO {
+  keep_entity_id: string;
+  delete_entity_id: string;
+}
+
+export interface EntityDeletionCandidateAgentDataDTO {
+  observation_id: number;
+  observed_at?: string;
+  payload_json?: Record<string, unknown>;
+}
+
+export interface EntityDeletionCandidateEntityDetailsDTO {
+  entity_type: 'Server' | 'Workstation' | 'FiscalRegister' | string;
+  entity_id: string;
+  display_name: string;
+  owner_id: string;
+  last_updated_by: string;
+  updated_at: string;
+  last_modified_date?: string;
+  deleted: boolean;
+  is_more_actual: boolean;
+  raw: Record<string, unknown>;
+  latest_agent_data?: EntityDeletionCandidateAgentDataDTO | null;
+}
+
+export interface EntityDeletionCandidateDetailsDTO {
+  candidate: EntityDeletionCandidateDTO;
+  reason_text: string;
+  keep_entity?: EntityDeletionCandidateEntityDetailsDTO | null;
+  delete_entity?: EntityDeletionCandidateEntityDetailsDTO | null;
+  entities: EntityDeletionCandidateEntityDetailsDTO[];
+  cascade_entities?: EntityDeletionCandidateEntityDetailsDTO[];
+  more_actual_entity_id: string;
+}
+
 export interface AgentObservationFeedRowDTO {
   observation_id: number;
   agent_uuid?: string;

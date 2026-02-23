@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/pkg/utils"
+	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -18,11 +20,12 @@ import (
 )
 
 type ServerHandler struct {
-	service server.Service
+	service         server.Service
+	deletionService services.EntityDeletionService
 }
 
-func NewServerHandler(service server.Service) *ServerHandler {
-	return &ServerHandler{service: service}
+func NewServerHandler(service server.Service, deletionService services.EntityDeletionService) *ServerHandler {
+	return &ServerHandler{service: service, deletionService: deletionService}
 }
 
 func (h *ServerHandler) RegisterRoutes(r chi.Router) {
@@ -167,6 +170,25 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if h.deletionService != nil {
+		item, err := h.deletionService.RequestDeletion(r.Context(), services.EntityDeletionRequest{
+			EntityType: "Server",
+			EntityID:   id,
+			Reason:     "Ручное удаление из карточки сущности",
+			Source:     models.EntityDeletionSourceManual,
+		})
+		if err != nil {
+			if errors.Is(err, services.ErrDeletionEntityNotFound) {
+				response.RespondWithError(w, http.StatusNotFound, "Not Found")
+				return
+			}
+			middleware.GetLogger(r.Context()).Error("delete stage failed", "error", err)
+			response.RespondWithError(w, http.StatusInternalServerError, "Delete Stage Failed")
+			return
+		}
+		response.RespondWithJSON(w, http.StatusAccepted, item)
+		return
+	}
 	if err := h.service.Delete(r.Context(), id); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)

@@ -1,9 +1,10 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
+import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { formatDate } from '@/utils/formatters';
@@ -28,6 +29,9 @@ const sourceLabelMap: Record<string, string> = {
   network_auto_both: 'Автоопределение сети (РС+ФР)',
   network_conflict: 'Конфликт сети',
   manual_resolution: 'Ручное разрешение',
+  delete_marked: 'Кандидат на удаление',
+  delete_confirmed: 'Подтверждение удаления',
+  duplicate_merge: 'Склейка дублей',
 };
 
 const fieldLabelMap: Record<string, string> = {
@@ -107,6 +111,12 @@ const ServerDetails: React.FC = () => {
     queryFn: () => equipmentApi.getOwnerHistory('Server', id!, 200),
     enabled: !!id,
   });
+  const { data: deletionCandidateRes } = useQuery({
+    queryKey: ['deletion-candidate', 'Server', id],
+    queryFn: () => deletionCandidatesApi.getByEntity('Server', id!),
+    enabled: !!id,
+    staleTime: 5_000,
+  });
 
   const { data: companiesRes } = useQuery({
     queryKey: ['companies-search', companySearch],
@@ -115,6 +125,7 @@ const ServerDetails: React.FC = () => {
   });
 
   const server = serverRes?.data;
+  const pendingDeletion = deletionCandidateRes?.data || null;
 
   const { data: ownerCompanyRes } = useQuery({
     queryKey: ['company', server?.owner_id],
@@ -216,6 +227,16 @@ const ServerDetails: React.FC = () => {
     onSuccess: () => message.success('Запрос на опрос отправлен'),
     onError: () => message.error('Не удалось отправить запрос на опрос'),
   });
+  const deleteMutation = useMutation({
+    mutationFn: () => equipmentApi.deleteServer(id!),
+    onSuccess: () => {
+      message.success('Сервер добавлен в кандидаты на удаление');
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'Server', id] });
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
+      void queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
+    },
+    onError: () => message.error('Ошибка удаления'),
+  });
 
   const companyOptions = useMemo(() => {
     const base = (companiesRes?.data || []).map((item) => ({
@@ -295,6 +316,7 @@ const ServerDetails: React.FC = () => {
             </div>
           </Space>
           <Tag color={getStatusColor(server.status) === 'success' ? 'green' : 'red'}>{(server.status || 'unknown').toUpperCase()}</Tag>
+          {pendingDeletion ? <Tag color="orange">Ожидает удаления #{pendingDeletion.id}</Tag> : null}
         </Space>
 
         {canEdit && (
@@ -302,7 +324,16 @@ const ServerDetails: React.FC = () => {
             <Button icon={<SyncOutlined spin={pollMutation.isPending} />} onClick={() => pollMutation.mutate()}>
               Опросить
             </Button>
-            <Button danger icon={<DeleteOutlined />}>Удалить</Button>
+            <Popconfirm
+              title="Добавить сервер в кандидаты на удаление?"
+              description="Фактическое удаление подтверждает другой администратор в разделе «Проблемы»."
+              okText="Добавить"
+              cancelText="Отмена"
+              okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+              onConfirm={() => deleteMutation.mutate()}
+            >
+              <Button danger icon={<DeleteOutlined />} disabled={Boolean(pendingDeletion)}>Удалить</Button>
+            </Popconfirm>
           </Space>
         )}
       </div>

@@ -1,9 +1,10 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
+import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import { getEntityIcon } from '@/utils/mappers';
 import { EntityOwnerHistoryItemDTO, UpdateWorkstationPayload } from '@/types/api';
@@ -28,6 +29,9 @@ const sourceLabelMap: Record<string, string> = {
   network_auto_both: 'Автоопределение сети (РС+ФР)',
   network_conflict: 'Конфликт сети',
   manual_resolution: 'Ручное разрешение',
+  delete_marked: 'Кандидат на удаление',
+  delete_confirmed: 'Подтверждение удаления',
+  duplicate_merge: 'Склейка дублей',
 };
 
 const WorkstationDetails: React.FC = () => {
@@ -54,6 +58,13 @@ const WorkstationDetails: React.FC = () => {
     enabled: !!id,
   });
 
+  const { data: deletionCandidateRes } = useQuery({
+    queryKey: ['deletion-candidate', 'Workstation', id],
+    queryFn: () => deletionCandidatesApi.getByEntity('Workstation', id!),
+    enabled: !!id,
+    staleTime: 5_000,
+  });
+
   const { data: companiesRes } = useQuery({
     queryKey: ['companies-search', companySearch],
     queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
@@ -77,7 +88,18 @@ const WorkstationDetails: React.FC = () => {
     onError: () => message.error('Ошибка обновления'),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => equipmentApi.deleteWorkstation(id!),
+    onSuccess: () => {
+      message.success('Рабочая станция добавлена в кандидаты на удаление');
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'Workstation', id] });
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
+    },
+    onError: () => message.error('Ошибка удаления'),
+  });
+
   const ws = wsRes?.data;
+  const pendingDeletion = deletionCandidateRes?.data || null;
   const companyOptions = useMemo(() => {
     const base = (companiesRes?.data || []).map((item) => ({
       value: String(item.id || ''),
@@ -150,9 +172,23 @@ const WorkstationDetails: React.FC = () => {
               text={`Агент ${agentUpdate.updater}${agentUpdate.updatedAt ? ` • ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm')}` : ''}`}
             />
           ) : null}
+          {pendingDeletion ? (
+            <Badge color="#faad14" text={`Ожидает подтверждения удаления • заявка #${pendingDeletion.id}`} />
+          ) : null}
         </Space>
 
-        {canEdit && <Button danger icon={<DeleteOutlined />}>Удалить</Button>}
+        {canEdit && (
+          <Popconfirm
+            title="Добавить рабочую станцию в кандидаты на удаление?"
+            description="Подтверждение удаления выполнит другой администратор в разделе «Проблемы»."
+            okText="Добавить"
+            cancelText="Отмена"
+            okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+            onConfirm={() => deleteMutation.mutate()}
+          >
+            <Button danger icon={<DeleteOutlined />} disabled={Boolean(pendingDeletion)}>Удалить</Button>
+          </Popconfirm>
+        )}
       </div>
 
       <Card title="Детали рабочей станции" className="glass-panel" size="small">

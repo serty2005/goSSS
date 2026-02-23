@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Popconfirm, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
+import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import { getEntityIcon } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
@@ -28,6 +29,9 @@ const sourceLabelMap: Record<string, string> = {
   network_auto_both: 'Автоопределение сети (РС+ФР)',
   network_conflict: 'Конфликт сети',
   manual_resolution: 'Ручное разрешение',
+  delete_marked: 'Кандидат на удаление',
+  delete_confirmed: 'Подтверждение удаления',
+  duplicate_merge: 'Склейка дублей',
 };
 
 type LicenseRow = {
@@ -76,6 +80,13 @@ const FiscalDetails: React.FC = () => {
     enabled: !!id,
   });
 
+  const { data: deletionCandidateRes } = useQuery({
+    queryKey: ['deletion-candidate', 'FiscalRegister', id],
+    queryFn: () => deletionCandidatesApi.getByEntity('FiscalRegister', id!),
+    enabled: !!id,
+    staleTime: 5_000,
+  });
+
   const { data: companiesRes } = useQuery({
     queryKey: ['companies-search', companySearch],
     queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
@@ -103,13 +114,15 @@ const FiscalDetails: React.FC = () => {
   const deleteMutation = useMutation({
     mutationFn: () => equipmentApi.deleteFiscal(id!),
     onSuccess: () => {
-      message.success('ФР удалён');
-      navigate('/fiscals');
+      message.success('ФР добавлен в кандидаты на удаление');
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'FiscalRegister', id] });
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
     },
     onError: () => message.error('Ошибка удаления'),
   });
 
   const fiscal = fiscalRes?.data;
+  const pendingDeletion = deletionCandidateRes?.data || null;
   const companyOptions = useMemo(() => {
     const base = (companiesRes?.data || []).map((item) => ({
       value: String(item.id || ''),
@@ -225,18 +238,21 @@ const FiscalDetails: React.FC = () => {
               text={`Агент ${agentUpdate.updater}${agentUpdate.updatedAt ? ` • ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm')}` : ''}`}
             />
           ) : null}
+          {pendingDeletion ? (
+            <Badge color="#faad14" text={`Ожидает подтверждения удаления • заявка #${pendingDeletion.id}`} />
+          ) : null}
         </Space>
 
         {canDelete && (
           <Popconfirm
-            title="Удалить фискальный регистратор?"
-            description="Действие необратимо."
-            okText="Удалить"
+            title="Добавить ФР в кандидаты на удаление?"
+            description="Фактическое удаление выполнит другой администратор в разделе «Проблемы»."
+            okText="Добавить"
             cancelText="Отмена"
             okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
             onConfirm={() => deleteMutation.mutate()}
           >
-            <Button danger icon={<DeleteOutlined />}>Удалить</Button>
+            <Button danger icon={<DeleteOutlined />} disabled={Boolean(pendingDeletion)}>Удалить</Button>
           </Popconfirm>
         )}
       </div>

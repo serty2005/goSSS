@@ -53,6 +53,7 @@ func Migrate(db *gorm.DB) error {
 		&models.CandidateStatusHistory{},
 		&models.CandidateWorkstationStaging{},
 		&models.CandidateFiscalStaging{},
+		&models.EntityDeletionCandidate{},
 		&models.OwnerChangeHistory{},
 		&models.NetworkCandidate{},
 		&models.NetworkCandidateGroup{},

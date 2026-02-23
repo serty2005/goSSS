@@ -38,6 +38,9 @@ const (
 	OwnerChangeSourceAgentDataUpdate  = "agent_data_update"
 	OwnerChangeSourceConnCopyRemoteID = "connection_copy_remote_id"
 	OwnerChangeSourceConnCopyServerIP = "connection_copy_server_address"
+	OwnerChangeSourceDeleteMarked     = "delete_marked"
+	OwnerChangeSourceDeleteConfirmed  = "delete_confirmed"
+	OwnerChangeSourceDuplicateMerge   = "duplicate_merge"
 )
 
 type OwnerChangeHistory struct {

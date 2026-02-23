@@ -6,6 +6,7 @@ import (
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	infraDB "etalon-server/internal/infra/db"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -171,21 +172,25 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_type
-		`).
-		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%")
+		`)
+	query = applyCompanySearchTerm(query, term)
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
 	}
-	err := query.Limit(limit).Offset(offset).Find(&entities).Error
+	err := query.
+		Order("CASE WHEN companies.parent_id IS NULL OR companies.parent_id = '' THEN 0 ELSE 1 END ASC").
+		Order("LOWER(COALESCE(companies.title, '')) ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(&entities).Error
 	return entities, err
 }
 
 func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, int64, error) {
-	pattern := "%" + term + "%"
 	base := r.getDB(ctx).WithContext(ctx).
 		Model(&company.Company{}).
-		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", pattern, pattern, pattern, pattern)
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id")
+	base = applyCompanySearchTerm(base, term)
 	if !showInactive {
 		base = base.Where("companies.active_contract = ?", true)
 	}
@@ -217,13 +222,49 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_type
-		`).
-		Where("companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?", pattern, pattern, pattern, pattern)
+		`)
+	query = applyCompanySearchTerm(query, term)
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
 	}
-	if err := query.Limit(limit).Offset(offset).Find(&entities).Error; err != nil {
+	if err := query.
+		Order("CASE WHEN companies.parent_id IS NULL OR companies.parent_id = '' THEN 0 ELSE 1 END ASC").
+		Order("LOWER(COALESCE(companies.title, '')) ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(&entities).Error; err != nil {
 		return nil, 0, err
 	}
 	return entities, total, nil
+}
+
+func applyCompanySearchTerm(query *gorm.DB, term string) *gorm.DB {
+	tokens := splitSearchTokens(term)
+	if len(tokens) == 0 {
+		return query
+	}
+
+	for _, token := range tokens {
+		pattern := "%" + token + "%"
+		query = query.Where(
+			"(companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?)",
+			pattern, pattern, pattern, pattern,
+		)
+	}
+
+	titleOnlyConditions := make([]string, 0, len(tokens))
+	args := make([]interface{}, 0, len(tokens))
+	for _, token := range tokens {
+		titleOnlyConditions = append(titleOnlyConditions, "companies.title ILIKE ?")
+		args = append(args, "%"+token+"%")
+	}
+
+	return query.Where(
+		"(companies.parent_id IS NULL OR companies.parent_id = '' OR ("+strings.Join(titleOnlyConditions, " OR ")+"))",
+		args...,
+	)
+}
+
+func splitSearchTokens(term string) []string {
+	return strings.Fields(strings.TrimSpace(term))
 }

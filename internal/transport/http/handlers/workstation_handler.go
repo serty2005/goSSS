@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/workstation"
+	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -13,11 +16,12 @@ import (
 )
 
 type WSHandler struct {
-	service workstation.Service
+	service         workstation.Service
+	deletionService services.EntityDeletionService
 }
 
-func NewWSHandler(service workstation.Service) *WSHandler {
-	return &WSHandler{service: service}
+func NewWSHandler(service workstation.Service, deletionService services.EntityDeletionService) *WSHandler {
+	return &WSHandler{service: service, deletionService: deletionService}
 }
 
 func (h *WSHandler) RegisterRoutes(r chi.Router) {
@@ -119,6 +123,25 @@ func (h *WSHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *WSHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if h.deletionService != nil {
+		item, err := h.deletionService.RequestDeletion(r.Context(), services.EntityDeletionRequest{
+			EntityType: "Workstation",
+			EntityID:   id,
+			Reason:     "Ручное удаление из карточки сущности",
+			Source:     models.EntityDeletionSourceManual,
+		})
+		if err != nil {
+			if errors.Is(err, services.ErrDeletionEntityNotFound) {
+				response.RespondWithError(w, http.StatusNotFound, "Not Found")
+				return
+			}
+			middleware.GetLogger(r.Context()).Error("delete stage failed", "error", err)
+			response.RespondWithError(w, http.StatusInternalServerError, "Delete Stage Failed")
+			return
+		}
+		response.RespondWithJSON(w, http.StatusAccepted, item)
+		return
+	}
 	if err := h.service.Delete(r.Context(), id); err != nil {
 		middleware.GetLogger(r.Context()).Error("delete failed", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Delete Failed")

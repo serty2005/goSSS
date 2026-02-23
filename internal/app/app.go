@@ -99,6 +99,7 @@ type Application struct {
 	OwnerHistoryHandler     *handlers.OwnerHistoryHandler
 	AgentObservationFeed    *handlers.AgentObservationFeedHandler
 	ReportHandler           *handlers.ReportHandler
+	EntityDeletionHandler   *handlers.EntityDeletionHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -311,6 +312,7 @@ type Services struct {
 	BitrixSyncService       services.BitrixSyncService
 	BitrixIncomingService   services.BitrixIncomingService
 	NetworkCandidateService services.NetworkCandidateService
+	EntityDeletionService   services.EntityDeletionService
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -355,6 +357,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.ServerRepo, repos.WorkstationRepo, repos.UserRepo, repos.BitrixRepo),
 		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
+		EntityDeletionService:   services.NewEntityDeletionService(app.Logger.With("component", "entity_deletion_service"), app.DB, transactor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.ContractRepo, repos.OwnerHistoryRepo),
 	}
 }
 
@@ -385,7 +388,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	// Передаем IntegrationManager вместо SDClient
 	app.SDeskGateway = gateways.NewServiceDeskGateway(app.Config, app.IntegrationManager, app.EventBus, app.Logger.With("component", "sdesk_gateway"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 
-	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"))
+	app.DuplicatesGateway = gateways.NewDuplicatesGateway(app.Config, app.DB, app.EventBus, app.Logger.With("component", "duplicates_gateway"), srvs.EntityDeletionService)
 	app.PollingGateway = gateways.NewServerPollingGateway(app.Config, app.Logger.With("component", "iiko_polling_gateway"), repos.ServerRepo, clients.IikoClient, app.EventBus)
 	app.AgentFTPGateway = gateways.NewAgentFTPGateway(app.Config, app.Logger.With("component", "agent_ftp_gateway"), app.DB, clients.FTPClient, srvs.AgentObservation)
 	app.FRUpdateFounder = workers.NewFRUpdateFounder(app.Config, app.Logger.With("component", "fr_update_founder"), app.EventBus, repos.FRRepo, repos.LinkRepo, app.IntegrationManager)
@@ -397,9 +400,9 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
-	app.ServerHandler = handlers.NewServerHandler(srvs.ServerService)
-	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService)
-	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService)
+	app.ServerHandler = handlers.NewServerHandler(srvs.ServerService, srvs.EntityDeletionService)
+	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService, srvs.EntityDeletionService)
+	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService, srvs.EntityDeletionService)
 	app.CompanyHandler = handlers.NewCompanyHandler(srvs.CompanyService)
 	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
@@ -419,6 +422,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
+	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 }
 
 func setupIntegrationModules(app *Application, srvs Services) {
@@ -529,6 +533,15 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.NetworkCandidateHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.NetworkCandidateHandler.Approve)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/groups/{groupID}/remove", a.NetworkCandidateHandler.RemoveGroup)
+		})
+
+		r.Route("/deletion-candidates", func(r chi.Router) {
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/by-entity", a.EntityDeletionHandler.GetByEntity)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/", a.EntityDeletionHandler.List)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.EntityDeletionHandler.RequestDeletion)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/{id}", a.EntityDeletionHandler.GetDetails)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/{id}/replay", a.EntityDeletionHandler.ReplayChoice)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/{id}/confirm", a.EntityDeletionHandler.ConfirmDeletion)
 		})
 
 		a.OwnerHistoryHandler.RegisterRoutes(r)

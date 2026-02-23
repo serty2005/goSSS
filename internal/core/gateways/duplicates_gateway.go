@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/services"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"sync"
@@ -26,15 +27,17 @@ type duplicatesGatewayImpl struct {
 	db     *gorm.DB
 	bus    eventbus.EventBus
 	logger logger.LoggerInterface
+	deletionSvc services.EntityDeletionService
 }
 
 // NewDuplicatesGateway создает новый экземпляр шлюза.
-func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus, logger logger.LoggerInterface) DuplicatesGateway {
+func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus, logger logger.LoggerInterface, deletionSvc services.EntityDeletionService) DuplicatesGateway {
 	return &duplicatesGatewayImpl{
 		cfg:    cfg,
 		db:     db,
 		bus:    bus,
 		logger: logger,
+		deletionSvc: deletionSvc,
 	}
 }
 
@@ -122,6 +125,15 @@ func (g *duplicatesGatewayImpl) findAndPublish(ctx context.Context, model interf
 		}
 
 		if len(internalIDs) > 1 {
+			if g.deletionSvc != nil {
+				handled, mergeErr := g.deletionSvc.TryAutoMergeDuplicateGroup(ctx, entityType, field, item.Value, internalIDs)
+				if mergeErr != nil {
+					log.Error("Ошибка автосклейки дублей", "value", item.Value, "error", mergeErr)
+				} else if handled {
+					log.Info("Группа дублей обработана автосклейкой", "value", item.Value, "ids_count", len(internalIDs))
+					continue
+				}
+			}
 			g.bus.Publish(eventbus.Event{
 				Type: events.DuplicatesFound,
 				Payload: events.DuplicatesFoundPayload{

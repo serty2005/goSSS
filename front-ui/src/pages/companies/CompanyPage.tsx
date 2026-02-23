@@ -1,17 +1,18 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
+import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { ServerEntity, WorkstationEntity, FiscalEntity, ContractDetailDTO } from '@/types/api';
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
 import TicketTable from '@/components/tickets/TicketTable';
 import { useAuthStore } from '@/store/authStore';
-import { canEditCompanyBase, canEditCompanyContract } from '@/utils/permissions';
+import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
 import { resolveCompanyID } from '@/utils/companyHierarchy';
 
 const { Title, Text } = Typography;
@@ -35,6 +36,7 @@ const normalizeServices = (raw: ContractDetailDTO['services']): string[] => {
 const CompanyPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
@@ -42,8 +44,11 @@ const CompanyPage: React.FC = () => {
   const [companyForm] = Form.useForm<{ title: string; address: string }>();
   const [contractForm] = Form.useForm<{ contract_type: string; contract_state: 'active' | 'inactive' }>();
   const user = useAuthStore((state) => state.user);
+  const currentUserID = String(user?.id || '');
   const canEditBase = canEditCompanyBase(user?.roles);
   const canEditContract = canEditCompanyContract(user?.roles);
+  const canDeleteCompany = isAdmin(user?.roles);
+  const canViewDeletionCandidate = canEditBase || canDeleteCompany;
 
   const { data: companyRes, isLoading: loadingCompany } = useQuery({
     queryKey: ['company', id],
@@ -55,6 +60,12 @@ const CompanyPage: React.FC = () => {
     queryKey: ['company', id, 'infra'],
     queryFn: () => companiesApi.getInfrastructure(id!),
     enabled: !!id,
+  });
+
+  const { data: companyDeletionCandidateRes } = useQuery({
+    queryKey: ['deletion-candidate', 'Company', id],
+    queryFn: () => deletionCandidatesApi.getByEntity('Company', id!),
+    enabled: Boolean(id) && canViewDeletionCandidate,
   });
 
   const { data: companyChildrenIDs = [], isLoading: loadingCompanyChildren } = useQuery({
@@ -91,6 +102,12 @@ const CompanyPage: React.FC = () => {
   });
 
   const company = companyRes?.data;
+  const companyDeletionCandidate = companyDeletionCandidateRes?.data || null;
+  const canOpenDeletionCandidateInTasks = Boolean(
+    companyDeletionCandidate
+      && canDeleteCompany
+      && String(companyDeletionCandidate.requested_by_user_id || '') !== currentUserID,
+  );
   const contractID = company?.contract_id;
   const contractType = company?.contract_type;
 
@@ -126,6 +143,25 @@ const CompanyPage: React.FC = () => {
     },
     onError: () => {
       message.error('Не удалось обновить компанию');
+    },
+  });
+
+  const requestCompanyDeletionMutation = useMutation({
+    mutationFn: async () => {
+      return deletionCandidatesApi.request({
+        entity_type: 'Company',
+        entity_id: id!,
+        reason: 'Ручная постановка компании в кандидаты на удаление',
+      });
+    },
+    onSuccess: () => {
+      message.success('Компания добавлена в кандидаты на удаление');
+      queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'Company', id] });
+      queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
+      setIsCompanyEditOpen(false);
+    },
+    onError: () => {
+      message.error('Не удалось добавить компанию в кандидаты на удаление');
     },
   });
 
@@ -353,11 +389,25 @@ const CompanyPage: React.FC = () => {
           </div>
 
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
-            {company.active_contract ? (
-              <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginRight: 0 }}>Активен</Tag>
-            ) : (
-              <Tag icon={<CloseCircleOutlined />} color="default" style={{ marginRight: 0 }}>Завершён</Tag>
-            )}
+            <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
+              {companyDeletionCandidate && (
+                <Tag
+                  color="orange"
+                  style={{ marginRight: 0, cursor: canOpenDeletionCandidateInTasks ? 'pointer' : 'default' }}
+                  onClick={() => {
+                    if (!canOpenDeletionCandidateInTasks) return;
+                    navigate(`/tasks?deletion_candidate_id=${companyDeletionCandidate.id}`);
+                  }}
+                >
+                  Кандидат на удаление
+                </Tag>
+              )}
+              {company.active_contract ? (
+                <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginRight: 0 }}>Активен</Tag>
+              ) : (
+                <Tag icon={<CloseCircleOutlined />} color="default" style={{ marginRight: 0 }}>Завершён</Tag>
+              )}
+            </Space>
           </div>
         </div>
 
@@ -388,10 +438,40 @@ const CompanyPage: React.FC = () => {
         title="Редактирование компании"
         open={isCompanyEditOpen}
         onCancel={() => setIsCompanyEditOpen(false)}
-        onOk={() => companyForm.submit()}
-        confirmLoading={updateCompanyMutation.isPending}
-        okText="Сохранить"
-        cancelText="Отмена"
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <div>
+              {canDeleteCompany && (
+                <Popconfirm
+                  title="Подтверждаете удаление?"
+                  description="Окончательное удаление сущности будет подтверждено другим администратором"
+                  okText="Да"
+                  cancelText="Нет"
+                  onConfirm={() => requestCompanyDeletionMutation.mutate()}
+                  disabled={Boolean(companyDeletionCandidate)}
+                >
+                  <Button
+                    danger
+                    disabled={Boolean(companyDeletionCandidate)}
+                    loading={requestCompanyDeletionMutation.isPending}
+                  >
+                    {companyDeletionCandidate ? 'Уже в кандидатах' : 'Удалить'}
+                  </Button>
+                </Popconfirm>
+              )}
+            </div>
+            <Space>
+              <Button onClick={() => setIsCompanyEditOpen(false)}>Отмена</Button>
+              <Button
+                type="primary"
+                loading={updateCompanyMutation.isPending}
+                onClick={() => companyForm.submit()}
+              >
+                Сохранить
+              </Button>
+            </Space>
+          </div>
+        }
       >
         <Form form={companyForm} layout="vertical" onFinish={(values) => updateCompanyMutation.mutate(values)}>
           <Form.Item label="Название" name="title" rules={[{ required: true, message: 'Введите название компании' }]}>
@@ -403,6 +483,13 @@ const CompanyPage: React.FC = () => {
           <Form.Item label="Адресный классификатор">
             <Button disabled block>Подключение классификатора (скоро)</Button>
           </Form.Item>
+          {canDeleteCompany && companyDeletionCandidate && (
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Tag color="orange" style={{ marginRight: 0 }}>
+                Компания уже в кандидатах на удаление (ID #{companyDeletionCandidate.id})
+              </Tag>
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 

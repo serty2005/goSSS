@@ -15,6 +15,7 @@ import (
 	"etalon-server/internal/transport/http/response"
 	"etalon-server/internal/transport/http/validators"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,6 +137,20 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	go func() { defer wg.Done(); allOwnerWorkstations, _ = h.workstationRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
 	go func() { defer wg.Done(); allOwnerFRs, _ = h.frRepo.FindByOwnerIDs(ctx, allOwnerIDs) }()
 	wg.Wait()
+
+	sort.SliceStable(allOwnerCompanies, func(i, j int) bool {
+		leftIsParent := allOwnerCompanies[i].ParentID == nil || strings.TrimSpace(*allOwnerCompanies[i].ParentID) == ""
+		rightIsParent := allOwnerCompanies[j].ParentID == nil || strings.TrimSpace(*allOwnerCompanies[j].ParentID) == ""
+		if leftIsParent != rightIsParent {
+			return leftIsParent
+		}
+		leftTitle := strings.ToLower(utils.SafeStringDereference(allOwnerCompanies[i].Title))
+		rightTitle := strings.ToLower(utils.SafeStringDereference(allOwnerCompanies[j].Title))
+		if leftTitle != rightTitle {
+			return leftTitle < rightTitle
+		}
+		return allOwnerCompanies[i].ID < allOwnerCompanies[j].ID
+	})
 
 	serversByOwner := h.groupServersByOwner(ctx, allOwnerServers)
 	workstationsByOwner := h.groupWorkstationsByOwner(ctx, allOwnerWorkstations)
