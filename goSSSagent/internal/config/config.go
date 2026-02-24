@@ -25,7 +25,7 @@ func LoadFromEnv(version string) (Config, error) {
 		ServerURL:           strings.TrimRight(getenv("GOSSS_AGENT_SERVER_URL", "http://localhost:8080"), "/"),
 		APIKey:              strings.TrimSpace(os.Getenv("GOSSS_AGENT_API_KEY")),
 		AgentVersion:        version,
-		AgentType:           getenv("GOSSS_AGENT_TYPE", "workstation"),
+		AgentType:           getenv("GOSSS_AGENT_TYPE", "sssruner"),
 		HeartbeatInterval:   durationFromEnvSeconds("GOSSS_AGENT_HEARTBEAT_SEC", 15*time.Second),
 		UpdateCheckInterval: durationFromEnvSeconds("GOSSS_AGENT_UPDATE_CHECK_SEC", 60*time.Second),
 		HostnameOverride:    strings.TrimSpace(os.Getenv("GOSSS_AGENT_HOSTNAME")),

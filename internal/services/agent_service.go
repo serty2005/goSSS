@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"etalon-server/internal/core/events"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/models"
@@ -141,20 +141,22 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		Type: events.AgentObservationRequested,
 		Payload: events.AgentObservationPayload{
 			TraceID: traceID,
-			Source: targetUUID,
-			Data:   *data,
+			Source:  targetUUID,
+			Data:    *data,
 		},
 	})
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
-	commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
-	if err == nil && len(commands) > 0 {
-		var commandIDs []uint
-		for _, cmd := range commands {
-			response.Tasks = append(response.Tasks, api.AgentTaskDTO{ID: cmd.ID, Type: cmd.Type, Payload: json.RawMessage(cmd.Payload), CreatedAt: cmd.CreatedAt})
-			commandIDs = append(commandIDs, cmd.ID)
+	if agentType == "sssruner" {
+		commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
+		if err == nil && len(commands) > 0 {
+			var commandIDs []uint
+			for _, cmd := range commands {
+				response.Tasks = append(response.Tasks, api.AgentTaskDTO{ID: cmd.ID, Type: cmd.Type, Payload: json.RawMessage(cmd.Payload), CreatedAt: cmd.CreatedAt})
+				commandIDs = append(commandIDs, cmd.ID)
+			}
+			_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
 		}
-		_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
 	}
 
 	return response, nil
@@ -179,4 +181,3 @@ func (s *agentServiceImpl) GetAgentConfig(ctx context.Context, uuid string) (*ap
 	}
 	return &configDTO, nil
 }
-
