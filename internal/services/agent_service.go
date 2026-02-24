@@ -147,16 +147,14 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 	})
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
-	if agentType == "sssruner" {
-		commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
-		if err == nil && len(commands) > 0 {
-			var commandIDs []uint
-			for _, cmd := range commands {
-				response.Tasks = append(response.Tasks, api.AgentTaskDTO{ID: cmd.ID, Type: cmd.Type, Payload: json.RawMessage(cmd.Payload), CreatedAt: cmd.CreatedAt})
-				commandIDs = append(commandIDs, cmd.ID)
-			}
-			_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
+	commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
+	if err == nil && len(commands) > 0 {
+		var commandIDs []uint
+		for _, cmd := range commands {
+			response.Tasks = append(response.Tasks, api.AgentTaskDTO{ID: cmd.ID, Type: cmd.Type, Payload: json.RawMessage(cmd.Payload), CreatedAt: cmd.CreatedAt})
+			commandIDs = append(commandIDs, cmd.ID)
 		}
+		_ = s.agentRepo.MarkCommandsAsSent(ctx, commandIDs)
 	}
 
 	return response, nil
