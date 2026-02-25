@@ -14,10 +14,12 @@ type AgentDataDTO struct {
 }
 
 type RegistrationRequestDTO struct {
-	AgentUUID    string       `json:"agent_uuid"`
-	Hostname     string       `json:"hostname"`
-	AgentVersion string       `json:"agent_version"`
-	InitialData  AgentDataDTO `json:"initial_data"`
+	AgentUUID          string                 `json:"agent_uuid"`
+	Hostname           string                 `json:"hostname"`
+	AgentVersion       string                 `json:"agent_version"`
+	InitialData        AgentDataDTO           `json:"initial_data"`
+	MachineFingerprint string                 `json:"machine_fingerprint,omitempty"`
+	SystemInfo         map[string]interface{} `json:"system_info,omitempty"`
 }
 
 type AgentTaskDTO struct {
@@ -30,6 +32,29 @@ type AgentTaskDTO struct {
 type HeartbeatResponseDTO struct {
 	Status string         `json:"status"`
 	Tasks  []AgentTaskDTO `json:"tasks,omitempty"`
+}
+
+type AgentRegistrationResponseDTO struct {
+	Status                string    `json:"status"`
+	AgentUUID             string    `json:"agent_uuid"`
+	AccessToken           string    `json:"access_token"`
+	AccessTokenExpiresAt  time.Time `json:"access_token_expires_at"`
+	RefreshToken          string    `json:"refresh_token"`
+	RefreshTokenExpiresAt time.Time `json:"refresh_token_expires_at"`
+}
+
+type AgentTokenRefreshRequestDTO struct {
+	AgentUUID    string `json:"agent_uuid"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type AgentTokenRefreshResponseDTO struct {
+	Status                string    `json:"status"`
+	AgentUUID             string    `json:"agent_uuid"`
+	AccessToken           string    `json:"access_token"`
+	AccessTokenExpiresAt  time.Time `json:"access_token_expires_at"`
+	RefreshToken          string    `json:"refresh_token"`
+	RefreshTokenExpiresAt time.Time `json:"refresh_token_expires_at"`
 }
 
 type SelfUpdateTaskPayload struct {

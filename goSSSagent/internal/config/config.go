@@ -4,64 +4,71 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
 
+// Эти значения задают привязку агента к конкретному инстансу ServiceDesk.
+// Для тестового билда URL фиксирован по требованию.
+var (
+	BrandName          = "MyHoreca_Xenion"
+	BootstrapServerURL = "http://10.25.1.125:8080"
+	BootstrapAPIKey    = "92a077f5-bea8-4773-a23e-9d8f1450a81c"
+)
+
 type Config struct {
-	ServerURL           string
-	APIKey              string
-	AgentVersion        string
-	AgentType           string
-	HeartbeatInterval   time.Duration
-	UpdateCheckInterval time.Duration
-	DataDir             string
-	HostnameOverride    string
+	BrandName              string
+	BrandCompany           string
+	BrandProduct           string
+	AgentProcessName       string
+	AgentVersion           string
+	RegistryPath           string
+	DataDir                string
+	ServerURL              string
+	BootstrapAPIKey        string
+	AgentType              string
+	HeartbeatInterval      time.Duration
+	UpdateCheckInterval    time.Duration
+	AccessTokenGracePeriod time.Duration
 }
 
-func LoadFromEnv(version string) (Config, error) {
-	cfg := Config{
-		ServerURL:           strings.TrimRight(getenv("GOSSS_AGENT_SERVER_URL", "http://localhost:8080"), "/"),
-		APIKey:              strings.TrimSpace(os.Getenv("GOSSS_AGENT_API_KEY")),
-		AgentVersion:        version,
-		AgentType:           getenv("GOSSS_AGENT_TYPE", "sssruner"),
-		HeartbeatInterval:   durationFromEnvSeconds("GOSSS_AGENT_HEARTBEAT_SEC", 15*time.Second),
-		UpdateCheckInterval: durationFromEnvSeconds("GOSSS_AGENT_UPDATE_CHECK_SEC", 60*time.Second),
-		HostnameOverride:    strings.TrimSpace(os.Getenv("GOSSS_AGENT_HOSTNAME")),
+func Load(version string) (Config, error) {
+	company, product, err := splitBrand(BrandName)
+	if err != nil {
+		return Config{}, err
 	}
 
-	dataDir := strings.TrimSpace(os.Getenv("GOSSS_AGENT_DATA_DIR"))
-	if dataDir == "" {
-		exePath, err := os.Executable()
-		if err != nil {
-			return Config{}, fmt.Errorf("не удалось определить каталог агента: %w", err)
-		}
-		dataDir = filepath.Dir(exePath)
+	agentName := product + "Agent"
+	dataDir := filepath.Join(os.Getenv("ProgramData"), company, agentName)
+	if strings.TrimSpace(dataDir) == "" || strings.EqualFold(dataDir, `\`+company+`\`+agentName) {
+		dataDir = filepath.Join(`C:\ProgramData`, company, agentName)
 	}
-	cfg.DataDir = dataDir
-
-	if cfg.APIKey == "" {
-		return Config{}, fmt.Errorf("не задан GOSSS_AGENT_API_KEY")
-	}
-	return cfg, nil
+	return Config{
+		BrandName:              BrandName,
+		BrandCompany:           company,
+		BrandProduct:           product,
+		AgentProcessName:       agentName,
+		AgentVersion:           strings.TrimSpace(version),
+		RegistryPath:           `Software\` + company + `\` + agentName,
+		DataDir:                dataDir,
+		ServerURL:              strings.TrimRight(BootstrapServerURL, "/"),
+		BootstrapAPIKey:        BootstrapAPIKey,
+		AgentType:              "sssruner",
+		HeartbeatInterval:      15 * time.Second,
+		UpdateCheckInterval:    60 * time.Second,
+		AccessTokenGracePeriod: 2 * time.Minute,
+	}, nil
 }
 
-func getenv(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+func splitBrand(brand string) (company, product string, err error) {
+	parts := strings.Split(strings.TrimSpace(brand), "_")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("BRAND_NAME должен быть в формате Company_Product, получено: %s", brand)
 	}
-	return fallback
-}
-
-func durationFromEnvSeconds(key string, fallback time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
+	company = strings.TrimSpace(parts[0])
+	product = strings.TrimSpace(parts[1])
+	if company == "" || product == "" {
+		return "", "", fmt.Errorf("BRAND_NAME содержит пустую часть: %s", brand)
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return time.Duration(n) * time.Second
+	return company, product, nil
 }

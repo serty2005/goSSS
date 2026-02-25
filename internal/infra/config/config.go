@@ -24,6 +24,7 @@ type Config struct {
 	AllowedOrigins     []string
 
 	AgentAPIKey      string
+	BrandName        string
 	SeederKey        string
 	JWTSecret        string
 	JWTExpirationMin int
@@ -118,6 +119,7 @@ func New() *Config {
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
 		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
+		BrandName:        getEnv("BRAND_NAME", "MyHoreca_Xenion"),
 		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
 		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
 		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440),

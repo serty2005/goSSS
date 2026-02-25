@@ -6,14 +6,19 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/services"
+	"etalon-agent/internal/state"
 	"etalon-agent/internal/updater"
 	"etalon-agent/internal/workflows"
+
+	"github.com/google/uuid"
 )
 
 type workflow interface {
@@ -22,32 +27,36 @@ type workflow interface {
 }
 
 type Agent struct {
-	cfg       config.Config
-	uuid      *services.UUIDService
-	client    *client.ServiceDeskClient
-	scheduler *services.Scheduler
-	workflows map[string]workflow
+	cfg                config.Config
+	client             *client.ServiceDeskClient
+	scheduler          *services.Scheduler
+	workflows          map[string]workflow
+	registryStore      *state.RegistryStore
+	identity           *state.Identity
+	tokens             *state.Tokens
+	machineFingerprint string
+	mu                 sync.Mutex
 }
 
-func NewAgent(cfg config.Config, uuidSvc *services.UUIDService, cli *client.ServiceDeskClient) (*Agent, error) {
-	if uuidSvc == nil || cli == nil {
-		return nil, fmt.Errorf("не заданы обязательные зависимости агента")
+func NewAgent(cfg config.Config, cli *client.ServiceDeskClient) (*Agent, error) {
+	if cli == nil {
+		return nil, fmt.Errorf("не задан HTTP-клиент ServiceDesk")
 	}
 
 	a := &Agent{
-		cfg:       cfg,
-		uuid:      uuidSvc,
-		client:    cli,
-		scheduler: services.NewScheduler(),
-		workflows: make(map[string]workflow),
+		cfg:           cfg,
+		client:        cli,
+		scheduler:     services.NewScheduler(),
+		workflows:     make(map[string]workflow),
+		registryStore: state.NewRegistryStore(cfg.RegistryPath),
 	}
 	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(cfg.AgentVersion, updater.NewService(cfg.DataDir, cli)))
 	return a, nil
 }
 
 func (a *Agent) Run(ctx context.Context) error {
-	if err := a.register(ctx); err != nil {
-		log.Printf("Регистрация при старте не удалась: %v", err)
+	if err := a.bootstrapIdentityAndTokens(ctx); err != nil {
+		return err
 	}
 
 	a.scheduler.AddTask("heartbeat", a.cfg.HeartbeatInterval, func(ctx context.Context) {
@@ -67,49 +76,150 @@ func (a *Agent) Run(ctx context.Context) error {
 	return a.scheduler.Run(ctx)
 }
 
-func (a *Agent) register(ctx context.Context) error {
+func (a *Agent) bootstrapIdentityAndTokens(ctx context.Context) error {
+	fpHash, err := state.ComputeMachineFingerprintHash()
+	if err != nil {
+		return fmt.Errorf("не удалось вычислить fingerprint машины: %w", err)
+	}
+	a.machineFingerprint = fpHash
+
+	identity, err := a.registryStore.EnsureIdentity(fpHash, func() (string, error) {
+		return uuid.NewString(), nil
+	})
+	if err != nil {
+		return fmt.Errorf("не удалось подготовить identity агента в реестре: %w", err)
+	}
+	a.identity = identity
+
+	if identity.ResetPerformed {
+		log.Printf("Fingerprint машины изменился, выполнен сброс identity и токенов, agent_uuid=%s", identity.UUID)
+	}
+
+	if err := a.ensureAuth(ctx); err != nil {
+		return fmt.Errorf("не удалось получить токены агента: %w", err)
+	}
+	return nil
+}
+
+func (a *Agent) ensureAuth(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ensureAuthLocked(ctx)
+}
+
+func (a *Agent) ensureAuthLocked(ctx context.Context) error {
+	if a.tokens == nil {
+		tokens, err := a.registryStore.LoadTokens()
+		if err != nil {
+			return err
+		}
+		a.tokens = tokens
+	}
+
+	now := time.Now()
+	if a.tokens != nil && strings.TrimSpace(a.tokens.AccessToken) != "" && now.Add(a.cfg.AccessTokenGracePeriod).Before(a.tokens.AccessTokenExpiresAt) {
+		return nil
+	}
+
+	if a.tokens != nil && strings.TrimSpace(a.tokens.RefreshToken) != "" && now.Before(a.tokens.RefreshTokenExpiresAt) {
+		resp, err := a.client.RefreshTokens(ctx, protocol.AgentTokenRefreshRequestDTO{
+			AgentUUID:    a.identity.UUID,
+			RefreshToken: a.tokens.RefreshToken,
+		})
+		if err == nil {
+			return a.applyTokenRefreshResponse(*resp)
+		}
+		log.Printf("Не удалось обновить токены через refresh, выполняю bootstrap-регистрацию: %v", err)
+	}
+
+	return a.registerAndFetchTokens(ctx)
+}
+
+func (a *Agent) registerAndFetchTokens(ctx context.Context) error {
 	host := a.hostname()
 	req := protocol.RegistrationRequestDTO{
-		AgentUUID:    a.uuid.Get(),
-		Hostname:     host,
-		AgentVersion: a.cfg.AgentVersion,
+		AgentUUID:          a.identity.UUID,
+		Hostname:           host,
+		AgentVersion:       a.cfg.AgentVersion,
+		MachineFingerprint: a.machineFingerprint,
 		InitialData: protocol.AgentDataDTO{
 			Hostname:     host,
 			CurrentTime:  time.Now().Format(time.RFC3339),
-			AgentVersion: a.cfg.AgentVersion,
-			AgentUUID:    a.uuid.Get(),
+			AgentUUID:    a.identity.UUID,
 			AgentType:    a.cfg.AgentType,
+			AgentVersion: a.cfg.AgentVersion,
 		},
+		SystemInfo: a.registryStore.CollectRegistrationSystemInfo(a.cfg.AgentProcessName),
 	}
-	if err := a.client.Register(ctx, req); err != nil {
+	resp, err := a.client.Register(ctx, a.cfg.BootstrapAPIKey, req)
+	if err != nil {
 		return err
 	}
-	log.Printf("Регистрация агента выполнена (uuid=%s)", a.uuid.Get())
+	return a.applyRegistrationResponse(*resp)
+}
+
+func (a *Agent) applyRegistrationResponse(resp protocol.AgentRegistrationResponseDTO) error {
+	a.tokens = &state.Tokens{
+		AccessToken:           resp.AccessToken,
+		RefreshToken:          resp.RefreshToken,
+		AccessTokenExpiresAt:  resp.AccessTokenExpiresAt,
+		RefreshTokenExpiresAt: resp.RefreshTokenExpiresAt,
+		LastTokenRefreshAt:    time.Now(),
+	}
+	if err := a.registryStore.SaveTokens(*a.tokens); err != nil {
+		return fmt.Errorf("не удалось сохранить токены агента в реестре: %w", err)
+	}
+	log.Printf("Получены токены агента (access до %s)", resp.AccessTokenExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+func (a *Agent) applyTokenRefreshResponse(resp protocol.AgentTokenRefreshResponseDTO) error {
+	a.tokens = &state.Tokens{
+		AccessToken:           resp.AccessToken,
+		RefreshToken:          resp.RefreshToken,
+		AccessTokenExpiresAt:  resp.AccessTokenExpiresAt,
+		RefreshTokenExpiresAt: resp.RefreshTokenExpiresAt,
+		LastTokenRefreshAt:    time.Now(),
+	}
+	if err := a.registryStore.SaveTokens(*a.tokens); err != nil {
+		return fmt.Errorf("не удалось сохранить обновленные токены в реестре: %w", err)
+	}
+	log.Printf("Токены агента обновлены (access до %s)", resp.AccessTokenExpiresAt.Format(time.RFC3339))
 	return nil
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.heartbeatLocked(ctx)
+}
+
+func (a *Agent) heartbeatLocked(ctx context.Context) error {
+	if err := a.ensureAuthLocked(ctx); err != nil {
+		return err
+	}
+
 	payload := protocol.AgentDataDTO{
 		Hostname:     a.hostname(),
 		CurrentTime:  time.Now().Format(time.RFC3339),
 		AgentVersion: a.cfg.AgentVersion,
-		AgentUUID:    a.uuid.Get(),
+		AgentUUID:    a.identity.UUID,
 		AgentType:    a.cfg.AgentType,
 	}
-	resp, err := a.client.SendHeartbeat(ctx, a.uuid.Get(), payload)
+	resp, err := a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 	if err != nil {
 		var httpErr *client.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			if regErr := a.register(ctx); regErr != nil {
-				return fmt.Errorf("heartbeat вернул 404 и повторная регистрация не удалась: %w", regErr)
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 401 {
+			log.Printf("Access token отклонен сервером, пытаюсь обновить токены")
+			a.tokens.AccessTokenExpiresAt = time.Time{}
+			if authErr := a.ensureAuthLocked(ctx); authErr != nil {
+				return fmt.Errorf("не удалось восстановить авторизацию агента: %w", authErr)
 			}
-			resp, err = a.client.SendHeartbeat(ctx, a.uuid.Get(), payload)
-			if err != nil {
-				return err
-			}
-		} else {
-			return err
+			resp, err = a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 		}
+	}
+	if err != nil {
+		return err
 	}
 
 	log.Printf("Heartbeat отправлен: status=%s tasks=%d", resp.Status, len(resp.Tasks))
@@ -136,9 +246,6 @@ func (a *Agent) registerWorkflow(w workflow) {
 }
 
 func (a *Agent) hostname() string {
-	if a.cfg.HostnameOverride != "" {
-		return a.cfg.HostnameOverride
-	}
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		return "unknown-host"

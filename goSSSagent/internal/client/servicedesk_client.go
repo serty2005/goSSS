@@ -24,28 +24,36 @@ func (e *HTTPError) Error() string {
 
 type ServiceDeskClient struct {
 	baseURL string
-	apiKey  string
 	client  *http.Client
 }
 
-func NewServiceDeskClient(baseURL, apiKey string) *ServiceDeskClient {
+func NewServiceDeskClient(baseURL string) *ServiceDeskClient {
 	return &ServiceDeskClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-func (c *ServiceDeskClient) Register(ctx context.Context, req protocol.RegistrationRequestDTO) error {
-	return c.doJSON(ctx, http.MethodPost, "/api/agents/register", req, nil, http.StatusAccepted, http.StatusConflict)
+func (c *ServiceDeskClient) Register(ctx context.Context, bootstrapAPIKey string, req protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+	var resp protocol.AgentRegistrationResponseDTO
+	if err := c.doJSON(ctx, http.MethodPost, "/api/agents/register", req, &resp, authHeader{Mode: authBearer, Token: bootstrapAPIKey}, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *ServiceDeskClient) SendHeartbeat(ctx context.Context, agentUUID string, data protocol.AgentDataDTO) (*protocol.HeartbeatResponseDTO, error) {
+func (c *ServiceDeskClient) RefreshTokens(ctx context.Context, req protocol.AgentTokenRefreshRequestDTO) (*protocol.AgentTokenRefreshResponseDTO, error) {
+	var resp protocol.AgentTokenRefreshResponseDTO
+	if err := c.doJSON(ctx, http.MethodPost, "/api/agents/auth/refresh", req, &resp, authHeader{}, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ServiceDeskClient) SendHeartbeat(ctx context.Context, agentUUID string, data protocol.AgentDataDTO, accessToken string) (*protocol.HeartbeatResponseDTO, error) {
 	var resp protocol.HeartbeatResponseDTO
 	path := fmt.Sprintf("/api/agents/%s/data", agentUUID)
-	if err := c.doJSON(ctx, http.MethodPost, path, data, &resp, http.StatusOK); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, path, data, &resp, authHeader{Mode: authBearer, Token: accessToken}, http.StatusOK); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -61,7 +69,6 @@ func (c *ServiceDeskClient) DownloadFile(ctx context.Context, url string) ([]byt
 		return nil, fmt.Errorf("ошибка скачивания файла обновления: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
@@ -73,7 +80,19 @@ func (c *ServiceDeskClient) DownloadFile(ctx context.Context, url string) ([]byt
 	return content, nil
 }
 
-func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bodyIn any, bodyOut any, okStatuses ...int) error {
+type authMode int
+
+const (
+	authNone authMode = iota
+	authBearer
+)
+
+type authHeader struct {
+	Mode  authMode
+	Token string
+}
+
+func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bodyIn any, bodyOut any, auth authHeader, okStatuses ...int) error {
 	var bodyReader io.Reader
 	if bodyIn != nil {
 		raw, err := json.Marshal(bodyIn)
@@ -87,9 +106,11 @@ func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bod
 	if err != nil {
 		return fmt.Errorf("не удалось создать запрос: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	if bodyIn != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if auth.Mode == authBearer {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(auth.Token))
 	}
 
 	resp, err := c.client.Do(req)
@@ -102,7 +123,6 @@ func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bod
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
-
 	if bodyOut == nil {
 		return nil
 	}

@@ -10,7 +10,6 @@ import (
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
 	"etalon-agent/internal/runtime"
-	"etalon-agent/internal/services"
 )
 
 var AgentVersion = "0.1.0-dev"
@@ -19,18 +18,13 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	cfg, err := config.LoadFromEnv(AgentVersion)
+	cfg, err := config.Load(AgentVersion)
 	if err != nil {
-		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
+		log.Fatalf("Ошибка загрузки конфигурации агента: %v", err)
 	}
 
-	uuidService, err := services.NewUUIDService(cfg.DataDir)
-	if err != nil {
-		log.Fatalf("Ошибка инициализации UUID агента: %v", err)
-	}
-
-	httpClient := client.NewServiceDeskClient(cfg.ServerURL, cfg.APIKey)
-	app, err := runtime.NewAgent(cfg, uuidService, httpClient)
+	httpClient := client.NewServiceDeskClient(cfg.ServerURL)
+	app, err := runtime.NewAgent(cfg, httpClient)
 	if err != nil {
 		log.Fatalf("Ошибка создания агента: %v", err)
 	}
@@ -38,7 +32,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("Запуск агента версии %s (uuid=%s)", cfg.AgentVersion, uuidService.Get())
+	log.Printf("Запуск %s версии %s", cfg.AgentProcessName, cfg.AgentVersion)
 	if err := app.Run(ctx); err != nil {
 		log.Fatalf("Агент завершился с ошибкой: %v", err)
 	}

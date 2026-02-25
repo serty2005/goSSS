@@ -26,6 +26,7 @@ import (
 	infraRepos "etalon-server/internal/infra/repositories"
 	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/services"
+	agentauthsvc "etalon-server/internal/services/agentauth"
 	companySvc "etalon-server/internal/services/company"
 	contractSvc "etalon-server/internal/services/contract"
 	fiscalSvc "etalon-server/internal/services/fiscal"
@@ -407,7 +408,8 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
 	app.TaskHandler = handlers.NewTaskHandler(srvs.TaskResolutionService, app.SDEditor, srvs.TaskService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
-	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService, app.Config.AgentAPIKey)
+	agentAuthService := agentauthsvc.NewService(app.DB, app.Logger.With("component", "agent_auth_service"), repos.AgentRepo, srvs.AgentService)
+	app.AgentHandler = handlers.NewAgentHandler(srvs.AgentService, agentAuthService, app.Config.AgentAPIKey)
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)

@@ -33,24 +33,24 @@ type DuplicateGroupDTO struct {
 }
 
 type EntityDeletionCandidateDTO struct {
-	ID                 uint                   `json:"id"`
-	EntityType         string                 `json:"entity_type"`
-	EntityID           string                 `json:"entity_id"`
-	EntityDisplayName  *string                `json:"entity_display_name,omitempty"`
-	Status             string                 `json:"status"`
-	Reason             *string                `json:"reason,omitempty"`
-	Source             string                 `json:"source"`
-	Comment            *string                `json:"comment,omitempty"`
-	RequestedByUserID  *string                `json:"requested_by_user_id,omitempty"`
-	RequestedAt        time.Time              `json:"requested_at"`
-	ConfirmedByUserID  *string                `json:"confirmed_by_user_id,omitempty"`
-	ConfirmedAt        *time.Time             `json:"confirmed_at,omitempty"`
-	DuplicateOfEntityID *string               `json:"duplicate_of_entity_id,omitempty"`
-	DuplicateField     *string                `json:"duplicate_field,omitempty"`
-	DuplicateValue     *string                `json:"duplicate_value,omitempty"`
-	Meta               map[string]interface{} `json:"meta,omitempty"`
-	CreatedAt          time.Time              `json:"created_at"`
-	UpdatedAt          time.Time              `json:"updated_at"`
+	ID                  uint                   `json:"id"`
+	EntityType          string                 `json:"entity_type"`
+	EntityID            string                 `json:"entity_id"`
+	EntityDisplayName   *string                `json:"entity_display_name,omitempty"`
+	Status              string                 `json:"status"`
+	Reason              *string                `json:"reason,omitempty"`
+	Source              string                 `json:"source"`
+	Comment             *string                `json:"comment,omitempty"`
+	RequestedByUserID   *string                `json:"requested_by_user_id,omitempty"`
+	RequestedAt         time.Time              `json:"requested_at"`
+	ConfirmedByUserID   *string                `json:"confirmed_by_user_id,omitempty"`
+	ConfirmedAt         *time.Time             `json:"confirmed_at,omitempty"`
+	DuplicateOfEntityID *string                `json:"duplicate_of_entity_id,omitempty"`
+	DuplicateField      *string                `json:"duplicate_field,omitempty"`
+	DuplicateValue      *string                `json:"duplicate_value,omitempty"`
+	Meta                map[string]interface{} `json:"meta,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
 }
 
 type EntityDeletionRequestDTO struct {
@@ -72,27 +72,27 @@ type EntityDeletionCandidateAgentDataDTO struct {
 }
 
 type EntityDeletionCandidateEntityDetailsDTO struct {
-	EntityType        string                           `json:"entity_type"`
-	EntityID          string                           `json:"entity_id"`
-	DisplayName       string                           `json:"display_name"`
-	OwnerID           string                           `json:"owner_id"`
-	LastUpdatedBy     string                           `json:"last_updated_by"`
-	UpdatedAt         time.Time                        `json:"updated_at"`
-	LastModifiedDate  *time.Time                       `json:"last_modified_date,omitempty"`
-	Deleted           bool                             `json:"deleted"`
-	IsMoreActual      bool                             `json:"is_more_actual"`
-	Raw               map[string]interface{}           `json:"raw"`
-	LatestAgentData   *EntityDeletionCandidateAgentDataDTO `json:"latest_agent_data,omitempty"`
+	EntityType       string                               `json:"entity_type"`
+	EntityID         string                               `json:"entity_id"`
+	DisplayName      string                               `json:"display_name"`
+	OwnerID          string                               `json:"owner_id"`
+	LastUpdatedBy    string                               `json:"last_updated_by"`
+	UpdatedAt        time.Time                            `json:"updated_at"`
+	LastModifiedDate *time.Time                           `json:"last_modified_date,omitempty"`
+	Deleted          bool                                 `json:"deleted"`
+	IsMoreActual     bool                                 `json:"is_more_actual"`
+	Raw              map[string]interface{}               `json:"raw"`
+	LatestAgentData  *EntityDeletionCandidateAgentDataDTO `json:"latest_agent_data,omitempty"`
 }
 
 type EntityDeletionCandidateDetailsDTO struct {
-	Candidate           EntityDeletionCandidateDTO                `json:"candidate"`
-	ReasonText          string                                    `json:"reason_text"`
-	KeepEntity          *EntityDeletionCandidateEntityDetailsDTO  `json:"keep_entity,omitempty"`
-	DeleteEntity        *EntityDeletionCandidateEntityDetailsDTO  `json:"delete_entity,omitempty"`
-	Entities            []EntityDeletionCandidateEntityDetailsDTO `json:"entities"`
-	CascadeEntities     []EntityDeletionCandidateEntityDetailsDTO `json:"cascade_entities,omitempty"`
-	MoreActualEntityID  string                                    `json:"more_actual_entity_id"`
+	Candidate          EntityDeletionCandidateDTO                `json:"candidate"`
+	ReasonText         string                                    `json:"reason_text"`
+	KeepEntity         *EntityDeletionCandidateEntityDetailsDTO  `json:"keep_entity,omitempty"`
+	DeleteEntity       *EntityDeletionCandidateEntityDetailsDTO  `json:"delete_entity,omitempty"`
+	Entities           []EntityDeletionCandidateEntityDetailsDTO `json:"entities"`
+	CascadeEntities    []EntityDeletionCandidateEntityDetailsDTO `json:"cascade_entities,omitempty"`
+	MoreActualEntityID string                                    `json:"more_actual_entity_id"`
 }
 
 // ErrorResponseDTO стандартизированный ответ с ошибкой.
@@ -413,10 +413,12 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 
 // RegistrationRequestDTO - тело запроса для регистрации нового агента.
 type RegistrationRequestDTO struct {
-	AgentUUID    string       `json:"agent_uuid"`
-	Hostname     string       `json:"hostname"`
-	AgentVersion string       `json:"agent_version"`
-	InitialData  AgentDataDTO `json:"initial_data"`
+	AgentUUID          string                 `json:"agent_uuid"`
+	Hostname           string                 `json:"hostname"`
+	AgentVersion       string                 `json:"agent_version"`
+	InitialData        AgentDataDTO           `json:"initial_data"`
+	MachineFingerprint string                 `json:"machine_fingerprint,omitempty"`
+	SystemInfo         map[string]interface{} `json:"system_info,omitempty"`
 }
 
 // AgentConfigDTO - структура конфигурации, отправляемая агенту.

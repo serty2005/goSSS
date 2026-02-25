@@ -169,6 +169,23 @@ type Agent struct {
 	UpdatedAt time.Time
 }
 
+// AgentSessionToken хранит серверные сессионные токены нового агента (sssruner).
+// Старые пассивные агенты (submit_json) эту модель не используют.
+type AgentSessionToken struct {
+	ID uint `gorm:"primaryKey"`
+
+	AgentUUID string `gorm:"type:text;index;not null"`
+	TokenType string `gorm:"type:varchar(20);index;not null"` // access | refresh
+	TokenHash string `gorm:"type:char(64);uniqueIndex;not null"`
+
+	ExpiresAt  time.Time  `gorm:"index;not null"`
+	LastUsedAt *time.Time `gorm:"index"`
+	RevokedAt  *time.Time `gorm:"index"`
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // AgentFile отслеживает состояние обработанных JSON-файлов от агентов.
 // Используется FTP-гейтвеем для инкрементальной обработки — только изменённые файлы.
 // Позволяет избежать повторной обработки одних и тех же данных.
