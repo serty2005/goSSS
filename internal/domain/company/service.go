@@ -20,5 +20,6 @@ type Service interface {
 	GetChildren(ctx context.Context, companyID string) ([]Company, error)
 
 	ListBitrixMappings(ctx context.Context, term string, limit, offset int) ([]BitrixMappingRow, error)
+	GetBitrixMappingByCompanyID(ctx context.Context, companyID string) (*BitrixMappingRow, error)
 	UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error
 }

@@ -142,6 +142,7 @@ func (c *Client) DealGet(ctx context.Context, dealID int64) (*Deal, error) {
 			"ASSIGNED_BY_ID",
 			"MODIFY_BY_ID",
 			"UF_CRM_1766060620",
+			"COMMENTS",
 			"UF_CRM_1766062398",
 		},
 	})

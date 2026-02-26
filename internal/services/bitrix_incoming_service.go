@@ -63,6 +63,7 @@ type bitrixIncomingService struct {
 	eventBus   eventbus.EventBus
 
 	consumerName string
+	dealLocks    sync.Map
 }
 
 func NewBitrixIncomingService(
@@ -396,6 +397,9 @@ func (s *bitrixIncomingService) handleIncomingEvent(ctx context.Context, item *b
 }
 
 func (s *bitrixIncomingService) handleDealAddOrUpdate(ctx context.Context, dealID int64) (string, string, error) {
+	unlock := s.lockDeal(dealID)
+	defer unlock()
+
 	if s.isSuppressedDeal(ctx, dealID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
@@ -431,12 +435,27 @@ func (s *bitrixIncomingService) handleDealAddOrUpdate(ctx context.Context, dealI
 		if err = s.syncAllTimelineCommentsForDeal(ctx, ticket); err != nil {
 			return "", "", err
 		}
+		s.publishBitrixTicketSync(ticket, "ticket_created_from_bitrix_company_mapped")
 		s.publishTicketUpdated(ticket.ID, "ticket_created_from_bitrix", "bitrix", "Создан тикет из сделки Bitrix24")
 	} else {
 		s.publishTicketUpdated(ticket.ID, "ticket_updated_from_bitrix", "bitrix", "Обновлён тикет из сделки Bitrix24")
 	}
 	return bitrix.IncomingEventStatusDone, "", nil
 }
+
+func (s *bitrixIncomingService) lockDeal(dealID int64) func() {
+	if dealID <= 0 {
+		return func() {}
+	}
+	muAny, _ := s.dealLocks.LoadOrStore(dealID, &sync.Mutex{})
+	mu, ok := muAny.(*sync.Mutex)
+	if !ok || mu == nil {
+		return func() {}
+	}
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (s *bitrixIncomingService) handleDealDelete(ctx context.Context, dealID int64) (string, string, error) {
 	if s.isSuppressedDeal(ctx, dealID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
@@ -959,7 +978,7 @@ func (s *bitrixIncomingService) createTicketFromDeal(ctx context.Context, deal *
 	if subject == "" {
 		subject = fmt.Sprintf("Сделка Bitrix24 #%d", deal.ID)
 	}
-	description := convertBitrixDescriptionForEtalon(toString(deal.Raw["UF_CRM_1766060620"]))
+	description := extractIncomingDealDescription(deal)
 	status := mapStageToTicketStatus(deal.StageID)
 	if status == "" {
 		status = tickets.StatusNew
@@ -982,6 +1001,15 @@ func (s *bitrixIncomingService) createTicketFromDeal(ctx context.Context, deal *
 	}
 	if pointID > 0 {
 		ticket.BitrixServicePointID = &pointID
+		if ticket.CompanyID == "" {
+			mappedCompanyID, mapErr := s.resolveMappedCompanyIDByPoint(ctx, pointID)
+			if mapErr != nil {
+				return nil, false, mapErr
+			}
+			if mappedCompanyID != "" {
+				ticket.CompanyID = mappedCompanyID
+			}
+		}
 	}
 	if err := s.ticketRepo.Create(ctx, ticket); err != nil {
 		return nil, false, err
@@ -1006,7 +1034,7 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		ticket.Subject = subject
 		changed = true
 	}
-	description := convertBitrixDescriptionForEtalon(toString(deal.Raw["UF_CRM_1766060620"]))
+	description := extractIncomingDealDescription(deal)
 	if description != "" && strings.TrimSpace(ticket.Description) != description {
 		ticket.Description = description
 		changed = true
@@ -1028,6 +1056,16 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID != pointID {
 			ticket.BitrixServicePointID = &pointID
 			changed = true
+		}
+		if strings.TrimSpace(ticket.CompanyID) == "" {
+			mappedCompanyID, err := s.resolveMappedCompanyIDByPoint(ctx, pointID)
+			if err != nil {
+				return err
+			}
+			if mappedCompanyID != "" {
+				ticket.CompanyID = mappedCompanyID
+				changed = true
+			}
 		}
 	}
 	if deal.AssignedBy != nil && *deal.AssignedBy > 0 {
@@ -1100,6 +1138,31 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		}
 	}
 	return nil
+}
+
+func extractIncomingDealDescription(deal *b24.Deal) string {
+	if deal == nil {
+		return ""
+	}
+	description := convertBitrixDescriptionForEtalon(toString(deal.Raw["UF_CRM_1766060620"]))
+	if strings.TrimSpace(description) != "" {
+		return description
+	}
+	return convertBitrixDescriptionForEtalon(toString(deal.Raw["COMMENTS"]))
+}
+
+func (s *bitrixIncomingService) resolveMappedCompanyIDByPoint(ctx context.Context, pointID int64) (string, error) {
+	if s.repo == nil || pointID <= 0 {
+		return "", nil
+	}
+	mapping, err := s.repo.GetCompanyServicePointMappingByPointID(ctx, pointID)
+	if err != nil {
+		return "", err
+	}
+	if mapping == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(mapping.CompanyID), nil
 }
 
 func (s *bitrixIncomingService) resolveEtalonUserIDByBitrixUserID(ctx context.Context, b24UserID int64) (uint, bool, error) {
@@ -1261,6 +1324,25 @@ func (s *bitrixIncomingService) publishTicketUpdated(ticketID, action, source, m
 			Source:     strings.TrimSpace(source),
 			Message:    strings.TrimSpace(message),
 			OccurredAt: time.Now(),
+		},
+	})
+}
+
+func (s *bitrixIncomingService) publishBitrixTicketSync(ticket *tickets.Ticket, reason string) {
+	if s.eventBus == nil || ticket == nil || !ticket.SyncWithBitrix {
+		return
+	}
+	if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID <= 0 {
+		return
+	}
+	if strings.TrimSpace(ticket.CompanyID) == "" {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type: events.BitrixTicketSyncRequested,
+		Payload: events.BitrixSyncEntityPayload{
+			TicketID: ticket.ID,
+			Reason:   strings.TrimSpace(reason),
 		},
 	})
 }

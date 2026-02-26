@@ -89,6 +89,25 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Request) {
+	if companyID := strings.TrimSpace(r.URL.Query().Get("company_id")); companyID != "" {
+		row, err := h.service.GetBitrixMappingByCompanyID(r.Context(), companyID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				response.RespondWithError(w, http.StatusNotFound, "Not Found")
+				return
+			}
+			middleware.GetLogger(r.Context()).Error("failed to get bitrix mapping by company id", "company_id", companyID, "error", err)
+			response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+			return
+		}
+		if row == nil {
+			response.RespondWithJSON(w, http.StatusOK, []companyBitrixMappingDTO{})
+			return
+		}
+		response.RespondWithJSON(w, http.StatusOK, []companyBitrixMappingDTO{toCompanyBitrixMappingDTO(*row)})
+		return
+	}
+
 	term := strings.TrimSpace(r.URL.Query().Get("term"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))

@@ -168,6 +168,26 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     }));
   }, [bitrixServicePoints]);
 
+  const { data: companyBitrixMapping, isFetching: isCompanyBitrixMappingLoading } = useQuery({
+    queryKey: ['company-bitrix-mapping', selectedCompanyId],
+    queryFn: () => companiesApi.getBitrixMappingByCompanyID(selectedCompanyId ?? ''),
+    enabled: open && isBitrixEnabled && Boolean(selectedCompanyId),
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!open || !isBitrixEnabled) return;
+    if (!selectedCompanyId) {
+      form.setFieldValue('bitrix_service_point_id', undefined);
+      return;
+    }
+    if (syncWithBitrix === false) return;
+    const mappedPointID = companyBitrixMapping?.bitrix_service_point_id;
+    if (mappedPointID && mappedPointID > 0) {
+      form.setFieldValue('bitrix_service_point_id', mappedPointID);
+    }
+  }, [open, isBitrixEnabled, selectedCompanyId, syncWithBitrix, companyBitrixMapping, form]);
+
   const shouldFetchCompanyDetail = open && Boolean(selectedCompanyId) && !companyMeta[selectedCompanyId ?? ''];
   const { data: companyDetailData } = useQuery({
     queryKey: ['company', selectedCompanyId],
@@ -608,7 +628,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                   <Select
                     showSearch
                     placeholder="Выберите точку обслуживания"
-                    loading={isBitrixPointsLoading}
+                    loading={isBitrixPointsLoading || isCompanyBitrixMappingLoading}
                     optionFilterProp="label"
                     options={bitrixPointsOptions}
                     disabled={syncWithBitrix === false}

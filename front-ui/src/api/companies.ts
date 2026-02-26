@@ -40,6 +40,20 @@ export const companiesApi = {
     return response.data;
   },
 
+  getBitrixMappingByCompanyID: async (companyId: string) => {
+    const response = await apiClient.get<CompanyBitrixMappingRowDTO[] | ApiResponse<CompanyBitrixMappingRowDTO[]>>('/companies/bitrix-service-point-mappings', {
+      params: { company_id: companyId },
+    });
+    const data = response.data as unknown;
+    if (Array.isArray(data)) {
+      return data[0] ?? null;
+    }
+    if (data && typeof data === 'object' && Array.isArray((data as { data?: CompanyBitrixMappingRowDTO[] }).data)) {
+      return (data as { data: CompanyBitrixMappingRowDTO[] }).data[0] ?? null;
+    }
+    return null;
+  },
+
   updateBitrixMapping: async (payload: { company_id?: string; bitrix_service_point_id?: number }) => {
     const response = await apiClient.put<ApiResponse<{ status: string }>>('/companies/bitrix-service-point-mappings', payload);
     return response.data;

@@ -364,6 +364,44 @@ func (s *serviceImpl) ListBitrixMappings(ctx context.Context, term string, limit
 	return result, nil
 }
 
+func (s *serviceImpl) GetBitrixMappingByCompanyID(ctx context.Context, companyID string) (*company.BitrixMappingRow, error) {
+	normalizedCompanyID := strings.TrimSpace(companyID)
+	if normalizedCompanyID == "" {
+		return nil, nil
+	}
+
+	comp, err := s.companyRepo.GetByID(ctx, normalizedCompanyID)
+	if err != nil {
+		return nil, err
+	}
+	if comp == nil {
+		return nil, domain.ErrNotFound
+	}
+
+	row := &company.BitrixMappingRow{Company: *comp}
+	mapping, err := s.bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, normalizedCompanyID)
+	if err != nil {
+		return nil, err
+	}
+	if mapping == nil || mapping.BitrixServicePointID <= 0 {
+		return row, nil
+	}
+
+	id := mapping.BitrixServicePointID
+	row.BitrixServicePointID = &id
+	point, err := s.bitrixRepo.GetServicePointByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if point != nil {
+		name := point.Name
+		row.BitrixServicePointName = &name
+		row.BitrixServicePointCode = point.OneCCode
+		row.BitrixServicePointStatus = point.ContractOn
+	}
+	return row, nil
+}
+
 func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error {
 	normalizedCompanyID := ""
 	if companyID != nil {
