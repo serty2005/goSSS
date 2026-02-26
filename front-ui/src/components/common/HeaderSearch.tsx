@@ -40,6 +40,7 @@ const TICKET_STATE_PARAM_KEYS = [
   'status',
   'only_active_statuses',
   'table_columns',
+  'table_sort',
   'assignee_ids',
   'archive_mode',
   'company',
@@ -56,6 +57,7 @@ const TICKET_PRESET_PARAM_KEYS = [
   'status',
   'only_active_statuses',
   'table_columns',
+  'table_sort',
   'assignee_ids',
   'company',
   'archive_company',
@@ -907,6 +909,12 @@ const HeaderSearch: React.FC = () => {
           onClick={() => {
             if (isTicketsListPage) {
               requestCreateTicket();
+              return;
+            }
+            if (isTicketsPage) {
+              const params = new URLSearchParams(location.search);
+              params.set('create', '1');
+              navigate(`${location.pathname}?${params.toString()}`);
               return;
             }
             requestCreateTicket();

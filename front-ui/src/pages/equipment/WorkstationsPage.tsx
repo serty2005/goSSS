@@ -12,6 +12,7 @@ type Row = {
   name: string;
   anydesk: string;
   teamviewer: string;
+  rustdesk: string;
   ownerId: string;
 };
 
@@ -48,6 +49,7 @@ const WorkstationsPage: React.FC = () => {
             name: String(row.device_name || id || 'Рабочая станция'),
             anydesk: String(row.anydesk || '-'),
             teamviewer: String(row.teamviewer || '-'),
+            rustdesk: String(row.rustdesk || '-'),
             ownerId: String(row.owner_id || ''),
           };
         }),
@@ -79,6 +81,7 @@ const WorkstationsPage: React.FC = () => {
     { title: 'Название', dataIndex: 'name', key: 'name' },
     { title: 'AnyDesk', dataIndex: 'anydesk', key: 'anydesk', width: 180 },
     { title: 'TeamViewer', dataIndex: 'teamviewer', key: 'teamviewer', width: 180 },
+    { title: 'RustDesk', dataIndex: 'rustdesk', key: 'rustdesk', width: 180 },
     {
       title: 'Владелец',
       dataIndex: 'ownerId',

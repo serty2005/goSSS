@@ -299,6 +299,7 @@ const TicketsPage: React.FC = () => {
   const status = searchParams.get('status') || '';
   const tableColumnsParam = searchParams.get('table_columns') || '';
   const tableSortParam = searchParams.get('table_sort') || '';
+  const selectedPresetID = searchParams.get('preset_id') || '';
   const onlyActiveStatuses = searchParams.get('only_active_statuses') === '1';
   const assigneeIDs = searchParams.get('assignee_ids') || '';
   const archiveMode = searchParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
@@ -959,9 +960,53 @@ const TicketsPage: React.FC = () => {
   };
 
   function applyTableSort(key: TableSortKey) {
-    const params = new URLSearchParams(searchParams);
     const nextOrder: TableSortOrder | null =
       tableSort?.key !== key ? 'asc' : tableSort.order === 'asc' ? 'desc' : null;
+    const nextTableSortValue = nextOrder ? `${key}:${nextOrder}` : '';
+    if (user && selectedPresetID) {
+      const profileConfig = (user.profile_config || {}) as Record<string, any>;
+      const ticketsConfig = (profileConfig.tickets || {}) as Record<string, any>;
+      const filtersConfig = (ticketsConfig.filters || {}) as Record<string, any>;
+      const presets = Array.isArray(filtersConfig.presets) ? filtersConfig.presets : [];
+      const presetIndex = presets.findIndex((item: any) => item?.id === selectedPresetID);
+      if (presetIndex >= 0) {
+        const currentPreset = presets[presetIndex] as { values?: Record<string, string> };
+        const currentSortValue = typeof currentPreset?.values?.table_sort === 'string' ? currentPreset.values.table_sort : '';
+        if (currentSortValue !== nextTableSortValue) {
+          const nextPreset = {
+            ...presets[presetIndex],
+            values: {
+              ...((presets[presetIndex] as any)?.values || {}),
+            } as Record<string, string>,
+          };
+          if (nextTableSortValue) {
+            nextPreset.values.table_sort = nextTableSortValue;
+          } else {
+            delete nextPreset.values.table_sort;
+          }
+          const nextPresets = [...presets];
+          nextPresets[presetIndex] = nextPreset;
+          const nextConfig = {
+            ...profileConfig,
+            tickets: {
+              ...ticketsConfig,
+              filters: {
+                ...filtersConfig,
+                presets: nextPresets,
+              },
+            },
+          };
+          const prevUser = user;
+          setUser({ ...user, profile_config: nextConfig as any });
+          updateProfileConfigMutation.mutate(nextConfig as any, {
+            onError: () => {
+              setUser(prevUser);
+            },
+          });
+        }
+      }
+    }
+    const params = new URLSearchParams(searchParams);
     if (!nextOrder) {
       params.delete('table_sort');
     } else {
@@ -974,18 +1019,16 @@ const TicketsPage: React.FC = () => {
   function renderSortableTitle(label: string, key: TableSortKey) {
     const order = tableSort?.key === key ? tableSort.order : null;
     return (
-      <Space size={4}>
+      <Space
+        size={4}
+        onClick={(event) => {
+          event.stopPropagation();
+          applyTableSort(key);
+        }}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+      >
         <span>{label}</span>
-        <Button
-          size="small"
-          type="text"
-          onClick={(event) => {
-            event.stopPropagation();
-            applyTableSort(key);
-          }}
-        >
-          {order === 'asc' ? '↑' : order === 'desc' ? '↓' : '↕'}
-        </Button>
+        {order ? <span aria-hidden="true">{order === 'asc' ? '↑' : '↓'}</span> : null}
       </Space>
     );
   }

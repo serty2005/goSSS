@@ -229,6 +229,9 @@ const WorkstationDetails: React.FC = () => {
           <Descriptions.Item label="LiteManager">
             <InlineFieldEditor value={ws.litemanager} editable={canEdit} onSave={(v) => saveField('litemanager', v)} saving={updateMutation.isPending && activeField === 'litemanager'} />
           </Descriptions.Item>
+          <Descriptions.Item label="RustDesk">
+            <InlineFieldEditor value={ws.rustdesk} editable={canEdit} onSave={(v) => saveField('rustdesk', v)} saving={updateMutation.isPending && activeField === 'rustdesk'} />
+          </Descriptions.Item>
         </Descriptions>
       </Card>
 
