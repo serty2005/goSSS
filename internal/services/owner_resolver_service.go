@@ -62,7 +62,7 @@ func NewOwnerResolverService(
 func (s *OwnerResolverService) Resolve(
 	ctx context.Context,
 	hubCompanyID string,
-	teamviewerID, litemanagerID, anydeskID, serialNumber string,
+	teamviewerID, litemanagerID, rustdeskID, anydeskID, serialNumber string,
 ) (*services.OwnerResolution, error) {
 	hubCompanyID = strings.TrimSpace(hubCompanyID)
 	if hubCompanyID == "" {
@@ -72,6 +72,7 @@ func (s *OwnerResolverService) Resolve(
 	// Нормализация входных данных
 	teamviewerID = normRemoteID(teamviewerID)
 	litemanagerID = normRemoteID(litemanagerID)
+	rustdeskID = normRemoteID(rustdeskID)
 	anydeskID = normRemoteID(anydeskID)
 	serialNumber = normalizeSerial(serialNumber)
 
@@ -79,6 +80,7 @@ func (s *OwnerResolverService) Resolve(
 		"hub_company_id", hubCompanyID,
 		"teamviewer_id", teamviewerID,
 		"litemanager_id", litemanagerID,
+		"rustdesk_id", rustdeskID,
 		"anydesk_id", anydeskID,
 		"serial_number", serialNumber,
 	)
@@ -111,7 +113,7 @@ func (s *OwnerResolverService) Resolve(
 	)
 
 	// Поиск РС по remote IDs среди дочерних компаний
-	wsMatch := s.findWorkstationAmongChildren(ctx, childIDs, teamviewerID, litemanagerID, anydeskID)
+	wsMatch := s.findWorkstationAmongChildren(ctx, childIDs, teamviewerID, litemanagerID, rustdeskID, anydeskID)
 
 	// Поиск ФР по serial среди дочерних компаний
 	frMatch := s.findFiscalAmongChildren(ctx, childIDs, serialNumber)
@@ -199,7 +201,7 @@ func (s *OwnerResolverService) Resolve(
 func (s *OwnerResolverService) findWorkstationAmongChildren(
 	ctx context.Context,
 	childIDs []string,
-	teamviewerID, litemanagerID, anydeskID string,
+	teamviewerID, litemanagerID, rustdeskID, anydeskID string,
 ) *services.OwnerMatch {
 	// Поиск по TeamViewer
 	if teamviewerID != "" {
@@ -231,6 +233,23 @@ func (s *OwnerResolverService) findWorkstationAmongChildren(
 				EntityID:   ws.ID,
 				MatchBy:    "litemanager",
 				MatchValue: litemanagerID,
+			}
+		}
+	}
+
+	// Поиск по RustDesk
+	if rustdeskID != "" {
+		var ws workstation.Workstation
+		err := s.db.WithContext(ctx).
+			Where("rustdesk = ? AND owner_id IN ?", rustdeskID, childIDs).
+			First(&ws).Error
+		if err == nil && ws.OwnerID != nil {
+			return &services.OwnerMatch{
+				OwnerID:    *ws.OwnerID,
+				EntityType: "Workstation",
+				EntityID:   ws.ID,
+				MatchBy:    "rustdesk",
+				MatchValue: rustdeskID,
 			}
 		}
 	}

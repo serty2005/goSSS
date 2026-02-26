@@ -222,6 +222,7 @@ func (s *taskResolutionServiceImpl) handleAddEquipment(ctx context.Context, task
 			DeviceName:   &details.AgentData.Hostname,
 			Teamviewer:   &details.AgentData.TeamviewerID,
 			Litemanager:  &details.AgentData.LitemanagerID,
+			Rustdesk:     &details.AgentData.RustdeskID,
 			Anydesk:      &details.AgentData.AnydeskID,
 			HealthStatus: "",
 		}

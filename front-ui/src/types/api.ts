@@ -121,6 +121,7 @@ export interface WorkstationEntity {
   anydesk?: string;
   teamviewer?: string;
   litemanager?: string;
+  rustdesk?: string;
   
   health_status: 'ok' | 'attention_required' | 'locked';
   status_details?: unknown;
@@ -637,6 +638,7 @@ export interface WorkstationDetailDTO {
   teamviewer?: string;
   anydesk?: string;
   litemanager?: string;
+  rustdesk?: string;
   description?: string;
   health_status?: 'ok' | 'attention_required' | 'locked';
   owner_id?: string;
@@ -712,6 +714,7 @@ export interface UpdateWorkstationPayload {
   anydesk?: string;
   teamviewer?: string;
   litemanager?: string;
+  rustdesk?: string;
   description?: string;
   owner_id?: string;
 }
@@ -756,6 +759,7 @@ export interface CandidateWorkstationStagingDTO {
   workstation_uuid?: string;
   teamviewer_id?: string;
   litemanager_id?: string;
+  rustdesk_id?: string;
   anydesk_id?: string;
   url_rms?: string;
   name?: string;
@@ -830,6 +834,7 @@ export interface CandidateApprovePayload {
 	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
 	teamviewer_id?: string;
 	litemanager_id?: string;
+	rustdesk_id?: string;
 	anydesk_id?: string;
 }
 
@@ -864,6 +869,7 @@ export interface NetworkCandidateWSStagingDTO {
   workstation_uuid?: string;
   teamviewer_id?: string;
   litemanager_id?: string;
+  rustdesk_id?: string;
   anydesk_id?: string;
   url_rms?: string;
 }

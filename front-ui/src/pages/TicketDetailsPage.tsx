@@ -500,6 +500,7 @@ const TicketDetailsPage: React.FC = () => {
           { label: 'AnyDesk', field: 'anydesk', value: String(dataRow.anydesk || '').trim() },
           { label: 'TeamViewer', field: 'teamviewer', value: String(dataRow.teamviewer || '').trim() },
           { label: 'LiteManager', field: 'litemanager', value: String(dataRow.litemanager || '').trim() },
+          { label: 'RustDesk', field: 'rustdesk', value: String(dataRow.rustdesk || '').trim() },
           { label: 'RDP', field: 'rdp', value: String(dataRow.rdp || '').trim() },
         ].filter((row) => row.value);
         if (rows.length === 0) return null;
@@ -1522,6 +1523,7 @@ const TicketDetailsPage: React.FC = () => {
                                             <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
                                             <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
                                             <Text type="secondary">LiteManager: {dataRow.litemanager || '-'}</Text>
+                                            <Text type="secondary">RustDesk: {dataRow.rustdesk || '-'}</Text>
                                           </Space>
                                         </Card>
                                       );

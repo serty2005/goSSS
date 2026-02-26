@@ -253,6 +253,7 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 		}{
 			{Field: "teamviewer", Value: ncNormRID(ncPtrValue(wsStage.TeamviewerID))},
 			{Field: "litemanager", Value: ncNormRID(ncPtrValue(wsStage.LitemanagerID))},
+			{Field: "rustdesk", Value: ncNormRID(ncPtrValue(wsStage.RustdeskID))},
 			{Field: "anydesk", Value: ncNormRID(ncPtrValue(wsStage.AnydeskID))},
 		} {
 			if cond.Value == "" {
@@ -277,6 +278,7 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 			DeviceName:       wsStage.Hostname,
 			Teamviewer:       ncStrPtr(ncNormRID(ncPtrValue(wsStage.TeamviewerID))),
 			Litemanager:      ncStrPtr(ncNormRID(ncPtrValue(wsStage.LitemanagerID))),
+			Rustdesk:         ncStrPtr(ncNormRID(ncPtrValue(wsStage.RustdeskID))),
 			Anydesk:          ncStrPtr(ncNormRID(ncPtrValue(wsStage.AnydeskID))),
 			IdentityHash:     ncStrPtr(identity),
 			LastModifiedDate: timeRef(wsStage.ObservedAt),
@@ -305,6 +307,9 @@ func (r *networkCandidateRepo) applyGroupWorkstation(tx *gorm.DB, groupID uint, 
 	}
 	if v := ncNormRID(ncPtrValue(wsStage.LitemanagerID)); v != "" {
 		updates["litemanager"] = v
+	}
+	if v := ncNormRID(ncPtrValue(wsStage.RustdeskID)); v != "" {
+		updates["rustdesk"] = v
 	}
 	if v := ncNormRID(ncPtrValue(wsStage.AnydeskID)); v != "" {
 		updates["anydesk"] = v

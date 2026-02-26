@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/transport/http/validators"
 	"fmt"
 	"net"
+	"strings"
 )
 
 // MatchReport содержит детальный отчет о поиске сущностей по данным агента.
@@ -56,9 +57,13 @@ func (s *entityMatcherServiceImpl) GetMatchReport(ctx context.Context, data *api
 	// Извлекаем ID заранее для логгера
 	tvID := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
 	lmID := utils.SafeStringDereference(validators.ExtractLiteManagerID(data.AdditionalProperties, data.LitemanagerID))
+	rdID := strings.TrimSpace(data.RustdeskID)
+	if strings.EqualFold(rdID, "none") {
+		rdID = ""
+	}
 
 	// Формируем идентификатор для логов: TV_LM
-	remoteIDs := fmt.Sprintf("TV:%s_LM:%s", tvID, lmID)
+	remoteIDs := fmt.Sprintf("TV:%s_LM:%s_RD:%s", tvID, lmID, rdID)
 	log := s.logger.With("remote_ids", remoteIDs, "serial", data.SerialNumber)
 
 	// --- Приоритет 1: Сервер (Server) ---
@@ -97,8 +102,8 @@ func (s *entityMatcherServiceImpl) GetMatchReport(ctx context.Context, data *api
 	}
 
 	// --- Приоритет 2: Рабочая станция (Workstation) ---
-	if tvID != "" || lmID != "" {
-		wsList, err := s.workstationRepo.FindAllByRemoteIDs(ctx, tvID, lmID)
+	if tvID != "" || lmID != "" || rdID != "" {
+		wsList, err := s.workstationRepo.FindAllByRemoteIDs(ctx, tvID, lmID, rdID)
 		if err == nil && len(wsList) > 0 {
 			if len(wsList) == 1 {
 				report.FoundWorkstation = &wsList[0]

@@ -16,6 +16,7 @@ type Workstation struct {
 	Teamviewer             *string        `gorm:"type:text"`
 	Anydesk                *string        `gorm:"type:text"`
 	Litemanager            *string        `gorm:"type:text"`
+	Rustdesk               *string        `gorm:"type:text"`
 	DeviceName             *string        `gorm:"type:text"`
 	ServerID               *string        `gorm:"column:server_id;type:text;index"`
 	IsNew                  bool           `gorm:"column:is_new;default:false;index" json:"is_new"`

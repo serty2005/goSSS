@@ -248,6 +248,7 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 					Anydesk:          ws.Anydesk,
 					Teamviewer:       ws.Teamviewer,
 					Litemanager:      ws.Litemanager,
+					Rustdesk:         ws.Rustdesk,
 				},
 			}
 			mu.Lock()

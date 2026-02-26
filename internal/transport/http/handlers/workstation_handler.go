@@ -165,6 +165,7 @@ func toWorkstationResponse(item workstation.Workstation) map[string]interface{} 
 		"teamviewer":         item.Teamviewer,
 		"anydesk":            item.Anydesk,
 		"litemanager":        item.Litemanager,
+		"rustdesk":           item.Rustdesk,
 		"device_name":        item.DeviceName,
 		"server_id":          item.ServerID,
 		"is_new":             item.IsNew,

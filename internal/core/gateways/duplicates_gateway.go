@@ -23,20 +23,20 @@ type DuplicatesGateway interface {
 }
 
 type duplicatesGatewayImpl struct {
-	cfg    *config.Config
-	db     *gorm.DB
-	bus    eventbus.EventBus
-	logger logger.LoggerInterface
+	cfg         *config.Config
+	db          *gorm.DB
+	bus         eventbus.EventBus
+	logger      logger.LoggerInterface
 	deletionSvc services.EntityDeletionService
 }
 
 // NewDuplicatesGateway создает новый экземпляр шлюза.
 func NewDuplicatesGateway(cfg *config.Config, db *gorm.DB, bus eventbus.EventBus, logger logger.LoggerInterface, deletionSvc services.EntityDeletionService) DuplicatesGateway {
 	return &duplicatesGatewayImpl{
-		cfg:    cfg,
-		db:     db,
-		bus:    bus,
-		logger: logger,
+		cfg:         cfg,
+		db:          db,
+		bus:         bus,
+		logger:      logger,
 		deletionSvc: deletionSvc,
 	}
 }
@@ -71,7 +71,7 @@ func (g *duplicatesGatewayImpl) runSearchCycle(ctx context.Context) {
 		fields     []string
 	}{
 		{&server.Server{}, "Server", []string{"ip"}},
-		{&workstation.Workstation{}, "Workstation", []string{"anydesk", "teamviewer", "litemanager"}},
+		{&workstation.Workstation{}, "Workstation", []string{"anydesk", "teamviewer", "litemanager", "rustdesk"}},
 		{&fiscal.FiscalRegister{}, "FiscalRegister", []string{"fr_serial_number", "rn_kkt"}},
 	}
 

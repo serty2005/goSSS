@@ -34,6 +34,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -566,11 +567,13 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	agentWSData := map[string]interface{}{
 		"teamviewer":  utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID)),
 		"litemanager": utils.SafeStringDereference(validators.ExtractLiteManagerID(data.AdditionalProperties, data.LitemanagerID)),
+		"rustdesk":    normalizeRustdeskID(data.RustdeskID),
 		"hostname":    data.Hostname,
 	}
 	log.Debug("Данные РС от агента",
 		"teamviewer", agentWSData["teamviewer"],
 		"litemanager", agentWSData["litemanager"],
+		"rustdesk", agentWSData["rustdesk"],
 		"hostname", agentWSData["hostname"],
 	)
 
@@ -588,11 +591,12 @@ func (p *processingEngineImpl) ProcessAgentData(ctx context.Context, source stri
 	} else {
 		// РС не найдена, но есть данные для неё -> add_equipment
 		// Проверяем, есть ли валидные данные для создания
-		if agentWSData["teamviewer"] != "" || agentWSData["litemanager"] != "" {
+		if agentWSData["teamviewer"] != "" || agentWSData["litemanager"] != "" || agentWSData["rustdesk"] != "" {
 			log.Info("Рабочая станция не найдена, создание задачи add_equipment",
 				"owner_id", ownerID,
 				"teamviewer", agentWSData["teamviewer"],
 				"litemanager", agentWSData["litemanager"],
+				"rustdesk", agentWSData["rustdesk"],
 			)
 			action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
 			if action != nil {
@@ -734,11 +738,13 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 
 	agentTV := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.TeamviewerID))
 	agentLM := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.LitemanagerID))
+	agentRD := normalizeRustdeskID(data.RustdeskID)
 	agentAD := utils.SafeStringDereference(validators.ValidateRemoteAccessID(data.AnydeskID))
 
 	log.Debug("Данные РС от агента",
 		"teamviewer", agentTV,
 		"litemanager", agentLM,
+		"rustdesk", agentRD,
 		"anydesk", agentAD,
 	)
 
@@ -751,6 +757,7 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		agentData := map[string]interface{}{
 			"teamviewer":  agentTV,
 			"litemanager": agentLM,
+			"rustdesk":    agentRD,
 			"anydesk":     agentAD,
 		}
 		if hasChanges, updateAction := p.reconciliationEngine.CompareEntityData(ctx, "Workstation", agentData, ws); hasChanges {
@@ -759,11 +766,12 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 		} else {
 			log.Debug("Изменений в РС не обнаружено", "ws_id", ws.ID)
 		}
-	} else if agentTV != "" || agentLM != "" || agentAD != "" {
+	} else if agentTV != "" || agentLM != "" || agentRD != "" || agentAD != "" {
 		log.Info("РС не найдена, создание задачи add_equipment",
 			"owner_id", ownerID,
 			"teamviewer", agentTV,
 			"litemanager", agentLM,
+			"rustdesk", agentRD,
 			"anydesk", agentAD,
 		)
 		action := p.reconciliationEngine.CreateConflictTask(ctx, "add_equipment", ownerID, data)
@@ -774,6 +782,14 @@ func (p *processingEngineImpl) processWorkstationActions(ctx context.Context, re
 			log.Debug("Задача add_equipment уже существует, пропускаем")
 		}
 	}
+}
+
+func normalizeRustdeskID(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.EqualFold(v, "none") {
+		return ""
+	}
+	return v
 }
 
 // processFiscalRegisterActions обрабатывает действия для фискального регистратора.

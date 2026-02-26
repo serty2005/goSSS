@@ -37,6 +37,7 @@ type CandidateApproveInput struct {
 	// Приоритет: ручной ввод > значения из staging.
 	TeamviewerID  *string
 	LitemanagerID *string
+	RustdeskID    *string
 	AnydeskID     *string
 }
 
@@ -139,6 +140,7 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		// Ручной ввод remote IDs
 		TeamviewerID:  in.TeamviewerID,
 		LitemanagerID: in.LitemanagerID,
+		RustdeskID:    in.RustdeskID,
 		AnydeskID:     in.AnydeskID,
 	}
 	if len(in.Workstations) > 0 {

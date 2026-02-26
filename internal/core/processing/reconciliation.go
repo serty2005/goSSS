@@ -149,7 +149,7 @@ func NewReconciliationEngine(
 //   - Локальные IP-адреса (127.x, 10.x, 192.168.x, 172.16-31.x) пропускаются
 //   - Владелец определяется по первой найденной сущности с непустым OwnerID
 func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *events.AgentDataPayload) (string, error) {
-	r.logger.Info("Определение владельца для данных из агента", "source", data.Source, "url_rms", data.Data.URLRms, "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "anydesk", data.Data.AnydeskID, "serial", data.Data.SerialNumber)
+	r.logger.Info("Определение владельца для данных из агента", "source", data.Source, "url_rms", data.Data.URLRms, "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "rustdesk", data.Data.RustdeskID, "anydesk", data.Data.AnydeskID, "serial", data.Data.SerialNumber)
 
 	normalizedIP := validators.ValidateIPAddress(data.Data.URLRms)
 	isLocal := normalizedIP == nil
@@ -172,8 +172,8 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 	}
 
 	// Шаг 2: Поиск по РС (TeamViewer + LiteManager)
-	ws, err := r.workstationRepo.FindByRemoteIDs(ctx, data.Data.TeamviewerID, "", data.Data.LitemanagerID)
-	r.logger.Debug("Поиск РС по TV/LM", "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "found", ws != nil, "error", err)
+	ws, err := r.workstationRepo.FindByRemoteIDs(ctx, data.Data.TeamviewerID, "", data.Data.LitemanagerID, data.Data.RustdeskID)
+	r.logger.Debug("Поиск РС по TV/LM/RD", "teamviewer", data.Data.TeamviewerID, "litemanager", data.Data.LitemanagerID, "rustdesk", data.Data.RustdeskID, "found", ws != nil, "error", err)
 	if err == nil && ws != nil {
 		if ws.OwnerID != nil {
 			r.logger.Debug("Владелец определен по РС (TV/LM)", "ws_id", ws.ID, "owner_id", *ws.OwnerID)
@@ -185,7 +185,7 @@ func (r *reconciliationEngineImpl) DetermineOwner(ctx context.Context, data *eve
 
 	// Шаг 3: Поиск по РС (AnyDesk)
 	if data.Data.AnydeskID != "" && data.Data.AnydeskID != "None" {
-		ws, err = r.workstationRepo.FindByRemoteIDs(ctx, "", data.Data.AnydeskID, "")
+		ws, err = r.workstationRepo.FindByRemoteIDs(ctx, "", data.Data.AnydeskID, "", "")
 		r.logger.Debug("Поиск РС по Anydesk", "anydesk", data.Data.AnydeskID, "found", ws != nil, "error", err)
 		if err == nil && ws != nil {
 			if ws.OwnerID != nil {
@@ -349,7 +349,7 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 			entityUUID = data.SerialNumber
 			r.logger.Debug("CreateConflictTask: новое оборудование (ФР)",
 				"serial_number", data.SerialNumber)
-		} else if data != nil && (data.TeamviewerID != "" || data.LitemanagerID != "" || data.AnydeskID != "") {
+		} else if data != nil && (data.TeamviewerID != "" || data.LitemanagerID != "" || data.RustdeskID != "" || data.AnydeskID != "") {
 			entityType = EntityTypeWorkstation
 			// Склеиваем найденные ID удалённого доступа в порядке Teamviewer -> Litemanager -> Anydesk, пропуская пустые
 			var ids []string
@@ -358,6 +358,9 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 			}
 			if data.LitemanagerID != "" {
 				ids = append(ids, data.LitemanagerID)
+			}
+			if data.RustdeskID != "" {
+				ids = append(ids, data.RustdeskID)
 			}
 			if data.AnydeskID != "" {
 				ids = append(ids, data.AnydeskID)
@@ -382,6 +385,9 @@ func (r *reconciliationEngineImpl) CreateConflictTask(ctx context.Context, confl
 			}
 			if data.LitemanagerID != "" {
 				ids = append(ids, data.LitemanagerID)
+			}
+			if data.RustdeskID != "" {
+				ids = append(ids, data.RustdeskID)
 			}
 			if data.AnydeskID != "" {
 				ids = append(ids, data.AnydeskID)
@@ -678,6 +684,7 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 			"ws_id", ws.ID,
 			"current_teamviewer", utils.SafeStringDereference(ws.Teamviewer),
 			"current_litemanager", utils.SafeStringDereference(ws.Litemanager),
+			"current_rustdesk", utils.SafeStringDereference(ws.Rustdesk),
 			"current_device_name", utils.SafeStringDereference(ws.DeviceName))
 
 		// ПРАВИЛО 2: Рабочая станция (WS) - Доверенное обновление специфичных полей.
@@ -702,6 +709,18 @@ func (r *reconciliationEngineImpl) CompareEntityData(ctx context.Context, entity
 				r.logger.Debug("CompareEntityData: Workstation — litemanager будет обновлён",
 					"ws_id", ws.ID,
 					"old_value", utils.SafeStringDereference(ws.Litemanager),
+					"new_value", val)
+			}
+		}
+
+		// Rustdesk
+		if val, ok := agentData["rustdesk"].(string); ok && val != "" {
+			if ws.Rustdesk == nil || *ws.Rustdesk != val {
+				updates["rustdesk"] = val
+				hasChanges = true
+				r.logger.Debug("CompareEntityData: Workstation — rustdesk будет обновлён",
+					"ws_id", ws.ID,
+					"old_value", utils.SafeStringDereference(ws.Rustdesk),
 					"new_value", val)
 			}
 		}

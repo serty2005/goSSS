@@ -341,6 +341,11 @@ type CandidateWorkstationStaging struct {
 	// Один из ключевых идентификаторов для поиска существующей РС.
 	LitemanagerID *string `gorm:"type:text;index" json:"litemanager_id"`
 
+	// RustdeskID — идентификатор RustDesk.
+	// Источник: поле rustdesk_id из AgentDataDTO.
+	// Один из ключевых идентификаторов для поиска существующей РС.
+	RustdeskID *string `gorm:"type:text;index" json:"rustdesk_id"`
+
 	// AnydeskID — идентификатор AnyDesk.
 	// Источник: поле anydesk_id из AgentDataDTO.
 	// Один из ключевых идентификаторов для поиска существующей РС.

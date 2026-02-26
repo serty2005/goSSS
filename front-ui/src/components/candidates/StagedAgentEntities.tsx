@@ -219,6 +219,7 @@ export const StagedAgentEntities: React.FC<StagedAgentEntitiesProps> = ({
                       )}
                       {ws.teamviewer_id ? <Text type="secondary">TeamViewer: {ws.teamviewer_id}</Text> : null}
                       {ws.litemanager_id ? <Text type="secondary">LiteManager: {ws.litemanager_id}</Text> : null}
+                      {ws.rustdesk_id ? <Text type="secondary">RustDesk: {ws.rustdesk_id}</Text> : null}
                       {ws.anydesk_id ? <Text type="secondary">AnyDesk: {ws.anydesk_id}</Text> : null}
                     </Space>
                   );

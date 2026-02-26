@@ -47,6 +47,7 @@ CREATE TABLE workstations (
   teamviewer TEXT,
   anydesk TEXT,
   litemanager TEXT,
+  rustdesk TEXT,
   device_name TEXT,
   last_modified_date TIMESTAMPTZ,
   description TEXT,

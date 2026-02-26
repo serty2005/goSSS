@@ -169,6 +169,7 @@ func (h *TaskHandler) enrichAddEquipmentDetails(task models.ReconciliationTask) 
 			TeamviewerID     string                    `json:"teamviewer_id"`
 			AnydeskID        string                    `json:"anydesk_id"`
 			LitemanagerID    string                    `json:"litemanager_id"`
+			RustdeskID       string                    `json:"rustdesk_id"`
 			AgentCurrentTime string                    `json:"agent_current_time"`
 		}{
 			EtalonOwnerID:    details.EtalonOwnerUUID,
@@ -179,6 +180,7 @@ func (h *TaskHandler) enrichAddEquipmentDetails(task models.ReconciliationTask) 
 			TeamviewerID:     details.AgentData.TeamviewerID,
 			AnydeskID:        details.AgentData.AnydeskID,
 			LitemanagerID:    details.AgentData.LitemanagerID,
+			RustdeskID:       details.AgentData.RustdeskID,
 			AgentCurrentTime: details.AgentData.CurrentTime,
 		}, nil
 	}
@@ -414,6 +416,7 @@ func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws workstat
 		Anydesk:       ws.Anydesk,
 		Teamviewer:    ws.Teamviewer,
 		Litemanager:   ws.Litemanager,
+		Rustdesk:      ws.Rustdesk,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 	if err == nil && link != nil {

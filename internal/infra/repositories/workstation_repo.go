@@ -96,8 +96,8 @@ func (r *workstationRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*wo
 func (r *workstationRepo) Search(ctx context.Context, term string, limit, offset int) ([]workstation.Workstation, error) {
 	var workstations []workstation.Workstation
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ? OR rustdesk ILIKE ?",
+			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
 		Limit(limit).Offset(offset).Find(&workstations).Error
 	return workstations, err
 }
@@ -124,8 +124,8 @@ func (r *workstationRepo) SearchWithTotal(ctx context.Context, term string, limi
 	pattern := "%" + term + "%"
 	base := r.dbOrTx(ctx, nil).WithContext(ctx).
 		Model(&workstation.Workstation{}).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern)
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ? OR rustdesk ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
@@ -134,8 +134,8 @@ func (r *workstationRepo) SearchWithTotal(ctx context.Context, term string, limi
 
 	var workstations []workstation.Workstation
 	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern).
+		Where("id::text ILIKE ? OR device_name ILIKE ? OR description ILIKE ? OR anydesk ILIKE ? OR teamviewer ILIKE ? OR litemanager ILIKE ? OR rustdesk ILIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern).
 		Limit(limit).
 		Offset(offset).
 		Order("updated_at DESC").
@@ -146,7 +146,7 @@ func (r *workstationRepo) SearchWithTotal(ctx context.Context, term string, limi
 	return workstations, total, nil
 }
 
-func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*workstation.Workstation, error) {
+func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm, rd string) (*workstation.Workstation, error) {
 	var ws workstation.Workstation
 	// Используем dbOrTx без транзакции
 	query := r.dbOrTx(ctx, nil).WithContext(ctx).Where("health_status != ?", "locked")
@@ -166,6 +166,10 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 		conditions = append(conditions, "litemanager = ?")
 		values = append(values, lm)
 	}
+	if rd != "" && rd != "None" {
+		conditions = append(conditions, "rustdesk = ?")
+		values = append(values, rd)
+	}
 
 	if len(conditions) == 0 {
 		return nil, nil
@@ -184,7 +188,7 @@ func (r *workstationRepo) FindByRemoteIDs(ctx context.Context, tv, ad, lm string
 }
 
 // FindAllByRemoteIDs реализует поиск всех совпадений для детекции дубликатов.
-func (r *workstationRepo) FindAllByRemoteIDs(ctx context.Context, tv, lm string) ([]workstation.Workstation, error) {
+func (r *workstationRepo) FindAllByRemoteIDs(ctx context.Context, tv, lm, rd string) ([]workstation.Workstation, error) {
 	var workstations []workstation.Workstation
 
 	// Ищем только активные записи (не locked)
@@ -200,6 +204,10 @@ func (r *workstationRepo) FindAllByRemoteIDs(ctx context.Context, tv, lm string)
 	if lm != "" && lm != "None" {
 		conditions = append(conditions, "litemanager = ?")
 		values = append(values, lm)
+	}
+	if rd != "" && rd != "None" {
+		conditions = append(conditions, "rustdesk = ?")
+		values = append(values, rd)
 	}
 
 	if len(conditions) == 0 {

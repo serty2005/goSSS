@@ -94,6 +94,7 @@ type NetworkCandidateWSStaging struct {
 	WorkstationUUID *string   `gorm:"type:text" json:"workstation_uuid"`
 	TeamviewerID    *string   `gorm:"type:text;index" json:"teamviewer_id"`
 	LitemanagerID   *string   `gorm:"type:text;index" json:"litemanager_id"`
+	RustdeskID      *string   `gorm:"type:text;index" json:"rustdesk_id"`
 	AnydeskID       *string   `gorm:"type:text;index" json:"anydesk_id"`
 	URLRms          *string   `gorm:"column:url_rms;type:text" json:"url_rms"`
 	CreatedAt       time.Time `json:"created_at"`

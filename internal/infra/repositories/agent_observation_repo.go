@@ -57,6 +57,7 @@ type CandidateApproveInput struct {
 	// Приоритет: ручной ввод > значения из staging.
 	TeamviewerID  *string
 	LitemanagerID *string
+	RustdeskID    *string
 	AnydeskID     *string
 }
 
@@ -228,6 +229,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		"serial_number", strings.TrimSpace(data.SerialNumber),
 		"teamviewer_id", normRID(data.TeamviewerID),
 		"litemanager_id", normRID(data.LitemanagerID),
+		"rustdesk_id", normRID(data.RustdeskID),
 		"anydesk_id", normRID(data.AnydeskID),
 	)
 
@@ -368,6 +370,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 					resolution, err = s.ownerResolver.Resolve(ctx, hubCompanyID,
 						normRID(data.TeamviewerID),
 						normRID(data.LitemanagerID),
+						normRID(data.RustdeskID),
 						normRID(data.AnydeskID),
 						normalizeSerial(data.SerialNumber),
 					)
@@ -494,6 +497,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 				"server_found", srv != nil,
 				"teamviewer_id", normRID(data.TeamviewerID),
 				"litemanager_id", normRID(data.LitemanagerID),
+				"rustdesk_id", normRID(data.RustdeskID),
 				"anydesk_id", normRID(data.AnydeskID),
 				"server_key", serverKey,
 				"crm_id", strings.TrimSpace(data.CRMID),
@@ -686,15 +690,17 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			}
 
 			// Применение ручного ввода remote IDs (приоритет над значениями из staging)
-			if in.TeamviewerID != nil || in.LitemanagerID != nil || in.AnydeskID != nil {
+			if in.TeamviewerID != nil || in.LitemanagerID != nil || in.RustdeskID != nil || in.AnydeskID != nil {
 				s.logger.Info("Применение ручного ввода remote IDs",
 					"candidate_id", in.CandidateID,
 					"observation_id", so.ID,
 					"manual_teamviewer", ptrValue(in.TeamviewerID),
 					"manual_litemanager", ptrValue(in.LitemanagerID),
+					"manual_rustdesk", ptrValue(in.RustdeskID),
 					"manual_anydesk", ptrValue(in.AnydeskID),
 					"original_teamviewer", normRID(payload.TeamviewerID),
 					"original_litemanager", normRID(payload.LitemanagerID),
+					"original_rustdesk", normRID(payload.RustdeskID),
 					"original_anydesk", normRID(payload.AnydeskID),
 				)
 			}
@@ -703,6 +709,9 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			}
 			if in.LitemanagerID != nil {
 				payload.LitemanagerID = *in.LitemanagerID
+			}
+			if in.RustdeskID != nil {
+				payload.RustdeskID = *in.RustdeskID
 			}
 			if in.AnydeskID != nil {
 				payload.AnydeskID = *in.AnydeskID
@@ -1126,6 +1135,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 		"identity_hash", identity,
 		"teamviewer_id", normRID(data.TeamviewerID),
 		"litemanager_id", normRID(data.LitemanagerID),
+		"rustdesk_id", normRID(data.RustdeskID),
 		"anydesk_id", normRID(data.AnydeskID),
 	)
 
@@ -1162,6 +1172,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 		ws.DeviceName = strPtr(strings.TrimSpace(data.Hostname))
 		ws.Teamviewer = normRIDPtr(data.TeamviewerID)
 		ws.Litemanager = normRIDPtr(data.LitemanagerID)
+		ws.Rustdesk = normRIDPtr(data.RustdeskID)
 		ws.Anydesk = normRIDPtr(data.AnydeskID)
 		ws.IdentityHash = strPtr(identity)
 		ws.LastModifiedDate = &observedAt
@@ -1189,6 +1200,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 			"device_name", ptrValue(ws.DeviceName),
 			"teamviewer", ptrValue(ws.Teamviewer),
 			"litemanager", ptrValue(ws.Litemanager),
+			"rustdesk", ptrValue(ws.Rustdesk),
 			"anydesk", ptrValue(ws.Anydesk),
 			"is_new", ws.IsNew,
 		)
@@ -1229,6 +1241,9 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 	}
 	if lm := normRIDPtr(data.LitemanagerID); lm != nil {
 		updates["litemanager"] = *lm
+	}
+	if rd := normRIDPtr(data.RustdeskID); rd != nil {
+		updates["rustdesk"] = *rd
 	}
 
 	if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Updates(updates).Error; err != nil {
@@ -1580,6 +1595,17 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 	}
 
 	// 4. Поиск по AnyDesk ID
+	if rd := normRID(data.RustdeskID); rd != "" {
+		if err := tx.Where("rustdesk = ?", rd).First(&ws).Error; err == nil {
+			s.logger.Debug("РС найдена по RustDesk ID",
+				"workstation_id", ws.ID,
+				"rustdesk_id", rd,
+				"owner_id", ptrValue(ws.OwnerID),
+			)
+			return &ws, nil
+		}
+	}
+
 	if ad := normRID(data.AnydeskID); ad != "" {
 		if err := tx.Where("anydesk = ?", ad).First(&ws).Error; err == nil {
 			s.logger.Debug("РС найдена по AnyDesk ID",
@@ -1595,6 +1621,7 @@ func (s *agentObservationRepo) findWorkstation(tx *gorm.DB, data *api.AgentDataD
 		"identity_hash", identityHashValue,
 		"teamviewer_id", normRID(data.TeamviewerID),
 		"litemanager_id", normRID(data.LitemanagerID),
+		"rustdesk_id", normRID(data.RustdeskID),
 		"anydesk_id", normRID(data.AnydeskID),
 	)
 	return nil, nil
@@ -1653,7 +1680,7 @@ func (s *agentObservationRepo) stage(tx *gorm.DB, obs *models.AgentObservation, 
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Create(&models.CandidateWorkstationStaging{CandidateID: c.ID, ObservationID: obs.ID, ObservedAt: observedAt, Hostname: strPtr(strings.TrimSpace(data.Hostname)), AgentUUID: strPtr(strings.TrimSpace(data.AgentUUID)), WorkstationUUID: stageWorkstationID, TeamviewerID: normRIDPtr(data.TeamviewerID), LitemanagerID: normRIDPtr(data.LitemanagerID), AnydeskID: normRIDPtr(data.AnydeskID), URLRms: strPtr(normalizedRMS)}).Error; err != nil {
+	if err := tx.Create(&models.CandidateWorkstationStaging{CandidateID: c.ID, ObservationID: obs.ID, ObservedAt: observedAt, Hostname: strPtr(strings.TrimSpace(data.Hostname)), AgentUUID: strPtr(strings.TrimSpace(data.AgentUUID)), WorkstationUUID: stageWorkstationID, TeamviewerID: normRIDPtr(data.TeamviewerID), LitemanagerID: normRIDPtr(data.LitemanagerID), RustdeskID: normRIDPtr(data.RustdeskID), AnydeskID: normRIDPtr(data.AnydeskID), URLRms: strPtr(normalizedRMS)}).Error; err != nil {
 		return nil, err
 	}
 	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
@@ -1951,6 +1978,7 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 		"serial_number", strings.TrimSpace(data.SerialNumber),
 		"teamviewer_id", normRID(data.TeamviewerID),
 		"litemanager_id", normRID(data.LitemanagerID),
+		"rustdesk_id", normRID(data.RustdeskID),
 		"anydesk_id", normRID(data.AnydeskID),
 	)
 
@@ -1981,6 +2009,10 @@ func (s *agentObservationRepo) resolveNetworkOwner(tx *gorm.DB, hubCompanyID str
 	if lm := normRID(data.LitemanagerID); lm != "" {
 		conditions = append(conditions, "litemanager = ?")
 		values = append(values, lm)
+	}
+	if rd := normRID(data.RustdeskID); rd != "" {
+		conditions = append(conditions, "rustdesk = ?")
+		values = append(values, rd)
 	}
 	if ad := normRID(data.AnydeskID); ad != "" {
 		conditions = append(conditions, "anydesk = ?")
@@ -2126,6 +2158,7 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 			WorkstationUUID: stageWorkstationID,
 			TeamviewerID:    normRIDPtr(data.TeamviewerID),
 			LitemanagerID:   normRIDPtr(data.LitemanagerID),
+			RustdeskID:      normRIDPtr(data.RustdeskID),
 			AnydeskID:       normRIDPtr(data.AnydeskID),
 			URLRms:          strPtr(normalizedRMS),
 		}
@@ -2299,6 +2332,7 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 			WorkstationUUID: stageWorkstationID,
 			TeamviewerID:    normRIDPtr(data.TeamviewerID),
 			LitemanagerID:   normRIDPtr(data.LitemanagerID),
+			RustdeskID:      normRIDPtr(data.RustdeskID),
 			AnydeskID:       normRIDPtr(data.AnydeskID),
 			URLRms:          strPtr(normalizedRMS),
 		}
@@ -2570,7 +2604,7 @@ func normRIDPtr(v string) *string {
 // Если все ID отсутствуют — создание РС невозможно, наблюдение отправляется в staging.
 // В этом случае администратор должен вручную указать remote IDs при подтверждении кандидата.
 func hasRemoteID(data *api.AgentDataDTO) bool {
-	return normRID(data.TeamviewerID) != "" || normRID(data.LitemanagerID) != "" || normRID(data.AnydeskID) != ""
+	return normRID(data.TeamviewerID) != "" || normRID(data.LitemanagerID) != "" || normRID(data.RustdeskID) != "" || normRID(data.AnydeskID) != ""
 }
 
 // resolveStageWorkstationID ищет уже существующую РС по remote IDs и

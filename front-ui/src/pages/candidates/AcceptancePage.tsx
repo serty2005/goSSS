@@ -90,10 +90,12 @@ const normalizeRemoteID = (value?: string) => String(value || '').trim().toLower
 const buildRemoteTokens = (item: CandidateWorkstationStagingDTO): string[] => {
   const tv = normalizeRemoteID(item.teamviewer_id);
   const lm = normalizeRemoteID(item.litemanager_id);
+  const rd = normalizeRemoteID(item.rustdesk_id);
   const ad = normalizeRemoteID(item.anydesk_id);
   return [
     tv ? `tv:${tv}` : '',
     lm ? `lm:${lm}` : '',
+    rd ? `rd:${rd}` : '',
     ad ? `ad:${ad}` : '',
   ].filter(Boolean);
 };
@@ -171,6 +173,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
         name: item.hostname || '',
         teamviewer_id: item.teamviewer_id,
         litemanager_id: item.litemanager_id,
+        rustdesk_id: item.rustdesk_id,
         anydesk_id: item.anydesk_id,
         agent_uuid: item.agent_uuid,
         remote_tokens: new Set(remoteTokens),
@@ -191,6 +194,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
     existing.workstation_uuid = existing.workstation_uuid || item.workstation_uuid;
     existing.teamviewer_id = existing.teamviewer_id || item.teamviewer_id;
     existing.litemanager_id = existing.litemanager_id || item.litemanager_id;
+    existing.rustdesk_id = existing.rustdesk_id || item.rustdesk_id;
     existing.anydesk_id = existing.anydesk_id || item.anydesk_id;
     remoteTokens.forEach((token) => existing.remote_tokens.add(token));
     existing.observed_at = maxObservedAt(existing.observed_at, item.observed_at);
@@ -219,6 +223,7 @@ const mergeCandidateWorkstations = (items: CandidateWorkstationStagingDTO[]): Ca
       name: item.name,
       teamviewer_id: item.teamviewer_id,
       litemanager_id: item.litemanager_id,
+      rustdesk_id: item.rustdesk_id,
       anydesk_id: item.anydesk_id,
       agent_uuid: item.agent_uuid,
       observed_at: item.observed_at,
@@ -376,6 +381,7 @@ const AcceptancePage: React.FC = () => {
       name: item.name || item.hostname || '',
       teamviewer_id: item.teamviewer_id,
       litemanager_id: item.litemanager_id,
+      rustdesk_id: item.rustdesk_id,
       anydesk_id: item.anydesk_id,
       agent_uuid: item.agent_uuid,
       observed_at: item.observed_at,

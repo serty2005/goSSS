@@ -49,7 +49,7 @@ type OwnerServerSummary = {
 
 const ENTITY_FIELDS_BY_TYPE: Record<string, string[]> = {
   Server: ['device_name', 'server_name', 'ip', 'unique_id', 'crm_id'],
-  Workstation: ['device_name', 'anydesk', 'teamviewer', 'litemanager', 'server_id'],
+  Workstation: ['device_name', 'anydesk', 'teamviewer', 'litemanager', 'rustdesk', 'server_id'],
   FiscalRegister: ['model_kkt', 'fr_serial_number', 'rn_kkt', 'fn_number', 'workstation_id'],
 };
 

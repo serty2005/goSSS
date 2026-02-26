@@ -185,6 +185,7 @@ func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	// Ручной ввод remote IDs (приоритет над значениями из staging)
 	input.TeamviewerID = strPtrOrNil(req.TeamviewerID)
 	input.LitemanagerID = strPtrOrNil(req.LitemanagerID)
+	input.RustdeskID = strPtrOrNil(req.RustdeskID)
 	input.AnydeskID = strPtrOrNil(req.AnydeskID)
 
 	updated, err := h.obsSrv.ApproveCandidate(r.Context(), input)
@@ -286,6 +287,7 @@ type candidateApproveRequest struct {
 	// Приоритет: ручной ввод > значения из staging.
 	TeamviewerID         *string `json:"teamviewer_id,omitempty"`
 	LitemanagerID        *string `json:"litemanager_id,omitempty"`
+	RustdeskID           *string `json:"rustdesk_id,omitempty"`
 	AnydeskID            *string `json:"anydesk_id,omitempty"`
 	BitrixServicePointID *int64  `json:"bitrix_service_point_id,omitempty"`
 }

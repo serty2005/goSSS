@@ -478,6 +478,7 @@ const TicketsPage: React.FC = () => {
           { label: 'TeamViewer', value: dataRow.teamviewer },
           { label: 'RDP', value: dataRow.rdp },
           { label: 'LM', value: dataRow.litemanager },
+          { label: 'RustDesk', value: dataRow.rustdesk },
         ].filter((entry) => entry.value);
         if (rows.length === 0) return null;
         return { key: `${item.entity_type}-${dataRow.uuid || title}`, title, rows };

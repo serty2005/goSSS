@@ -248,6 +248,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       { label: 'TeamViewer', value: data.teamviewer as string | undefined },
       { label: 'rdp', value: data.rdp as string | undefined },
       { label: 'LM', value: data.litemanager as string | undefined },
+      { label: 'RustDesk', value: data.rustdesk as string | undefined },
       ...(item.entity_type === 'Server'
         ? [{ label: 'Partners', value: data.partners_link as string | undefined, isLink: true }]
         : []),

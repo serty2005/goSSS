@@ -253,6 +253,10 @@ func validateAgentData(data *api.AgentDataDTO, log logger.LoggerInterface) error
 		validRemoteIDs++
 		hasUsefulData = true
 	}
+	if data.RustdeskID != "" && data.RustdeskID != "None" {
+		validRemoteIDs++
+		hasUsefulData = true
+	}
 	if data.AnydeskID != "" && data.AnydeskID != "None" {
 		validRemoteIDs++
 		hasUsefulData = true

@@ -63,5 +63,5 @@ type OwnerResolver interface {
 	// Возвращает:
 	//   - *OwnerResolution: результат разрешения
 	//   - error: ошибка БД
-	Resolve(ctx context.Context, hubCompanyID string, teamviewerID, litemanagerID, anydeskID, serialNumber string) (*OwnerResolution, error)
+	Resolve(ctx context.Context, hubCompanyID string, teamviewerID, litemanagerID, rustdeskID, anydeskID, serialNumber string) (*OwnerResolution, error)
 }

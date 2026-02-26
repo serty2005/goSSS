@@ -121,7 +121,14 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
             </div>
           )}
 
-          {!data.anydesk && !data.teamviewer && !data.litemanager && !data.description && (
+          {data.rustdesk && (
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Text>RustDesk:</Text>
+              <Paragraph copyable={{ text: String(data.rustdesk) }} style={{ margin: 0 }}>{String(data.rustdesk)}</Paragraph>
+            </div>
+          )}
+
+          {!data.anydesk && !data.teamviewer && !data.litemanager && !data.rustdesk && !data.description && (
             <Text type="secondary" italic>Нет дополнительной информации</Text>
           )}
         </Space>

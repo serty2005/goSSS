@@ -20,9 +20,9 @@ type Repository interface {
 	Search(ctx context.Context, term string, limit, offset int) ([]Workstation, error)
 	SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]Workstation, int64, error)
 
-	FindByRemoteIDs(ctx context.Context, tv, ad, lm string) (*Workstation, error)
+	FindByRemoteIDs(ctx context.Context, tv, ad, lm, rd string) (*Workstation, error)
 	// FindAllByRemoteIDs ищет ВСЕ рабочие станции, совпадающие по идентификаторам (для поиска дублей).
-	FindAllByRemoteIDs(ctx context.Context, tv, lm string) ([]Workstation, error)
+	FindAllByRemoteIDs(ctx context.Context, tv, lm, rd string) ([]Workstation, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]Workstation, error)
 	SetOwnerWithBinding(ctx context.Context, tx *gorm.DB, internalID string, ownerID string, bindingMode string) (bool, error)
 

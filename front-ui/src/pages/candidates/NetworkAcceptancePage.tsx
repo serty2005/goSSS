@@ -111,6 +111,7 @@ const buildAgentClusters = (groups: NetworkCandidateGroupDTO[]): AgentCluster[] 
     const connections = [
       normalizeID(group.ws?.teamviewer_id) ? `tv:${normalizeID(group.ws?.teamviewer_id)}` : '',
       normalizeID(group.ws?.litemanager_id) ? `lm:${normalizeID(group.ws?.litemanager_id)}` : '',
+      normalizeID(group.ws?.rustdesk_id) ? `rd:${normalizeID(group.ws?.rustdesk_id)}` : '',
       normalizeID(group.ws?.anydesk_id) ? `ad:${normalizeID(group.ws?.anydesk_id)}` : '',
     ].filter(Boolean);
 
@@ -639,6 +640,7 @@ const NetworkAcceptancePage: React.FC = () => {
                             </Text>
                             <Text type="secondary">TeamViewer: {item.teamviewer_id || '-'}</Text>
                             <Text type="secondary">LiteManager: {item.litemanager_id || '-'}</Text>
+                            <Text type="secondary">RustDesk: {item.rustdesk_id || '-'}</Text>
                             <Text type="secondary">AnyDesk: {item.anydesk_id || '-'}</Text>
                           </Space>
                         ))}
@@ -774,6 +776,7 @@ const NetworkAcceptancePage: React.FC = () => {
                       <Text>UUID агента: {group.ws.agent_uuid || '-'}</Text>
                       <Text>TeamViewer: {group.ws.teamviewer_id || '-'}</Text>
                       <Text>LiteManager: {group.ws.litemanager_id || '-'}</Text>
+                      <Text>RustDesk: {group.ws.rustdesk_id || '-'}</Text>
                       <Text>AnyDesk: {group.ws.anydesk_id || '-'}</Text>
                     </Space>
                   ) : (

@@ -39,7 +39,7 @@ type EntityDeletionRequest struct {
 	Comment    string
 	Source     string
 
-	RequestedByUserID *string
+	RequestedByUserID   *string
 	DuplicateOfEntityID *string
 	DuplicateField      *string
 	DuplicateValue      *string
@@ -69,9 +69,9 @@ type EntityDeletionCandidateAgentData struct {
 }
 
 type EntityDeletionCandidateEntityDetails struct {
-	Snapshot       *entitySnapshot
-	Raw            map[string]interface{}
-	IsMoreActual   bool
+	Snapshot        *entitySnapshot
+	Raw             map[string]interface{}
+	IsMoreActual    bool
 	LatestAgentData *EntityDeletionCandidateAgentData
 }
 
@@ -1193,7 +1193,6 @@ func (s *entityDeletionServiceImpl) autoMergeFiscalDuplicatesTx(ctx context.Cont
 	return nil
 }
 
-
 func (s *entityDeletionServiceImpl) ensureDuplicateWorkerCandidateTx(ctx context.Context, entityType, survivorID, loserID, field, value string) error {
 	entityType = normalizeEntityType(entityType)
 	survivorID = strings.TrimSpace(survivorID)
@@ -1456,6 +1455,7 @@ func buildWorkstationMergePatch(target, source *workstation.Workstation) (map[st
 	copyStringField(updates, "teamviewer", ptrStringValue(target.Teamviewer), source.Teamviewer, &notes)
 	copyStringField(updates, "anydesk", ptrStringValue(target.Anydesk), source.Anydesk, &notes)
 	copyStringField(updates, "litemanager", ptrStringValue(target.Litemanager), source.Litemanager, &notes)
+	copyStringField(updates, "rustdesk", ptrStringValue(target.Rustdesk), source.Rustdesk, &notes)
 	copyStringField(updates, "device_name", ptrStringValue(target.DeviceName), source.DeviceName, &notes)
 	copyStringField(updates, "description", ptrStringValue(target.Description), source.Description, &notes)
 
