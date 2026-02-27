@@ -1,12 +1,12 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
-import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
+import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
-import { ServerEntity, WorkstationEntity, FiscalEntity, ContractDetailDTO } from '@/types/api';
+import { ServerEntity, WorkstationEntity, FiscalEntity, ContractDetailDTO, CompanyModel } from '@/types/api';
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
@@ -35,6 +35,21 @@ const normalizeServices = (raw: ContractDetailDTO['services']): string[] => {
   return [];
 };
 
+const resolveServerTitle = (server: ServerEntity) => (
+  server.device_name
+  || server.server_name
+  || server.ip
+  || server.unique_id
+  || server.uuid
+);
+
+type NetworkCompanyNode = {
+  id: string;
+  parentID: string;
+  depth: number;
+  company: CompanyModel;
+};
+
 const CompanyPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
@@ -48,6 +63,8 @@ const CompanyPage: React.FC = () => {
   const [companySearch, setCompanySearch] = useState('');
   const [spreadCompanySearch, setSpreadCompanySearch] = useState('');
   const [spreadCompanyID, setSpreadCompanyID] = useState<string | undefined>(undefined);
+  const [isNetworkContractModalOpen, setIsNetworkContractModalOpen] = useState(false);
+  const [selectedNetworkContractCompanyID, setSelectedNetworkContractCompanyID] = useState('');
   const user = useAuthStore((state) => state.user);
   const currentUserID = String(user?.id || '');
   const canEditBase = canEditCompanyBase(user?.roles);
@@ -115,6 +132,8 @@ const CompanyPage: React.FC = () => {
   );
   const contractID = company?.contract_id;
   const contractType = company?.contract_type;
+  const companyID = resolveCompanyID(company || {}) || company?.id || '';
+  const parentCompanyID = String(company?.parent_id || '').trim();
 
   const { data: contractRes } = useQuery({
     queryKey: ['contract', contractID, 'company-modal'],
@@ -125,6 +144,168 @@ const CompanyPage: React.FC = () => {
   const { data: companySearchRes } = useQuery({
     queryKey: ['companies-search-company-page', companySearch],
     queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    staleTime: 30_000,
+  });
+
+  const { data: networkRootCompanyRes, isLoading: loadingNetworkRootCompany } = useQuery({
+    queryKey: ['company', parentCompanyID, 'network-root'],
+    queryFn: () => companiesApi.getCompany(parentCompanyID),
+    enabled: Boolean(parentCompanyID),
+    staleTime: 30_000,
+  });
+
+  const networkRootCompany = useMemo(() => {
+    if (parentCompanyID) {
+      return networkRootCompanyRes?.data;
+    }
+    return company;
+  }, [company, networkRootCompanyRes?.data, parentCompanyID]);
+
+  const networkRootID = resolveCompanyID(networkRootCompany || {}) || networkRootCompany?.id || '';
+
+  const { data: networkGraphNodes = [], isLoading: loadingNetworkGraph } = useQuery({
+    queryKey: ['company', networkRootID, 'network-graph'],
+    enabled: Boolean(networkRootID),
+    staleTime: 30_000,
+    queryFn: async () => {
+      const rootID = String(networkRootID || '').trim();
+      if (!rootID) {
+        return [] as NetworkCompanyNode[];
+      }
+
+      const visited = new Set<string>([rootID]);
+      const queue: Array<{ id: string; depth: number }> = [{ id: rootID, depth: 0 }];
+      const nodes: NetworkCompanyNode[] = [];
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        const childrenRes = await companiesApi.getChildren(current.id);
+        const children = childrenRes?.data || [];
+        children.forEach((child) => {
+          const childID = String(resolveCompanyID(child || {}) || child.id || '').trim();
+          if (!childID || visited.has(childID)) {
+            return;
+          }
+          visited.add(childID);
+          nodes.push({
+            id: childID,
+            parentID: current.id,
+            depth: current.depth + 1,
+            company: child,
+          });
+          queue.push({ id: childID, depth: current.depth + 1 });
+        });
+      }
+
+      return nodes;
+    },
+  });
+
+  const hasNetwork = Boolean(parentCompanyID) || networkGraphNodes.length > 0;
+  const networkCompanyIDs = useMemo(() => {
+    if (!networkRootID) {
+      return [] as string[];
+    }
+    const ids = new Set<string>([networkRootID]);
+    networkGraphNodes.forEach((node) => ids.add(node.id));
+    return Array.from(ids);
+  }, [networkGraphNodes, networkRootID]);
+
+  const networkCompanyProfileQueries = useQueries({
+    queries: hasNetwork
+      ? networkCompanyIDs.map((networkCompanyID) => ({
+        queryKey: ['company', networkCompanyID, 'profile', 'network'],
+        queryFn: () => companiesApi.getCompany(networkCompanyID),
+        staleTime: 30_000,
+      }))
+      : [],
+  });
+
+  const loadingNetworkProfiles = networkCompanyProfileQueries.some((query) => query.isLoading);
+  const networkCompanyByID = useMemo(() => {
+    const result = new Map<string, CompanyModel>();
+    if (networkRootID && networkRootCompany) {
+      result.set(networkRootID, networkRootCompany);
+    }
+    networkGraphNodes.forEach((node) => {
+      result.set(node.id, node.company);
+    });
+    networkCompanyIDs.forEach((networkCompanyID, index) => {
+      const profile = networkCompanyProfileQueries[index]?.data?.data;
+      if (profile) {
+        result.set(networkCompanyID, profile);
+      }
+    });
+    return result;
+  }, [networkCompanyIDs, networkCompanyProfileQueries, networkGraphNodes, networkRootCompany, networkRootID]);
+
+  const networkNodes = useMemo(() => {
+    if (!networkRootID) {
+      return [] as NetworkCompanyNode[];
+    }
+    const rootCompanyData = networkCompanyByID.get(networkRootID) || networkRootCompany || {};
+    const nodes: NetworkCompanyNode[] = [{
+      id: networkRootID,
+      parentID: '',
+      depth: 0,
+      company: rootCompanyData,
+    }];
+    networkGraphNodes.forEach((node) => {
+      nodes.push({
+        ...node,
+        company: networkCompanyByID.get(node.id) || node.company,
+      });
+    });
+    return nodes;
+  }, [networkCompanyByID, networkGraphNodes, networkRootCompany, networkRootID]);
+
+  const networkNodesByDepth = useMemo(() => {
+    const map = new Map<number, NetworkCompanyNode[]>();
+    networkNodes.forEach((node) => {
+      if (node.depth === 0) {
+        return;
+      }
+      const levelNodes = map.get(node.depth) || [];
+      levelNodes.push(node);
+      map.set(node.depth, levelNodes);
+    });
+    return Array.from(map.entries())
+      .sort((left, right) => left[0] - right[0])
+      .map((entry) => entry[1]);
+  }, [networkNodes]);
+
+  const networkInfrastructureQueries = useQueries({
+    queries: hasNetwork
+      ? networkCompanyIDs.map((networkCompanyID) => ({
+        queryKey: ['company', networkCompanyID, 'infra', 'network'],
+        queryFn: () => companiesApi.getInfrastructure(networkCompanyID),
+        staleTime: 30_000,
+      }))
+      : [],
+  });
+
+  const loadingNetworkInfrastructure = networkInfrastructureQueries.some((query) => query.isLoading);
+  const networkServersByCompanyID = useMemo(() => {
+    const result = new Map<string, ServerEntity[]>();
+    networkCompanyIDs.forEach((networkCompanyID, index) => {
+      const queryData = networkInfrastructureQueries[index]?.data?.data || [];
+      const servers = queryData
+        .filter((item) => item.entity_type === 'Server')
+        .map((item) => item.data as ServerEntity);
+      result.set(networkCompanyID, servers);
+    });
+    return result;
+  }, [networkCompanyIDs, networkInfrastructureQueries]);
+
+  const selectedNetworkContractCompany = useMemo(
+    () => networkCompanyByID.get(selectedNetworkContractCompanyID),
+    [networkCompanyByID, selectedNetworkContractCompanyID],
+  );
+  const selectedNetworkContractID = String(selectedNetworkContractCompany?.contract_id || '').trim();
+  const { data: selectedNetworkContractRes, isLoading: loadingSelectedNetworkContract } = useQuery({
+    queryKey: ['contract', selectedNetworkContractID, 'network-card-view'],
+    queryFn: () => contractsApi.getContract(selectedNetworkContractID),
+    enabled: isNetworkContractModalOpen && Boolean(selectedNetworkContractID),
     staleTime: 30_000,
   });
 
@@ -318,7 +499,6 @@ const CompanyPage: React.FC = () => {
     }
   }, [companyChildrenIDs.length, ticketScope]);
 
-  const companyID = resolveCompanyID(company || {}) || company?.id || '';
   const hasChildCompanies = companyChildrenIDs.length > 0;
   const ticketCompanyIDs = ticketScope === 'with_children' && hasChildCompanies
     ? [companyID, ...companyChildrenIDs]
@@ -409,55 +589,208 @@ const CompanyPage: React.FC = () => {
     );
   };
 
+  const renderEquipmentTab = (
+    <div style={{ marginTop: 10 }}>
+      {loadingInfra ? <Spin /> : (
+        <>
+          {renderSection(
+            'Серверы',
+            groupedInfra.servers.length,
+            <Row gutter={[12, 12]}>
+              {groupedInfra.servers.map((srv) => (
+                <Col key={srv.uuid} xs={24} sm={12} lg={8} xl={6}>
+                  <ServerCard data={srv} />
+                </Col>
+              ))}
+            </Row>,
+          )}
+
+          {renderSection(
+            'Фискальные регистраторы',
+            groupedInfra.fiscals.length,
+            <Row gutter={[12, 12]}>
+              {groupedInfra.fiscals.map((fr) => (
+                <Col key={fr.uuid} xs={24} sm={12} lg={8} xl={6}>
+                  <FiscalCard data={fr} />
+                </Col>
+              ))}
+            </Row>,
+          )}
+
+          {renderSection(
+            'Рабочие станции',
+            groupedInfra.workstations.length,
+            <Row gutter={[12, 12]}>
+              {groupedInfra.workstations.map((ws) => (
+                <Col key={ws.uuid} xs={24} sm={12} lg={8} xl={6}>
+                  <WorkstationCard data={ws} />
+                </Col>
+              ))}
+            </Row>,
+          )}
+
+          {(infraRes?.data || []).length === 0 && <Empty description="Оборудование не найдено" />}
+        </>
+      )}
+    </div>
+  );
+
+  const resolveContractBadge = (item?: CompanyModel) => {
+    if (!item) {
+      return { color: 'default' as const, label: 'Контракт не задан' };
+    }
+    const hasContract = Boolean(String(item.contract_id || '').trim());
+    if (!hasContract) {
+      return { color: 'default' as const, label: 'Контракт не задан' };
+    }
+    if (item.active_contract) {
+      return { color: 'success' as const, label: 'Активный контракт' };
+    }
+    return { color: 'default' as const, label: 'Неактивный контракт' };
+  };
+
+  const openNetworkContractModal = (networkCompanyID: string) => {
+    const row = networkCompanyByID.get(networkCompanyID);
+    const rowContractID = String(row?.contract_id || '').trim();
+    if (!rowContractID) {
+      message.info('У компании отсутствует контракт');
+      return;
+    }
+    setSelectedNetworkContractCompanyID(networkCompanyID);
+    setIsNetworkContractModalOpen(true);
+  };
+
+  const renderNetworkCompanyCard = (node: NetworkCompanyNode, isRoot = false) => {
+    const cardCompanyID = node.id;
+    const item = node.company || {};
+    const cardTitle = String(item.title || item.additional_name || cardCompanyID || 'Компания');
+    const cardAdditionalName = String(item.additional_name || '').trim();
+    const cardAddress = String(item.address || '').trim();
+    const cardServers = networkServersByCompanyID.get(cardCompanyID) || [];
+    const isCurrent = cardCompanyID === companyID;
+    const contractBadge = resolveContractBadge(item);
+
+    return (
+      <Card
+        key={cardCompanyID || cardTitle}
+        size="small"
+        style={{
+          borderColor: isCurrent ? token.colorPrimary : token.colorBorder,
+          boxShadow: isCurrent ? `0 0 0 1px ${token.colorPrimary}` : undefined,
+          minWidth: 280,
+          maxWidth: 360,
+        }}
+      >
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space size={8} wrap>
+            {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
+            {isCurrent && <Tag color="gold" style={{ marginRight: 0 }}>Текущая</Tag>}
+            <Tag
+              color={contractBadge.color}
+              style={{ marginRight: 0, cursor: 'pointer' }}
+              onClick={() => openNetworkContractModal(cardCompanyID)}
+            >
+              {contractBadge.label}
+            </Tag>
+          </Space>
+          <div>
+            <Link to={`/companies/${cardCompanyID}`} style={{ fontWeight: 600, display: 'block' }}>
+              {cardTitle}
+            </Link>
+            <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+              Юр. название: {cardAdditionalName || '-'}
+            </Text>
+            <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+              Адрес: {cardAddress || '-'}
+            </Text>
+          </div>
+          <div>
+            {cardServers.length > 0 ? (
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {cardServers.map((server) => {
+                  const serverIP = String(server.ip || '').trim();
+                  return (
+                    <div key={server.uuid} style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8, padding: 8 }}>
+                      <Link to={`/servers/${server.uuid}`} style={{ fontWeight: 600 }}>
+                        {resolveServerTitle(server)}
+                      </Link>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+                        <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                          {serverIP || '-'}
+                        </Text>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          disabled={!serverIP}
+                          onClick={async () => {
+                            if (!serverIP) {
+                              return;
+                            }
+                            try {
+                              await navigator.clipboard.writeText(serverIP);
+                              message.success('IP скопирован');
+                            } catch {
+                              message.error('Не удалось скопировать IP');
+                            }
+                          }}
+                        >
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </Space>
+            ) : null }
+          </div>
+        </Space>
+      </Card>
+    );
+  };
+
+  const rootNode = networkNodes.find((node) => node.depth === 0 && node.id === networkRootID);
+
+  const renderNetworkTab = (
+    <div style={{ marginTop: 10 }}>
+      {(loadingNetworkRootCompany || loadingNetworkGraph || loadingNetworkProfiles || loadingNetworkInfrastructure) ? (
+        <Spin />
+      ) : !rootNode ? (
+        <Empty description="Структура сети не найдена" />
+      ) : (
+        <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, minWidth: 760 }}>
+            {renderNetworkCompanyCard(rootNode, true)}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+              {networkNodesByDepth.length > 0 ? networkNodesByDepth.map((nodesAtDepth, depthIndex) => (
+                <div
+                  key={`depth-${depthIndex + 1}`}
+                  style={{
+                    display: 'grid',
+                    gridTemplateRows: 'repeat(3, minmax(0, auto))',
+                    gridAutoFlow: 'column',
+                    gridAutoColumns: 'minmax(280px, 360px)',
+                    gap: 12,
+                  }}
+                >
+                  {nodesAtDepth.map((node) => renderNetworkCompanyCard(node))}
+                </div>
+              )) : (
+                <Card size="small" style={{ minWidth: 280, maxWidth: 360 }}>
+                  <Text type="secondary">Дочерние компании отсутствуют</Text>
+                </Card>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   const items = [
     {
-      key: 'infrastructure',
-      label: 'Инфраструктура',
-      children: (
-        <div style={{ marginTop: 10 }}>
-          {loadingInfra ? <Spin /> : (
-            <>
-              {renderSection(
-                'Серверы',
-                groupedInfra.servers.length,
-                <Row gutter={[12, 12]}>
-                  {groupedInfra.servers.map((srv) => (
-                    <Col key={srv.uuid} xs={24} sm={12} lg={8} xl={6}>
-                      <ServerCard data={srv} />
-                    </Col>
-                  ))}
-                </Row>,
-              )}
-
-              {renderSection(
-                'Фискальные регистраторы',
-                groupedInfra.fiscals.length,
-                <Row gutter={[12, 12]}>
-                  {groupedInfra.fiscals.map((fr) => (
-                    <Col key={fr.uuid} xs={24} sm={12} lg={8} xl={6}>
-                      <FiscalCard data={fr} />
-                    </Col>
-                  ))}
-                </Row>,
-              )}
-
-              {renderSection(
-                'Рабочие станции',
-                groupedInfra.workstations.length,
-                <Row gutter={[12, 12]}>
-                  {groupedInfra.workstations.map((ws) => (
-                    <Col key={ws.uuid} xs={24} sm={12} lg={8} xl={6}>
-                      <WorkstationCard data={ws} />
-                    </Col>
-                  ))}
-                </Row>,
-              )}
-
-              {(infraRes?.data || []).length === 0 && <Empty description="Оборудование не найдено" />}
-            </>
-          )}
-        </div>
-      ),
+      key: 'equipment',
+      label: 'Оборудование',
+      children: renderEquipmentTab,
     },
     {
       key: 'tickets',
@@ -499,6 +832,14 @@ const CompanyPage: React.FC = () => {
       ),
     },
   ];
+
+  if (hasNetwork) {
+    items.unshift({
+      key: 'infrastructure',
+      label: 'Инфраструктура',
+      children: renderNetworkTab,
+    });
+  }
 
   return (
     <div>
@@ -585,7 +926,59 @@ const CompanyPage: React.FC = () => {
         </Descriptions>
       </Card>
 
-      <Tabs defaultActiveKey="infrastructure" items={items} />
+      <Tabs defaultActiveKey={hasNetwork ? 'infrastructure' : 'equipment'} items={items} />
+
+      <Modal
+        title="Параметры контракта компании"
+        open={isNetworkContractModalOpen}
+        onCancel={() => setIsNetworkContractModalOpen(false)}
+        footer={<Button onClick={() => setIsNetworkContractModalOpen(false)}>Закрыть</Button>}
+      >
+        {loadingSelectedNetworkContract ? (
+          <Spin />
+        ) : (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div>
+              <Text type="secondary">Компания</Text>
+              <Text strong style={{ display: 'block' }}>
+                {selectedNetworkContractCompany?.title || selectedNetworkContractCompany?.additional_name || selectedNetworkContractCompanyID || '-'}
+              </Text>
+            </div>
+            <div>
+              <Text type="secondary">Статус контракта</Text>
+              <Text strong style={{ display: 'block' }}>
+                {selectedNetworkContractRes?.data?.state === 'active'
+                  ? 'Активен'
+                  : selectedNetworkContractRes?.data?.state
+                    ? String(selectedNetworkContractRes.data.state)
+                    : (selectedNetworkContractCompany?.active_contract ? 'Активен' : 'Неактивен')}
+              </Text>
+            </div>
+            <div>
+              <Text type="secondary">Тип контракта</Text>
+              <Text strong style={{ display: 'block' }}>
+                {normalizeServices(selectedNetworkContractRes?.data?.services || [])[0]
+                  || selectedNetworkContractCompany?.contract_type
+                  || '-'}
+              </Text>
+            </div>
+            <div>
+              <Text type="secondary">В этом же контракте</Text>
+              {(selectedNetworkContractRes?.data?.companies || []).length > 0 ? (
+                <Space direction="vertical" size={4} style={{ display: 'flex', marginTop: 4 }}>
+                  {(selectedNetworkContractRes?.data?.companies || []).map((recipient) => (
+                    <Link key={recipient.id} to={`/companies/${recipient.id}`}>
+                      {recipient.title || recipient.id}
+                    </Link>
+                  ))}
+                </Space>
+              ) : (
+                <Text strong style={{ display: 'block' }}>-</Text>
+              )}
+            </div>
+          </Space>
+        )}
+      </Modal>
 
       <Modal
         title="Редактирование компании"
