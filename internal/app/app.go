@@ -101,6 +101,7 @@ type Application struct {
 	AgentObservationFeed    *handlers.AgentObservationFeedHandler
 	ReportHandler           *handlers.ReportHandler
 	EntityDeletionHandler   *handlers.EntityDeletionHandler
+	MaterialHandler         *handlers.MaterialHandler
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -425,6 +426,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
+	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
 }
 
 func setupIntegrationModules(app *Application, srvs Services) {
@@ -520,6 +522,14 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.ContractHandler.CreateContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.ContractHandler.UpdateContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{id}", a.ContractHandler.DeleteContract)
+		})
+
+		r.Route("/materials", func(r chi.Router) {
+			r.Get("/", a.MaterialHandler.List)
+			r.Get("/{id}", a.MaterialHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.MaterialHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.MaterialHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/{id}", a.MaterialHandler.Delete)
 		})
 
 		r.Route("/candidates", func(r chi.Router) {

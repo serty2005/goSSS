@@ -674,11 +674,18 @@ type AcceptedResponseDTO struct {
 
 // ContractResponseDTO - DTO контракта для API без служебных полей модели.
 type ContractResponseDTO struct {
-	ID             string     `json:"id"`
-	State          *string    `json:"state,omitempty"`
-	StateStartTime *time.Time `json:"state_start_time,omitempty"`
-	Services       []string   `json:"services,omitempty"`
-	ServiceLevel   int        `json:"service_level"`
+	ID             string               `json:"id"`
+	State          *string              `json:"state,omitempty"`
+	StateStartTime *time.Time           `json:"state_start_time,omitempty"`
+	Services       []string             `json:"services,omitempty"`
+	Recipients     []string             `json:"recipients,omitempty"`
+	Companies      []ContractCompanyDTO `json:"companies,omitempty"`
+	ServiceLevel   int                  `json:"service_level"`
+}
+
+type ContractCompanyDTO struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // === DTO для создания сущностей ===
@@ -724,12 +731,12 @@ type FiscalRegisterCreateDTO struct {
 
 // ContractCreateDTO - DTO для создания контракта
 type ContractCreateDTO struct {
-	State          *string                `json:"state"`
-	StateStartTime *time.Time             `json:"state_start_time"`
-	Services       map[string]interface{} `json:"services"`
-	Recipients     map[string]interface{} `json:"recipients"`
-	ServiceLevel   int                    `json:"service_level"`
-	CompanyIDs     []string               `json:"company_ids"`
+	State          *string     `json:"state"`
+	StateStartTime *time.Time  `json:"state_start_time"`
+	Services       interface{} `json:"services"`
+	Recipients     interface{} `json:"recipients"`
+	ServiceLevel   int         `json:"service_level"`
+	CompanyIDs     []string    `json:"company_ids"`
 }
 
 // === DTO для пагинации ===

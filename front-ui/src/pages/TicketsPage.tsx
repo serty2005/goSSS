@@ -473,6 +473,10 @@ const TicketsPage: React.FC = () => {
         }
         const dataRow = item.data as Record<string, string | undefined>;
         const title = dataRow.device_name || dataRow.server_name || dataRow.uuid || 'Оборудование';
+        const entityID = String(dataRow.uuid || '').trim();
+        const entityPath = item.entity_type === 'Server'
+          ? `/servers/${entityID}`
+          : `/workstations/${entityID}`;
         const rows = [
           ...(item.entity_type === 'Server' ? [{ label: 'IP', value: dataRow.ip }] : []),
           { label: 'AnyDesk', value: dataRow.anydesk },
@@ -482,9 +486,9 @@ const TicketsPage: React.FC = () => {
           { label: 'RustDesk', value: dataRow.rustdesk },
         ].filter((entry) => entry.value);
         if (rows.length === 0) return null;
-        return { key: `${item.entity_type}-${dataRow.uuid || title}`, title, rows };
+        return { key: `${item.entity_type}-${dataRow.uuid || title}`, title, rows, entityPath };
       })
-      .filter(Boolean) as Array<{ key: string; title: string; rows: Array<{ label: string; value?: string }> }>;
+      .filter(Boolean) as Array<{ key: string; title: string; rows: Array<{ label: string; value?: string }>; entityPath: string }>;
   }, [infrastructure]);
 
   const comments = useMemo(
@@ -1515,7 +1519,9 @@ const TicketsPage: React.FC = () => {
                   renderItem={(group) => (
                     <List.Item key={group.key}>
                       <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                        <Text strong>{group.title}</Text>
+                        <a href={group.entityPath} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                          <Text strong>{group.title}</Text>
+                        </a>
                         {group.rows.map((row) => (
                           <Paragraph
                             key={`${group.key}-${row.label}-${row.value}`}

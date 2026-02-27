@@ -61,6 +61,8 @@ func Migrate(db *gorm.DB) error {
 		&models.NetworkCandidateWSStaging{},
 		&models.NetworkCandidateFRStaging{},
 		&models.CompanyContract{},
+		&models.Material{},
+		&models.MaterialLink{},
 		&models.ExternalSystemLink{},
 		&models.EquipmentStatusLog{},
 		&bitrix.DealLink{},

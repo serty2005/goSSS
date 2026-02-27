@@ -16,6 +16,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -228,12 +229,18 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 			}
 		}
 
+		companyIDsPatch, hasCompanyIDsPatch := extractCompanyIDsPatch(data)
 		normalizeContractJSONFields(data)
 
 		affectedCompanyIDs := make(map[string]struct{}, len(existing.Companies))
 		for _, comp := range existing.Companies {
 			if comp.ID != "" {
 				affectedCompanyIDs[comp.ID] = struct{}{}
+			}
+		}
+		if hasCompanyIDsPatch {
+			for _, companyID := range companyIDsPatch {
+				affectedCompanyIDs[companyID] = struct{}{}
 			}
 		}
 
@@ -245,6 +252,13 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 			return domain.ErrNotFound
 		}
 
+		if hasCompanyIDsPatch {
+			existing.ID = id
+			if err := s.contractRepo.ReplaceCompanyLinks(txCtx, existing, companyIDsPatch); err != nil {
+				return err
+			}
+		}
+
 		tx := db.ExtractDB(txCtx, nil)
 		for companyID := range affectedCompanyIDs {
 			if err := s.recalculateCompanyStatus(txCtx, tx, companyID); err != nil {
@@ -254,6 +268,52 @@ func (s *serviceImpl) UpdateContract(ctx context.Context, id string, data map[st
 
 		return nil
 	})
+}
+
+func extractCompanyIDsPatch(data map[string]interface{}) ([]string, bool) {
+	raw, exists := data["company_ids"]
+	if !exists {
+		return nil, false
+	}
+	delete(data, "company_ids")
+
+	switch values := raw.(type) {
+	case []string:
+		return uniqueTrimmedStrings(values), true
+	case []interface{}:
+		result := make([]string, 0, len(values))
+		for _, item := range values {
+			id := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if id == "" || id == "<nil>" {
+				continue
+			}
+			result = append(result, id)
+		}
+		return uniqueTrimmedStrings(result), true
+	default:
+		id := strings.TrimSpace(fmt.Sprintf("%v", raw))
+		if id == "" || id == "<nil>" {
+			return []string{}, true
+		}
+		return []string{id}, true
+	}
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
 }
 
 func extractStateValue(raw interface{}) (string, bool) {

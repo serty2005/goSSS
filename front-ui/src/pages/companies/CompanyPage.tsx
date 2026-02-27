@@ -11,6 +11,8 @@ import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
 import TicketTable from '@/components/tickets/TicketTable';
+import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
+import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
 import { resolveCompanyID } from '@/utils/companyHierarchy';
@@ -41,8 +43,11 @@ const CompanyPage: React.FC = () => {
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
   const [ticketScope, setTicketScope] = useState<'own' | 'with_children'>('own');
-  const [companyForm] = Form.useForm<{ title: string; address: string }>();
+  const [companyForm] = Form.useForm<{ title: string; address: string; parent_id?: string }>();
   const [contractForm] = Form.useForm<{ contract_type: string; contract_state: 'active' | 'inactive' }>();
+  const [companySearch, setCompanySearch] = useState('');
+  const [spreadCompanySearch, setSpreadCompanySearch] = useState('');
+  const [spreadCompanyID, setSpreadCompanyID] = useState<string | undefined>(undefined);
   const user = useAuthStore((state) => state.user);
   const currentUserID = String(user?.id || '');
   const canEditBase = canEditCompanyBase(user?.roles);
@@ -117,6 +122,19 @@ const CompanyPage: React.FC = () => {
     enabled: isContractEditOpen && !!contractID,
   });
 
+  const { data: companySearchRes } = useQuery({
+    queryKey: ['companies-search-company-page', companySearch],
+    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    staleTime: 30_000,
+  });
+
+  const { data: spreadCompanySearchRes } = useQuery({
+    queryKey: ['companies-search-company-page-spread', spreadCompanySearch],
+    queryFn: () => companiesApi.searchCompanies(spreadCompanySearch, 20, 0),
+    enabled: isContractEditOpen,
+    staleTime: 30_000,
+  });
+
   useEffect(() => {
     if (!isContractEditOpen) {
       return;
@@ -129,10 +147,11 @@ const CompanyPage: React.FC = () => {
   }, [contractRes?.data?.services, contractRes?.data?.state, contractForm, contractType, isContractEditOpen]);
 
   const updateCompanyMutation = useMutation({
-    mutationFn: async (values: { title: string; address: string }) => {
+    mutationFn: async (values: { title: string; address: string; parent_id?: string }) => {
       return companiesApi.updateCompany(id!, {
         title: values.title.trim(),
         address: values.address.trim(),
+        parent_id: values.parent_id || null,
       });
     },
     onSuccess: () => {
@@ -192,6 +211,92 @@ const CompanyPage: React.FC = () => {
     },
   });
 
+  const createContractMutation = useMutation({
+    mutationFn: async (values: { contract_type: string; contract_state: 'active' | 'inactive' }) => {
+      const currentCompanyID = resolveCompanyID(companyRes?.data || {}) || companyRes?.data?.id || '';
+      if (!currentCompanyID) {
+        throw new Error('Отсутствует компания');
+      }
+
+      return contractsApi.createContract({
+        state: values.contract_state,
+        services: [values.contract_type],
+        recipients: [currentCompanyID],
+        service_level: 0,
+        company_ids: [currentCompanyID],
+      });
+    },
+    onSuccess: () => {
+      message.success('Контракт создан');
+      setIsContractEditOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['company', id] });
+      queryClient.invalidateQueries({ queryKey: ['company'] });
+    },
+    onError: () => {
+      message.error('Не удалось создать контракт');
+    },
+  });
+
+  const leaveContractMutation = useMutation({
+    mutationFn: async () => {
+      const currentCompanyID = resolveCompanyID(companyRes?.data || {}) || companyRes?.data?.id || '';
+      if (!contractID || !currentCompanyID) {
+        throw new Error('Недостаточно данных для операции');
+      }
+      const current = await contractsApi.getContract(contractID);
+      const companies = current.data.companies || [];
+      const remainingCompanyIDs = companies.map((item) => item.id).filter((item) => item !== currentCompanyID);
+      const services = normalizeServices(current.data.services);
+
+      await contractsApi.updateContract(contractID, {
+        company_ids: remainingCompanyIDs,
+        recipients: remainingCompanyIDs,
+      });
+
+      await contractsApi.createContract({
+        state: current.data.state || 'active',
+        state_start_time: current.data.state_start_time,
+        services,
+        recipients: [currentCompanyID],
+        service_level: current.data.service_level || 0,
+        company_ids: [currentCompanyID],
+      });
+    },
+    onSuccess: () => {
+      message.success('Для компании создан новый отдельный контракт');
+      setSpreadCompanyID(undefined);
+      setIsContractEditOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['company', id] });
+      queryClient.invalidateQueries({ queryKey: ['contract', contractID, 'company-modal'] });
+    },
+    onError: () => {
+      message.error('Не удалось вывести компанию в отдельный контракт');
+    },
+  });
+
+  const spreadContractMutation = useMutation({
+    mutationFn: async () => {
+      if (!contractID || !spreadCompanyID) {
+        throw new Error('Выберите компанию для распространения');
+      }
+      const current = await contractsApi.getContract(contractID);
+      const companyIDs = Array.from(new Set([...(current.data.companies || []).map((item) => item.id), spreadCompanyID]));
+      return contractsApi.updateContract(contractID, {
+        company_ids: companyIDs,
+        recipients: companyIDs,
+      });
+    },
+    onSuccess: () => {
+      message.success('Компания добавлена в контракт');
+      setSpreadCompanyID(undefined);
+      queryClient.invalidateQueries({ queryKey: ['contract', contractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['company'] });
+    },
+    onError: () => {
+      message.error('Не удалось распространить контракт');
+    },
+  });
+
   const groupedInfra = useMemo(() => {
     const rawInfrastructure = infraRes?.data ?? [];
     const servers: ServerEntity[] = [];
@@ -213,6 +318,43 @@ const CompanyPage: React.FC = () => {
     }
   }, [companyChildrenIDs.length, ticketScope]);
 
+  const companyID = resolveCompanyID(company || {}) || company?.id || '';
+  const hasChildCompanies = companyChildrenIDs.length > 0;
+  const ticketCompanyIDs = ticketScope === 'with_children' && hasChildCompanies
+    ? [companyID, ...companyChildrenIDs]
+    : [companyID];
+  const parentTitle = company?.parent_title;
+  const contractCompanies = contractRes?.data?.companies || [];
+
+  const parentOptions = useMemo(() => {
+    const options = (companySearchRes?.data || [])
+      .map((item) => ({
+        value: String(item.id || ''),
+        title: String(item.title || item.additional_name || item.id || ''),
+        parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+      }))
+      .filter((item) => item.value && item.title && item.value !== companyID);
+    if (company?.parent_id && parentTitle && !options.some((item) => item.value === company.parent_id)) {
+      options.unshift({
+        value: company.parent_id,
+        title: parentTitle,
+        parentTitle: undefined,
+      });
+    }
+    return options;
+  }, [company?.parent_id, companyID, companySearchRes?.data, parentTitle]);
+
+  const spreadCompanyOptions = useMemo(() => {
+    const existing = new Set(contractCompanies.map((item) => item.id));
+    return (spreadCompanySearchRes?.data || [])
+      .map((item) => ({
+        value: String(item.id || ''),
+        title: String(item.title || item.additional_name || item.id || ''),
+        parentTitle: item.parent_title ? String(item.parent_title) : undefined,
+      }))
+      .filter((item) => item.value && item.title && !existing.has(item.value));
+  }, [contractCompanies, spreadCompanySearchRes?.data]);
+
   if (loadingCompany) {
     return (
       <div style={{ padding: 50, textAlign: 'center' }}>
@@ -222,32 +364,35 @@ const CompanyPage: React.FC = () => {
   }
 
   if (!company) return <Empty description="Компания не найдена" />;
-  const companyID = resolveCompanyID(company) || company.id || '';
-  const hasChildCompanies = companyChildrenIDs.length > 0;
-  const ticketCompanyIDs = ticketScope === 'with_children' && hasChildCompanies
-    ? [companyID, ...companyChildrenIDs]
-    : [companyID];
-
-  const parentTitle = company.parent_title;
 
   const openCompanyEdit = () => {
     companyForm.setFieldsValue({
       title: company.title || '',
       address: company.address || '',
+      parent_id: company.parent_id || undefined,
     });
     setIsCompanyEditOpen(true);
   };
 
   const openContractEdit = () => {
-    if (!contractID) return;
-
     const resolvedType = normalizeServices(contractRes?.data?.services)[0] || contractType || contractTypeOptions[0];
     const resolvedState = (contractRes?.data?.state) === 'active' ? 'active' : 'inactive';
     contractForm.setFieldsValue({
       contract_type: resolvedType,
       contract_state: resolvedState,
     });
+    if (contractID && (contractRes?.data?.companies || []).length > 1) {
+      message.warning('Контракт общий. Изменения типа и статуса применятся ко всем компаниям-участникам.');
+    }
     setIsContractEditOpen(true);
+  };
+
+  const handleContractFinish = (values: { contract_type: string; contract_state: 'active' | 'inactive' }) => {
+    if (contractID) {
+      updateContractMutation.mutate(values);
+      return;
+    }
+    createContractMutation.mutate(values);
   };
 
   const renderSection = (title: string, count: number, content: React.ReactNode) => {
@@ -345,9 +490,13 @@ const CompanyPage: React.FC = () => {
       ),
     },
     {
-      key: 'contracts',
-      label: 'Контракты',
-      children: <Empty description="Раздел в разработке" style={{ marginTop: 12 }} />,
+      key: 'materials',
+      label: 'Материалы',
+      children: (
+        <div style={{ marginTop: 10 }}>
+          <MaterialsPanel entityType="Company" entityID={companyID} title="Материалы компании" />
+        </div>
+      ),
     },
   ];
 
@@ -427,6 +576,10 @@ const CompanyPage: React.FC = () => {
                   <Text>{contractType || 'Не указан'}</Text>
                 )}
               </Space>
+            ) : canEditContract ? (
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
+                Создать контракт
+              </Button>
             ) : '-'}
           </Descriptions.Item>
         </Descriptions>
@@ -480,6 +633,15 @@ const CompanyPage: React.FC = () => {
           <Form.Item label="Адрес" name="address" rules={[{ required: true, message: 'Введите адрес' }]}>
             <Input.TextArea rows={3} placeholder="Адрес компании" />
           </Form.Item>
+          <Form.Item label="Родительская компания" name="parent_id">
+            <CompanySearchSelect
+              allowClear
+              options={parentOptions}
+              placeholder="Выберите родительскую компанию"
+              onSearch={setCompanySearch}
+              onChange={(value) => companyForm.setFieldValue('parent_id', value)}
+            />
+          </Form.Item>
           <Form.Item label="Адресный классификатор">
             <Button disabled block>Подключение классификатора (скоро)</Button>
           </Form.Item>
@@ -494,16 +656,34 @@ const CompanyPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title="Параметры контракта"
+        title={contractID ? 'Параметры контракта' : 'Создание контракта'}
         open={isContractEditOpen}
         onCancel={() => setIsContractEditOpen(false)}
         onOk={() => contractForm.submit()}
-        confirmLoading={updateContractMutation.isPending}
+        confirmLoading={updateContractMutation.isPending || createContractMutation.isPending}
         okText="Сохранить"
         cancelText="Отмена"
-        width={420}
+        width={560}
       >
-        <Form form={contractForm} layout="vertical" onFinish={(values) => updateContractMutation.mutate(values)}>
+        <Form form={contractForm} layout="vertical" onFinish={handleContractFinish}>
+          {contractID && contractCompanies.length > 0 && (
+            <Form.Item label="Участники контракта">
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                {contractCompanies.map((item) => (
+                  <Link key={item.id} to={`/companies/${item.id}`} target="_blank" rel="noreferrer">
+                    {item.title}
+                  </Link>
+                ))}
+              </Space>
+            </Form.Item>
+          )}
+          {contractCompanies.length > 1 && (
+            <Form.Item>
+              <Text type="warning">
+                Контракт общий: изменение статуса и типа применится ко всем участникам.
+              </Text>
+            </Form.Item>
+          )}
           <Form.Item
             label="Статус"
             name="contract_state"
@@ -527,6 +707,40 @@ const CompanyPage: React.FC = () => {
               placeholder="Выберите тип контракта"
             />
           </Form.Item>
+          {contractID && (
+            <Form.Item label="Распространить контракт на компанию">
+              <Space style={{ width: '100%' }} align="start">
+                <div style={{ flex: 1 }}>
+                  <CompanySearchSelect
+                    allowClear
+                    value={spreadCompanyID}
+                    options={spreadCompanyOptions}
+                    placeholder="Выберите компанию"
+                    onSearch={setSpreadCompanySearch}
+                    onChange={setSpreadCompanyID}
+                  />
+                </div>
+                <Button
+                  onClick={() => spreadContractMutation.mutate()}
+                  loading={spreadContractMutation.isPending}
+                  disabled={!spreadCompanyID}
+                >
+                  Добавить
+                </Button>
+              </Space>
+            </Form.Item>
+          )}
+          {contractID && (
+            <Form.Item>
+              <Button
+                danger
+                onClick={() => leaveContractMutation.mutate()}
+                loading={leaveContractMutation.isPending}
+              >
+                Выйти из контракта и создать новый
+              </Button>
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>

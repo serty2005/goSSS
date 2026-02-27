@@ -14,6 +14,7 @@ import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import EntityHierarchyExplorer from '@/components/entities/EntityHierarchyExplorer';
+import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -508,6 +509,15 @@ const ServerDetails: React.FC = () => {
                       initialFocus={{ type: 'server', id: String(server.id) }}
                     />
                   )}
+                </Card>
+              ),
+            },
+            {
+              key: 'materials',
+              label: 'Материалы',
+              children: (
+                <Card title="Материалы сервера" className="glass-panel" size="small">
+                  <MaterialsPanel entityType="Server" entityID={String(server.id)} />
                 </Card>
               ),
             },

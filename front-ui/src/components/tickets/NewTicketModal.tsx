@@ -286,6 +286,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         return {
           key: `parent-${(item.data as { uuid?: string })?.uuid || resolveEquipmentTitle(item)}`,
           title: `${resolveEquipmentTitle(item)} (родительская компания)`,
+          entityPath: `/servers/${(item.data as { uuid?: string })?.uuid || ''}`,
           connections,
         };
       })
@@ -293,6 +294,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       key?: string;
       title: string;
       connections: Array<{ label: string; value?: string; isLink?: boolean }>;
+      entityPath: string;
     }>;
 
     const ownGroups = infrastructure
@@ -302,6 +304,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         return {
           key: (item.data as { uuid?: string })?.uuid,
           title: resolveEquipmentTitle(item),
+          entityPath: item.entity_type === 'Server'
+            ? `/servers/${(item.data as { uuid?: string })?.uuid || ''}`
+            : `/workstations/${(item.data as { uuid?: string })?.uuid || ''}`,
           connections,
         };
       })
@@ -309,6 +314,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       key?: string;
       title: string;
       connections: Array<{ label: string; value?: string; isLink?: boolean }>;
+      entityPath: string;
     }>;
     return [...parentServerGroups, ...ownGroups];
   }, [infrastructure, parentInfrastructure]);
@@ -679,7 +685,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     {connectionsGroups.map((group) => (
                       <Card key={group.key || group.title} size="small" className="glass-panel">
                         <Space orientation="vertical" size={4} style={{ width: '100%' }}>
-                          <Text strong>{group.title}</Text>
+                          <a href={group.entityPath} target="_blank" rel="noreferrer">
+                            <Text strong>{group.title}</Text>
+                          </a>
                           <Space orientation="vertical" size={0} style={{ width: '100%' }}>
                             {group.connections.map((entry) => (
                               entry.isLink ? (

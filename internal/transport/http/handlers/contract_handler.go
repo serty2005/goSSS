@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -55,6 +57,8 @@ func (h *ContractHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 		State:          contractModel.State,
 		StateStartTime: contractModel.StateStartTime,
 		Services:       parseContractServices(contractModel.Services),
+		Recipients:     parseContractRecipients(contractModel.Recipients),
+		Companies:      toContractCompaniesDTO(contractModel.Companies),
 		ServiceLevel:   contractModel.ServiceLevel,
 	}
 
@@ -101,6 +105,28 @@ func parseContractServices(raw []byte) []string {
 	}
 
 	return nil
+}
+
+func parseContractRecipients(raw []byte) []string {
+	return parseContractServices(raw)
+}
+
+func toContractCompaniesDTO(items []company.Company) []api.ContractCompanyDTO {
+	result := make([]api.ContractCompanyDTO, 0, len(items))
+	for _, item := range items {
+		title := ""
+		if item.Title != nil {
+			title = strings.TrimSpace(*item.Title)
+		}
+		if title == "" {
+			title = item.ID
+		}
+		result = append(result, api.ContractCompanyDTO{
+			ID:    item.ID,
+			Title: title,
+		})
+	}
+	return result
 }
 
 func (h *ContractHandler) CreateContract(w http.ResponseWriter, r *http.Request) {

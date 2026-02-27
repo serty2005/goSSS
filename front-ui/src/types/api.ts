@@ -742,8 +742,31 @@ export interface ContractDetailDTO {
   state?: string;
   services?: string[] | Record<string, unknown>;
   recipients?: string[] | Record<string, unknown>;
+  companies?: Array<{ id: string; title: string }>;
   service_level?: number;
   state_start_time?: string;
+}
+
+export interface MaterialEntityRefDTO {
+  entity_type: 'Company' | 'Server' | 'Workstation' | 'FiscalRegister';
+  entity_id: string;
+}
+
+export interface MaterialDTO {
+  id: string;
+  author_id?: number;
+  author_name: string;
+  subject: string;
+  content: string;
+  entity_refs: MaterialEntityRefDTO[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaterialPayload {
+  subject: string;
+  content: string;
+  entity_refs: MaterialEntityRefDTO[];
 }
 
 // --- Candidate Acceptance DTO ---

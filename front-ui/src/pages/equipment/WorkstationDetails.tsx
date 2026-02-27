@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, Popconfirm, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, Popconfirm, Tabs, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
@@ -15,6 +15,7 @@ import dayjs from 'dayjs';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import MaterialsPanel from '@/components/materials/MaterialsPanel';
 
 const { Title, Text } = Typography;
 
@@ -235,48 +236,69 @@ const WorkstationDetails: React.FC = () => {
         </Descriptions>
       </Card>
 
-      <Card title="История изменений" className="glass-panel" size="small" style={{ marginTop: 16 }}>
-        <Table<EntityOwnerHistoryItemDTO>
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
-          dataSource={ownerHistoryRes?.data || []}
-          columns={[
-            {
-              title: 'Время',
-              dataIndex: 'created_at',
-              key: 'created_at',
-              render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
-              width: 200,
-            },
-            {
-              title: 'Источник',
-              dataIndex: 'change_source',
-              key: 'change_source',
-              width: 220,
-              render: (value: string) => sourceLabelMap[value] || value || '-',
-            },
-            {
-              title: 'Владелец',
-              key: 'owners',
-              width: 320,
-              render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
-                const fromOwner = record.from_owner_id || '';
-                const toOwner = record.to_owner_id || '';
-                if (!fromOwner && !toOwner) return '-';
-                if (fromOwner && toOwner && fromOwner !== toOwner) return `${fromOwner} → ${toOwner}`;
-                return toOwner || fromOwner || '-';
-              },
-            },
-            {
-              title: 'Кто сделал',
-              key: 'actor',
-              render: (_: unknown, record: EntityOwnerHistoryItemDTO) => renderActor(record),
-              width: 260,
-            },
-            { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
-          ]}
-        />
-      </Card>
+      <Tabs
+        style={{ marginTop: 16 }}
+        defaultActiveKey="history"
+        items={[
+          {
+            key: 'history',
+            label: 'История изменений',
+            children: (
+              <Card title="История изменений" className="glass-panel" size="small">
+                <Table<EntityOwnerHistoryItemDTO>
+                  rowKey="id"
+                  pagination={{ pageSize: 10 }}
+                  dataSource={ownerHistoryRes?.data || []}
+                  columns={[
+                    {
+                      title: 'Время',
+                      dataIndex: 'created_at',
+                      key: 'created_at',
+                      render: (value: string) => dayjs(value).format('DD.MM.YYYY HH:mm:ss'),
+                      width: 200,
+                    },
+                    {
+                      title: 'Источник',
+                      dataIndex: 'change_source',
+                      key: 'change_source',
+                      width: 220,
+                      render: (value: string) => sourceLabelMap[value] || value || '-',
+                    },
+                    {
+                      title: 'Владелец',
+                      key: 'owners',
+                      width: 320,
+                      render: (_: unknown, record: EntityOwnerHistoryItemDTO) => {
+                        const fromOwner = record.from_owner_id || '';
+                        const toOwner = record.to_owner_id || '';
+                        if (!fromOwner && !toOwner) return '-';
+                        if (fromOwner && toOwner && fromOwner !== toOwner) return `${fromOwner} → ${toOwner}`;
+                        return toOwner || fromOwner || '-';
+                      },
+                    },
+                    {
+                      title: 'Кто сделал',
+                      key: 'actor',
+                      render: (_: unknown, record: EntityOwnerHistoryItemDTO) => renderActor(record),
+                      width: 260,
+                    },
+                    { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
+                  ]}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'materials',
+            label: 'Материалы',
+            children: (
+              <Card title="Материалы рабочей станции" className="glass-panel" size="small">
+                <MaterialsPanel entityType="Workstation" entityID={String(ws.id)} />
+              </Card>
+            ),
+          },
+        ]}
+      />
 
       <AgentObservationRawModal
         open={Boolean(activeObservationID)}

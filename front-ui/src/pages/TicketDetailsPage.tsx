@@ -473,6 +473,7 @@ const TicketDetailsPage: React.FC = () => {
           key: `${keyPrefix}-Server-${entityID}`,
           entityType: 'Server' as const,
           entityID,
+          entityPath: `/servers/${entityID}`,
           title: resolveEntityTitle(item),
           statsCount: stats?.count || 0,
           rows: [{ label: 'Адрес сервера', field: 'ip', value: address }],
@@ -482,6 +483,7 @@ const TicketDetailsPage: React.FC = () => {
       key: string;
       entityType: 'Server';
       entityID: string;
+      entityPath: string;
       title: string;
       statsCount: number;
       rows: Array<{ label: string; field: string; value: string }>;
@@ -509,6 +511,7 @@ const TicketDetailsPage: React.FC = () => {
           key: `Workstation-${entityID}`,
           entityType: 'Workstation' as const,
           entityID,
+          entityPath: `/workstations/${entityID}`,
           title: resolveEntityTitle(item),
           statsCount: stats?.count || 0,
           statsLastCopiedAt: stats?.lastCopiedAt || 0,
@@ -519,6 +522,7 @@ const TicketDetailsPage: React.FC = () => {
       key: string;
       entityType: 'Workstation';
       entityID: string;
+      entityPath: string;
       title: string;
       statsCount: number;
       statsLastCopiedAt: number;
@@ -1361,7 +1365,9 @@ const TicketDetailsPage: React.FC = () => {
                                       <Card key={group.key} size="small" className="glass-panel">
                                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
                                           <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                                            <Text strong>{group.title}</Text>
+                                            <a href={group.entityPath} target="_blank" rel="noreferrer">
+                                              <Text strong>{group.title}</Text>
+                                            </a>
                                             <Tag color="geekblue">Сервер</Tag>
                                           </Space>
                                           {group.rows.map((row) => (
@@ -1397,7 +1403,9 @@ const TicketDetailsPage: React.FC = () => {
                                     <Card key={group.key} size="small" className="glass-panel">
                                       <Space direction="vertical" size={6} style={{ width: '100%' }}>
                                         <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                                          <Text strong>{group.title}</Text>
+                                          <a href={group.entityPath} target="_blank" rel="noreferrer">
+                                            <Text strong>{group.title}</Text>
+                                          </a>
                                           <Tag color={group.entityType === 'Server' ? 'geekblue' : 'cyan'}>
                                             {group.entityType === 'Server' ? 'Сервер' : 'Станция'}
                                           </Tag>
