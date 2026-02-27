@@ -166,6 +166,8 @@ func (s *entityDeletionServiceImpl) ConfirmDeletion(ctx context.Context, candida
 		if len(deleteIDs) == 0 {
 			deleteIDs = []string{candidate.EntityID}
 		}
+		// На случай устаревшего meta после ручного replay всегда добавляем актуальный entity_id кандидата.
+		deleteIDs = uniqueTrimmedStrings(append(deleteIDs, strings.TrimSpace(candidate.EntityID)))
 		deletedAny := false
 		for _, deleteID := range uniqueTrimmedStrings(deleteIDs) {
 			if candidate.DuplicateOfEntityID != nil && strings.TrimSpace(*candidate.DuplicateOfEntityID) == deleteID {
@@ -381,6 +383,14 @@ func (s *entityDeletionServiceImpl) ReplayDuplicateChoice(ctx context.Context, c
 		updateData := map[string]interface{}{
 			"entity_id":              deleteEntityID,
 			"duplicate_of_entity_id": keepEntityID,
+		}
+		meta := s.parseCandidateMeta(candidate)
+		meta["duplicate_entity_ids"] = []string{deleteEntityID}
+		meta["survivor_id"] = keepEntityID
+		meta["loser_id"] = deleteEntityID
+		if metaJSON, mErr := json.Marshal(meta); mErr == nil {
+			updateData["meta"] = datatypes.JSON(metaJSON)
+			candidate.Meta = datatypes.JSON(metaJSON)
 		}
 		if snap, _ := s.getEntitySnapshot(txCtx, candidate.EntityType, deleteEntityID, true); snap != nil {
 			updateData["entity_display_name"] = edsStringPtrOrNil(snap.DisplayName)

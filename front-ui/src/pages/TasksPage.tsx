@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -6,7 +6,7 @@ import {
   Descriptions,
   Modal,
   Radio,
-  Select,
+  Spin,
   Space,
   Table,
   Tabs,
@@ -14,10 +14,9 @@ import {
   Typography,
   message,
 } from 'antd';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router-dom';
-import { tasksApi } from '@/api/tasks';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import type {
@@ -26,19 +25,11 @@ import type {
   EntityDeletionCandidateDetailsDTO,
   EntityDeletionCandidateEntityDetailsDTO,
   InfrastructureItem,
-  TaskDTO,
-  TaskStatus,
 } from '@/types/api';
-import { getEntityIcon } from '@/utils/mappers';
-import TaskStatusTag from '@/components/common/TaskStatusTag';
-import TaskResolutionModal from '@/features/tasks/TaskResolutionModal';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 
-const { Option } = Select;
-const { Title, Text } = Typography;
-
-type FilterStatus = TaskStatus | 'all';
+const { Text } = Typography;
 
 type OwnerServerSummary = {
   id: string;
@@ -293,9 +284,6 @@ function CandidateEntityCard(props: {
 }
 
 const TasksPage: React.FC = () => {
-  const [statusFilter, setStatusFilter] = useState<FilterStatus>('new');
-  const [page, setPage] = useState(1);
-  const [selectedTask, setSelectedTask] = useState<TaskDTO | null>(null);
   const [selectedDeletionCandidate, setSelectedDeletionCandidate] = useState<EntityDeletionCandidateDTO | null>(null);
   const [replayKeepEntityID, setReplayKeepEntityID] = useState<string>('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -306,23 +294,41 @@ const TasksPage: React.FC = () => {
   const canConfirmDeletion = isAdmin(user?.roles);
   const selectedDeletionCandidateID = selectedDeletionCandidate?.id ?? 0;
   const preopenDeletionCandidateID = Number(searchParams.get('deletion_candidate_id') || 0);
+  const deletionCandidatesLimit = 20;
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['tasks', statusFilter, page],
-    queryFn: () => tasksApi.getTasks(statusFilter === 'all' ? undefined : statusFilter, page),
-  });
-
-  const { data: deletionCandidatesData, isFetching: isDeletionCandidatesFetching } = useQuery({
+  const {
+    data: deletionCandidatesData,
+    isLoading: isDeletionCandidatesLoading,
+    isFetching: isDeletionCandidatesFetching,
+    isFetchingNextPage: isDeletionCandidatesFetchingNextPage,
+    hasNextPage: hasDeletionCandidatesNextPage,
+    fetchNextPage: fetchDeletionCandidatesNextPage,
+  } = useInfiniteQuery({
     queryKey: ['deletion-candidates', 'tasks-page'],
-    queryFn: () => deletionCandidatesApi.list({ status: 'PENDING', limit: 200, offset: 0 }),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      deletionCandidatesApi.list({ status: 'PENDING', limit: deletionCandidatesLimit, offset: Number(pageParam) || 0 }),
+    getNextPageParam: (lastPage) => {
+      const meta = lastPage.meta;
+      if (!meta?.has_next) {
+        return undefined;
+      }
+      return (meta.offset || 0) + (meta.limit || deletionCandidatesLimit);
+    },
     enabled: canConfirmDeletion,
   });
+  const allDeletionCandidates = useMemo(
+    () => (deletionCandidatesData?.pages || []).flatMap((pageData) => pageData.data || []),
+    [deletionCandidatesData?.pages],
+  );
+  const deletionCandidatesTotal = deletionCandidatesData?.pages?.[0]?.meta?.total || 0;
 
   useEffect(() => {
-    if (!preopenDeletionCandidateID || !deletionCandidatesData?.data?.length || selectedDeletionCandidate) {
+    if (!preopenDeletionCandidateID || allDeletionCandidates.length === 0 || selectedDeletionCandidate) {
       return;
     }
-    const found = deletionCandidatesData.data.find((item) => item.id === preopenDeletionCandidateID);
+    const found = allDeletionCandidates.find((item) => item.id === preopenDeletionCandidateID);
     if (!found) {
       return;
     }
@@ -330,7 +336,30 @@ const TasksPage: React.FC = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('deletion_candidate_id');
     setSearchParams(next, { replace: true });
-  }, [deletionCandidatesData?.data, preopenDeletionCandidateID, searchParams, selectedDeletionCandidate, setSearchParams]);
+  }, [allDeletionCandidates, preopenDeletionCandidateID, searchParams, selectedDeletionCandidate, setSearchParams]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node || !hasDeletionCandidatesNextPage) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting || isDeletionCandidatesFetchingNextPage) {
+          return;
+        }
+        void fetchDeletionCandidatesNextPage();
+      },
+      { rootMargin: '240px 0px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    fetchDeletionCandidatesNextPage,
+    hasDeletionCandidatesNextPage,
+    isDeletionCandidatesFetchingNextPage,
+    allDeletionCandidates.length,
+  ]);
 
   const {
     data: deletionCandidateDetailsData,
@@ -350,9 +379,15 @@ const TasksPage: React.FC = () => {
       setReplayKeepEntityID('');
       return;
     }
+    const pairEntityIDs = [
+      String(deletionCandidateDetails.candidate.entity_id || '').trim(),
+      String(deletionCandidateDetails.candidate.duplicate_of_entity_id || '').trim(),
+    ].filter(Boolean);
     const fallbackKeepID =
       deletionCandidateDetails.keep_entity?.entity_id ||
       deletionCandidateDetails.more_actual_entity_id ||
+      pairEntityIDs[1] ||
+      pairEntityIDs[0] ||
       deletionCandidateDetails.entities[0]?.entity_id ||
       '';
     setReplayKeepEntityID(fallbackKeepID);
@@ -438,11 +473,9 @@ const TasksPage: React.FC = () => {
 
   const confirmDeletionMutation = useMutation({
     mutationFn: (candidateID: number) => deletionCandidatesApi.confirm(candidateID),
-    onSuccess: () => {
+    onSuccess: (_data, candidateID) => {
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
-      if (selectedDeletionCandidateID) {
-        void queryClient.invalidateQueries({ queryKey: ['deletion-candidates', 'details', selectedDeletionCandidateID] });
-      }
+      void queryClient.invalidateQueries({ queryKey: ['deletion-candidates', 'details', candidateID] });
       message.success('Удаление подтверждено');
     },
     onError: () => {
@@ -456,48 +489,10 @@ const TasksPage: React.FC = () => {
         keep_entity_id: payload.keepEntityID,
         delete_entity_id: payload.deleteEntityID,
       }),
-    onSuccess: async (_, variables) => {
-      await queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
-      await queryClient.invalidateQueries({ queryKey: ['deletion-candidates', 'details', variables.candidateID] });
-    },
     onError: () => {
       message.error('Не удалось применить ручной выбор дубля');
     },
   });
-
-  const taskColumns = [
-    { title: 'ID', dataIndex: 'id', width: 80 },
-    {
-      title: 'Тип',
-      dataIndex: 'task_type',
-      render: (type: string) => (
-        <Space>
-          {getEntityIcon('default')} {type}
-        </Space>
-      ),
-    },
-    { title: 'Сущность', dataIndex: 'entity_type' },
-    {
-      title: 'Статус',
-      dataIndex: 'status',
-      render: (status: TaskStatus) => <TaskStatusTag status={status} />,
-    },
-    {
-      title: 'Создана',
-      dataIndex: 'created_at',
-      render: (date: string) => formatDateTime(date),
-    },
-    {
-      title: 'Действие',
-      key: 'action',
-      render: (_: unknown, record: TaskDTO) => (
-        <Button size="small" onClick={() => setSelectedTask(record)}>
-          Открыть
-        </Button>
-      ),
-    },
-  ];
-
   const deletionColumns = [
     { title: 'ID', dataIndex: 'id', width: 80 },
     {
@@ -528,6 +523,9 @@ const TasksPage: React.FC = () => {
       key: 'action',
       width: 190,
       render: (_: unknown, row: EntityDeletionCandidateDTO) => {
+        if (String(row.source || '').trim() !== 'manual') {
+          return null;
+        }
         const canConfirm = canConfirmDeletion && String(row.requested_by_user_id || '') !== currentUserID;
         return (
           <Button
@@ -547,19 +545,31 @@ const TasksPage: React.FC = () => {
     },
   ];
 
-  const modalEntities = deletionCandidateDetails?.entities ?? [];
+  const modalEntities = useMemo(() => deletionCandidateDetails?.entities ?? [], [deletionCandidateDetails?.entities]);
+  const replayPairEntityIDs = useMemo(() => {
+    if (!deletionCandidateDetails) return [];
+    const pair = [
+      String(deletionCandidateDetails.candidate.entity_id || '').trim(),
+      String(deletionCandidateDetails.candidate.duplicate_of_entity_id || '').trim(),
+    ].filter(Boolean);
+    return Array.from(new Set(pair));
+  }, [deletionCandidateDetails]);
+  const replayPairEntities = useMemo(
+    () => modalEntities.filter((entity) => replayPairEntityIDs.includes(entity.entity_id)),
+    [modalEntities, replayPairEntityIDs],
+  );
+
   const isDuplicateReplayAvailable = Boolean(
     deletionCandidateDetails &&
       deletionCandidateDetails.candidate.status === 'PENDING' &&
       deletionCandidateDetails.candidate.duplicate_of_entity_id &&
-      modalEntities.length >= 2,
+      replayPairEntityIDs.length === 2,
   );
 
   const replayDeleteEntityID = useMemo(() => {
-    if (!isDuplicateReplayAvailable || !replayKeepEntityID || !deletionCandidateDetails) return '';
-    const other = deletionCandidateDetails.entities.find((item) => item.entity_id !== replayKeepEntityID);
-    return other?.entity_id || '';
-  }, [deletionCandidateDetails, isDuplicateReplayAvailable, replayKeepEntityID]);
+    if (!isDuplicateReplayAvailable || !replayKeepEntityID) return '';
+    return replayPairEntityIDs.find((entityID) => entityID !== replayKeepEntityID) || '';
+  }, [isDuplicateReplayAvailable, replayKeepEntityID, replayPairEntityIDs]);
 
   const modalConfirmAllowed = Boolean(
     selectedDeletionCandidate &&
@@ -575,6 +585,7 @@ const TasksPage: React.FC = () => {
 
   const handleModalConfirmDeletion = async () => {
     if (!selectedDeletionCandidate) return;
+    const candidateID = selectedDeletionCandidate.id;
 
     try {
       if (isDuplicateReplayAvailable && replayKeepEntityID && replayDeleteEntityID && deletionCandidateDetails) {
@@ -588,15 +599,15 @@ const TasksPage: React.FC = () => {
         const changedChoice = replayKeepEntityID !== currentKeepID || replayDeleteEntityID !== currentDeleteID;
         if (changedChoice) {
           await replayDeletionChoiceMutation.mutateAsync({
-            candidateID: selectedDeletionCandidate.id,
+            candidateID,
             keepEntityID: replayKeepEntityID,
             deleteEntityID: replayDeleteEntityID,
           });
         }
       }
 
-      await confirmDeletionMutation.mutateAsync(selectedDeletionCandidate.id);
       setSelectedDeletionCandidate(null);
+      await confirmDeletionMutation.mutateAsync(candidateID);
     } catch {
       // Сообщения об ошибках уже показывает слой мутаций
     }
@@ -652,7 +663,7 @@ const TasksPage: React.FC = () => {
                 style={{ width: '100%' }}
               >
                 <Space direction="vertical" style={{ width: '100%' }}>
-                  {details.entities.map((entity) => (
+                  {replayPairEntities.map((entity) => (
                     <Radio key={entity.entity_id} value={entity.entity_id}>
                       <Space wrap>
                         <Text strong>{entity.display_name || entity.entity_id}</Text>
@@ -773,42 +784,10 @@ const TasksPage: React.FC = () => {
 
   return (
     <div style={{ padding: 0 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={3} style={{ margin: 0 }}>
-          Задачи оператора
-        </Title>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching} />
-          <Select<FilterStatus> defaultValue="new" style={{ width: 200 }} onChange={(val) => setStatusFilter(val)}>
-            <Option value="all">Все задачи</Option>
-            <Option value="new">Новые</Option>
-            <Option value="resolved">Решенные</Option>
-            <Option value="rejected">Отклоненные</Option>
-            <Option value="pending_sd_action">В обработке SD</Option>
-          </Select>
-        </Space>
-      </div>
-
-      <Card className="glass-panel" styles={{ body: { padding: 0 } }}>
-        <Table
-          dataSource={data?.data}
-          columns={taskColumns}
-          rowKey="id"
-          loading={isLoading}
-          pagination={{
-            current: page,
-            total: data?.meta?.total || 0,
-            pageSize: data?.meta?.limit || 50,
-            onChange: (p) => setPage(p),
-          }}
-        />
-      </Card>
-
       {canConfirmDeletion && (
         <Card
           className="glass-panel"
           title="Кандидаты на удаление"
-          style={{ marginTop: 16 }}
           extra={
             <Button
               icon={<ReloadOutlined />}
@@ -819,8 +798,9 @@ const TasksPage: React.FC = () => {
         >
           <Table<EntityDeletionCandidateDTO>
             rowKey="id"
-            pagination={{ pageSize: 10 }}
-            dataSource={deletionCandidatesData?.data || []}
+            pagination={false}
+            loading={isDeletionCandidatesLoading}
+            dataSource={allDeletionCandidates}
             columns={deletionColumns}
             onRow={(record) => ({
               onClick: () => setSelectedDeletionCandidate(record),
@@ -828,10 +808,14 @@ const TasksPage: React.FC = () => {
             })}
             locale={{ emptyText: 'Нет кандидатов на удаление' }}
           />
+          <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
+            {(isDeletionCandidatesFetchingNextPage || (hasDeletionCandidatesNextPage && allDeletionCandidates.length > 0)) && <Spin size="small" />}
+            {!hasDeletionCandidatesNextPage && allDeletionCandidates.length > 0 && (
+              <Text type="secondary">Показано: {allDeletionCandidates.length} из {deletionCandidatesTotal}</Text>
+            )}
+          </div>
         </Card>
       )}
-
-      <TaskResolutionModal visible={!!selectedTask} task={selectedTask} onClose={() => setSelectedTask(null)} />
 
       <Modal
         open={!!selectedDeletionCandidate}
