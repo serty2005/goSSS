@@ -839,6 +839,9 @@ func (o *Orchestrator) handleServerPollingSucceeded(ctx context.Context, event e
 		"last_polled_at":  payload.LastPolledAt,
 		"last_updated_by": "rms_polling",
 	}
+	if strings.TrimSpace(payload.CRMID) != "" {
+		updates["crm_id"] = strings.TrimSpace(payload.CRMID)
+	}
 
 	if _, err := o.serverRepo.Update(ctx, nil, payload.ServerUUID, updates); err != nil {
 		log.Error("Не удалось обновить данные сервера после успешного опроса", "error", err)

@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -34,7 +35,15 @@ func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
 }
 
 type installLicenseRequestDTO struct {
-	UniqueID string `json:"unique_id"`
+	Login            string `json:"login"`
+	Password         string `json:"password"`
+	FallbackPassword string `json:"fallback_password,omitempty"`
+	UniqueID         string `json:"unique_id"`
+}
+
+type installLicenseResponseDTO struct {
+	Message string                         `json:"message"`
+	Result  *services.InstallLicenseResult `json:"result,omitempty"`
 }
 
 func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Request) {
@@ -50,12 +59,27 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
-	if dto.UniqueID == "" {
+	if strings.TrimSpace(dto.Login) == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Поле 'login' обязательно для заполнения")
+		return
+	}
+	if strings.TrimSpace(dto.Password) == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Поле 'password' обязательно для заполнения")
+		return
+	}
+	if strings.TrimSpace(dto.UniqueID) == "" {
 		response.RespondWithError(w, http.StatusBadRequest, "Поле 'unique_id' обязательно для заполнения")
 		return
 	}
 
-	err := h.actionsSvc.InstallLicense(r.Context(), serverID, dto.UniqueID)
+	result, err := h.actionsSvc.InstallLicense(
+		r.Context(),
+		serverID,
+		dto.Login,
+		dto.Password,
+		dto.FallbackPassword,
+		dto.UniqueID,
+	)
 	if err != nil {
 		var httpErr *iiko.HttpError
 		if errors.As(err, &httpErr) {
@@ -68,13 +92,18 @@ func (h *ServerActionsHandler) installLicense(w http.ResponseWriter, r *http.Req
 
 		if errors.Is(err, domain.ErrNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Сервер с указанным ID не найден")
+		} else if strings.Contains(strings.ToLower(err.Error()), "обязателен") || strings.Contains(strings.ToLower(err.Error()), "доступна только") {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
 		} else {
 			log.Error("Ошибка при установке лицензии", "serverID", serverID, "error", err)
 			response.RespondWithError(w, http.StatusInternalServerError, "Внутренняя ошибка сервера при установке лицензии")
 		}
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, map[string]string{"message": "Команда на установку лицензии выполнена успешно"})
+	response.RespondWithJSON(w, http.StatusOK, installLicenseResponseDTO{
+		Message: "Лицензия успешно установлена и сервер подтвердил запуск",
+		Result:  result,
+	})
 }
 
 // pollServerStatus обрабатывает запрос на принудительный асинхронный опрос статуса сервера.

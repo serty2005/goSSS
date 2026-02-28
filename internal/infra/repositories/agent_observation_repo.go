@@ -640,9 +640,6 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 			if out.ServerKey != nil && strings.TrimSpace(*out.ServerKey) != "" {
 				serverUpdates["server_key"] = valOrNil(out.ServerKey)
 			}
-			if v := valOrNil(in.ServerCRMID); v != nil {
-				serverUpdates["crm_id"] = v
-			}
 			if v := valOrNil(in.ServerURL); v != nil {
 				serverUpdates["ip"] = v
 			}
@@ -958,6 +955,11 @@ func (s *agentObservationRepo) ensureServer(tx *gorm.DB, c *models.Candidate, in
 			return &srv, nil
 		}
 	}
+	if c.ServerCRMID != nil && strings.TrimSpace(*c.ServerCRMID) != "" {
+		if err := tx.Where("crm_id = ?", strings.TrimSpace(*c.ServerCRMID)).First(&srv).Error; err == nil {
+			return &srv, nil
+		}
+	}
 	if c.ServerKey != nil {
 		if err := tx.Where("server_key = ?", *c.ServerKey).First(&srv).Error; err == nil {
 			return &srv, nil
@@ -965,7 +967,6 @@ func (s *agentObservationRepo) ensureServer(tx *gorm.DB, c *models.Candidate, in
 	}
 	srv = server.Server{
 		OwnerID:     &in.CompanyID,
-		CRMid:       in.ServerCRMID,
 		IP:          in.ServerURL,
 		UniqueID:    in.ServerUniqueID,
 		CabinetLink: strPtr(extractCabinetClientID(ptrValue(in.ServerCabinetLink))),

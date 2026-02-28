@@ -7,6 +7,9 @@ import (
 	"etalon-server/internal/infra/logger"
 	infrarepos "etalon-server/internal/infra/repositories"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
+	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -120,12 +123,33 @@ func (s *agentObservationServiceImpl) ApplyObservation(ctx context.Context, sour
 }
 
 func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error) {
+	normalizedServerURL, err := normalizeServerURL(in.ServerURL)
+	if err != nil {
+		return nil, err
+	}
+	teamviewerID, err := normalizeNumericRemote(in.TeamviewerID, "teamviewer_id")
+	if err != nil {
+		return nil, err
+	}
+	anydeskID, err := normalizeNumericRemote(in.AnydeskID, "anydesk_id")
+	if err != nil {
+		return nil, err
+	}
+	litemanagerID, err := normalizeAlphaNumericRemote(in.LitemanagerID, "litemanager_id")
+	if err != nil {
+		return nil, err
+	}
+	rustdeskID, err := normalizeAlphaNumericRemote(in.RustdeskID, "rustdesk_id")
+	if err != nil {
+		return nil, err
+	}
+
 	mapped := infrarepos.CandidateApproveInput{
 		CandidateID:           in.CandidateID,
 		CompanyID:             in.CompanyID,
 		ServerID:              in.ServerID,
-		ServerCRMID:           in.ServerCRMID,
-		ServerURL:             in.ServerURL,
+		ServerCRMID:           nil,
+		ServerURL:             normalizedServerURL,
 		ServerUniqueID:        in.ServerUniqueID,
 		ServerCabinetLink:     in.ServerCabinetLink,
 		ServerName:            in.ServerName,
@@ -138,10 +162,10 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		ContractMode:          in.ContractMode,
 		ContractType:          in.ContractType,
 		// Ручной ввод remote IDs
-		TeamviewerID:  in.TeamviewerID,
-		LitemanagerID: in.LitemanagerID,
-		RustdeskID:    in.RustdeskID,
-		AnydeskID:     in.AnydeskID,
+		TeamviewerID:  teamviewerID,
+		LitemanagerID: litemanagerID,
+		RustdeskID:    rustdeskID,
+		AnydeskID:     anydeskID,
 	}
 	if len(in.Workstations) > 0 {
 		mapped.Workstations = make([]infrarepos.CandidateWorkstationInput, 0, len(in.Workstations))
@@ -154,4 +178,49 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		}
 	}
 	return s.storage.ApproveCandidate(ctx, mapped)
+}
+
+func normalizeServerURL(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return nil, nil
+	}
+	normalized := validators.ValidateIPAddress(raw)
+	if normalized == nil {
+		return nil, fmt.Errorf("некорректный формат server_url")
+	}
+	return normalized, nil
+}
+
+func normalizeNumericRemote(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return nil, nil
+	}
+	normalized := validators.ValidateRemoteAccessID(raw)
+	if normalized == nil {
+		return nil, fmt.Errorf("некорректный формат %s", field)
+	}
+	return normalized, nil
+}
+
+func normalizeAlphaNumericRemote(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return nil, nil
+	}
+	normalized := validators.ValidateWorkstationRemoteID(raw)
+	if normalized == nil {
+		return nil, fmt.Errorf("некорректный формат %s", field)
+	}
+	return normalized, nil
 }

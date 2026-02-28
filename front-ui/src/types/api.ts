@@ -709,6 +709,28 @@ export interface UpdateServerPayload {
   owner_id?: string;
 }
 
+export interface InstallServerLicensePayload {
+  login: string;
+  password: string;
+  fallback_password?: string;
+  unique_id: string;
+}
+
+export interface InstallServerLicenseResult {
+  server_id: string;
+  status: string;
+  server_name?: string;
+  server_version?: string;
+  server_edition?: string;
+  crm_id?: string;
+  last_polled_at: string;
+}
+
+export interface InstallServerLicenseResponse {
+  message: string;
+  result?: InstallServerLicenseResult;
+}
+
 export interface UpdateWorkstationPayload {
   device_name?: string;
   anydesk?: string;

@@ -1,4 +1,3 @@
-// Файл: internal/infra/iiko/client.go
 package iiko
 
 import (
@@ -16,7 +15,7 @@ import (
 	"time"
 )
 
-// IikoServerInfo структура для парсинга XML-ответа от сервера iikoRMS
+// IikoServerInfo структура для парсинга ответа от сервера iikoRMS.
 type IikoServerInfo struct {
 	XMLName     xml.Name `xml:"r"`
 	ServerName  string   `xml:"serverName"`
@@ -25,10 +24,18 @@ type IikoServerInfo struct {
 	ServerState string   `xml:"serverState"`
 }
 
+// LicenseInfoResponse содержит данные лицензии из XML-ответа iiko.
+type LicenseInfoResponse struct {
+	XMLName           xml.Name `xml:"result"`
+	CrmOrganizationID string   `xml:"licenseInfo>licenseData>r>crmOrganizationId"`
+	SerialNumber      string   `xml:"licenseInfo>licenseData>r>serialNumber"`
+}
+
 // IikoClient определяет интерфейс для взаимодействия с iikoRMS API.
 type IikoClient interface {
 	GetServerMonitoringInfo(ctx context.Context, serverURL string) (*IikoServerInfo, error)
 	InstallLicense(ctx context.Context, serverURL, login, password, fallbackPassword, uid string) (bool, error)
+	GetCRMid(ctx context.Context, serverURL, login, password, fallbackPassword string) (string, error)
 }
 
 type iikoClientImpl struct {
@@ -39,16 +46,14 @@ type iikoClientImpl struct {
 // NewIikoClient создает новый экземпляр клиента для iikoRMS.
 func NewIikoClient(timeout time.Duration, logger logger.LoggerInterface) IikoClient {
 	return &iikoClientImpl{
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
-		logger: logger,
+		httpClient: &http.Client{Timeout: timeout},
+		logger:     logger,
 	}
 }
 
 // GetServerMonitoringInfo получает статус и информацию о сервере.
 func (c *iikoClientImpl) GetServerMonitoringInfo(ctx context.Context, serverURL string) (*IikoServerInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/resto/get_server_info.jsp?encoding=UTF-8", serverURL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать GET-запрос: %w", err)
 	}
@@ -94,40 +99,56 @@ func (c *iikoClientImpl) GetServerMonitoringInfo(ctx context.Context, serverURL 
 func (c *iikoClientImpl) InstallLicense(ctx context.Context, serverURL, login, password, fallbackPassword, uid string) (bool, error) {
 	log := c.logger.With("server_url", serverURL, "uid", uid)
 
-	// Первая попытка с основным паролем
 	success, err := c.fetchAndInstallLicense(ctx, serverURL, login, password, uid, log)
 	if err == nil && success {
 		return true, nil
 	}
 
-	// Проверяем, является ли ошибка ошибкой аутентификации (401/403)
 	var httpErr *HttpError
-	if asHttpErr, ok := err.(*HttpError); ok {
-		httpErr = asHttpErr
+	if asHTTP, ok := err.(*HttpError); ok {
+		httpErr = asHTTP
 	}
 
 	if (httpErr != nil && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden)) && fallbackPassword != "" {
-		log.Warn("Первая попытка аутентификации не удалась, пробую с запасным паролем.")
-		// Вторая попытка с запасным паролем
+		log.Warn("Первая попытка аутентификации не удалась, пробую с запасным паролем")
 		return c.fetchAndInstallLicense(ctx, serverURL, login, fallbackPassword, uid, log)
 	}
 
 	return false, err
 }
 
+// GetCRMid получает CRM ID сервера iikoRMS.
+func (c *iikoClientImpl) GetCRMid(ctx context.Context, serverURL, login, password, fallbackPassword string) (string, error) {
+	log := c.logger.With("server_url", serverURL)
+
+	crmid, err := c.fetchCRMid(ctx, serverURL, login, password)
+	if err == nil {
+		return crmid, nil
+	}
+
+	var httpErr *HttpError
+	if asHTTP, ok := err.(*HttpError); ok {
+		httpErr = asHTTP
+	}
+
+	if (httpErr != nil && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden)) && fallbackPassword != "" {
+		log.Warn("Первая попытка аутентификации для получения CRM ID не удалась, пробую с запасным паролем")
+		return c.fetchCRMid(ctx, serverURL, login, fallbackPassword)
+	}
+
+	return "", err
+}
+
 func (c *iikoClientImpl) fetchAndInstallLicense(ctx context.Context, serverURL, login, password, uid string, log logger.LoggerInterface) (bool, error) {
-	// 1. Получаем информацию о сервере (версия, редакция)
 	info, err := c.getServerInfoXML(ctx, serverURL)
 	if err != nil {
 		return false, err
 	}
 
-	// 2. Хэшируем пароль
 	hasher := sha1.New()
 	hasher.Write([]byte(password))
 	passwordHash := hex.EncodeToString(hasher.Sum(nil))
 
-	// 3. Формируем тело и заголовки запроса
 	endpoint := fmt.Sprintf("%s/resto/services/licensing?methodName=fetchAndInstallLicense&", serverURL)
 	xmlBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <args>
@@ -138,7 +159,7 @@ func (c *iikoClientImpl) fetchAndInstallLicense(ctx context.Context, serverURL, 
     <serialNumber>%s</serialNumber>
 </args>`, uid)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBufferString(xmlBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(xmlBody))
 	if err != nil {
 		return false, fmt.Errorf("не удалось создать POST-запрос: %w", err)
 	}
@@ -152,14 +173,12 @@ func (c *iikoClientImpl) fetchAndInstallLicense(ctx context.Context, serverURL, 
 
 	log.Info("Отправка запроса на установку лицензии на iiko-сервер")
 
-	// 4. Отправляем запрос
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("ошибка при отправке запроса: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 5. Проверяем статус ответа
 	if resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
 		return false, NewHttpError(resp.StatusCode, fmt.Sprintf("сервер вернул ошибку: %s. Тело ответа: %s", resp.Status, string(responseBody)))
@@ -169,19 +188,73 @@ func (c *iikoClientImpl) fetchAndInstallLicense(ctx context.Context, serverURL, 
 	return true, nil
 }
 
+func (c *iikoClientImpl) fetchCRMid(ctx context.Context, serverURL, login, password string) (string, error) {
+	info, err := c.getServerInfoXML(ctx, serverURL)
+	if err != nil {
+		return "", err
+	}
+
+	hasher := sha1.New()
+	hasher.Write([]byte(password))
+	passwordHash := hex.EncodeToString(hasher.Sum(nil))
+
+	endpoint := fmt.Sprintf("%s/resto/services/licensing?methodName=getForceDeveloperSandboxModeInfo&", serverURL)
+	xmlBody := `<?xml version="1.0" encoding="utf-8"?><args><entities-version>1</entities-version><client-type>BACK</client-type><enable-warnings>false</enable-warnings><client-call-id>30264dfd-570d-46c0-81b8-6bef9da5a2c9</client-call-id><license-hash>-1938788177</license-hash><restrictions-state-hash>5761</restrictions-state-hash><obtained-license-connections-ids /><request-watchdog-check-results>true</request-watchdog-check-results><use-raw-entities>true</use-raw-entities></args>`
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(xmlBody))
+	if err != nil {
+		return "", fmt.Errorf("не удалось создать POST-запрос: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-Resto-LoginName", login)
+	req.Header.Set("X-Resto-PasswordHash", passwordHash)
+	req.Header.Set("X-Resto-BackVersion", info.Version)
+	req.Header.Set("X-Resto-AuthType", "BACK")
+	req.Header.Set("X-Resto-ServerEdition", info.Edition)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ошибка при отправке запроса на получение CRMid: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("не удалось прочитать ответ сервера: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", NewHttpError(resp.StatusCode, fmt.Sprintf("сервер вернул ошибку при получении CRMid: %s. Ответ: %s", resp.Status, string(responseBody)))
+	}
+
+	var licenseInfo LicenseInfoResponse
+	cleanXML := strings.ReplaceAll(string(responseBody), "&lt;", "<")
+	cleanXML = strings.ReplaceAll(cleanXML, "&gt;", ">")
+
+	if err := xml.Unmarshal([]byte(cleanXML), &licenseInfo); err != nil {
+		return "", fmt.Errorf("не удалось разобрать XML-ответ с лицензией: %w. Ответ: %s", err, string(responseBody))
+	}
+
+	if licenseInfo.CrmOrganizationID == "" {
+		return "", fmt.Errorf("не удалось найти CRMid в ответе сервера. Ответ: %s", string(responseBody))
+	}
+
+	return licenseInfo.CrmOrganizationID, nil
+}
+
 // getServerInfoXML получает и подготавливает информацию о сервере для аутентификации.
 func (c *iikoClientImpl) getServerInfoXML(ctx context.Context, serverURL string) (*IikoServerInfo, error) {
 	info, err := c.GetServerMonitoringInfo(ctx, serverURL)
 	if err != nil {
 		return nil, err
 	}
-	// iiko API требует замены 'default' на 'IIKO_RMS' и 'chain' на 'IIKO_CHAIN' в заголовках
 	info.Edition = strings.Replace(info.Edition, "default", "IIKO_RMS", -1)
 	info.Edition = strings.Replace(info.Edition, "chain", "IIKO_CHAIN", -1)
 	return info, nil
 }
 
-// HttpError специальный тип ошибки для HTTP-ответов
+// HttpError специальный тип ошибки для HTTP-ответов.
 type HttpError struct {
 	StatusCode int
 	Message    string

@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/validators"
 	"fmt"
 	"strings"
 )
@@ -25,6 +26,9 @@ func NewService(logger logger.LoggerInterface, tm interfaces.Transactor, repo wo
 }
 
 func (s *serviceImpl) Create(ctx context.Context, dto *api.WorkstationCreateDTO) (*workstation.Workstation, error) {
+	if err := normalizeWorkstationCreate(dto); err != nil {
+		return nil, err
+	}
 	entity := &workstation.Workstation{
 		Teamviewer: dto.Teamviewer, Anydesk: dto.Anydesk, Litemanager: dto.Litemanager,
 		DeviceName: dto.DeviceName, Description: dto.Description, OwnerID: dto.OwnerID,
@@ -56,6 +60,9 @@ func (s *serviceImpl) Create(ctx context.Context, dto *api.WorkstationCreateDTO)
 
 func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]interface{}) error {
 	cleanData(data)
+	if err := normalizeWorkstationUpdate(data); err != nil {
+		return err
+	}
 	// После ручного именования станция перестаёт считаться новой.
 	if rawName, ok := data["device_name"]; ok {
 		if name, okCast := rawName.(string); okCast && name != "" {
@@ -188,4 +195,99 @@ func stringPtrValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func normalizeWorkstationCreate(dto *api.WorkstationCreateDTO) error {
+	if dto == nil {
+		return fmt.Errorf("пустые данные рабочей станции")
+	}
+	var err error
+	dto.Teamviewer, err = normalizeNumericRemoteID(dto.Teamviewer, "teamviewer")
+	if err != nil {
+		return err
+	}
+	dto.Anydesk, err = normalizeNumericRemoteID(dto.Anydesk, "anydesk")
+	if err != nil {
+		return err
+	}
+	dto.Litemanager, err = normalizeAlphaNumericRemoteID(dto.Litemanager, "litemanager")
+	if err != nil {
+		return err
+	}
+	dto.Rustdesk, err = normalizeAlphaNumericRemoteID(dto.Rustdesk, "rustdesk")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeWorkstationUpdate(data map[string]interface{}) error {
+	if err := normalizeMapRemoteID(data, "teamviewer", normalizeNumericRemoteID); err != nil {
+		return err
+	}
+	if err := normalizeMapRemoteID(data, "anydesk", normalizeNumericRemoteID); err != nil {
+		return err
+	}
+	if err := normalizeMapRemoteID(data, "litemanager", normalizeAlphaNumericRemoteID); err != nil {
+		return err
+	}
+	if err := normalizeMapRemoteID(data, "rustdesk", normalizeAlphaNumericRemoteID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeMapRemoteID(data map[string]interface{}, field string, normalizer func(*string, string) (*string, error)) error {
+	raw, exists := data[field]
+	if !exists {
+		return nil
+	}
+	if raw == nil {
+		data[field] = nil
+		return nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("поле %s должно быть строкой", field)
+	}
+	normalized, err := normalizer(&value, field)
+	if err != nil {
+		return err
+	}
+	if normalized == nil {
+		data[field] = nil
+	} else {
+		data[field] = *normalized
+	}
+	return nil
+}
+
+func normalizeNumericRemoteID(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	normalized := validators.ValidateRemoteAccessID(trimmed)
+	if normalized == nil {
+		return nil, fmt.Errorf("некорректный формат %s", field)
+	}
+	return normalized, nil
+}
+
+func normalizeAlphaNumericRemoteID(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	normalized := validators.ValidateWorkstationRemoteID(trimmed)
+	if normalized == nil {
+		return nil, fmt.Errorf("некорректный формат %s", field)
+	}
+	return normalized, nil
 }

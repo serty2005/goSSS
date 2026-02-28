@@ -130,6 +130,10 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.service.Create(r.Context(), &dto)
 	if err != nil {
+		if isValidationError(err) {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, domain.ErrAlreadyExists) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
 			response.RespondWithError(w, http.StatusConflict, "Already Exists")
@@ -151,6 +155,10 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	err := h.service.Update(r.Context(), id, data)
 	if err != nil {
+		if isValidationError(err) {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
 			response.RespondWithError(w, http.StatusNotFound, "Not Found")
@@ -253,4 +261,12 @@ func parseCSVQuery(value string) []string {
 		}
 	}
 	return result
+}
+
+func isValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lowered, "некорректный формат") || strings.Contains(lowered, "должно быть строкой") || strings.Contains(lowered, "пустые данные")
 }

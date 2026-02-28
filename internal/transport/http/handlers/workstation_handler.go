@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -98,6 +99,10 @@ func (h *WSHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.service.Create(r.Context(), &dto)
 	if err != nil {
+		if isWorkstationValidationError(err) {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		middleware.GetLogger(r.Context()).Error("create failed", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Creation Failed")
 		return
@@ -114,6 +119,10 @@ func (h *WSHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	err := h.service.Update(r.Context(), id, data)
 	if err != nil {
+		if isWorkstationValidationError(err) {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		middleware.GetLogger(r.Context()).Error("update failed", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Update Failed")
 		return
@@ -176,4 +185,12 @@ func toWorkstationResponse(item workstation.Workstation) map[string]interface{} 
 		"owner_id":           item.OwnerID,
 		"owner_binding_mode": item.OwnerBindingMode,
 	}
+}
+
+func isWorkstationValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(text, "некорректный формат") || strings.Contains(text, "должно быть строкой") || strings.Contains(text, "пустые данные")
 }

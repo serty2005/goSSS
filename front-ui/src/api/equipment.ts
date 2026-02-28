@@ -2,6 +2,8 @@ import apiClient from './axios';
 import { 
   ApiResponse, 
   EntityOwnerHistoryItemDTO,
+  InstallServerLicensePayload,
+  InstallServerLicenseResponse,
   ServerDetailDTO, 
   WorkstationDetailDTO, 
   FiscalDetailDTO,
@@ -36,6 +38,11 @@ export const equipmentApi = {
 
   pollServer: async (uuid: string) => {
     const response = await apiClient.post<ApiResponse<void>>(`/servers/${uuid}/poll`);
+    return response.data;
+  },
+
+  installServerLicense: async (uuid: string, payload: InstallServerLicensePayload) => {
+    const response = await apiClient.post<ApiResponse<InstallServerLicenseResponse>>(`/servers/${uuid}/license`, payload);
     return response.data;
   },
 

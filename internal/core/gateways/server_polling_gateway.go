@@ -186,6 +186,13 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server ser
 			},
 		})
 	} else {
+		crmID := ""
+		if value, crmErr := g.rmsClient.GetCRMid(ctx, url, g.cfg.RMSLogin, g.cfg.RMSPassword1, g.cfg.RMSPassword2); crmErr != nil {
+			log.Warn("Не удалось получить CRM ID сервера", "url", url, "error", crmErr)
+		} else {
+			crmID = strings.TrimSpace(value)
+		}
+
 		log.Info("Информация о сервере успешно получена", "state", info.ServerState)
 		g.bus.Publish(eventbus.Event{
 			Type: events.ServerPollingSucceeded,
@@ -195,6 +202,7 @@ func (g *serverPollingGatewayImpl) processServer(ctx context.Context, server ser
 				ServerName:    info.ServerName,
 				ServerEdition: info.Edition,
 				ServerVersion: shortenVersion(info.Version),
+				CRMID:         crmID,
 				NewStatus:     mapServerStateToStatus(info.ServerState),
 				LastPolledAt:  time.Now(),
 			},

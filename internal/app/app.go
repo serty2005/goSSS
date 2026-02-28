@@ -348,7 +348,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		AgentService:            services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
 		TaskResolutionService:   services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
-		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, clients.IikoClient),
+		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),
 		EntityMatcherService:    services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo, repos.OwnerHistoryRepo),
 		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
@@ -458,6 +458,9 @@ func (a *Application) setupRouter() *chi.Mux {
 	r.Use(middleware.DebugHTTPIOMiddleware())
 	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
 	r.Use(middleware.TimeoutUnless(60*time.Second, func(r *http.Request) bool {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/servers/") && strings.HasSuffix(r.URL.Path, "/license") {
+			return true
+		}
 		return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/events")
 	}))
 

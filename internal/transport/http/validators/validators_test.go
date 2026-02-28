@@ -112,6 +112,25 @@ func TestBuildPartnersPortalLink(t *testing.T) {
 	assert.Nil(t, BuildPartnersPortalLink("", "10.10.10.10:8080"))
 }
 
+func TestValidateWorkstationRemoteID(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected *string
+	}{
+		{"Допустимый буквенно-цифровой ID", "LM-123_ABC", stringPtr("LM-123_ABC")},
+		{"Пустой ID", "", nil},
+		{"Некорректные символы", "LM 123 !", nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ValidateWorkstationRemoteID(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 // Вспомогательная функция для тестов, чтобы создавать указатели на строки.
 func stringPtr(s string) *string {
 	return &s

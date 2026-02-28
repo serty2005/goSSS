@@ -119,13 +119,13 @@ type BitrixSyncEntityPayload struct {
 // TicketUpdatedPayload — полезная нагрузка события TicketUpdated.
 // Используется фронтендом для реактивного обновления карточек тикетов и уведомлений.
 type TicketUpdatedPayload struct {
-	TicketID         string    `json:"ticket_id"`
-	Action           string    `json:"action"`
-	Source           string    `json:"source"`
-	Message          string    `json:"message,omitempty"`
-	OccurredAt       time.Time `json:"occurred_at"`
-	RecipientUserID  *uint     `json:"recipient_user_id,omitempty"`
-	ActorUserID      *uint     `json:"actor_user_id,omitempty"`
+	TicketID        string    `json:"ticket_id"`
+	Action          string    `json:"action"`
+	Source          string    `json:"source"`
+	Message         string    `json:"message,omitempty"`
+	OccurredAt      time.Time `json:"occurred_at"`
+	RecipientUserID *uint     `json:"recipient_user_id,omitempty"`
+	ActorUserID     *uint     `json:"actor_user_id,omitempty"`
 }
 
 // AgentObservationUpdatedPayload описывает актуальное состояние агента для UI-ленты наблюдений.
@@ -217,6 +217,9 @@ type ServerPollingSucceededPayload struct {
 
 	// ServerVersion — версия ОС сервера.
 	ServerVersion string
+
+	// CRMID — CRM ID сервера, полученный через licensing API.
+	CRMID string
 
 	// NewStatus — новый статус сервера после опроса.
 	// Значения: "online", "offline", "archived", "undefined".

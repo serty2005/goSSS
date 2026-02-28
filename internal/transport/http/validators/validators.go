@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	uniqueIDRegex         = regexp.MustCompile(`^\d{3}-\d{3}-\d{3}$`)
-	remoteAccessIDRegex   = regexp.MustCompile(`(\d\s*){9,10}`)
-	LiteManagerIDRegex    = regexp.MustCompile(`MH_\d{5}`)
-	iikoCloudDomainRegex  = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
-	syrveCloudDomainRegex = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
-	cabinetLinkIDRegex    = regexp.MustCompile(`\d+`)
+	uniqueIDRegex            = regexp.MustCompile(`^\d{3}-\d{3}-\d{3}$`)
+	remoteAccessIDRegex      = regexp.MustCompile(`(\d\s*){9,10}`)
+	LiteManagerIDRegex       = regexp.MustCompile(`MH_\d{5}`)
+	iikoCloudDomainRegex     = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
+	syrveCloudDomainRegex    = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
+	cabinetLinkIDRegex       = regexp.MustCompile(`\d+`)
+	workstationRemoteIDRegex = regexp.MustCompile(`^[A-Za-z0-9._:-]{3,128}$`)
 )
 
 // ValidateUniqueID проверяет формат UniqueID.
@@ -32,6 +33,18 @@ func ValidateRemoteAccessID(raw string) *string {
 	}
 	normalized := strings.ReplaceAll(found, " ", "")
 	return &normalized
+}
+
+// ValidateWorkstationRemoteID валидирует пользовательский ID удалённого доступа для РС.
+func ValidateWorkstationRemoteID(raw string) *string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if !workstationRemoteIDRegex.MatchString(raw) {
+		return nil
+	}
+	return &raw
 }
 
 // ExtractLiteManagerID извлекает LiteManager ID из данных.

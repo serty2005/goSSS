@@ -28,8 +28,11 @@ func NewService(logger logger.LoggerInterface, tm interfaces.Transactor, repo se
 }
 
 func (s *serviceImpl) Create(ctx context.Context, dto *api.ServerCreateDTO) (*server.Server, error) {
+	if err := normalizeServerCreate(dto); err != nil {
+		return nil, err
+	}
 	entity := &server.Server{
-		UniqueID: dto.UniqueID, CRMid: dto.CRMid, Teamviewer: dto.Teamviewer,
+		UniqueID: dto.UniqueID, CRMid: nil, Teamviewer: dto.Teamviewer,
 		RDP: dto.RDP, Anydesk: dto.Anydesk, IP: dto.IP, DeviceName: dto.DeviceName,
 		ServerName: dto.ServerName, ServerVersion: dto.ServerVersion, Description: dto.Description,
 		OwnerID: dto.OwnerID, Status: "unknown",
@@ -60,7 +63,9 @@ func (s *serviceImpl) Create(ctx context.Context, dto *api.ServerCreateDTO) (*se
 
 func (s *serviceImpl) Update(ctx context.Context, id string, data map[string]interface{}) error {
 	cleanData(data)
-	normalizeServerUpdate(data)
+	if err := normalizeServerUpdate(data); err != nil {
+		return err
+	}
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		before, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
@@ -181,18 +186,63 @@ func cleanData(data map[string]interface{}) {
 	delete(data, "deleted_at")
 }
 
-func normalizeServerUpdate(data map[string]interface{}) {
+func normalizeServerCreate(dto *api.ServerCreateDTO) error {
+	if dto == nil {
+		return fmt.Errorf("пустые данные сервера")
+	}
+	dto.CRMid = nil
+	if dto.IP != nil {
+		raw := strings.TrimSpace(*dto.IP)
+		if raw == "" {
+			dto.IP = nil
+		} else {
+			normalized := validators.ValidateIPAddress(raw)
+			if normalized == nil {
+				return fmt.Errorf("некорректный формат URL/IP сервера")
+			}
+			dto.IP = normalized
+		}
+	}
+	return nil
+}
+
+func normalizeServerUpdate(data map[string]interface{}) error {
+	delete(data, "crm_id")
+
+	rawIP, existsIP := data["ip"]
+	if existsIP {
+		if rawIP == nil {
+			data["ip"] = nil
+		} else {
+			ipValue, ok := rawIP.(string)
+			if !ok {
+				return fmt.Errorf("поле ip должно быть строкой")
+			}
+			ipValue = strings.TrimSpace(ipValue)
+			if ipValue == "" {
+				data["ip"] = nil
+			} else {
+				normalized := validators.ValidateIPAddress(ipValue)
+				if normalized == nil {
+					return fmt.Errorf("некорректный формат URL/IP сервера")
+				}
+				data["ip"] = *normalized
+			}
+		}
+	}
+
 	rawValue, exists := data["cabinet_link"]
 	if !exists {
-		return
+		return nil
 	}
 
 	strValue, ok := rawValue.(string)
 	if !ok {
-		return
+		return fmt.Errorf("поле cabinet_link должно быть строкой")
 	}
 
 	data["cabinet_link"] = validators.ValidateCabinetLink(strValue, "")
+	return nil
 }
 
 func contextUserID(ctx context.Context) string {
