@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ServerEntity } from '@/types/api';
 import { equipmentApi } from '@/api/equipment';
+import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import { getEntityIcon } from '@/utils/mappers';
 import {
   cleanWebUrl,
@@ -42,6 +43,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
   const hasAccessData = Boolean(data.anydesk || data.teamviewer || data.rdp || data.litemanager);
 
   const pollBadge = getPollBadge(data.operational_status);
+  const licenseStatus = String(data.operational_status || data.status || '').trim().toLowerCase();
 
   const pollMutation = useMutation({
     mutationFn: () => equipmentApi.pollServer(data.uuid),
@@ -122,7 +124,16 @@ const ServerCard: React.FC<Props> = ({ data }) => {
           <Text strong>{data.device_name || data.server_name || 'Сервер'}</Text>
         </Space>
       )}
-      extra={<Badge status={pollBadge.status} text={pollBadge.text} />}
+      extra={(
+        <Space size={8}>
+          <Badge status={pollBadge.status} text={pollBadge.text} />
+          <ServerLicenseStatusTag
+            serverID={String(data.uuid || '')}
+            status={licenseStatus}
+            uniqueID={String(data.unique_id || '')}
+          />
+        </Space>
+      )}
       actions={[
         <Button
           key="poll"

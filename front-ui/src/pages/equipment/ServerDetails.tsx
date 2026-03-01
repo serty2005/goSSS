@@ -1,19 +1,20 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme, Modal, Form, Input, Tooltip } from 'antd';
+import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
 import { formatDate } from '@/utils/formatters';
-import { EntityOwnerHistoryItemDTO, InstallServerLicensePayload, UpdateServerPayload } from '@/types/api';
+import { EntityOwnerHistoryItemDTO, UpdateServerPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
 import { canEditEquipment } from '@/utils/permissions';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import EntityHierarchyExplorer from '@/components/entities/EntityHierarchyExplorer';
+import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import dayjs from 'dayjs';
 
@@ -98,8 +99,6 @@ const ServerDetails: React.FC = () => {
   const queryClient = useQueryClient();
   const [activeField, setActiveField] = useState<string | null>(null);
   const [companySearch, setCompanySearch] = useState<string>('');
-  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
-  const [licenseForm] = Form.useForm<InstallServerLicensePayload>();
   const user = useAuthStore((state) => state.user);
   const canEdit = canEditEquipment(user?.roles);
 
@@ -234,19 +233,6 @@ const ServerDetails: React.FC = () => {
     },
     onError: () => message.error('Не удалось отправить запрос на опрос'),
   });
-  const installLicenseMutation = useMutation({
-    mutationFn: (payload: InstallServerLicensePayload) => equipmentApi.installServerLicense(id!, payload),
-    onSuccess: (res) => {
-      const result = res?.data?.result;
-      const version = result?.server_version ? `, версия ${result.server_version}` : '';
-      const status = result?.status ? `, статус ${result.status}` : '';
-      message.success(`Лицензия установлена успешно${status}${version}`);
-      setIsLicenseModalOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['server', id] });
-      void queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
-    },
-    onError: () => message.error('Не удалось установить лицензию'),
-  });
   const deleteMutation = useMutation({
     mutationFn: () => equipmentApi.deleteServer(id!),
     onSuccess: () => {
@@ -281,7 +267,6 @@ const ServerDetails: React.FC = () => {
   if (!server) return <div>Сервер не найден</div>;
 
   const normalizedStatus = String(server.status || '').toLowerCase();
-  const canInstallLicense = canEdit && (normalizedStatus === 'active' || normalizedStatus === 'license');
 
   const saveField = (field: keyof UpdateServerPayload, value: string) => {
     if (!canEdit) return;
@@ -296,17 +281,6 @@ const ServerDetails: React.FC = () => {
       return;
     }
     navigate(-1);
-  };
-
-  const openInstallLicenseModal = () => {
-    if (!canInstallLicense) return;
-    licenseForm.setFieldsValue({
-      login: '',
-      password: '',
-      fallback_password: '',
-      unique_id: String(server.unique_id || '').trim(),
-    });
-    setIsLicenseModalOpen(true);
   };
 
   const serverRecord = server as unknown as Record<string, unknown>;
@@ -349,15 +323,14 @@ const ServerDetails: React.FC = () => {
               <Text type="secondary">{server.id}</Text>
             </div>
           </Space>
-          <Tooltip title={canInstallLicense ? 'Нажмите для установки лицензии' : 'Установка лицензии доступна только для статусов active или license'}>
-            <Tag
-              color={getStatusColor(server.status) === 'success' ? 'green' : 'red'}
-              style={canInstallLicense ? { cursor: 'pointer' } : undefined}
-              onClick={openInstallLicenseModal}
-            >
-              {(server.status || 'unknown').toUpperCase()}
-            </Tag>
-          </Tooltip>
+          <ServerLicenseStatusTag
+            serverID={String(id || '')}
+            status={normalizedStatus}
+            uniqueID={String(server.unique_id || '')}
+            onInstalled={() => {
+              void queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
+            }}
+          />
           {pendingDeletion ? <Tag color="orange">Ожидает удаления #{pendingDeletion.id}</Tag> : null}
         </Space>
 
@@ -566,35 +539,6 @@ const ServerDetails: React.FC = () => {
         />
       </Space>
 
-      <Modal
-        title="Установка лицензии сервера"
-        open={isLicenseModalOpen}
-        onCancel={() => setIsLicenseModalOpen(false)}
-        onOk={() => {
-          licenseForm
-            .validateFields()
-            .then((values) => installLicenseMutation.mutate(values))
-            .catch(() => undefined);
-        }}
-        okText="Установить"
-        cancelText="Отмена"
-        confirmLoading={installLicenseMutation.isPending}
-      >
-        <Form<InstallServerLicensePayload> form={licenseForm} layout="vertical">
-          <Form.Item name="login" label="Логин" rules={[{ required: true, message: 'Укажите логин' }]}>
-            <Input autoComplete="username" />
-          </Form.Item>
-          <Form.Item name="password" label="Пароль" rules={[{ required: true, message: 'Укажите пароль' }]}>
-            <Input.Password autoComplete="current-password" />
-          </Form.Item>
-          <Form.Item name="fallback_password" label="Резервный пароль (опционально)">
-            <Input.Password autoComplete="off" />
-          </Form.Item>
-          <Form.Item name="unique_id" label="UID" rules={[{ required: true, message: 'Укажите UID' }]}>
-            <Input />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 };

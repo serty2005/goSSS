@@ -11,8 +11,14 @@ type ResolvedByAssigneeStat struct {
 	Count    int64  `json:"count"`
 }
 
+type ServerStatusStat struct {
+	Status string `json:"status"`
+	Count  int64  `json:"count"`
+}
+
 type DashboardStats struct {
 	ResolvedByAssignee []ResolvedByAssigneeStat `json:"resolved_by_assignee"`
+	ServerStatuses     []ServerStatusStat       `json:"server_statuses"`
 	TotalTickets       int64                    `json:"total_tickets"`
 	PolledServers24h   int64                    `json:"polled_servers_24h"`
 }

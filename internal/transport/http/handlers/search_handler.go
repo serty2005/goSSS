@@ -80,7 +80,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var initialFRs []fiscal.FiscalRegister
 	wg.Add(4)
 	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, showInactive, limit, 0) }()
-	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0, nil) }()
+	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0, nil, nil, nil) }()
 	go func() { defer wg.Done(); initialWorkstations, _ = h.workstationRepo.Search(ctx, term, limit, 0) }()
 	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
 	wg.Wait()

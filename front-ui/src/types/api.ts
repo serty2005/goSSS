@@ -420,8 +420,14 @@ export interface DashboardResolvedByAssigneeDTO {
   count: number;
 }
 
+export interface DashboardServerStatusDTO {
+  status: string;
+  count: number;
+}
+
 export interface DashboardStatsDTO {
   resolved_by_assignee: DashboardResolvedByAssigneeDTO[];
+  server_statuses: DashboardServerStatusDTO[];
   total_tickets: number;
   polled_servers_24h: number;
 }

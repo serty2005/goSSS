@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Button, Card, Empty, Space, Spin, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { companiesApi } from '@/api/companies';
 import { equipmentApi } from '@/api/equipment';
+import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import EntityListToolbar, {
   type EntityListColumnOption,
   type EntityListFilterConfig,
@@ -16,6 +17,7 @@ const { Title, Text } = Typography;
 
 type Row = {
   id: string;
+  uniqueID: string;
   name: string;
   ip: string;
   version: string;
@@ -108,6 +110,7 @@ const ServersPage: React.FC = () => {
   const [companyOptionCache, setCompanyOptionCache] = useState<Record<string, string>>({});
 
   const term = (searchParams.get('q') || '').trim();
+  const statusFromQuery = (searchParams.get('status') || '').trim();
   const activeVisibleColumnKeys = useMemo(() => {
     const allowedKeys = new Set(TABLE_COLUMN_OPTIONS.map((item) => item.key));
     const filtered = visibleColumnKeys.filter((key) => allowedKeys.has(key));
@@ -128,6 +131,14 @@ const ServersPage: React.FC = () => {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
+    if (!statusFromQuery) return;
+    setSelectedStatuses([statusFromQuery]);
+    const next = new URLSearchParams(searchParams);
+    next.delete('status');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, statusFromQuery]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const payload: ListViewState = {
       companies: selectedCompanyIDs,
@@ -141,11 +152,14 @@ const ServersPage: React.FC = () => {
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const companyFilterKey = useMemo(() => selectedCompanyIDs.slice().sort(), [selectedCompanyIDs]);
+  const statusFilterKey = useMemo(() => selectedStatuses.slice().sort(), [selectedStatuses]);
+  const typeFilterKey = useMemo(() => selectedTypes.slice().sort(), [selectedTypes]);
 
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
-    queryKey: ['equipment', 'servers', term, companyFilterKey],
+    queryKey: ['equipment', 'servers', term, companyFilterKey, statusFilterKey, typeFilterKey],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => equipmentApi.listServers(term, limit, Number(pageParam) || 0, companyFilterKey),
+    queryFn: ({ pageParam }) =>
+      equipmentApi.listServers(term, limit, Number(pageParam) || 0, companyFilterKey, statusFilterKey, typeFilterKey),
     getNextPageParam: (lastPage) => {
       const meta = lastPage.meta;
       if (!meta?.has_next) return undefined;
@@ -170,6 +184,7 @@ const ServersPage: React.FC = () => {
           const id = normalizeText(row.id, '');
           return {
             id,
+            uniqueID: normalizeText(row.unique_id, ''),
             name: normalizeText(row.device_name || row.server_name, id || 'Сервер'),
             ip: normalizeText(row.ip),
             version: normalizeText(row.server_version, '-'),
@@ -252,36 +267,25 @@ const ServersPage: React.FC = () => {
 
   const statusFilterOptions = useMemo<EntityListFilterOption[]>(
     () =>
-      Array.from(new Set(rows.map((row) => row.status).filter(Boolean)))
+      Array.from(new Set([...rows.map((row) => row.status), ...selectedStatuses].filter(Boolean)))
         .sort(compareText)
         .map((value) => ({ value, label: value })),
-    [rows],
+    [rows, selectedStatuses],
   );
 
   const typeFilterOptions = useMemo<EntityListFilterOption[]>(
     () =>
-      Array.from(new Set(rows.map((row) => row.type).filter(Boolean)))
+      Array.from(new Set([...rows.map((row) => row.type), ...selectedTypes].filter(Boolean)))
         .sort(compareText)
         .map((value) => ({ value, label: value })),
-    [rows],
-  );
-
-  const hasClientFilters = selectedStatuses.length > 0 || selectedTypes.length > 0;
-  const filteredRows = useMemo(
-    () =>
-      rows.filter((row) => {
-        if (selectedStatuses.length > 0 && !selectedStatuses.includes(row.status)) return false;
-        if (selectedTypes.length > 0 && !selectedTypes.includes(row.type)) return false;
-        return true;
-      }),
-    [rows, selectedStatuses, selectedTypes],
+    [rows, selectedTypes],
   );
 
   const total = data?.pages?.[0]?.meta?.total || 0;
 
   useEffect(() => {
     const node = loadMoreRef.current;
-    if (!node || !hasNextPage || hasClientFilters) return;
+    if (!node || !hasNextPage) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -293,7 +297,7 @@ const ServersPage: React.FC = () => {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasClientFilters, hasNextPage, isFetchingNextPage, rows.length]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, rows.length]);
 
   const addCompanyFilter = (companyId: string) => {
     if (!companyId) return;
@@ -372,7 +376,13 @@ const ServersPage: React.FC = () => {
         key: 'status',
         width: 140,
         sorter: (a, b) => compareText(a.status, b.status),
-        render: (status: string) => <Tag color={status === 'active' ? 'success' : 'default'}>{status}</Tag>,
+        render: (_status: string, record) => (
+          <ServerLicenseStatusTag
+            serverID={record.id}
+            status={record.status}
+            uniqueID={record.uniqueID}
+          />
+        ),
       },
       {
         title: 'Тип',
@@ -383,7 +393,7 @@ const ServersPage: React.FC = () => {
         render: (value: string) => value || '-',
       },
     ],
-    [navigate, selectedCompanyIDs],
+    [navigate],
   );
 
   const columns = useMemo(() => {
@@ -466,12 +476,10 @@ const ServersPage: React.FC = () => {
             </div>
           ) : rows.length === 0 ? (
             <Empty description="Серверы не найдены" />
-          ) : filteredRows.length === 0 ? (
-            <Empty description="По выбранным фильтрам серверы не найдены" />
           ) : (
             <Table<Row>
               rowKey="id"
-              dataSource={filteredRows}
+              dataSource={rows}
               columns={columns}
               pagination={false}
               showSorterTooltip={false}
@@ -486,20 +494,12 @@ const ServersPage: React.FC = () => {
         {!isLoading && rows.length > 0 && (
           <Space direction="vertical" size={0} style={{ marginTop: 12 }}>
             <Text type="secondary">Найдено по запросу: {total}</Text>
-            <Text type="secondary">Загружено: {rows.length}, после фильтров: {filteredRows.length}</Text>
-            {hasClientFilters && hasNextPage ? (
-              <Text type="warning">Автоподгрузка при активных фильтрах отключена</Text>
-            ) : null}
+            <Text type="secondary">Загружено: {rows.length}</Text>
           </Space>
         )}
 
         <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40, gap: 8 }}>
-          {(isFetchingNextPage || (!hasClientFilters && hasNextPage && rows.length > 0)) && <Spin size="small" />}
-          {hasClientFilters && hasNextPage && rows.length > 0 && !isFetchingNextPage ? (
-            <Button size="small" onClick={() => void fetchNextPage()}>
-              Загрузить ещё
-            </Button>
-          ) : null}
+          {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
           {!hasNextPage && rows.length > 0 ? (
             <Text type="secondary">Показано: {rows.length} из {total}</Text>
           ) : null}

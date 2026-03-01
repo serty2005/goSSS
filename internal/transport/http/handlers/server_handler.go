@@ -52,6 +52,8 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	term := r.URL.Query().Get("term")
 	companyIDs := parseCSVQuery(r.URL.Query().Get("company_ids"))
+	statuses := parseCSVQuery(r.URL.Query().Get("statuses"))
+	types := parseCSVQuery(r.URL.Query().Get("types"))
 	if limit <= 0 {
 		limit = 50
 	}
@@ -65,9 +67,9 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 		err   error
 	)
 	if term != "" {
-		items, total, err = h.service.Search(r.Context(), term, limit, offset, companyIDs)
+		items, total, err = h.service.Search(r.Context(), term, limit, offset, companyIDs, statuses, types)
 	} else {
-		items, total, err = h.service.List(r.Context(), limit, offset, companyIDs)
+		items, total, err = h.service.List(r.Context(), limit, offset, companyIDs, statuses, types)
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {

@@ -7,8 +7,8 @@ import (
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/server"
 	infraDB "etalon-server/internal/infra/db"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -41,6 +41,41 @@ func (r *serverRepo) applyCompanyFilter(query *gorm.DB, companyIDs []string) *go
 		return query
 	}
 	return query.Where("(servers.owner_id IN ? OR owner_comp.parent_id IN ?)", cleanIDs, cleanIDs)
+}
+
+func (r *serverRepo) applyStatusFilter(query *gorm.DB, statuses []string) *gorm.DB {
+	cleanStatuses := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		trimmed := strings.TrimSpace(status)
+		if trimmed != "" {
+			cleanStatuses = append(cleanStatuses, trimmed)
+		}
+	}
+	if len(cleanStatuses) == 0 {
+		return query
+	}
+	return query.Where("servers.status IN ?", cleanStatuses)
+}
+
+func (r *serverRepo) applyTypeFilter(query *gorm.DB, types []string) *gorm.DB {
+	cleanTypes := make([]string, 0, len(types))
+	for _, item := range types {
+		trimmed := strings.TrimSpace(item)
+		if trimmed != "" {
+			cleanTypes = append(cleanTypes, trimmed)
+		}
+	}
+	if len(cleanTypes) == 0 {
+		return query
+	}
+	return query.Where("servers.server_edition IN ?", cleanTypes)
+}
+
+func (r *serverRepo) applyListFilters(query *gorm.DB, companyIDs, statuses, types []string) *gorm.DB {
+	query = r.applyCompanyFilter(query, companyIDs)
+	query = r.applyStatusFilter(query, statuses)
+	query = r.applyTypeFilter(query, types)
+	return query
 }
 
 func (r *serverRepo) applyServerListSelect(query *gorm.DB) *gorm.DB {
@@ -122,11 +157,11 @@ func (r *serverRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*server.
 	return serverMap, nil
 }
 
-func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]server.Server, error) {
+func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int, companyIDs, statuses, types []string) ([]server.Server, error) {
 	var servers []server.Server
 	pattern := "%" + term + "%"
 	query := r.listBaseQuery(ctx)
-	query = r.applyCompanyFilter(query, companyIDs)
+	query = r.applyListFilters(query, companyIDs, statuses, types)
 	query = query.Where("servers.id::text ILIKE ? OR servers.device_name ILIKE ? OR servers.ip ILIKE ? OR servers.unique_id ILIKE ? OR servers.description ILIKE ? OR servers.server_name ILIKE ? OR servers.crm_id ILIKE ?",
 		pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 	err := r.applyServerListSelect(query).
@@ -137,16 +172,16 @@ func (r *serverRepo) Search(ctx context.Context, term string, limit, offset int,
 	return servers, err
 }
 
-func (r *serverRepo) List(ctx context.Context, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
+func (r *serverRepo) List(ctx context.Context, limit, offset int, companyIDs, statuses, types []string) ([]server.Server, int64, error) {
 	var total int64
 	query := r.listBaseQuery(ctx)
-	query = r.applyCompanyFilter(query, companyIDs)
+	query = r.applyListFilters(query, companyIDs, statuses, types)
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var servers []server.Server
-	if err := r.applyServerListSelect(r.applyCompanyFilter(r.listBaseQuery(ctx), companyIDs)).
+	if err := r.applyServerListSelect(r.applyListFilters(r.listBaseQuery(ctx), companyIDs, statuses, types)).
 		Limit(limit).
 		Offset(offset).
 		Order("servers.updated_at DESC").
@@ -157,12 +192,12 @@ func (r *serverRepo) List(ctx context.Context, limit, offset int, companyIDs []s
 	return servers, total, nil
 }
 
-func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int, companyIDs []string) ([]server.Server, int64, error) {
+func (r *serverRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int, companyIDs, statuses, types []string) ([]server.Server, int64, error) {
 	pattern := "%" + term + "%"
 	base := r.listBaseQuery(ctx)
-	base = r.applyCompanyFilter(base, companyIDs)
+	base = r.applyListFilters(base, companyIDs, statuses, types)
 	base = base.Where("servers.id::text ILIKE ? OR servers.device_name ILIKE ? OR servers.ip ILIKE ? OR servers.unique_id ILIKE ? OR servers.description ILIKE ? OR servers.server_name ILIKE ? OR servers.crm_id ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+		pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {

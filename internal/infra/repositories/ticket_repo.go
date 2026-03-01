@@ -513,6 +513,7 @@ func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.Ticke
 func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error) {
 	stats := &tickets.DashboardStats{
 		ResolvedByAssignee: make([]tickets.ResolvedByAssigneeStat, 0),
+		ServerStatuses:     make([]tickets.ServerStatusStat, 0),
 	}
 
 	if err := r.db.WithContext(ctx).Model(&tickets.Ticket{}).Count(&stats.TotalTickets).Error; err != nil {
@@ -543,6 +544,20 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 		return nil, err
 	}
 	stats.ResolvedByAssignee = rows
+
+	serverStatusRows := make([]tickets.ServerStatusStat, 0)
+	if err := r.db.WithContext(ctx).Raw(
+		`SELECT
+			COALESCE(NULLIF(TRIM(status), ''), 'unknown') AS status,
+			COUNT(*) AS count
+		FROM servers
+		WHERE deleted_at IS NULL
+		GROUP BY COALESCE(NULLIF(TRIM(status), ''), 'unknown')
+		ORDER BY count DESC, status ASC`,
+	).Scan(&serverStatusRows).Error; err != nil {
+		return nil, err
+	}
+	stats.ServerStatuses = serverStatusRows
 
 	return stats, nil
 }
