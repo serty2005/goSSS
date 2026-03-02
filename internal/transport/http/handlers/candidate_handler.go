@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -218,6 +219,32 @@ func (h *CandidateHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	response.RespondWithJSON(w, http.StatusOK, updated)
 }
 
+func (h *CandidateHandler) Reject(w http.ResponseWriter, r *http.Request) {
+	id, err := parseCandidateID(r)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный идентификатор кандидата")
+		return
+	}
+
+	var req candidateRejectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		return
+	}
+
+	updated, err := h.obsSrv.RejectCandidate(r.Context(), services.CandidateRejectInput{
+		CandidateID: id,
+		Comment:     strPtrOrNil(req.Comment),
+	})
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось отклонить кандидата", "candidate_id", id, "error", err)
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, updated)
+}
+
 func (h *CandidateHandler) ApproveManual(w http.ResponseWriter, r *http.Request) {
 	var req candidateApproveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -301,6 +328,10 @@ type candidateApproveRequest struct {
 	RustdeskID           *string `json:"rustdesk_id,omitempty"`
 	AnydeskID            *string `json:"anydesk_id,omitempty"`
 	BitrixServicePointID *int64  `json:"bitrix_service_point_id,omitempty"`
+}
+
+type candidateRejectRequest struct {
+	Comment *string `json:"comment"`
 }
 
 func (h *CandidateHandler) applyBitrixMapping(r *http.Request, companyID string, pointID *int64) error {

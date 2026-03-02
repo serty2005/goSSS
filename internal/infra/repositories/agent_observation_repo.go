@@ -68,6 +68,11 @@ type CandidateWorkstationInput struct {
 	Name            string
 }
 
+type CandidateRejectInput struct {
+	CandidateID uint
+	Comment     *string
+}
+
 // AgentObservationService определяет интерфейс для обработки наблюдений от агентов мониторинга.
 // Реализует паттерн Service Layer, скрывая сложную логику сопоставления и создания сущностей.
 type CandidateRecalculationResult struct {
@@ -91,6 +96,7 @@ type AgentObservationService interface {
 	// ApproveCandidate подтверждает кандидата оператором.
 	// Создает компанию, сервер и привязывает все staged-наблюдения.
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
+	RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
 }
 
@@ -794,6 +800,52 @@ func (s *agentObservationRepo) closeEmptyCandidates(ctx context.Context, candida
 // Возвращает:
 //   - *models.Candidate: обновленный кандидат
 //   - error: ошибка валидации или БД
+func (s *agentObservationRepo) RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error) {
+	var out models.Candidate
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
+			return err
+		}
+
+		switch out.Status {
+		case models.CandidateStatusApproved, models.CandidateStatusCancelled:
+			return fmt.Errorf("кандидат со статусом %s нельзя отклонить", out.Status)
+		case models.CandidateStatusRejected:
+			return nil
+		}
+
+		from := out.Status
+		if err := tx.Model(&models.Candidate{}).
+			Where("id = ?", out.ID).
+			Update("status", models.CandidateStatusRejected).Error; err != nil {
+			return err
+		}
+
+		reason := "Кандидат отклонён оператором"
+		if msg := strings.TrimSpace(ptrValue(in.Comment)); msg != "" {
+			reason = fmt.Sprintf("%s: %s", reason, msg)
+		}
+		if err := tx.Create(&models.CandidateStatusHistory{
+			CandidateID: out.ID,
+			FromStatus:  strPtr(from),
+			ToStatus:    models.CandidateStatusRejected,
+			Reason:      &reason,
+		}).Error; err != nil {
+			return err
+		}
+
+		return tx.Model(&models.ReconciliationTask{}).
+			Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", out.ID), []string{"new", "pending_sd_action", "sd_error"}).
+			Updates(map[string]interface{}{"status": "resolved", "comment": "Кандидат отклонён"}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.WithContext(ctx).Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
 func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error) {
 	isManual := in.CandidateID == 0
 	s.logger.Info("Начато подтверждение кандидата",

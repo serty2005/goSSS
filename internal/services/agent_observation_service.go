@@ -50,6 +50,11 @@ type CandidateWorkstationInput struct {
 	Name            string
 }
 
+type CandidateRejectInput struct {
+	CandidateID uint
+	Comment     *string
+}
+
 type CandidateRecalculationResult struct {
 	CandidatesTotal   int `json:"candidates_total"`
 	ObservationsTotal int `json:"observations_total"`
@@ -65,12 +70,14 @@ type CandidateRecalculationResult struct {
 type AgentObservationService interface {
 	ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error)
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
+	RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
 }
 
 type agentObservationStorage interface {
 	ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error)
 	ApproveCandidate(ctx context.Context, in infrarepos.CandidateApproveInput) (*models.Candidate, error)
+	RejectCandidate(ctx context.Context, in infrarepos.CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*infrarepos.CandidateRecalculationResult, error)
 }
 
@@ -192,6 +199,14 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		}
 	}
 	return s.storage.ApproveCandidate(ctx, mapped)
+}
+
+func (s *agentObservationServiceImpl) RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error) {
+	mapped := infrarepos.CandidateRejectInput{
+		CandidateID: in.CandidateID,
+		Comment:     in.Comment,
+	}
+	return s.storage.RejectCandidate(ctx, mapped)
 }
 
 func (s *agentObservationServiceImpl) RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error) {

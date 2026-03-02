@@ -31,6 +31,7 @@ import {
   CandidateDTO,
   CandidateObservationDTO,
   CandidateRecalculationResultDTO,
+  WorkstationDetailDTO,
   CandidateStatus,
   CandidateWorkstationStagingDTO,
   BitrixServicePointDTO,
@@ -353,6 +354,22 @@ const AcceptancePage: React.FC = () => {
     },
   });
 
+  const rejectMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedCandidateID) throw new Error('Кандидат не выбран');
+      const comment = String(form.getFieldValue('comment') || '').trim();
+      return candidatesApi.rejectCandidate(selectedCandidateID, { comment: comment || undefined });
+    },
+    onSuccess: () => {
+      message.success('Кандидат отклонён');
+      closeDrawer();
+      void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+    },
+    onError: () => {
+      message.error('Не удалось отклонить кандидата');
+    },
+  });
+
   const approveMutation = useMutation({
     mutationFn: async (payload: CandidateApprovePayload) => {
       if (isManualMode) {
@@ -369,6 +386,33 @@ const AcceptancePage: React.FC = () => {
     onError: () => {
       message.error('Не удалось подтвердить кандидата');
     },
+  });
+
+  const existingWorkstationUUIDs = useMemo(
+    () => Array.from(new Set(workstationDrafts.map((item) => String(item.workstation_uuid || '').trim()).filter(Boolean))),
+    [workstationDrafts],
+  );
+
+  const existingWorkstationsQuery = useQuery({
+    queryKey: ['candidate', selectedCandidateID, 'existing-workstations', existingWorkstationUUIDs],
+    queryFn: async () => {
+      const rows = await Promise.all(existingWorkstationUUIDs.map(async (workstationUUID) => {
+        try {
+          const response = await equipmentApi.getWorkstation(workstationUUID);
+          return [workstationUUID, response.data] as const;
+        } catch {
+          return [workstationUUID, null] as const;
+        }
+      }));
+      return rows.reduce<Record<string, WorkstationDetailDTO>>((acc, [workstationUUID, item]) => {
+        if (item) {
+          acc[workstationUUID] = item;
+        }
+        return acc;
+      }, {});
+    },
+    enabled: drawerOpen && !isManualMode && existingWorkstationUUIDs.length > 0,
+    staleTime: 30_000,
   });
 
   const agentObservationsMutation = useMutation({
@@ -557,6 +601,21 @@ const AcceptancePage: React.FC = () => {
     approveMutation.mutate(payload);
   };
 
+  const onReject = () => {
+    if (!selectedCandidateID) {
+      message.error('Кандидат не выбран');
+      return;
+    }
+    Modal.confirm({
+      title: `Отклонить кандидата #${selectedCandidateID}?`,
+      content: 'Наблюдения агента останутся в задаче, чтобы можно было вернуться к принятию позже.',
+      okText: 'Отклонить',
+      okButtonProps: { danger: true },
+      cancelText: 'Отмена',
+      onOk: async () => rejectMutation.mutateAsync(),
+    });
+  };
+
   const columns = [
     {
       title: 'ID',
@@ -674,6 +733,68 @@ const AcceptancePage: React.FC = () => {
     return allObserved.reduce((max, current) => (dayjs(current).isAfter(dayjs(max)) ? current : max));
   }, [stagedFiscals, workstationDrafts]);
 
+  const existingWorkstationActions = useMemo(() => {
+    const existingMap = existingWorkstationsQuery.data || {};
+    const targetOwnerID = companyMode === 'existing'
+      ? selectedExistingCompanyID
+      : (selectedParentCompanyID || '');
+
+    return workstationDrafts
+      .filter((item) => String(item.workstation_uuid || '').trim())
+      .map((item) => {
+        const workstationUUID = String(item.workstation_uuid || '').trim();
+        const existing = existingMap[workstationUUID];
+        if (!existing) {
+          return null;
+        }
+
+        const nextName = String(item.name || '').trim();
+        const currentName = String(existing.device_name || '').trim();
+
+        const actions: string[] = [];
+        if (targetOwnerID && String(existing.owner_id || '').trim() !== targetOwnerID) {
+          actions.push(`смена владельца (${existing.owner_id || 'не задан'} → ${targetOwnerID})`);
+        } else if (!targetOwnerID) {
+          actions.push('назначение владельца на выбранную/создаваемую компанию');
+        }
+        if (nextName && nextName !== currentName) {
+          actions.push(`изменение имени (${currentName || 'не задано'} → ${nextName})`);
+        }
+        if (item.teamviewer_id && !String(existing.teamviewer || '').trim()) {
+          actions.push(`добавление TeamViewer ID (${item.teamviewer_id})`);
+        }
+        if (item.litemanager_id && !String(existing.litemanager || '').trim()) {
+          actions.push(`добавление LiteManager ID (${item.litemanager_id})`);
+        }
+        if (item.rustdesk_id && !String(existing.rustdesk || '').trim()) {
+          actions.push(`добавление RustDesk ID (${item.rustdesk_id})`);
+        }
+        if (item.anydesk_id && !String(existing.anydesk || '').trim()) {
+          actions.push(`добавление AnyDesk ID (${item.anydesk_id})`);
+        }
+        if (item.agent_uuid) {
+          actions.push(`привязка к agent-instance (${item.agent_uuid})`);
+        }
+
+        if (actions.length === 0) {
+          actions.push('существенных изменений по карточке РС не требуется');
+        }
+
+        return {
+          workstationUUID,
+          currentName: currentName || workstationUUID,
+          actions,
+        };
+      })
+      .filter(Boolean) as Array<{ workstationUUID: string; currentName: string; actions: string[] }>;
+  }, [
+    existingWorkstationsQuery.data,
+    workstationDrafts,
+    companyMode,
+    selectedExistingCompanyID,
+    selectedParentCompanyID,
+  ]);
+
   const approvalBlockReasons = useMemo(() => {
     const reasons: string[] = [];
 
@@ -684,6 +805,10 @@ const AcceptancePage: React.FC = () => {
 
     if (approveMutation.isPending) {
       reasons.push('Идёт подтверждение кандидата');
+      return reasons;
+    }
+    if (rejectMutation.isPending) {
+      reasons.push('Идёт отклонение кандидата');
       return reasons;
     }
 
@@ -739,6 +864,7 @@ const AcceptancePage: React.FC = () => {
     return reasons;
   }, [
     approveMutation.isPending,
+    rejectMutation.isPending,
     companyMode,
     formValues,
     selectedCandidate,
@@ -811,16 +937,25 @@ const AcceptancePage: React.FC = () => {
         size="large"
         open={drawerOpen}
         onClose={closeDrawer}
+        closable={false}
+        maskClosable={!agentDataOpen}
         extra={(
           <Space>
-            <Button onClick={closeDrawer}>
-              Отмена
-            </Button>
+            {!isManualMode && (
+              <Button
+                danger
+                type="primary"
+                loading={rejectMutation.isPending}
+                onClick={onReject}
+              >
+                Не принимаем
+              </Button>
+            )}
             <AcceptanceButton
               isBlocked={approvalBlocked}
               blockReasons={approvalBlockReasons}
               onSubmit={onSubmit}
-              isPending={approveMutation.isPending}
+              isPending={approveMutation.isPending || rejectMutation.isPending}
             />
           </Space>
         )}
@@ -1017,6 +1152,25 @@ const AcceptancePage: React.FC = () => {
                     </Card>
                   </Col>
                 </Row>
+
+                {existingWorkstationActions.length > 0 && (
+                  <Card size="small" title="Что изменится для уже существующих станций">
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      {existingWorkstationActions.map((item) => (
+                        <div key={item.workstationUUID}>
+                          <Typography.Text strong>{item.currentName}</Typography.Text>
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                            {item.actions.map((action) => (
+                              <li key={`${item.workstationUUID}-${action}`}>
+                                <Typography.Text type="secondary">{action}</Typography.Text>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </Space>
+                  </Card>
+                )}
 
                 <AcceptanceForm
                   form={form}

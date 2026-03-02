@@ -901,6 +901,10 @@ export interface CandidateApprovePayload {
 	anydesk_id?: string;
 }
 
+export interface CandidateRejectPayload {
+  comment?: string;
+}
+
 export type CompanyMode = 'existing' | 'new';
 export type ServerMode = 'existing' | 'new';
 export type ContractMode = 'inherit_parent' | 'new';

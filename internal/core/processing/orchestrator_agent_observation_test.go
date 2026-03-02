@@ -38,6 +38,10 @@ func (s *stubObservationService) ApproveCandidate(_ context.Context, _ services.
 	return nil, nil
 }
 
+func (s *stubObservationService) RejectCandidate(_ context.Context, _ services.CandidateRejectInput) (*models.Candidate, error) {
+	return nil, nil
+}
+
 func (s *stubObservationService) RecalculateCandidates(_ context.Context) (*services.CandidateRecalculationResult, error) {
 	return &services.CandidateRecalculationResult{}, nil
 }
