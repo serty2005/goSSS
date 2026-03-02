@@ -54,6 +54,17 @@ func (h *CandidateHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // Get возвращает карточку кандидата вместе с staged-данными по станциям и ФР.
+func (h *CandidateHandler) Recalculate(w http.ResponseWriter, r *http.Request) {
+	result, err := h.obsSrv.RecalculateCandidates(r.Context())
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось выполнить пересчёт кандидатов", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось выполнить пересчёт кандидатов")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, result)
+}
+
 func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := parseCandidateID(r)
 	if err != nil {

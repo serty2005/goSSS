@@ -537,6 +537,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/candidates", func(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/", a.CandidateHandler.List)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/recalculate", a.CandidateHandler.Recalculate)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}", a.CandidateHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/{id}/observations", a.CandidateHandler.GetObservations)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/approve", a.CandidateHandler.Approve)

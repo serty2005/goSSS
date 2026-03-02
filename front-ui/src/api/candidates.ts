@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, CandidateApprovePayload, CandidateDTO, CandidateObservationDTO, CandidateStatus } from '@/types/api';
+import { ApiResponse, CandidateApprovePayload, CandidateDTO, CandidateObservationDTO, CandidateRecalculationResultDTO, CandidateStatus } from '@/types/api';
 
 interface CandidatesListParams {
   status?: CandidateStatus | 'ACTIVE' | 'ALL';
@@ -28,6 +28,11 @@ export const candidatesApi = {
     const response = await apiClient.get<ApiResponse<CandidateObservationDTO[]>>(`/candidates/${id}/observations`, {
       params,
     });
+    return response.data;
+  },
+
+  recalculateCandidates: async () => {
+    const response = await apiClient.post<ApiResponse<CandidateRecalculationResultDTO>>('/candidates/recalculate');
     return response.data;
   },
 

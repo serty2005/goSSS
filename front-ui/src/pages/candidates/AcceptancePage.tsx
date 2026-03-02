@@ -19,6 +19,7 @@ import {
   Tag,
   Typography,
   message,
+  notification,
 } from 'antd';
 import dayjs from 'dayjs';
 import { candidatesApi } from '@/api/candidates';
@@ -29,6 +30,7 @@ import {
   CandidateApprovePayload,
   CandidateDTO,
   CandidateObservationDTO,
+  CandidateRecalculationResultDTO,
   CandidateStatus,
   CandidateWorkstationStagingDTO,
   BitrixServicePointDTO,
@@ -315,6 +317,39 @@ const AcceptancePage: React.FC = () => {
         uniqueID: String(matched.unique_id || ''),
         name: String(matched.device_name || matched.server_name || ''),
       };
+    },
+  });
+
+  const recalculateSummary = (stats: CandidateRecalculationResultDTO): string => [
+    `Кандидатов: ${stats.candidates_total}`,
+    `Наблюдений: ${stats.observations_total}`,
+    `Пересчитано: ${stats.reprocessed}`,
+    `Применено: ${stats.applied}`,
+    `Осталось в кандидатах: ${stats.staged}`,
+    `Игнорировано: ${stats.ignored}`,
+    `Игнорировано как устаревшие: ${stats.ignored_stale}`,
+    `Ошибок: ${stats.errors}`,
+    `Закрыто кандидатов: ${stats.candidates_closed}`,
+  ].join('\n');
+
+  const recalculateMutation = useMutation({
+    mutationFn: () => candidatesApi.recalculateCandidates(),
+    onSuccess: (response) => {
+      const stats = response.data;
+      notification.success({
+        title: 'Пересчёт кандидатов завершён',
+        description: recalculateSummary(stats),
+        duration: 8,
+      });
+      void refetchCandidates();
+      if (selectedCandidateID) {
+        void queryClient.invalidateQueries({ queryKey: ['candidate', selectedCandidateID] });
+      }
+    },
+    onError: () => {
+      notification.error({
+        title: 'Не удалось выполнить пересчёт кандидатов',
+      });
     },
   });
 
@@ -737,7 +772,12 @@ const AcceptancePage: React.FC = () => {
               { value: 'ALL', label: 'Все' },
             ]}
           />
-          <Button onClick={() => void refetchCandidates()}>Обновить</Button>
+          <Button
+            loading={recalculateMutation.isPending}
+            onClick={() => void recalculateMutation.mutateAsync()}
+          >
+            Обновить
+          </Button>
           <Button type="primary" onClick={openManualAcceptance}>Добавить компанию и сервер</Button>
         </Space>
       </Space>

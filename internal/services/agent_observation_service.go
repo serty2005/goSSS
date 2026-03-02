@@ -50,14 +50,28 @@ type CandidateWorkstationInput struct {
 	Name            string
 }
 
+type CandidateRecalculationResult struct {
+	CandidatesTotal   int `json:"candidates_total"`
+	ObservationsTotal int `json:"observations_total"`
+	Reprocessed       int `json:"reprocessed"`
+	Applied           int `json:"applied"`
+	Staged            int `json:"staged"`
+	Ignored           int `json:"ignored"`
+	IgnoredStale      int `json:"ignored_stale"`
+	Errors            int `json:"errors"`
+	CandidatesClosed  int `json:"candidates_closed"`
+}
+
 type AgentObservationService interface {
 	ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error)
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
+	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
 }
 
 type agentObservationStorage interface {
 	ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error)
 	ApproveCandidate(ctx context.Context, in infrarepos.CandidateApproveInput) (*models.Candidate, error)
+	RecalculateCandidates(ctx context.Context) (*infrarepos.CandidateRecalculationResult, error)
 }
 
 type agentObservationServiceImpl struct {
@@ -178,6 +192,27 @@ func (s *agentObservationServiceImpl) ApproveCandidate(ctx context.Context, in C
 		}
 	}
 	return s.storage.ApproveCandidate(ctx, mapped)
+}
+
+func (s *agentObservationServiceImpl) RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error) {
+	res, err := s.storage.RecalculateCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return &CandidateRecalculationResult{}, nil
+	}
+	return &CandidateRecalculationResult{
+		CandidatesTotal:   res.CandidatesTotal,
+		ObservationsTotal: res.ObservationsTotal,
+		Reprocessed:       res.Reprocessed,
+		Applied:           res.Applied,
+		Staged:            res.Staged,
+		Ignored:           res.Ignored,
+		IgnoredStale:      res.IgnoredStale,
+		Errors:            res.Errors,
+		CandidatesClosed:  res.CandidatesClosed,
+	}, nil
 }
 
 func normalizeServerURL(value *string) (*string, error) {

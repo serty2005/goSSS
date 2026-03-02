@@ -70,6 +70,18 @@ type CandidateWorkstationInput struct {
 
 // AgentObservationService определяет интерфейс для обработки наблюдений от агентов мониторинга.
 // Реализует паттерн Service Layer, скрывая сложную логику сопоставления и создания сущностей.
+type CandidateRecalculationResult struct {
+	CandidatesTotal   int
+	ObservationsTotal int
+	Reprocessed       int
+	Applied           int
+	Staged            int
+	Ignored           int
+	IgnoredStale      int
+	Errors            int
+	CandidatesClosed  int
+}
+
 type AgentObservationService interface {
 	// ApplyObservation обрабатывает данные, полученные от агента мониторинга.
 	// Выполняет поиск существующих сущностей, создание/обновление Workstation и FiscalRegister,
@@ -79,6 +91,7 @@ type AgentObservationService interface {
 	// ApproveCandidate подтверждает кандидата оператором.
 	// Создает компанию, сервер и привязывает все staged-наблюдения.
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
+	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
 }
 
 // agentObservationRepo реализует логику обработки наблюдений от агентов.
@@ -579,6 +592,188 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 	}
 
 	return obs, nil
+}
+
+func (s *agentObservationRepo) RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error) {
+	result := &CandidateRecalculationResult{}
+
+	var activeCandidates []models.Candidate
+	if err := s.db.WithContext(ctx).
+		Where("status IN ?", []string{models.CandidateStatusNew, models.CandidateStatusInReview}).
+		Find(&activeCandidates).Error; err != nil {
+		return nil, err
+	}
+	result.CandidatesTotal = len(activeCandidates)
+	if len(activeCandidates) == 0 {
+		return result, nil
+	}
+
+	candidateIDs := make([]uint, 0, len(activeCandidates))
+	for _, candidate := range activeCandidates {
+		candidateIDs = append(candidateIDs, candidate.ID)
+	}
+
+	var stagedObservations []models.AgentObservation
+	if err := s.db.WithContext(ctx).
+		Model(&models.AgentObservation{}).
+		Where("candidate_id IN ? AND status = ?", candidateIDs, models.AgentObservationStatusStaged).
+		Order("observed_at asc, id asc").
+		Find(&stagedObservations).Error; err != nil {
+		return nil, err
+	}
+	result.ObservationsTotal = len(stagedObservations)
+	if len(stagedObservations) == 0 {
+		closed, err := s.closeEmptyCandidates(ctx, candidateIDs)
+		if err != nil {
+			return nil, err
+		}
+		result.CandidatesClosed = closed
+		return result, nil
+	}
+
+	for i := range stagedObservations {
+		observation := stagedObservations[i]
+		var payload api.AgentDataDTO
+		if err := json.Unmarshal(observation.PayloadJSON, &payload); err != nil {
+			result.Errors++
+			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ payload РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° РєР°РЅРґРёРґР°С‚Р°",
+				"observation_id", observation.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&models.AgentObservation{}).
+				Where("id = ?", observation.ID).
+				Updates(map[string]interface{}{
+					"status":               models.AgentObservationStatusProcessing,
+					"error_text":           nil,
+					"candidate_id":         nil,
+					"network_candidate_id": nil,
+					"workstation_id":       nil,
+					"fr_id":                nil,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("observation_id = ?", observation.ID).Delete(&models.CandidateWorkstationStaging{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("observation_id = ?", observation.ID).Delete(&models.CandidateFiscalStaging{}).Error; err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			result.Errors++
+			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРіРѕС‚РѕРІРёС‚СЊ РЅР°Р±Р»СЋРґРµРЅРёРµ Рє РїРµСЂРµСЃС‡РµС‚Сѓ",
+				"observation_id", observation.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		reprocessed, err := s.ApplyObservation(ctx, observation.Source, &payload)
+		if err != nil {
+			result.Errors++
+			continue
+		}
+		if reprocessed == nil {
+			result.Errors++
+			continue
+		}
+
+		result.Reprocessed++
+		switch reprocessed.Status {
+		case models.AgentObservationStatusApplied:
+			result.Applied++
+		case models.AgentObservationStatusStaged:
+			result.Staged++
+		case models.AgentObservationStatusIgnored:
+			result.Ignored++
+		case models.AgentObservationStatusIgnoredStale:
+			result.IgnoredStale++
+		default:
+			result.Errors++
+		}
+	}
+
+	closed, err := s.closeEmptyCandidates(ctx, candidateIDs)
+	if err != nil {
+		return nil, err
+	}
+	result.CandidatesClosed = closed
+	return result, nil
+}
+
+func (s *agentObservationRepo) closeEmptyCandidates(ctx context.Context, candidateIDs []uint) (int, error) {
+	if len(candidateIDs) == 0 {
+		return 0, nil
+	}
+
+	closed := 0
+	for _, candidateID := range candidateIDs {
+		var wsCount int64
+		if err := s.db.WithContext(ctx).
+			Model(&models.CandidateWorkstationStaging{}).
+			Where("candidate_id = ?", candidateID).
+			Count(&wsCount).Error; err != nil {
+			return 0, err
+		}
+		if wsCount > 0 {
+			continue
+		}
+
+		var frCount int64
+		if err := s.db.WithContext(ctx).
+			Model(&models.CandidateFiscalStaging{}).
+			Where("candidate_id = ?", candidateID).
+			Count(&frCount).Error; err != nil {
+			return 0, err
+		}
+		if frCount > 0 {
+			continue
+		}
+
+		var candidate models.Candidate
+		if err := s.db.WithContext(ctx).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return 0, err
+		}
+		if candidate.Status == models.CandidateStatusCancelled || candidate.Status == models.CandidateStatusApproved {
+			continue
+		}
+
+		from := candidate.Status
+		reason := "РєР°РЅРґРёРґР°С‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°РєСЂС‹С‚ РїРѕСЃР»Рµ РїРµСЂРµСЃС‡РµС‚Р°"
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&models.Candidate{}).
+				Where("id = ?", candidateID).
+				Updates(map[string]interface{}{
+					"status": models.CandidateStatusCancelled,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&models.CandidateStatusHistory{
+				CandidateID: candidateID,
+				FromStatus:  strPtr(from),
+				ToStatus:    models.CandidateStatusCancelled,
+				Reason:      &reason,
+			}).Error; err != nil {
+				return err
+			}
+			return tx.Model(&models.ReconciliationTask{}).
+				Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", candidateID), []string{"new", "pending_sd_action", "sd_error"}).
+				Updates(map[string]interface{}{"status": "resolved", "comment": reason}).Error
+		}); err != nil {
+			return 0, err
+		}
+
+		closed++
+	}
+
+	return closed, nil
 }
 
 // ApproveCandidate подтверждает кандидата оператором.

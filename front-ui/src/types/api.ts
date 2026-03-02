@@ -854,6 +854,18 @@ export interface CandidateObservationDTO {
   payload_json: Record<string, unknown>;
 }
 
+export interface CandidateRecalculationResultDTO {
+  candidates_total: number;
+  observations_total: number;
+  reprocessed: number;
+  applied: number;
+  staged: number;
+  ignored: number;
+  ignored_stale: number;
+  errors: number;
+  candidates_closed: number;
+}
+
 export interface CandidateApprovePayload {
 	company_id?: string;
 	company?: {
