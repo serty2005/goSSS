@@ -53,6 +53,28 @@ func (r *bitrixRepo) DeleteDealLinkByTicketID(ctx context.Context, ticketID stri
 	return r.getDB(ctx).WithContext(ctx).Where("ticket_id = ?", ticketID).Delete(&bitrix.DealLink{}).Error
 }
 
+func (r *bitrixRepo) UpsertIgnoredDeal(ctx context.Context, item *bitrix.IgnoredDeal) error {
+	if item == nil || item.B24DealID <= 0 {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "b24_deal_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"ticket_id", "updated_at"}),
+	}).Create(item).Error
+}
+
+func (r *bitrixRepo) HasIgnoredDeal(ctx context.Context, dealID int64) (bool, error) {
+	if dealID <= 0 {
+		return false, nil
+	}
+	var count int64
+	err := r.getDB(ctx).WithContext(ctx).
+		Model(&bitrix.IgnoredDeal{}).
+		Where("b24_deal_id = ?", dealID).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func (r *bitrixRepo) UpsertCommentLink(ctx context.Context, link *bitrix.CommentLink) error {
 	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "etalon_comment_id"}},
@@ -76,6 +98,10 @@ func (r *bitrixRepo) GetCommentLinkByB24ID(ctx context.Context, b24CommentID int
 		return nil, nil
 	}
 	return &item, err
+}
+
+func (r *bitrixRepo) DeleteCommentLinksByTicketID(ctx context.Context, ticketID string) error {
+	return r.getDB(ctx).WithContext(ctx).Where("ticket_id = ?", ticketID).Delete(&bitrix.CommentLink{}).Error
 }
 
 func (r *bitrixRepo) UpsertUserMap(ctx context.Context, item *bitrix.UserMap) error {

@@ -81,6 +81,16 @@ export const ticketsApi = {
     return response.data;
   },
 
+  unlinkFromBitrix: async (id: number | string) => {
+    const response = await apiClient.delete<ApiResponse<TicketDTO>>(`/tickets/${id}/bitrix-link`);
+    return response.data;
+  },
+
+  deleteTicket: async (id: number | string) => {
+    const response = await apiClient.delete<ApiResponse<{ status: string }>>(`/tickets/${id}`);
+    return response.data;
+  },
+
   addComment: async (id: number | string, comment: string, isPrivate = false) => {
     const response = await apiClient.post<ApiResponse<{ status: string }>>(`/tickets/${id}/comments`, {
       comment,

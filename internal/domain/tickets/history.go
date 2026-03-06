@@ -30,6 +30,7 @@ const (
 	HistoryFieldAsset       = "asset"
 	HistoryFieldComment     = "comment"
 	HistoryFieldConnection  = "connection"
+	HistoryFieldBitrixLink  = "bitrix_link"
 )
 
 type TicketHistory struct {

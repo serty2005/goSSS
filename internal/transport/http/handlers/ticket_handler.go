@@ -48,6 +48,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/{id}/comments", h.AddComment)
 	r.Patch("/{id}/comments/{comment_uuid}", h.UpdateComment)
 	r.Delete("/{id}/comments/{comment_uuid}", h.DeleteComment)
+	r.Delete("/{id}/bitrix-link", h.UnlinkFromBitrix)
 	r.Post("/{id}/refresh-comments", h.RefreshCommentsFromServiceDesk)
 	r.Post("/{id}/connection-copy", h.RecordConnectionCopy)
 	r.Get("/{id}/connection-stats", h.GetConnectionCopyStats)
@@ -56,6 +57,7 @@ func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Patch("/{id}/assign", h.Assign)
 	r.Patch("/{id}/company", h.ChangeCompany)
 	r.Patch("/{id}/bitrix", h.UpdateBitrixFields)
+	r.Delete("/{id}", h.Delete)
 }
 func (h *TicketHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.service.GetDashboardStats(r.Context())
@@ -475,6 +477,55 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 	h.publishTicketUpdated(ticket.ID, "ticket_bitrix_fields_updated", "ui", "Обновлены поля интеграции Bitrix24", userID, nil)
 
 	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+func (h *TicketHandler) UnlinkFromBitrix(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		return
+	}
+
+	ticket, err := h.service.UnlinkFromBitrix(r.Context(), id, userID, getUserRolesFromContext(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrTicketNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
+		case errors.Is(err, services.ErrTicketForbidden):
+			response.RespondWithError(w, http.StatusForbidden, "Недостаточно прав")
+		default:
+			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	h.publishTicketUpdated(ticket.ID, "ticket_bitrix_unlinked", "ui", "Разорвана связь тикета с Bitrix24", userID, nil)
+	response.RespondWithJSON(w, http.StatusOK, ticket)
+}
+
+func (h *TicketHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := getUserIDFromContext(r)
+	if userID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "ID пользователя не найден в контексте")
+		return
+	}
+
+	err := h.service.Delete(r.Context(), id, userID, getUserRolesFromContext(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrTicketNotFound):
+			response.RespondWithError(w, http.StatusNotFound, "Заявка не найдена")
+		case errors.Is(err, services.ErrTicketForbidden):
+			response.RespondWithError(w, http.StatusForbidden, "Недостаточно прав")
+		default:
+			response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *TicketHandler) publishBitrixTicketSync(ticketID string, reason string) {

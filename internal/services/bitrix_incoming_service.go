@@ -403,6 +403,13 @@ func (s *bitrixIncomingService) handleDealAddOrUpdate(ctx context.Context, dealI
 	if s.isSuppressedDeal(ctx, dealID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
+	ignored, err := s.repo.HasIgnoredDeal(ctx, dealID)
+	if err != nil {
+		return "", "", err
+	}
+	if ignored {
+		return bitrix.IncomingEventStatusIgnored, "сделка вручную отвязана от ServiceDesk", nil
+	}
 	deal, err := s.client.DealGet(ctx, dealID)
 	if err != nil {
 		return "", "", err
@@ -866,6 +873,14 @@ func renderBitrixAttachmentHTML(publicURL, fileName, mimeType string) string {
 }
 
 func (s *bitrixIncomingService) resolveTicketByDealID(ctx context.Context, dealID int64) (*tickets.Ticket, error) {
+	ignored, err := s.repo.HasIgnoredDeal(ctx, dealID)
+	if err != nil {
+		return nil, err
+	}
+	if ignored {
+		return nil, nil
+	}
+
 	link, err := s.repo.GetDealLinkByDealID(ctx, dealID)
 	if err != nil {
 		return nil, err

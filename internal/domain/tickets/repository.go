@@ -61,6 +61,7 @@ type TicketRepository interface {
 	GetByID(ctx context.Context, id string) (*Ticket, error)
 	GetByNumber(ctx context.Context, number int) (*Ticket, error)
 	GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*Ticket, error)
+	Delete(ctx context.Context, ticketID string) error
 
 	Find(ctx context.Context, filter TicketFilter) ([]Ticket, error)
 	Count(ctx context.Context, filter TicketFilter) (int64, error)

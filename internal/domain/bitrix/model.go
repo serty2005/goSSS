@@ -23,6 +23,15 @@ type CommentLink struct {
 
 func (CommentLink) TableName() string { return "comment_link" }
 
+type IgnoredDeal struct {
+	B24DealID int64     `json:"b24_deal_id" gorm:"primaryKey"`
+	TicketID  string    `json:"ticket_id" gorm:"type:text;index"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (IgnoredDeal) TableName() string { return "bitrix_ignored_deals" }
+
 type UserMap struct {
 	EtalonUserID uint      `json:"etalon_user_id" gorm:"primaryKey"`
 	B24UserID    int64     `json:"b24_user_id" gorm:"uniqueIndex;not null"`

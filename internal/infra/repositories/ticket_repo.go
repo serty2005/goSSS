@@ -95,6 +95,54 @@ func (r *ticketRepo) GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*
 	return &ticket, err
 }
 
+func (r *ticketRepo) Delete(ctx context.Context, ticketID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var fileIDs []string
+		if err := tx.Model(&tickets.TicketFileLink{}).
+			Where("ticket_id = ?", ticketID).
+			Pluck("file_id", &fileIDs).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Where("ticket_id = ?", ticketID).Delete(&tickets.TicketFileLink{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("entity_id = ?", ticketID).Delete(&tickets.Attachment{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("ticket_id = ?", ticketID).Delete(&tickets.TicketComment{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("ticket_id = ?", ticketID).Delete(&tickets.TicketHistory{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", ticketID).Delete(&tickets.Ticket{}).Error; err != nil {
+			return err
+		}
+
+		uniqueFileIDs := make([]string, 0, len(fileIDs))
+		seenFileIDs := make(map[string]struct{}, len(fileIDs))
+		for _, fileID := range fileIDs {
+			normalized := strings.TrimSpace(fileID)
+			if normalized == "" {
+				continue
+			}
+			if _, exists := seenFileIDs[normalized]; exists {
+				continue
+			}
+			seenFileIDs[normalized] = struct{}{}
+			uniqueFileIDs = append(uniqueFileIDs, normalized)
+		}
+		if len(uniqueFileIDs) == 0 {
+			return nil
+		}
+
+		return tx.Where("id IN ?", uniqueFileIDs).
+			Where("NOT EXISTS (SELECT 1 FROM ticket_file_links tfl WHERE tfl.file_id = file_assets.id)").
+			Delete(&tickets.FileAsset{}).Error
+	})
+}
+
 func (r *ticketRepo) Find(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, error) {
 	var items []tickets.Ticket
 	query := r.buildQuery(ctx, filter).

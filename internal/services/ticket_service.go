@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +71,8 @@ type TicketService interface {
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
 	UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error)
+	UnlinkFromBitrix(ctx context.Context, ticketID string, actorID uint, roles []string) (*tickets.Ticket, error)
+	Delete(ctx context.Context, ticketID string, actorID uint, roles []string) error
 	AutoCloseResolvedTickets(ctx context.Context, threshold time.Duration) (int, error)
 	ProcessExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]DeferredStatusActivation, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
@@ -98,6 +101,7 @@ type ticketServiceImpl struct {
 
 var ErrReporterNotFound = errors.New("пользователь-автор не найден")
 var ErrTicketNotFound = errors.New("заявка не найдена")
+var ErrTicketForbidden = errors.New("недостаточно прав для операции с тикетом")
 var ErrCommentNotFound = errors.New("комментарий не найден")
 var ErrCommentForbidden = errors.New("недостаточно прав для операции с комментарием")
 
@@ -573,6 +577,68 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) UnlinkFromBitrix(ctx context.Context, ticketID string, actorID uint, roles []string) (*tickets.Ticket, error) {
+	actor, err := s.requireTicketAdmin(ctx, actorID, roles)
+	if err != nil {
+		return nil, err
+	}
+
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket == nil {
+		return nil, ErrTicketNotFound
+	}
+
+	hadBitrixBinding, err := s.unlinkTicketBitrixData(ctx, ticket)
+	if err != nil {
+		return nil, err
+	}
+	if !hadBitrixBinding {
+		ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+		return ticket, nil
+	}
+
+	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+	if actor != nil {
+		s.recordHistory(ctx, ticket.ID, &actor.ID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldBitrixLink, tickets.HistorySourceUI, "linked", "unlinked", nil)
+	}
+
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+	return ticket, nil
+}
+
+func (s *ticketServiceImpl) Delete(ctx context.Context, ticketID string, actorID uint, roles []string) error {
+	if _, err := s.requireTicketAdmin(ctx, actorID, roles); err != nil {
+		return err
+	}
+
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if ticket == nil {
+		return ErrTicketNotFound
+	}
+
+	storageKeys, err := s.collectTicketStorageKeys(ctx, ticket.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.unlinkTicketBitrixData(ctx, ticket); err != nil {
+		return err
+	}
+	if err := s.ticketRepo.Delete(ctx, ticket.ID); err != nil {
+		return err
+	}
+
+	s.cleanupTicketFiles(ticket.ID, storageKeys)
+	return nil
 }
 
 func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error) {
@@ -1321,6 +1387,162 @@ func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID stri
 	}
 
 	return result, nil
+}
+
+func (s *ticketServiceImpl) requireTicketAdmin(ctx context.Context, actorID uint, roles []string) (*user.User, error) {
+	if actorID == 0 {
+		return nil, ErrTicketForbidden
+	}
+	actor, err := s.userRepo.GetByID(ctx, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить пользователя: %w", err)
+	}
+	if actor == nil {
+		return nil, ErrTicketForbidden
+	}
+	if isAdminUser(actor) || hasUserRole(roles, user.RoleAdmin) {
+		return actor, nil
+	}
+	return actor, ErrTicketForbidden
+}
+
+func (s *ticketServiceImpl) unlinkTicketBitrixData(ctx context.Context, ticket *tickets.Ticket) (bool, error) {
+	if ticket == nil {
+		return false, nil
+	}
+
+	hadBitrixBinding := ticket.SyncWithBitrix ||
+		ticket.BitrixServicePointID != nil ||
+		strings.TrimSpace(ticket.BitrixDealTitle) != "" ||
+		strings.HasPrefix(strings.TrimSpace(ticket.ServiceDeskUUID), "b24:deal:")
+
+	dealID, err := s.resolveBitrixDealIDForTicket(ctx, ticket)
+	if err != nil {
+		return false, err
+	}
+	if dealID != nil && *dealID > 0 {
+		hadBitrixBinding = true
+	}
+
+	if s.bitrixRepo != nil {
+		if dealID != nil && *dealID > 0 {
+			if err := s.bitrixRepo.UpsertIgnoredDeal(ctx, &bitrix.IgnoredDeal{
+				B24DealID: *dealID,
+				TicketID:  ticket.ID,
+			}); err != nil {
+				return false, err
+			}
+		}
+		if err := s.bitrixRepo.DeleteDealLinkByTicketID(ctx, ticket.ID); err != nil {
+			return false, err
+		}
+		if err := s.bitrixRepo.DeleteCommentLinksByTicketID(ctx, ticket.ID); err != nil {
+			return false, err
+		}
+	}
+
+	ticket.SyncWithBitrix = false
+	ticket.BitrixServicePointID = nil
+	ticket.BitrixDealTitle = ""
+	if _, ok := parseBitrixDealIDFromServiceDeskUUID(ticket.ServiceDeskUUID); ok {
+		ticket.ServiceDeskUUID = ""
+	}
+
+	return hadBitrixBinding, nil
+}
+
+func (s *ticketServiceImpl) resolveBitrixDealIDForTicket(ctx context.Context, ticket *tickets.Ticket) (*int64, error) {
+	if ticket == nil {
+		return nil, nil
+	}
+	if ticket.BitrixDealID != nil && *ticket.BitrixDealID > 0 {
+		dealID := *ticket.BitrixDealID
+		return &dealID, nil
+	}
+	if s.bitrixRepo != nil {
+		link, err := s.bitrixRepo.GetDealLinkByTicketID(ctx, ticket.ID)
+		if err != nil {
+			return nil, err
+		}
+		if link != nil && link.B24DealID > 0 {
+			dealID := link.B24DealID
+			return &dealID, nil
+		}
+	}
+	if dealID, ok := parseBitrixDealIDFromServiceDeskUUID(ticket.ServiceDeskUUID); ok {
+		return &dealID, nil
+	}
+	return nil, nil
+}
+
+func parseBitrixDealIDFromServiceDeskUUID(sdUUID string) (int64, bool) {
+	value := strings.TrimSpace(sdUUID)
+	if !strings.HasPrefix(value, "b24:deal:") {
+		return 0, false
+	}
+	dealID, err := strconv.ParseInt(strings.TrimPrefix(value, "b24:deal:"), 10, 64)
+	if err != nil || dealID <= 0 {
+		return 0, false
+	}
+	return dealID, true
+}
+
+func (s *ticketServiceImpl) collectTicketStorageKeys(ctx context.Context, ticketID string) ([]string, error) {
+	links, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(links) == 0 {
+		return nil, nil
+	}
+
+	result := make([]string, 0, len(links))
+	seen := make(map[string]struct{}, len(links))
+	for _, link := range links {
+		fileID := strings.TrimSpace(link.FileID)
+		if fileID == "" {
+			continue
+		}
+		asset, assetErr := s.ticketRepo.GetFileAssetByID(ctx, fileID)
+		if assetErr != nil {
+			return nil, assetErr
+		}
+		if asset == nil {
+			continue
+		}
+		storageKey := strings.TrimSpace(asset.StorageKey)
+		if storageKey == "" {
+			continue
+		}
+		if _, exists := seen[storageKey]; exists {
+			continue
+		}
+		seen[storageKey] = struct{}{}
+		result = append(result, storageKey)
+	}
+	return result, nil
+}
+
+func (s *ticketServiceImpl) cleanupTicketFiles(ticketID string, storageKeys []string) {
+	if s.cfg == nil || strings.TrimSpace(s.cfg.TicketStoragePath) == "" {
+		return
+	}
+
+	for _, storageKey := range storageKeys {
+		normalized := strings.TrimSpace(storageKey)
+		if normalized == "" {
+			continue
+		}
+		absPath := filepath.Join(s.cfg.TicketStoragePath, filepath.FromSlash(normalized))
+		if err := os.Remove(absPath); err != nil && !errors.Is(err, os.ErrNotExist) && s.logger != nil {
+			s.logger.Warn("Не удалось удалить файл тикета", "ticket_id", ticketID, "path", absPath, "error", err)
+		}
+	}
+
+	ticketDir := filepath.Join(s.cfg.TicketStoragePath, ticketID)
+	if err := os.RemoveAll(ticketDir); err != nil && s.logger != nil {
+		s.logger.Warn("Не удалось удалить директорию тикета", "ticket_id", ticketID, "path", ticketDir, "error", err)
+	}
 }
 
 func (s *ticketServiceImpl) isServiceDeskEnabledForReads() bool {

@@ -57,6 +57,7 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       if (entry.field === 'assignee') return 'Изменён исполнитель';
       if (entry.field === 'company') return 'Изменена компания';
       if (entry.field === 'asset') return 'Изменено оборудование';
+      if (entry.field === 'bitrix_link') return 'Изменена связь с Bitrix24';
       return 'Изменение заявки';
   }
 };
@@ -733,6 +734,34 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось обновить поля Bitrix24'),
   });
 
+  const unlinkBitrixMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) return;
+      return ticketsApi.unlinkFromBitrix(id);
+    },
+    onSuccess: () => {
+      message.success('Связь с Bitrix24 разорвана');
+      setIsBitrixEditMode(false);
+      setIsBitrixSyncModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+    onError: () => message.error('Не удалось разорвать связь с Bitrix24'),
+  });
+
+  const deleteTicketMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) return;
+      return ticketsApi.deleteTicket(id);
+    },
+    onSuccess: () => {
+      message.success('Тикет удалён');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      navigate('/tickets');
+    },
+    onError: () => message.error('Не удалось удалить тикет'),
+  });
+
   const updateWorkstationNameMutation = useMutation({
     mutationFn: async (payload: { workstationID: string; deviceName: string }) => {
       return equipmentApi.updateWorkstation(payload.workstationID, { device_name: payload.deviceName });
@@ -785,6 +814,11 @@ const TicketDetailsPage: React.FC = () => {
   }
 
   const hasBitrixLink = Boolean(String(metadata.bitrix_deal_url || '').trim());
+  const hasBitrixBinding = metadata.sync_with_bitrix
+    || hasBitrixLink
+    || Boolean(metadata.bitrix_service_point_id)
+    || Boolean(String(metadata.bitrix_deal_title || '').trim())
+    || String(metadata.service_desk_uuid || '').trim().startsWith('b24:deal:');
   const canPushToBitrix = Boolean(metadata.bitrix_service_point_id) && Boolean(String(metadata.bitrix_deal_title || '').trim());
 
   const uploadAttachmentsRequest = async (options: UploadRequestOption) => {
@@ -935,6 +969,32 @@ const TicketDetailsPage: React.FC = () => {
             >
               {metadata.sync_with_bitrix ? 'Выгрузить в Битрикс24' : 'Включить синхронизацию с Битрикс24'}
             </Button>
+          )}
+          {isAdminRole && hasBitrixBinding && (
+            <Popconfirm
+              title="Разорвать связь с Bitrix24?"
+              description="Тикет останется в ServiceDesk, но больше не будет синхронизироваться и не создастся заново из этой сделки."
+              okText="Разорвать связь"
+              cancelText="Отмена"
+              onConfirm={() => unlinkBitrixMutation.mutate()}
+            >
+              <Button loading={unlinkBitrixMutation.isPending}>
+                Разорвать связь B24
+              </Button>
+            </Popconfirm>
+          )}
+          {isAdminRole && (
+            <Popconfirm
+              title="Удалить тикет?"
+              description={hasBitrixBinding ? 'Связь со сделкой Bitrix24 будет разорвана только локально. В Bitrix24 ничего не изменится.' : 'Тикет будет удалён из ServiceDesk без возможности восстановления.'}
+              okText="Удалить"
+              cancelText="Отмена"
+              onConfirm={() => deleteTicketMutation.mutate()}
+            >
+              <Button danger loading={deleteTicketMutation.isPending}>
+                Удалить тикет
+              </Button>
+            </Popconfirm>
           )}
           <Button onClick={() => void toggleTicketSubscription()}>
             {ticketSubscriptions.includes(id) ? 'Отписаться' : 'Подписаться на тикет'}

@@ -7,8 +7,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
-import { Extension } from '@tiptap/core';
-import { Plugin } from '@tiptap/pm/state';
+import type { JSONContent } from '@tiptap/core';
 import { buildMentionHTML, extractMentionQuery, type MentionOption } from '@/features/tickets/editor/mentions';
 
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -29,74 +28,45 @@ type MentionRange = {
   query: string;
 };
 
-const COMMON_FORMAT_TAGS = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'a', 'img', 'blockquote', 'ul', 'ol', 'li', 'span', 'div']);
-const SPECIAL_HTML_TAGS = new Set(['np', 'center', 'f1', 'qrcode']);
+const normalizeClipboardText = (value: string) => String(value || '')
+  .replace(/\r\n/g, '\n')
+  .replace(/\r/g, '\n');
 
-const looksLikeTechnicalMarkup = (value: string) => {
-  const source = String(value || '').trim();
-  if (!source) return false;
-
-  const tagMatches = Array.from(source.matchAll(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi));
-  if (tagMatches.length === 0) {
-    return /&lt;\/?([a-z][a-z0-9-]*)\b/i.test(source);
+const extractClipboardPlainText = (event: ClipboardEvent) => {
+  const plainText = normalizeClipboardText(event.clipboardData?.getData('text/plain') || '');
+  if (plainText) {
+    return plainText;
   }
 
-  let hasSpecialTag = false;
-  let hasCustomTag = false;
-
-  for (const match of tagMatches) {
-    const tag = String(match[1] || '').toLowerCase();
-    if (!tag) continue;
-    if (SPECIAL_HTML_TAGS.has(tag)) {
-      hasSpecialTag = true;
-      break;
-    }
-    if (!COMMON_FORMAT_TAGS.has(tag) || /\d/.test(tag) || tag.includes('-')) {
-      hasCustomTag = true;
-    }
+  const html = event.clipboardData?.getData('text/html') || '';
+  if (!html) {
+    return '';
   }
 
-  if (hasSpecialTag) return true;
-  if (hasCustomTag && tagMatches.length >= 2) return true;
-  return tagMatches.length >= 3 && /\n/.test(source) && source.length > 100;
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  return normalizeClipboardText(parsed.body?.textContent || '');
 };
 
-const HTMLCodePaste = Extension.create({
-  name: 'htmlCodePaste',
-  addProseMirrorPlugins() {
-    return [
-      new Plugin({
-        props: {
-          handlePaste: (view, event) => {
-            const hasImageFile = Array.from(event.clipboardData?.items || []).some(
-              (item) => item.kind === 'file' && item.type.startsWith('image/'),
-            );
-            if (hasImageFile) {
-              return false;
-            }
-            const html = event.clipboardData?.getData('text/html') || '';
-            const text = event.clipboardData?.getData('text/plain') || '';
-            const payload = html || text;
-            if (!payload || !looksLikeTechnicalMarkup(payload)) {
-              return false;
-            }
+const buildPlainTextContent = (value: string): JSONContent[] => {
+  const normalized = normalizeClipboardText(value);
+  if (!normalized) {
+    return [];
+  }
 
-            event.preventDefault();
-            const { state } = view;
-            const { from, to } = state.selection;
-            const block = state.schema.nodes.codeBlock.create(
-              null,
-              state.schema.text(payload.replace(/\r\n/g, '\n')),
-            );
-            const tr = state.tr.replaceRangeWith(from, to, block);
-            view.dispatch(tr.scrollIntoView());
-            return true;
-          },
-        },
-      }),
-    ];
-  },
-});
+  return normalized.split(/\n{2,}/).map((paragraph) => {
+    const lines = paragraph.split('\n');
+    const content: JSONContent[] = [];
+    lines.forEach((line, index) => {
+      if (line) {
+        content.push({ type: 'text', text: line });
+      }
+      if (index < lines.length - 1) {
+        content.push({ type: 'hardBreak' });
+      }
+    });
+    return content.length > 0 ? { type: 'paragraph', content } : { type: 'paragraph' };
+  });
+};
 
 const SmartTicketEditor: React.FC<Props> = ({
   value,
@@ -137,7 +107,6 @@ const SmartTicketEditor: React.FC<Props> = ({
       Placeholder.configure({
         placeholder: placeholder || '',
       }),
-      HTMLCodePaste,
     ],
     [placeholder],
   );
@@ -286,11 +255,36 @@ const SmartTicketEditor: React.FC<Props> = ({
           .filter((item) => item.kind === 'file')
           .map((item) => item.getAsFile())
           .filter((item): item is File => Boolean(item));
-        if (files.length === 0) return false;
-        if (!onImageUpload && !onFileUpload) return false;
+        if (files.length > 0) {
+          if (!onImageUpload && !onFileUpload) return false;
+          event.preventDefault();
+          void insertUploadedFiles(files);
+          return true;
+        }
+
+        const plainText = extractClipboardPlainText(event);
+        if (!plainText) {
+          return false;
+        }
 
         event.preventDefault();
-        void insertUploadedFiles(files);
+        const activeEditor = editorRef.current;
+        if (!activeEditor) {
+          return true;
+        }
+
+        if (activeEditor.isActive('codeBlock')) {
+          const { from, to } = activeEditor.state.selection;
+          const tr = activeEditor.state.tr.insertText(plainText, from, to);
+          activeEditor.view.dispatch(tr.scrollIntoView());
+          return true;
+        }
+
+        const content = buildPlainTextContent(plainText);
+        if (content.length === 0) {
+          return true;
+        }
+        activeEditor.chain().focus().insertContent(content).run();
         return true;
       },
       handleDrop: (_view, event) => {
