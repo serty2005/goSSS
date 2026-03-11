@@ -7,3 +7,5 @@ storage/*
 docker/.env
 tools/seeder/*
 *.xls
+*.pdf
+*.html
