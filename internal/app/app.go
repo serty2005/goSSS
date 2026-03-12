@@ -272,11 +272,12 @@ func setupRepositories(db *gorm.DB) Repositories {
 }
 
 type ExternalClients struct {
-	SDClient     external.ExternalSystemClient
-	FTPClient    services.FTPClient
-	IikoClient   iiko.IikoClient
-	BitrixClient *bitrixplugin.Client
-	RedisClient  *redis.Client
+	SDClient        external.ExternalSystemClient
+	FTPClient       services.FTPClient
+	IikoClient      iiko.IikoClient
+	BitrixClient    *bitrixplugin.Client
+	ContractMailbox contractSvc.ContractMailboxClient
+	RedisClient     *redis.Client
 }
 
 func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) ExternalClients {
@@ -289,11 +290,12 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 		})
 	}
 	return ExternalClients{
-		SDClient:     naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
-		FTPClient:    services.NewFTPClient(cfg, log.With("component", "ftp_client")),
-		IikoClient:   iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
-		BitrixClient: bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
-		RedisClient:  redisClient,
+		SDClient:        naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
+		FTPClient:       services.NewFTPClient(cfg, log.With("component", "ftp_client")),
+		IikoClient:      iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+		BitrixClient:    bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
+		ContractMailbox: contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
+		RedisClient:     redisClient,
 	}
 }
 
@@ -398,7 +400,15 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	app.StatusActualityWorker = workers.NewStatusActualityWorker(app.Config, app.Logger.With("component", "status_actuality_worker"), app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo)
 	app.DeferredTicketWorker = workers.NewDeferredTicketWorker(app.Logger.With("component", "deferred_ticket_worker"), srvs.TicketService, app.EventBus, time.Minute)
 	app.TicketGateway = gateways.NewTicketGateway(app.Config, app.Logger.With("component", "ticket_gateway"), app.IntegrationManager, repos.TicketRepo, app.EventBus, app.DB, repos.LinkRepo)
-	app.ContractGateway = gateways.NewContractGateway(app.Config, app.Logger.With("component", "contract_gateway"), app.IntegrationManager, srvs.ContractService)
+	app.ContractGateway = gateways.NewContractGateway(
+		app.Config,
+		app.Logger.With("component", "contract_gateway"),
+		clients.ContractMailbox,
+		srvs.BitrixSyncService,
+		repos.BitrixRepo,
+		srvs.ContractService,
+		repos.ContractRepo,
+	)
 }
 
 func setupHandlers(app *Application, repos Repositories, srvs Services) {
@@ -418,7 +428,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus)
-	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService)
+	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo)
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation, srvs.CompanyService)
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)

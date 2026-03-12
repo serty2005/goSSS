@@ -222,6 +222,33 @@ func (r *bitrixRepo) UpdateServicePointOneCData(ctx context.Context, b24ElementI
 		Updates(updates).Error
 }
 
+func (r *bitrixRepo) UpdateServicePointSyncData(ctx context.Context, point *bitrix.ServicePoint) error {
+	if point == nil || point.B24ElementID <= 0 {
+		return nil
+	}
+
+	item := *point
+	item.Name = strings.TrimSpace(item.Name)
+	item.Address = strings.TrimSpace(item.Address)
+	item.UpdatedAt = time.Now()
+
+	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "b24_element_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"name":              item.Name,
+			"address":           item.Address,
+			"one_c_code":        item.OneCCode,
+			"one_c_contract_on": item.ContractOn,
+			"contract_type":     item.ContractType,
+			"contract_start":    item.ContractStart,
+			"contract_end":      item.ContractEnd,
+			"client_order":      item.ClientOrder,
+			"raw_json":          item.RawJSON,
+			"updated_at":        item.UpdatedAt,
+		}),
+	}).Create(&item).Error
+}
+
 func (r *bitrixRepo) GetServicePointByID(ctx context.Context, b24ElementID int64) (*bitrix.ServicePoint, error) {
 	var item bitrix.ServicePoint
 	err := r.getDB(ctx).WithContext(ctx).Where("b24_element_id = ?", b24ElementID).First(&item).Error
@@ -248,6 +275,12 @@ func (r *bitrixRepo) UpsertCompanyServicePointMapping(ctx context.Context, item 
 		Columns:   []clause.Column{{Name: "company_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"bitrix_service_point_id", "updated_at"}),
 	}).Create(item).Error
+}
+
+func (r *bitrixRepo) ListCompanyServicePointMappings(ctx context.Context) ([]bitrix.CompanyServicePointMapping, error) {
+	var items []bitrix.CompanyServicePointMapping
+	err := r.getDB(ctx).WithContext(ctx).Order("company_id asc").Find(&items).Error
+	return items, err
 }
 
 func (r *bitrixRepo) GetCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) (*bitrix.CompanyServicePointMapping, error) {

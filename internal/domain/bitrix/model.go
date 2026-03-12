@@ -42,13 +42,17 @@ type UserMap struct {
 func (UserMap) TableName() string { return "user_map" }
 
 type ServicePoint struct {
-	B24ElementID int64     `json:"b24_element_id" gorm:"primaryKey"`
-	Name         string    `json:"name" gorm:"type:text;not null;index"`
-	Address      string    `json:"address" gorm:"type:text"`
-	OneCCode     *string   `json:"one_c_code,omitempty" gorm:"type:varchar(128);index"`
-	ContractOn   *bool     `json:"contract_on,omitempty" gorm:"column:one_c_contract_on"`
-	RawJSON      string    `json:"raw_json" gorm:"type:text"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	B24ElementID  int64      `json:"b24_element_id" gorm:"primaryKey"`
+	Name          string     `json:"name" gorm:"type:text;not null;index"`
+	Address       string     `json:"address" gorm:"type:text"`
+	OneCCode      *string    `json:"one_c_code,omitempty" gorm:"type:varchar(128);index"`
+	ContractOn    *bool      `json:"contract_on,omitempty" gorm:"column:one_c_contract_on"`
+	ContractType  *string    `json:"contract_type,omitempty" gorm:"type:varchar(64);index"`
+	ContractStart *time.Time `json:"contract_start,omitempty"`
+	ContractEnd   *time.Time `json:"contract_end,omitempty"`
+	ClientOrder   *string    `json:"client_order,omitempty" gorm:"type:text"`
+	RawJSON       string     `json:"raw_json" gorm:"type:text"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 func (ServicePoint) TableName() string { return "bitrix_service_points" }

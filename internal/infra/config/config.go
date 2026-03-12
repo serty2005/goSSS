@@ -45,6 +45,12 @@ type Config struct {
 
 	EnableContractGateway bool
 	ContractSyncInterval  time.Duration
+	ContractIMAPHost      string
+	ContractIMAPPort      int
+	ContractIMAPUsername  string
+	ContractIMAPPassword  string
+	ContractIMAPMailbox   string
+	ContractZipMaxBytes   int
 
 	CommonContractID string
 
@@ -109,6 +115,15 @@ func New() *Config {
 		bitrixIntegrationUserID = detectBitrixIntegrationUserID(bitrixBaseURL)
 	}
 
+	contractSyncHours := getEnvAsInt("CONTRACT_SYNC_INTERVAL_HOURS", 0)
+	if contractSyncHours <= 0 {
+		legacyMinutes := getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)
+		contractSyncHours = max(1, legacyMinutes/60)
+		if legacyMinutes > 0 && contractSyncHours == 0 {
+			contractSyncHours = 1
+		}
+	}
+
 	return &Config{
 		ServerPort:         getEnv("PORT", "8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
@@ -139,7 +154,13 @@ func New() *Config {
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
 		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
-		ContractSyncInterval:  time.Duration(getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)) * time.Minute,
+		ContractSyncInterval:  time.Duration(contractSyncHours) * time.Hour,
+		ContractIMAPHost:      strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
+		ContractIMAPPort:      getEnvAsInt("CONTRACT_IMAP_PORT", 993),
+		ContractIMAPUsername:  strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
+		ContractIMAPPassword:  getEnv("CONTRACT_IMAP_PASSWORD", ""),
+		ContractIMAPMailbox:   strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
+		ContractZipMaxBytes:   getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
 
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 

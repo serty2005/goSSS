@@ -43,12 +43,14 @@ type ServicePointSyncAction string
 const (
 	ServicePointSyncActionCreate    ServicePointSyncAction = "create"
 	ServicePointSyncActionUpdate    ServicePointSyncAction = "update"
+	ServicePointSyncActionDelete    ServicePointSyncAction = "delete"
 	ServicePointSyncActionUnchanged ServicePointSyncAction = "unchanged"
 	ServicePointSyncActionSkipped   ServicePointSyncAction = "skipped"
 	ServicePointSyncActionAmbiguous ServicePointSyncAction = "ambiguous"
 )
 
 type ServicePointSyncPlanItem struct {
+	Key             string                 `json:"key"`
 	Row             int                    `json:"row"`
 	Name            string                 `json:"name"`
 	OneCCode        string                 `json:"one_c_code"`
@@ -58,12 +60,15 @@ type ServicePointSyncPlanItem struct {
 	B24ElementID    *int64                 `json:"b24_element_id,omitempty"`
 	CurrentCode     string                 `json:"current_code,omitempty"`
 	CurrentContract string                 `json:"current_contract,omitempty"`
+	MatchedPointIDs []int64                `json:"matched_point_ids,omitempty"`
+	AutoApply       bool                   `json:"auto_apply,omitempty"`
 }
 
 type ServicePointSyncPreview struct {
 	ProcessedRows int                        `json:"processed_rows"`
 	ToCreate      int                        `json:"to_create"`
 	ToUpdate      int                        `json:"to_update"`
+	ToDelete      int                        `json:"to_delete"`
 	Unchanged     int                        `json:"unchanged"`
 	Skipped       int                        `json:"skipped"`
 	Ambiguous     int                        `json:"ambiguous"`
@@ -74,15 +79,17 @@ type ServicePointSyncApplyResult struct {
 	ProcessedRows int      `json:"processed_rows"`
 	Created       int      `json:"created"`
 	Updated       int      `json:"updated"`
+	Deleted       int      `json:"deleted"`
 	Unchanged     int      `json:"unchanged"`
 	Skipped       int      `json:"skipped"`
 	Ambiguous     int      `json:"ambiguous"`
-	AppliedRows   []int    `json:"applied_rows,omitempty"`
+	AppliedKeys   []string `json:"applied_keys,omitempty"`
 	Errors        []string `json:"errors,omitempty"`
 }
 
 type ServicePointSyncApplyOptions struct {
-	SelectedRows []int `json:"selected_rows,omitempty"`
+	SelectedRows []int    `json:"selected_rows,omitempty"`
+	SelectedKeys []string `json:"selected_keys,omitempty"`
 }
 
 type importedServicePointRow struct {
@@ -210,26 +217,31 @@ func (s *bitrixSyncService) ImportServicePoints(
 	if err != nil {
 		return nil, err
 	}
+	statesByID := make(map[int64]bitrixServicePointState)
+	for _, items := range statesByName {
+		for _, item := range items {
+			statesByID[item.ID] = item
+		}
+	}
 
-	selectedSet := make(map[int]struct{})
+	selectedSet := make(map[string]struct{}, len(options.SelectedKeys)+len(options.SelectedRows))
+	for _, key := range options.SelectedKeys {
+		if trimmed := strings.TrimSpace(key); trimmed != "" {
+			selectedSet[trimmed] = struct{}{}
+		}
+	}
 	for _, row := range options.SelectedRows {
 		if row > 0 {
-			selectedSet[row] = struct{}{}
+			selectedSet[syncPlanRowKey(row)] = struct{}{}
 		}
 	}
 
 	result := &ServicePointSyncApplyResult{
-		AppliedRows: make([]int, 0, 64),
+		AppliedKeys: make([]string, 0, 64),
 		Errors:      make([]string, 0, 16),
 	}
 
 	for _, item := range plan.Items {
-		if len(selectedSet) > 0 {
-			if _, ok := selectedSet[item.Row]; !ok {
-				continue
-			}
-		}
-
 		result.ProcessedRows++
 		switch item.Action {
 		case ServicePointSyncActionUnchanged:
@@ -242,6 +254,12 @@ func (s *bitrixSyncService) ImportServicePoints(
 
 		switch item.Action {
 		case ServicePointSyncActionCreate:
+			if len(selectedSet) > 0 {
+				if _, ok := selectedSet[item.Key]; !ok {
+					result.Skipped++
+					continue
+				}
+			}
 			fields := map[string]interface{}{
 				"NAME": item.Name,
 			}
@@ -261,19 +279,18 @@ func (s *bitrixSyncService) ImportServicePoints(
 				continue
 			}
 			result.Created++
-			result.AppliedRows = append(result.AppliedRows, item.Row)
+			result.AppliedKeys = append(result.AppliedKeys, item.Key)
 
 		case ServicePointSyncActionUpdate:
 			if item.B24ElementID == nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("не указан ID Bitrix для точки %q", item.Name))
 				continue
 			}
-			stateList := statesByName[normalizePointName(item.Name)]
-			if len(stateList) == 0 {
+			state, ok := statesByID[*item.B24ElementID]
+			if !ok {
 				result.Errors = append(result.Errors, fmt.Sprintf("не найдена точка Bitrix для обновления %q", item.Name))
 				continue
 			}
-			state := stateList[0]
 
 			fields := map[string]interface{}{
 				"NAME": state.Name,
@@ -296,7 +313,25 @@ func (s *bitrixSyncService) ImportServicePoints(
 				continue
 			}
 			result.Updated++
-			result.AppliedRows = append(result.AppliedRows, item.Row)
+			result.AppliedKeys = append(result.AppliedKeys, item.Key)
+
+		case ServicePointSyncActionDelete:
+			if item.B24ElementID == nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("не указан ID Bitrix для удаления точки %q", item.Name))
+				continue
+			}
+			if len(selectedSet) > 0 {
+				if _, ok := selectedSet[item.Key]; !ok {
+					result.Skipped++
+					continue
+				}
+			}
+			if deleteErr := s.client.ListsElementDelete(ctx, iblockType, iblockID, *item.B24ElementID); deleteErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("не удалось удалить точку %q: %v", item.Name, deleteErr))
+				continue
+			}
+			result.Deleted++
+			result.AppliedKeys = append(result.AppliedKeys, item.Key)
 		}
 	}
 
@@ -308,8 +343,8 @@ func (s *bitrixSyncService) ImportServicePoints(
 	if len(result.Errors) == 0 {
 		result.Errors = nil
 	}
-	if len(result.AppliedRows) == 0 {
-		result.AppliedRows = nil
+	if len(result.AppliedKeys) == 0 {
+		result.AppliedKeys = nil
 	}
 
 	return result, nil
@@ -326,16 +361,29 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 	if err != nil {
 		return nil, err
 	}
+	mappings, err := s.repo.ListCompanyServicePointMappings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mappedPointIDs := make(map[int64]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.BitrixServicePointID > 0 {
+			mappedPointIDs[mapping.BitrixServicePointID] = struct{}{}
+		}
+	}
 
 	preview := &ServicePointSyncPreview{
 		Items: make([]ServicePointSyncPlanItem, 0, len(rows)),
 	}
+	reportNames := make(map[string]struct{}, len(rows))
+	matchedPointIDs := make(map[int64]struct{}, len(rows))
 
 	for _, row := range rows {
 		preview.ProcessedRows++
 		if row.Name == "" || row.OneCCode == "" {
 			preview.Skipped++
 			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Key:           syncPlanRowKey(row.Row),
 				Row:           row.Row,
 				Name:          row.Name,
 				OneCCode:      row.OneCCode,
@@ -346,10 +394,12 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 			continue
 		}
 
+		reportNames[normalizePointName(row.Name)] = struct{}{}
 		matches := statesByName[normalizePointName(row.Name)]
 		if len(matches) == 0 {
 			preview.ToCreate++
 			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Key:           syncPlanRowKey(row.Row),
 				Row:           row.Row,
 				Name:          row.Name,
 				OneCCode:      row.OneCCode,
@@ -360,19 +410,37 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 			continue
 		}
 		if len(matches) > 1 {
+			conflictIDs := collectDeletionCandidatePointIDs(matches, mappedPointIDs)
+			if len(conflictIDs) == 0 {
+				preview.Skipped++
+				preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+					Key:             syncPlanRowKey(row.Row),
+					Row:             row.Row,
+					Name:            row.Name,
+					OneCCode:        row.OneCCode,
+					ContractLabel:   contractBoolToLabel(row.ContractOn),
+					Action:          ServicePointSyncActionSkipped,
+					Reason:          "дубли найдены, но все конфликтующие точки уже закреплены за компаниями",
+					MatchedPointIDs: collectAllPointIDs(matches),
+				})
+				continue
+			}
 			preview.Ambiguous++
 			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
-				Row:           row.Row,
-				Name:          row.Name,
-				OneCCode:      row.OneCCode,
-				ContractLabel: contractBoolToLabel(row.ContractOn),
-				Action:        ServicePointSyncActionAmbiguous,
-				Reason:        "в Bitrix24 найдено несколько точек с одинаковым NAME",
+				Key:             syncPlanRowKey(row.Row),
+				Row:             row.Row,
+				Name:            row.Name,
+				OneCCode:        row.OneCCode,
+				ContractLabel:   contractBoolToLabel(row.ContractOn),
+				Action:          ServicePointSyncActionAmbiguous,
+				Reason:          "в Bitrix24 найдено несколько точек с одинаковым NAME",
+				MatchedPointIDs: conflictIDs,
 			})
 			continue
 		}
 
 		state := matches[0]
+		matchedPointIDs[state.ID] = struct{}{}
 		desiredContract := contractBoolToLabel(row.ContractOn)
 		currentContract := contractBoolToLabel(state.CurrentContract)
 		needUpdate := false
@@ -387,6 +455,7 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 			preview.ToUpdate++
 			id := state.ID
 			preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+				Key:             syncPlanRowKey(row.Row),
 				Row:             row.Row,
 				Name:            row.Name,
 				OneCCode:        row.OneCCode,
@@ -395,6 +464,7 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 				B24ElementID:    &id,
 				CurrentCode:     state.CurrentCode,
 				CurrentContract: currentContract,
+				AutoApply:       true,
 			})
 			continue
 		}
@@ -402,6 +472,7 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 		preview.Unchanged++
 		id := state.ID
 		preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+			Key:             syncPlanRowKey(row.Row),
 			Row:             row.Row,
 			Name:            row.Name,
 			OneCCode:        row.OneCCode,
@@ -413,7 +484,70 @@ func (s *bitrixSyncService) buildSyncPlan(ctx context.Context, rows []importedSe
 		})
 	}
 
+	for _, state := range uniqueServicePointStates(statesByName) {
+		if _, matched := matchedPointIDs[state.ID]; matched {
+			continue
+		}
+		if _, mapped := mappedPointIDs[state.ID]; mapped {
+			continue
+		}
+		if _, exists := reportNames[normalizePointName(state.Name)]; exists {
+			continue
+		}
+
+		preview.ToDelete++
+		stateID := state.ID
+		preview.Items = append(preview.Items, ServicePointSyncPlanItem{
+			Key:             syncPlanDeleteKey(stateID),
+			Name:            state.Name,
+			OneCCode:        state.CurrentCode,
+			Action:          ServicePointSyncActionDelete,
+			Reason:          "точка есть в Bitrix24, но отсутствует в загруженном отчёте",
+			B24ElementID:    &stateID,
+			CurrentCode:     state.CurrentCode,
+			CurrentContract: contractBoolToLabel(state.CurrentContract),
+		})
+	}
+
+	preview.ProcessedRows = len(preview.Items)
 	return preview, nil
+}
+
+// collectAllPointIDs возвращает идентификаторы всех точек из набора состояний без фильтрации.
+func collectAllPointIDs(items []bitrixServicePointState) []int64 {
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		if item.ID > 0 {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids
+}
+
+// uniqueServicePointStates разворачивает индекс точек по имени в плоский список без дублей по ID.
+func uniqueServicePointStates(statesByName map[string][]bitrixServicePointState) []bitrixServicePointState {
+	result := make([]bitrixServicePointState, 0, len(statesByName))
+	seen := make(map[int64]struct{}, len(statesByName))
+	for _, items := range statesByName {
+		for _, item := range items {
+			if _, exists := seen[item.ID]; exists {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// syncPlanRowKey формирует стабильный ключ строки плана для действий по строкам отчета.
+func syncPlanRowKey(row int) string {
+	return fmt.Sprintf("row:%d", row)
+}
+
+// syncPlanDeleteKey формирует стабильный ключ для удаления существующей точки Bitrix24.
+func syncPlanDeleteKey(pointID int64) string {
+	return fmt.Sprintf("delete:%d", pointID)
 }
 
 func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, iblockType string, iblockID int) (map[string][]bitrixServicePointState, error) {

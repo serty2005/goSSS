@@ -460,6 +460,21 @@ func (c *Client) ListsElementUpdate(
 	return err
 }
 
+func (c *Client) ListsElementDelete(
+	ctx context.Context,
+	iblockTypeID string,
+	iblockID int,
+	elementID int64,
+) error {
+	body := map[string]interface{}{
+		"IBLOCK_TYPE_ID": iblockTypeID,
+		"IBLOCK_ID":      iblockID,
+		"ELEMENT_ID":     elementID,
+	}
+	_, _, err := c.call(ctx, "lists.element.delete", body)
+	return err
+}
+
 func (c *Client) ListsFieldGet(ctx context.Context, iblockTypeID string, iblockID int, fieldID string) (map[string]interface{}, error) {
 	body := map[string]interface{}{
 		"IBLOCK_TYPE_ID": iblockTypeID,

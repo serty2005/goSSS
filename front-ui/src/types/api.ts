@@ -334,9 +334,10 @@ export interface ServicePointImportResultDTO {
   ambiguous_names?: string[];
 }
 
-export type ServicePointSyncAction = 'create' | 'update' | 'unchanged' | 'skipped' | 'ambiguous';
+export type ServicePointSyncAction = 'create' | 'update' | 'delete' | 'unchanged' | 'skipped' | 'ambiguous';
 
 export interface ServicePointSyncPlanItemDTO {
+  key: string;
   row: number;
   name: string;
   one_c_code: string;
@@ -346,12 +347,15 @@ export interface ServicePointSyncPlanItemDTO {
   b24_element_id?: number;
   current_code?: string;
   current_contract?: string;
+  matched_point_ids?: number[];
+  auto_apply?: boolean;
 }
 
 export interface ServicePointSyncPreviewDTO {
   processed_rows: number;
   to_create: number;
   to_update: number;
+  to_delete: number;
   unchanged: number;
   skipped: number;
   ambiguous: number;
@@ -362,11 +366,45 @@ export interface ServicePointSyncApplyResultDTO {
   processed_rows: number;
   created: number;
   updated: number;
+  deleted: number;
   unchanged: number;
   skipped: number;
   ambiguous: number;
-  applied_rows?: number[];
+  applied_keys?: string[];
   errors?: string[];
+}
+
+export interface ContractMailImportDTO {
+  id: string;
+  message_id: string;
+  attachment_name: string;
+  attachment_hash: string;
+  received_at?: string;
+  status: string;
+  error_text?: string;
+  processed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractServicePointConflictDTO {
+  id: string;
+  conflict_type: string;
+  service_point_name: string;
+  contractor_id?: string;
+  message_id?: string;
+  attachment_hash?: string;
+  matched_point_ids?: number[];
+  mapped_point_ids?: number[];
+  deletion_candidate_ids?: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractSyncStateDTO {
+  latest_import?: ContractMailImportDTO;
+  recent_imports: ContractMailImportDTO[];
+  conflicts: ContractServicePointConflictDTO[];
 }
 
 export interface TicketHistoryDTO {

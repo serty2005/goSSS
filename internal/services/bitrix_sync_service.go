@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	b24 "etalon-server/internal/infra/plugins/bitrix"
+	contractsvc "etalon-server/internal/services/contract"
 	"fmt"
 	"html"
 	"os"
@@ -56,6 +57,7 @@ type BitrixSyncService interface {
 	PreviewServicePointsImport(ctx context.Context, fileName string, content []byte) (*ServicePointImportPreview, error)
 	PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error)
 	ImportServicePoints(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping, options ServicePointSyncApplyOptions) (*ServicePointSyncApplyResult, error)
+	SyncServicePointsFromDailyReport(ctx context.Context, rows []contractsvc.ContractReportRow) (*ServicePointContractSyncResult, error)
 }
 
 type bitrixSyncService struct {
@@ -97,7 +99,17 @@ func NewBitrixSyncService(
 }
 
 func (s *bitrixSyncService) IsEnabled() bool {
-	return s.cfg.EnableBitrixGateway && s.client != nil && s.client.IsConfigured()
+	return s.canReadBitrix()
+}
+
+// canReadBitrix проверяет, доступно ли чтение списка точек и пользователей из Bitrix24.
+func (s *bitrixSyncService) canReadBitrix() bool {
+	return s.cfg != nil && s.cfg.EnableBitrixGateway && s.client != nil && s.client.IsConfigured()
+}
+
+// isContractReportDryRun определяет режим тестового прогона для ежедневного отчета 1С.
+func (s *bitrixSyncService) isContractReportDryRun() bool {
+	return s.cfg != nil && s.cfg.EnableContractGateway && !s.cfg.BitrixWebhookEnabled
 }
 
 func (s *bitrixSyncService) SyncTicketByID(ctx context.Context, ticketID string) error {

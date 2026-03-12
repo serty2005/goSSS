@@ -45,6 +45,8 @@ func Migrate(db *gorm.DB) error {
 		&workstation.Workstation{},
 		&fiscal.FiscalRegister{},
 		&contract.Contract{},
+		&contract.MailImport{},
+		&contract.ServicePointSyncConflict{},
 		&models.AgentFile{},
 		&models.ReconciliationTask{},
 		&models.Agent{},

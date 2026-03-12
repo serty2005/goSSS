@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	contractdom "etalon-server/internal/domain/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"io"
@@ -16,15 +17,20 @@ import (
 )
 
 type BitrixHandler struct {
-	service services.BitrixSyncService
+	service      services.BitrixSyncService
+	contractRepo contractdom.Repository
 }
 
-func NewBitrixHandler(service services.BitrixSyncService) *BitrixHandler {
-	return &BitrixHandler{service: service}
+func NewBitrixHandler(service services.BitrixSyncService, contractRepo contractdom.Repository) *BitrixHandler {
+	return &BitrixHandler{
+		service:      service,
+		contractRepo: contractRepo,
+	}
 }
 
 func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/service-points", h.ListServicePoints)
+	r.Get("/service-points/contract-sync/state", h.GetContractSyncState)
 	r.Post("/service-points/refresh", h.RefreshServicePoints)
 	r.Get("/users/suggest", h.SuggestUser)
 	r.Post("/users/refresh", h.RefreshUsers)
@@ -69,6 +75,69 @@ func (h *BitrixHandler) RefreshServicePoints(w http.ResponseWriter, r *http.Requ
 		"status": "ok",
 		"count":  count,
 	})
+}
+
+func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Request) {
+	if h.contractRepo == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "репозиторий контрактов не инициализирован")
+		return
+	}
+
+	imports, err := h.contractRepo.ListMailImports(r.Context(), 20)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	conflicts, err := h.contractRepo.ListServicePointSyncConflicts(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	items := make([]api.ContractMailImportDTO, 0, len(imports))
+	for _, item := range imports {
+		items = append(items, api.ContractMailImportDTO{
+			ID:             item.ID,
+			MessageID:      item.MessageID,
+			AttachmentName: item.AttachmentName,
+			AttachmentHash: item.AttachmentHash,
+			ReceivedAt:     item.ReceivedAt,
+			Status:         item.Status,
+			ErrorText:      item.ErrorText,
+			ProcessedAt:    item.ProcessedAt,
+			CreatedAt:      item.CreatedAt,
+			UpdatedAt:      item.UpdatedAt,
+		})
+	}
+
+	conflictItems := make([]api.ContractServicePointConflictDTO, 0, len(conflicts))
+	for _, item := range conflicts {
+		details := extractConflictDetails([]byte(item.Details))
+		conflictItems = append(conflictItems, api.ContractServicePointConflictDTO{
+			ID:                   item.ID,
+			ConflictType:         item.ConflictType,
+			ServicePointName:     item.ServicePointName,
+			ContractorID:         item.ContractorID,
+			MessageID:            item.MessageID,
+			AttachmentHash:       item.AttachmentHash,
+			MatchedPointIDs:      details.MatchedPointIDs,
+			MappedPointIDs:       details.MappedPointIDs,
+			DeletionCandidateIDs: details.DeletionCandidateIDs,
+			CreatedAt:            item.CreatedAt,
+			UpdatedAt:            item.UpdatedAt,
+		})
+	}
+
+	payload := api.ContractSyncStateDTO{
+		RecentImports: items,
+		Conflicts:     conflictItems,
+	}
+	if len(items) > 0 {
+		payload.LatestImport = &items[0]
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, payload)
 }
 
 func (h *BitrixHandler) RefreshUsers(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +219,7 @@ func (h *BitrixHandler) ImportServicePoints(w http.ResponseWriter, r *http.Reque
 
 	options := services.ServicePointSyncApplyOptions{
 		SelectedRows: parseSelectedRows(r.FormValue("selected_rows")),
+		SelectedKeys: parseSelectedKeys(r.FormValue("selected_keys")),
 	}
 
 	result, err := h.service.ImportServicePoints(r.Context(), fileName, content, mapping, options)
@@ -235,4 +305,58 @@ func parseSelectedRows(raw string) []int {
 		return nil
 	}
 	return values
+}
+
+func parseSelectedKeys(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+
+	if strings.HasPrefix(trimmed, "[") {
+		var parsed []string
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+			return uniqueSelectedKeys(parsed)
+		}
+	}
+
+	return uniqueSelectedKeys(strings.Split(trimmed, ","))
+}
+
+func uniqueSelectedKeys(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+type contractConflictDetails struct {
+	MatchedPointIDs      []int64 `json:"matched_point_ids"`
+	MappedPointIDs       []int64 `json:"mapped_point_ids"`
+	DeletionCandidateIDs []int64 `json:"deletion_candidate_ids"`
+}
+
+func extractConflictDetails(details []byte) contractConflictDetails {
+	if len(details) == 0 {
+		return contractConflictDetails{}
+	}
+
+	var payload contractConflictDetails
+	if err := json.Unmarshal(details, &payload); err != nil {
+		return contractConflictDetails{}
+	}
+	return payload
 }

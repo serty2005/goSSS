@@ -23,6 +23,7 @@ type Repository interface {
 	ListServicePoints(ctx context.Context) ([]ServicePoint, error)
 	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]ServicePoint, error)
 	UpdateServicePointOneCData(ctx context.Context, b24ElementID int64, oneCCode string, contractOn *bool) error
+	UpdateServicePointSyncData(ctx context.Context, point *ServicePoint) error
 
 	ReplaceUserCache(ctx context.Context, users []UserCache) error
 	ListUserCache(ctx context.Context) ([]UserCache, error)
@@ -31,6 +32,7 @@ type Repository interface {
 	ListServicePointsByIDs(ctx context.Context, ids []int64) ([]ServicePoint, error)
 
 	UpsertCompanyServicePointMapping(ctx context.Context, item *CompanyServicePointMapping) error
+	ListCompanyServicePointMappings(ctx context.Context) ([]CompanyServicePointMapping, error)
 	GetCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) (*CompanyServicePointMapping, error)
 	GetCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) (*CompanyServicePointMapping, error)
 	ListCompanyServicePointMappingsByCompanyIDs(ctx context.Context, companyIDs []string) ([]CompanyServicePointMapping, error)

@@ -2,6 +2,7 @@ import apiClient from './axios';
 import {
   ApiResponse,
   BitrixUserSuggestionDTO,
+  ContractSyncStateDTO,
   ServicePointImportPreviewDTO,
   ServicePointSyncApplyResultDTO,
   ServicePointSyncPreviewDTO,
@@ -17,6 +18,11 @@ export const bitrixAdminApi = {
     const response = await apiClient.get<ApiResponse<{ suggestion?: BitrixUserSuggestionDTO | null }>>('/bitrix/users/suggest', {
       params,
     });
+    return response.data;
+  },
+
+  getContractSyncState: async () => {
+    const response = await apiClient.get<ApiResponse<ContractSyncStateDTO>>('/bitrix/service-points/contract-sync/state');
     return response.data;
   },
 
@@ -62,15 +68,15 @@ export const bitrixAdminApi = {
 
   applyServicePointsImport: async (
     file: File,
-    mapping: { code_column: string; name_column: string; contract_column: string; selected_rows?: number[] },
+    mapping: { code_column: string; name_column: string; contract_column: string; selected_keys?: string[] },
   ) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('code_column', mapping.code_column);
     formData.append('name_column', mapping.name_column);
     formData.append('contract_column', mapping.contract_column);
-    if (mapping.selected_rows && mapping.selected_rows.length > 0) {
-      formData.append('selected_rows', JSON.stringify(mapping.selected_rows));
+    if (mapping.selected_keys && mapping.selected_keys.length > 0) {
+      formData.append('selected_keys', JSON.stringify(mapping.selected_keys));
     }
 
     const response = await apiClient.post<ApiResponse<ServicePointSyncApplyResultDTO>>(

@@ -12,6 +12,7 @@ type Repository interface {
 
 	GetByID(ctx context.Context, internalID string) (*Contract, error)
 	GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*Contract, error)
+	ListByLastUpdatedBy(ctx context.Context, lastUpdatedBy string) ([]Contract, error)
 
 	// ReplaceCompanyLinks обновляет связи Many-to-Many для контракта.
 	// companies: список моделей компаний, которые должны быть привязаны к контракту.
@@ -19,4 +20,10 @@ type Repository interface {
 
 	// GetActiveContractIDsForCompany возвращает ID активных контрактов компании.
 	GetActiveContractIDsForCompany(ctx context.Context, companyID string) ([]string, error)
+
+	GetMailImportByAttachmentHash(ctx context.Context, attachmentHash string) (*MailImport, error)
+	ListMailImports(ctx context.Context, limit int) ([]MailImport, error)
+	UpsertMailImport(ctx context.Context, item *MailImport) error
+	ListServicePointSyncConflicts(ctx context.Context) ([]ServicePointSyncConflict, error)
+	ReplaceServicePointSyncConflicts(ctx context.Context, conflicts []ServicePointSyncConflict) error
 }
