@@ -84,6 +84,7 @@ type Config struct {
 	BitrixOriginatorID          string
 	BitrixCategoryID            int
 	BitrixRateLimitPerMin       int
+	BitrixRateLimitBurst        int
 	BitrixSyncInterval          time.Duration
 	BitrixDictionarySyncEvery   time.Duration
 	BitrixServicePointsIBlockID int
@@ -194,7 +195,8 @@ func New() *Config {
 		BitrixBaseURL:               bitrixBaseURL,
 		BitrixOriginatorID:          getEnv("BITRIX_ORIGINATOR_ID", "ETALON_SD"),
 		BitrixCategoryID:            getEnvAsInt("BITRIX_CATEGORY_ID", 17),
-		BitrixRateLimitPerMin:       min(max(1, getEnvAsInt("BITRIX_RATE_LIMIT_PER_MIN", 100)), 100),
+		BitrixRateLimitPerMin:       min(max(1, getEnvAsInt("BITRIX_RATE_LIMIT_PER_MIN", 120)), 300),
+		BitrixRateLimitBurst:        max(1, getEnvAsInt("BITRIX_RATE_LIMIT_BURST", 50)),
 		BitrixSyncInterval:          time.Duration(getEnvAsInt("BITRIX_SYNC_INTERVAL_MIN", 5)) * time.Minute,
 		BitrixDictionarySyncEvery:   time.Duration(getEnvAsInt("BITRIX_DICTIONARY_SYNC_INTERVAL_HOURS", 24)) * time.Hour,
 		BitrixServicePointsIBlockID: getEnvAsInt("BITRIX_SERVICE_POINT_IBLOCK_ID", 101),

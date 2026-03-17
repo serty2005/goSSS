@@ -552,35 +552,27 @@ func syncPlanDeleteKey(pointID int64) string {
 
 func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, iblockType string, iblockID int) (map[string][]bitrixServicePointState, error) {
 	statesByName := make(map[string][]bitrixServicePointState)
-	start := 0
-	for {
-		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start, bitrixServicePointSelectFields)
-		if err != nil {
-			return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
-		}
+	items, err := s.client.ListsElementGetAll(ctx, iblockType, iblockID, bitrixServicePointSelectFields)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
+	}
 
-		for _, item := range items {
-			currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
-			contractValue := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
-			contractOn := parseContractStatus(contractValue)
-			state := bitrixServicePointState{
-				ID:              item.ID,
-				Name:            item.Name,
-				Properties:      item.Properties,
-				CurrentCode:     currentCode,
-				CurrentContract: contractOn,
-			}
-			normalizedName := normalizePointName(item.Name)
-			if normalizedName == "" {
-				continue
-			}
-			statesByName[normalizedName] = append(statesByName[normalizedName], state)
+	for _, item := range items {
+		currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
+		contractValue := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
+		contractOn := parseContractStatus(contractValue)
+		state := bitrixServicePointState{
+			ID:              item.ID,
+			Name:            item.Name,
+			Properties:      item.Properties,
+			CurrentCode:     currentCode,
+			CurrentContract: contractOn,
 		}
-
-		if next <= 0 {
-			break
+		normalizedName := normalizePointName(item.Name)
+		if normalizedName == "" {
+			continue
 		}
-		start = next
+		statesByName[normalizedName] = append(statesByName[normalizedName], state)
 	}
 
 	return statesByName, nil

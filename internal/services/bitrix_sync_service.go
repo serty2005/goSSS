@@ -313,25 +313,18 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 	if err != nil {
 		return 0, err
 	}
+	items, err := s.client.ListsElementGetAll(ctx, iblockType, iblockID, bitrixServicePointSelectFields)
+	if err != nil {
+		return 0, err
+	}
 	all := make([]bitrix.ServicePoint, 0, 512)
-	start := 0
-	for {
-		items, next, err := s.client.ListsElementGet(ctx, iblockType, iblockID, start, bitrixServicePointSelectFields)
-		if err != nil {
-			return 0, err
-		}
-		for _, item := range items {
-			all = append(all, bitrix.ServicePoint{
-				B24ElementID: item.ID,
-				Name:         item.Name,
-				RawJSON:      item.RawJSON,
-				UpdatedAt:    time.Now(),
-			})
-		}
-		if next <= 0 {
-			break
-		}
-		start = next
+	for _, item := range items {
+		all = append(all, bitrix.ServicePoint{
+			B24ElementID: item.ID,
+			Name:         item.Name,
+			RawJSON:      item.RawJSON,
+			UpdatedAt:    time.Now(),
+		})
 	}
 	if err := s.repo.ReplaceServicePoints(ctx, all); err != nil {
 		return 0, err
@@ -385,32 +378,25 @@ func (s *bitrixSyncService) RefreshUsers(ctx context.Context) (int, error) {
 	if !s.IsEnabled() {
 		return 0, nil
 	}
-	users := make([]bitrix.UserCache, 0, 256)
-	start := 0
-	for {
-		page, next, err := s.client.UserGet(ctx, start)
-		if err != nil {
-			return 0, err
-		}
-		now := time.Now()
-		for _, u := range page {
-			users = append(users, bitrix.UserCache{
-				B24UserID:  u.ID,
-				Name:       strings.TrimSpace(strings.Join([]string{u.LastName, u.FirstName, u.SecondName}, " ")),
-				Active:     u.Active,
-				LastName:   u.LastName,
-				FirstName:  u.FirstName,
-				SecondName: u.SecondName,
-				Email:      u.Email,
-				Phone:      u.Phone,
-				LastSeenAt: &now,
-				UpdatedAt:  now,
-			})
-		}
-		if next <= 0 {
-			break
-		}
-		start = next
+	page, err := s.client.UserGetAll(ctx)
+	if err != nil {
+		return 0, err
+	}
+	users := make([]bitrix.UserCache, 0, len(page))
+	now := time.Now()
+	for _, u := range page {
+		users = append(users, bitrix.UserCache{
+			B24UserID:  u.ID,
+			Name:       strings.TrimSpace(strings.Join([]string{u.LastName, u.FirstName, u.SecondName}, " ")),
+			Active:     u.Active,
+			LastName:   u.LastName,
+			FirstName:  u.FirstName,
+			SecondName: u.SecondName,
+			Email:      u.Email,
+			Phone:      u.Phone,
+			LastSeenAt: &now,
+			UpdatedAt:  now,
+		})
 	}
 	if err := s.repo.ReplaceUserCache(ctx, users); err != nil {
 		return 0, err
