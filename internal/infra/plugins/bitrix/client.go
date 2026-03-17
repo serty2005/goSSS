@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Deal struct {
@@ -75,15 +77,26 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	logger     logger.LoggerInterface
+	limiter    *rate.Limiter
 }
 
 func NewClient(cfg *config.Config, log logger.LoggerInterface) *Client {
+	baseURL := ""
+	timeout := 15 * time.Second
+	limitPerMinute := 100
+	if cfg != nil {
+		baseURL = strings.TrimRight(strings.TrimSpace(cfg.BitrixBaseURL), "/") + "/"
+		timeout = cfg.RequestTimeout
+		limitPerMinute = max(1, cfg.BitrixRateLimitPerMin)
+	}
+
 	return &Client{
-		baseURL: strings.TrimRight(strings.TrimSpace(cfg.BitrixBaseURL), "/") + "/",
+		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: cfg.RequestTimeout,
+			Timeout: timeout,
 		},
-		logger: log,
+		logger:  log,
+		limiter: rate.NewLimiter(rate.Every(time.Minute/time.Duration(limitPerMinute)), 1),
 	}
 }
 
@@ -560,6 +573,11 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
+		if c.limiter != nil {
+			if err := c.limiter.Wait(ctx); err != nil {
+				return nil, 0, fmt.Errorf("ожидание лимита Bitrix24 прервано: %w", err)
+			}
+		}
 		if attempt > 0 {
 			delay := time.Duration(attempt*attempt) * 200 * time.Millisecond
 			time.Sleep(delay)
