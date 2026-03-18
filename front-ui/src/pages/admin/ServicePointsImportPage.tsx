@@ -7,8 +7,10 @@ import {
   Col,
   Descriptions,
   Empty,
+  Input,
   Popconfirm,
   Row,
+  Select,
   Space,
   Statistic,
   Table,
@@ -16,6 +18,7 @@ import {
   Tag,
   Typography,
   message,
+  theme as antTheme,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -71,10 +74,28 @@ const formatDateTime = (value?: string) => {
 
 const shortValue = (value?: string, size = 10) => (!value ? '—' : value.length <= size * 2 ? value : `${value.slice(0, size)}…${value.slice(-size)}`);
 const displayValue = (value?: string | number | null) => String(value ?? '').trim() || '—';
+const hasValue = (value?: string | number | null) => String(value ?? '').trim().length > 0;
 const normalizeSearch = (value: string) => value.trim().toLowerCase().replace(/ё/g, 'е');
 const isChangedValue = (left?: string | number | null, right?: string | number | null) => String(left ?? '').trim() !== String(right ?? '').trim();
+const joinCompactParts = (...parts: Array<string | number | null | undefined>) => parts.map((part) => String(part ?? '').trim()).filter(Boolean).join(' • ');
+const buildDiffSummary = (diff: ContractSyncFieldDiffDTO) => `${diff.label}: ${displayValue(diff.current_value)} → ${displayValue(diff.next_value)}`;
+const buildDeleteDuplicateSummary = (item: ContractSyncQueueItemDTO) => joinCompactParts(
+  hasValue(item.service_point_code) ? `Код ${displayValue(item.service_point_code)}` : '',
+  hasValue(item.current_code) ? `Текущий ${displayValue(item.current_code)}` : '',
+  hasValue(item.current_contract_type || item.contract_type) ? `Тип ${displayValue(item.current_contract_type || item.contract_type)}` : '',
+  hasValue(item.contractor_name) ? `Контрагент ${item.contractor_name}` : '',
+);
+const buildQueueIdentitySummary = (item: ContractSyncQueueItemDTO) => joinCompactParts(
+  hasValue(item.service_point_code) ? `Код ${displayValue(item.service_point_code)}` : '',
+  hasValue(item.contract_type) ? `Тип ${displayValue(item.contract_type)}` : '',
+  hasValue(item.contractor_name) ? `Контрагент ${item.contractor_name}` : '',
+);
+const buildDuplicateGroupSummary = (item: ContractSyncQueueItemDTO) => item.matched_point_ids?.length
+  ? `Группа дублей: ${item.matched_point_ids.join(', ')}`
+  : 'Группа дублей не определена';
 
 const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, content, danger = false, active = false }) => {
+  const { token } = antTheme.useToken();
   const [isPinned, setIsPinned] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const isOpen = isPinned || isHovered;
@@ -106,9 +127,9 @@ const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, conten
           width: 36,
           height: 36,
           borderRadius: 18,
-          border: `1px solid ${danger && active ? '#ff4d4f' : '#d9d9d9'}`,
-          background: danger && active ? '#fff2f0' : '#ffffff',
-          color: danger && active ? '#cf1322' : '#595959',
+          border: `1px solid ${danger && active ? token.colorErrorBorder : token.colorBorder}`,
+          background: danger && active ? token.colorErrorBg : token.colorBgContainer,
+          color: danger && active ? token.colorError : token.colorTextSecondary,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -128,9 +149,9 @@ const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, conten
             maxWidth: 'min(360px, calc(100vw - 32px))',
             padding: 12,
             borderRadius: 12,
-            border: '1px solid #d9d9d9',
-            background: '#ffffff',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+            border: `1px solid ${token.colorBorderSecondary}`,
+            background: token.colorBgElevated,
+            boxShadow: token.boxShadowSecondary,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
@@ -148,12 +169,13 @@ const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, conten
                   width: 28,
                   height: 28,
                   borderRadius: 14,
-                  border: '1px solid #d9d9d9',
-                  background: '#ffffff',
+                  border: `1px solid ${token.colorBorder}`,
+                  background: token.colorBgContainer,
                   cursor: 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  color: token.colorTextSecondary,
                 }}
               >
                 <CloseOutlined />
@@ -245,39 +267,6 @@ const fieldBlock = (label: string, value?: string | number | null, strong = fals
   </Space>
 );
 
-const diffBlock = (diff: ContractSyncFieldDiffDTO) => (
-  <Space key={`${diff.field}-${diff.label}`} orientation="vertical" size={0}>
-    <Text strong>{diff.label}</Text>
-    <Text type="secondary">Сейчас: {displayValue(diff.current_value)}</Text>
-    <Text>После запуска: {displayValue(diff.next_value)}</Text>
-  </Space>
-);
-
-const renderUpsertChanges = (item: ContractSyncQueueItemDTO) => {
-  if (item.action === 'create') {
-    return (
-      <Space orientation="vertical" size={4}>
-        {fieldBlock('Название из отчёта', item.service_point_name, true)}
-        {fieldBlock('Код из отчёта', item.service_point_code)}
-        {fieldBlock('Тип контракта из отчёта', item.contract_type)}
-      </Space>
-    );
-  }
-  if (item.change_set?.length) {
-    return (
-      <Space orientation="vertical" size={6}>
-        <Space wrap>
-          {item.change_set.map((diff) => (
-            <Tag key={`${item.key}-${diff.field}`} color="blue">{diff.label}</Tag>
-          ))}
-        </Space>
-        {item.change_set.map(diffBlock)}
-      </Space>
-    );
-  }
-  return <Text type="secondary">Изменения не детализированы</Text>;
-};
-
 const renderDeleteRisk = (item: ContractSyncQueueItemDTO) => (
   <Space orientation="vertical" size={6}>
     <Space wrap>
@@ -285,12 +274,68 @@ const renderDeleteRisk = (item: ContractSyncQueueItemDTO) => (
       <Tag color={item.filled_fields ? 'gold' : 'default'}>Заполнено полей: {item.filled_fields ?? 0}</Tag>
       <Tag color={(item.matched_point_ids?.length || 0) > 1 ? 'volcano' : 'default'}>Дублей: {item.matched_point_ids?.length || 0}</Tag>
     </Space>
-    {fieldBlock('Bitrix24 ID', item.b24_element_id)}
-    {fieldBlock('Текущий код', item.current_code || item.service_point_code)}
-    {fieldBlock('Текущий тип контракта', item.current_contract_type || item.contract_type)}
-    <Text type="secondary">Группа дублей: {item.matched_point_ids?.length ? item.matched_point_ids.join(', ') : '—'}</Text>
+    <Text type="secondary" className="contract-sync-inline-text" title={buildDeleteDuplicateSummary(item) || '—'}>
+      {buildDeleteDuplicateSummary(item) || '—'}
+    </Text>
+    <Text type="secondary" className="contract-sync-inline-text" title={buildDuplicateGroupSummary(item)}>
+      {buildDuplicateGroupSummary(item)}
+    </Text>
   </Space>
 );
+
+const renderQueueChangeSummary = (item: ContractSyncQueueItemDTO) => {
+  if (item.action === 'delete') {
+    return (
+      <Space orientation="vertical" size={4}>
+        <Text>Удаление дубля из Bitrix24</Text>
+        <Space wrap size={[4, 4]}>
+          <Tag color={item.is_mapped ? 'blue' : 'orange'}>{item.is_mapped ? 'Есть сопоставление' : 'Без сопоставления'}</Tag>
+          <Tag color={item.filled_fields ? 'gold' : 'default'}>Полей: {item.filled_fields ?? 0}</Tag>
+          <Tag color={(item.matched_point_ids?.length || 0) > 1 ? 'volcano' : 'default'}>Дублей: {item.matched_point_ids?.length || 0}</Tag>
+        </Space>
+        <Text type="secondary" className="contract-sync-inline-text" title={buildDuplicateGroupSummary(item)}>
+          {buildDuplicateGroupSummary(item)}
+        </Text>
+      </Space>
+    );
+  }
+
+  if (item.action === 'create') {
+    return (
+      <Space orientation="vertical" size={4}>
+        <Text>Создание новой точки по данным отчёта</Text>
+        {item.contractor_name ? (
+          <Text type="secondary" className="contract-sync-inline-text" title={`Контрагент ${item.contractor_name}`}>
+            Контрагент {item.contractor_name}
+          </Text>
+        ) : null}
+      </Space>
+    );
+  }
+
+  if (item.change_set?.length) {
+    return (
+      <Space orientation="vertical" size={4}>
+        <Space wrap size={[4, 4]}>
+          {item.change_set.map((diff) => (
+            <Tag key={`${item.key}-${diff.field}`} color="blue">{diff.label}</Tag>
+          ))}
+        </Space>
+        {item.change_set.slice(0, 2).map((diff) => {
+          const summary = buildDiffSummary(diff);
+          return (
+            <Text key={`${item.key}-${diff.field}-summary`} className="contract-sync-inline-text" title={summary}>
+              {summary}
+            </Text>
+          );
+        })}
+        {item.change_set.length > 2 ? <Text type="secondary">И ещё полей: {item.change_set.length - 2}</Text> : null}
+      </Space>
+    );
+  }
+
+  return <Text type="secondary">Изменения не детализированы</Text>;
+};
 
 const rowClassName = (item: ContractSyncQueueItemDTO | QueueRow) => {
   if ('has_execution_errors' in item && item.has_execution_errors) return 'contract-sync-row-error';
@@ -301,6 +346,7 @@ const rowClassName = (item: ContractSyncQueueItemDTO | QueueRow) => {
 };
 
 const ServicePointsImportPage: React.FC = () => {
+  const { token } = antTheme.useToken();
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const navigate = useNavigate();
@@ -526,20 +572,41 @@ const ServicePointsImportPage: React.FC = () => {
       {
         title: 'Кандидат на удаление',
         key: 'delete_target',
-        width: 300,
+        width: 420,
         render: (_, item) => (
           <Space orientation="vertical" size={4}>
-            <Space wrap>
-              <Text strong>{item.service_point_name || '—'}</Text>
-              {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : null}
-            </Space>
-            {fieldBlock('Текущий код', item.current_code || item.service_point_code)}
-            {fieldBlock('Текущий тип контракта', item.current_contract_type || item.contract_type)}
+            <Text strong className="contract-sync-inline-text" title={item.service_point_name || '—'}>
+              {item.service_point_name || '—'}
+            </Text>
+            <Text type="secondary" className="contract-sync-inline-text" title={buildDeleteDuplicateSummary(item) || '—'}>
+              {buildDeleteDuplicateSummary(item) || '—'}
+            </Text>
           </Space>
         ),
       },
-      { title: 'Риск и контекст', key: 'risk', width: 360, render: (_, item) => renderDeleteRisk(item) },
-      { title: 'Причина удаления', dataIndex: 'reason', key: 'reason', width: 300, render: (value?: string) => value || '—' },
+      { title: 'Контекст', key: 'risk', width: 320, render: (_, item) => renderDeleteRisk(item) },
+      {
+        title: 'Причина удаления',
+        dataIndex: 'reason',
+        key: 'reason',
+        width: 240,
+        render: (value?: string) => (
+          <Text className="contract-sync-inline-text" title={value || '—'}>
+            {value || '—'}
+          </Text>
+        ),
+      },
+      {
+        title: 'Действие',
+        key: 'delete_action',
+        width: 150,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            {actionTag(item.action)}
+            {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : <Text type="secondary">Без B24 ID</Text>}
+          </Space>
+        ),
+      },
     ],
     [],
   );
@@ -550,22 +617,33 @@ const ServicePointsImportPage: React.FC = () => {
         title: 'Порядок',
         dataIndex: 'queue_order',
         key: 'queue_order',
-        width: 90,
+        width: 72,
         sorter: (a, b) => a.queue_order - b.queue_order,
       },
-      { title: 'Операция', dataIndex: 'action', key: 'action', width: 120, render: (value: ContractSyncQueueItemDTO['action']) => actionTag(value) },
       {
-        title: 'Строка',
+        title: 'Операция',
+        dataIndex: 'action',
+        key: 'action',
+        width: 150,
+        render: (value: ContractSyncQueueItemDTO['action'], item) => (
+          <Space orientation="vertical" size={4}>
+            {actionTag(value)}
+            {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : <Tag>Новый</Tag>}
+          </Space>
+        ),
+      },
+      {
+        title: 'Точка',
         key: 'identity',
-        width: 320,
+        width: 280,
         render: (_, item) => (
           <Space orientation="vertical" size={4}>
-            <Space wrap>
-              <Text strong>{item.service_point_name || '—'}</Text>
-              {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : <Tag>Новый элемент</Tag>}
-            </Space>
-            <Text type="secondary">Код: {displayValue(item.service_point_code)}</Text>
-            <Text type="secondary">Тип контракта: {displayValue(item.contract_type)}</Text>
+            <Text strong className="contract-sync-inline-text" title={item.service_point_name || '—'}>
+              {item.service_point_name || '—'}
+            </Text>
+            <Text type="secondary" className="contract-sync-inline-text" title={buildQueueIdentitySummary(item) || '—'}>
+              {buildQueueIdentitySummary(item) || '—'}
+            </Text>
           </Space>
         ),
       },
@@ -573,18 +651,26 @@ const ServicePointsImportPage: React.FC = () => {
         title: 'Что произойдёт',
         key: 'changes',
         width: 360,
-        render: (_, item) => (item.action === 'delete' ? renderDeleteRisk(item) : renderUpsertChanges(item)),
+        render: (_, item) => renderQueueChangeSummary(item),
       },
       {
         title: 'Статус',
         key: 'status',
-        width: 320,
+        width: 280,
         render: (_, item) => (
           <Space orientation="vertical" size={4}>
-            {item.has_execution_errors ? <Tag color="red">Ошибка выполнения</Tag> : actionTag(item.action)}
-            <Text type="secondary">{item.reason || '—'}</Text>
+            {item.has_execution_errors ? <Tag color="red">Ошибка выполнения</Tag> : null}
+            {item.reason ? (
+              <Text type="secondary" className="contract-sync-inline-text" title={item.reason}>
+                {item.reason}
+              </Text>
+            ) : (
+              <Text type="secondary">Без замечаний</Text>
+            )}
             {item.execution_errors.map((errorText, index) => (
-              <Text key={`${item.key}-error-${index}`} type="danger">{errorText}</Text>
+              <Text key={`${item.key}-error-${index}`} type="danger" className="contract-sync-inline-text" title={errorText}>
+                {errorText}
+              </Text>
             ))}
           </Space>
         ),
@@ -668,49 +754,50 @@ const ServicePointsImportPage: React.FC = () => {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 0 }}>
-          <select
+          <Select
             value={upsertFilter}
-            onChange={(event) => setUpsertFilter(event.target.value as UpsertFilter)}
-            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
-          >
-            <option value="all">Изменения: {upsertItems.length}</option>
-            <option value="create">Create: {upsertStats.create}</option>
-            <option value="update">Update: {upsertStats.update}</option>
-          </select>
-          <select
+            onChange={(value) => setUpsertFilter(value as UpsertFilter)}
+            options={[
+              { value: 'all', label: `Изменения: ${upsertItems.length}` },
+              { value: 'create', label: `Create: ${upsertStats.create}` },
+              { value: 'update', label: `Update: ${upsertStats.update}` },
+            ]}
+            style={{ minWidth: 180, flexShrink: 0 }}
+            popupMatchSelectWidth={false}
+          />
+          <Select
             value={deleteFilter}
-            onChange={(event) => setDeleteFilter(event.target.value as DeleteFilter)}
-            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
-          >
-            <option value="all">Удаления: {deleteItems.length}</option>
-            <option value="mapped">С сопоставлением: {deleteMappedCount}</option>
-            <option value="unmapped">Без сопоставления: {deleteUnmappedCount}</option>
-          </select>
-          <select
+            onChange={(value) => setDeleteFilter(value as DeleteFilter)}
+            options={[
+              { value: 'all', label: `Удаления: ${deleteItems.length}` },
+              { value: 'mapped', label: `С сопоставлением: ${deleteMappedCount}` },
+              { value: 'unmapped', label: `Без сопоставления: ${deleteUnmappedCount}` },
+            ]}
+            style={{ minWidth: 210, flexShrink: 0 }}
+            popupMatchSelectWidth={false}
+          />
+          <Select
             value={queueFilter}
-            onChange={(event) => setQueueFilter(event.target.value as QueueFilter)}
-            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
-          >
-            <option value="all">Очередь: {queueItems.length}</option>
-            <option value="create">Create: {queueStats.create}</option>
-            <option value="update">Update: {queueStats.update}</option>
-            <option value="delete">Delete: {queueStats.delete}</option>
-            <option value="errors">Ошибки: {queueErrorCount}</option>
-          </select>
+            onChange={(value) => setQueueFilter(value as QueueFilter)}
+            options={[
+              { value: 'all', label: `Очередь: ${queueItems.length}` },
+              { value: 'create', label: `Create: ${queueStats.create}` },
+              { value: 'update', label: `Update: ${queueStats.update}` },
+              { value: 'delete', label: `Delete: ${queueStats.delete}` },
+              { value: 'errors', label: `Ошибки: ${queueErrorCount}` },
+            ]}
+            style={{ minWidth: 160, flexShrink: 0 }}
+            popupMatchSelectWidth={false}
+          />
         </div>
-        <input
-          type="search"
+        <Input
+          allowClear
           placeholder="Поиск по точке, коду, типу, компании или B24 ID"
           value={searchValue}
           onChange={(event) => setSearchValue(event.target.value)}
           style={{
             width: '100%',
             minWidth: 0,
-            height: 36,
-            padding: '0 12px',
-            borderRadius: 10,
-            border: '1px solid #d9d9d9',
-            outline: 'none',
           }}
         />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', minWidth: 0 }}>
@@ -771,7 +858,14 @@ const ServicePointsImportPage: React.FC = () => {
 
   return (
     <Space orientation="vertical" size={12} style={{ width: '100%', marginTop: -16 }}>
-      <style>{`.contract-sync-row-create td{background:#f6ffed}.contract-sync-row-update td{background:#f0f5ff}.contract-sync-row-delete td{background:#fff2e8}.contract-sync-row-error td{background:#fff1f0!important}`}</style>
+      <style>{`
+        .contract-sync-row-create td{background:${token.colorSuccessBg}}
+        .contract-sync-row-update td{background:${token.colorInfoBg}}
+        .contract-sync-row-delete td{background:${token.colorWarningBg}}
+        .contract-sync-row-error td{background:${token.colorErrorBg}!important}
+        .contract-sync-table .ant-table-tbody > tr > td{vertical-align:top}
+        .contract-sync-inline-text{display:block;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+      `}</style>
 
       {contractSyncQuery.isError ? (
         <Alert
@@ -848,6 +942,7 @@ const ServicePointsImportPage: React.FC = () => {
                   ) : (
                     <Table<ContractSyncQueueItemDTO>
                       className="contract-sync-table"
+                      size="small"
                       rowKey="key"
                       rowClassName={rowClassName}
                       dataSource={filteredUpsertItems}
@@ -894,6 +989,7 @@ const ServicePointsImportPage: React.FC = () => {
                   ) : (
                     <Table<ContractSyncQueueItemDTO>
                       className="contract-sync-table"
+                      size="small"
                       rowKey="key"
                       rowClassName={rowClassName}
                       dataSource={filteredDeleteItems}
@@ -906,7 +1002,7 @@ const ServicePointsImportPage: React.FC = () => {
                         getCheckboxProps: () => ({ disabled: isExecuting }),
                       }}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
-                      scroll={{ x: 1350 }}
+                      scroll={{ x: 1130 }}
                       locale={{ emptyText: search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
                     />
                   )}
@@ -992,6 +1088,7 @@ const ServicePointsImportPage: React.FC = () => {
                   ) : (
                     <Table<QueueRow>
                       className="contract-sync-table"
+                      size="small"
                       rowKey="key"
                       rowClassName={rowClassName}
                       dataSource={filteredQueueItems}
@@ -1003,7 +1100,7 @@ const ServicePointsImportPage: React.FC = () => {
                         getCheckboxProps: () => ({ disabled: isExecuting }),
                       }}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
-                      scroll={{ x: 1450 }}
+                      scroll={{ x: 1140 }}
                       locale={{ emptyText: search ? 'По текущему поиску и фильтрам в очереди совпадений нет' : 'Очередь выполнения пуста' }}
                     />
                   )}
