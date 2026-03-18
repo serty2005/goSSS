@@ -20,7 +20,7 @@ import HeaderSearch from '@/components/common/HeaderSearch';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { profileApi } from '@/api/profile';
-import { LayoutHeaderContext, type ReportHeaderConfig } from '@/components/layout/LayoutHeaderContext';
+import { LayoutHeaderContext, type LayoutHeaderConfig } from '@/components/layout/LayoutHeaderContext';
 import { buildProfileConfigWithPalettes, paletteFromProfileConfig } from '@/theme/profileConfig';
 import { defaultThemePalettes, type ThemeMode, type ThemePalette } from '@/theme/themeConfig';
 import { useTicketRealtime, type TicketRealtimePayload } from '@/features/realtime/useTicketRealtime';
@@ -95,7 +95,7 @@ const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
 
 const MainLayout: React.FC = () => {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
-  const [headerConfig, setHeaderConfig] = useState<ReportHeaderConfig | null>(null);
+  const [headerConfig, setHeaderConfig] = useState<LayoutHeaderConfig | null>(null);
   const [headerAddon, setHeaderAddon] = useState<React.ReactNode | null>(null);
   const [ticketNotifications, setTicketNotifications] = useState<TicketNotificationItem[]>([]);
   const colorInputRefs = useRef<Record<EditableColorKey, HTMLInputElement | null>>({
@@ -173,13 +173,7 @@ const MainLayout: React.FC = () => {
 
   const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
   const sidebarCollapsed = !screens.lg || sidebarCollapsedPreference;
-  const isReportHeader = headerConfig?.mode === 'reports';
-
-  useEffect(() => {
-    if (!location.pathname.startsWith('/reports/')) {
-      setHeaderConfig(null);
-    }
-  }, [location.pathname]);
+  const hasCustomHeaderControls = Boolean(headerConfig?.controls);
 
   useEffect(() => {
     setHeaderAddon(null);
@@ -520,10 +514,11 @@ const MainLayout: React.FC = () => {
           style={{
             position: 'sticky',
             top: 0,
-            zIndex: 10,
+            zIndex: 40,
             background: token.colorBgContainer,
             backdropFilter: 'blur(10px)',
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            overflow: 'visible',
           }}
         >
           <Header
@@ -534,6 +529,7 @@ const MainLayout: React.FC = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              overflow: 'visible',
             }}
           >
           <div className="app-header-left" style={{ display: 'flex', alignItems: 'center' }}>
@@ -548,10 +544,10 @@ const MainLayout: React.FC = () => {
             />
           </div>
 
-          <div className="app-header-center" style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
-            {isReportHeader ? (
-              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, maxWidth: '100%', minWidth: 0, overflowX: 'auto' }}>
+          <div className="app-header-center" style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0, overflow: 'visible' }}>
+            {hasCustomHeaderControls ? (
+              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, overflow: 'visible' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, maxWidth: '100%', minWidth: 0, overflow: 'visible' }}>
                   {headerConfig?.controls}
                 </div>
               </div>

@@ -30,6 +30,7 @@ type Repository interface {
 
 	GetServicePointByID(ctx context.Context, b24ElementID int64) (*ServicePoint, error)
 	ListServicePointsByIDs(ctx context.Context, ids []int64) ([]ServicePoint, error)
+	DeleteServicePointsByIDs(ctx context.Context, ids []int64) error
 
 	UpsertCompanyServicePointMapping(ctx context.Context, item *CompanyServicePointMapping) error
 	ListCompanyServicePointMappings(ctx context.Context) ([]CompanyServicePointMapping, error)

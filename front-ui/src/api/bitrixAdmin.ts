@@ -2,6 +2,7 @@ import apiClient from './axios';
 import {
   ApiResponse,
   BitrixUserSuggestionDTO,
+  ContractSyncQueueItemDTO,
   ContractSyncExecuteResultDTO,
   ContractSyncStateDTO,
   ServicePointImportPreviewDTO,
@@ -27,7 +28,7 @@ export const bitrixAdminApi = {
     return response.data;
   },
 
-  executeContractSync: async (payload: { selected_keys: string[] }, signal?: AbortSignal) => {
+  executeContractSync: async (payload: { selected_keys: string[]; queue_items: ContractSyncQueueItemDTO[] }, signal?: AbortSignal) => {
     const response = await apiClient.post<ApiResponse<ContractSyncExecuteResultDTO>>(
       '/bitrix/service-points/contract-sync/execute',
       payload,

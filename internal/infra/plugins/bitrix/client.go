@@ -87,6 +87,11 @@ type ListElementBatchResult struct {
 	Errors     map[string]error
 }
 
+type ListElementBatchGetResult struct {
+	Items  map[int64]ListElement
+	Errors map[int64]error
+}
+
 type User struct {
 	ID         int64
 	Name       string
@@ -563,6 +568,85 @@ func (c *Client) ListsElementDelete(
 	}
 	_, _, _, err := c.call(ctx, "lists.element.delete", body)
 	return err
+}
+
+func (c *Client) ListsElementBatchGetByIDs(
+	ctx context.Context,
+	iblockTypeID string,
+	iblockID int,
+	elementIDs []int64,
+	selectFields []string,
+) (*ListElementBatchGetResult, error) {
+	result := &ListElementBatchGetResult{
+		Items:  make(map[int64]ListElement),
+		Errors: make(map[int64]error),
+	}
+	if len(elementIDs) == 0 {
+		return result, nil
+	}
+
+	uniqueIDs := make([]int64, 0, len(elementIDs))
+	seen := make(map[int64]struct{}, len(elementIDs))
+	for _, elementID := range elementIDs {
+		if elementID <= 0 {
+			continue
+		}
+		if _, exists := seen[elementID]; exists {
+			continue
+		}
+		seen[elementID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, elementID)
+	}
+	if len(uniqueIDs) == 0 {
+		return result, nil
+	}
+
+	for offset := 0; offset < len(uniqueIDs); offset += bitrixBatchLimit {
+		chunk := uniqueIDs[offset:min(offset+bitrixBatchLimit, len(uniqueIDs))]
+		batchCommands := make([]batchCommand, 0, len(chunk))
+		keysByID := make(map[int64]string, len(chunk))
+
+		for _, elementID := range chunk {
+			key := fmt.Sprintf("element_%d", elementID)
+			keysByID[elementID] = key
+			params := map[string]any{
+				"IBLOCK_TYPE_ID": iblockTypeID,
+				"IBLOCK_ID":      iblockID,
+				"ELEMENT_ID":     elementID,
+			}
+			if len(selectFields) > 0 {
+				params["SELECT"] = selectFields
+			}
+			batchCommands = append(batchCommands, batchCommand{
+				ID:     key,
+				Method: "lists.element.get",
+				Params: params,
+			})
+		}
+
+		batchResult, err := c.callBatch(ctx, false, batchCommands)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, elementID := range chunk {
+			key := keysByID[elementID]
+			if cmdErr, failed := batchResult.Errors[key]; failed {
+				result.Errors[elementID] = cmdErr
+				continue
+			}
+
+			items := parseListElements(batchResult.Results[key])
+			if len(items) == 0 {
+				result.Errors[elementID] = fmt.Errorf("элемент %d не найден в ответе Bitrix24", elementID)
+				continue
+			}
+
+			result.Items[elementID] = items[0]
+		}
+	}
+
+	return result, nil
 }
 
 func (c *Client) ListsElementBatch(ctx context.Context, commands []ListElementBatchCommand) (*ListElementBatchResult, error) {

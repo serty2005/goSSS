@@ -358,7 +358,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
 		WorkstationService:      workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo, repos.OwnerHistoryRepo),
 		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo, repos.OwnerHistoryRepo),
-		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.ServerRepo, repos.WorkstationRepo, repos.UserRepo, repos.BitrixRepo),
+		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.ServerRepo, repos.WorkstationRepo, repos.UserRepo, repos.BitrixRepo, repos.CompanyRepo),
 		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 		EntityDeletionService:   services.NewEntityDeletionService(app.Logger.With("component", "entity_deletion_service"), app.DB, transactor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.ContractRepo, repos.OwnerHistoryRepo),

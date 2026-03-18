@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"etalon-server/internal/domain/bitrix"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
@@ -63,16 +64,17 @@ type BitrixSyncService interface {
 }
 
 type bitrixSyncService struct {
-	cfg        *config.Config
-	log        logger.LoggerInterface
-	client     *b24.Client
-	redis      *redis.Client
-	ticketRepo tickets.TicketRepository
-	serverRepo server.Repository
-	wsRepo     workstation.Repository
-	history    TicketHistoryWriter
-	userRepo   user.Repository
-	repo       bitrix.Repository
+	cfg         *config.Config
+	log         logger.LoggerInterface
+	client      *b24.Client
+	redis       *redis.Client
+	ticketRepo  tickets.TicketRepository
+	serverRepo  server.Repository
+	wsRepo      workstation.Repository
+	history     TicketHistoryWriter
+	userRepo    user.Repository
+	repo        bitrix.Repository
+	companyRepo company.Repository
 }
 
 func NewBitrixSyncService(
@@ -85,18 +87,20 @@ func NewBitrixSyncService(
 	wsRepo workstation.Repository,
 	userRepo user.Repository,
 	repo bitrix.Repository,
+	companyRepo company.Repository,
 ) BitrixSyncService {
 	return &bitrixSyncService{
-		cfg:        cfg,
-		log:        log,
-		client:     client,
-		redis:      redisClient,
-		ticketRepo: ticketRepo,
-		serverRepo: serverRepo,
-		wsRepo:     wsRepo,
-		history:    NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
-		userRepo:   userRepo,
-		repo:       repo,
+		cfg:         cfg,
+		log:         log,
+		client:      client,
+		redis:       redisClient,
+		ticketRepo:  ticketRepo,
+		serverRepo:  serverRepo,
+		wsRepo:      wsRepo,
+		history:     NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
+		userRepo:    userRepo,
+		repo:        repo,
+		companyRepo: companyRepo,
 	}
 }
 

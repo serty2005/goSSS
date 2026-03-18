@@ -25,7 +25,7 @@ type ServicePointContractSyncResult struct {
 
 type ServicePointContractResolution struct {
 	B24ElementID     int64
-	ContractorID     string
+	ServicePointCode string
 	ServicePointName string
 	ContractOn       bool
 	ContractType     string
@@ -94,12 +94,12 @@ func (s *bitrixSyncService) SyncServicePointsFromDailyReport(ctx context.Context
 	}
 
 	for _, row := range contractsvc.AggregateContractReportRows(rows) {
-		if row.ContractorID == "" || row.ServicePointName == "" {
+		if row.ServicePointCode == "" || row.ServicePointName == "" {
 			result.Skipped++
 			continue
 		}
 
-		if exactMatches := statesByCode[normalizeCell(row.ContractorID)]; len(exactMatches) == 1 {
+		if exactMatches := statesByCode[normalizeCell(row.ServicePointCode)]; len(exactMatches) == 1 {
 			applied, err := s.applyServicePointReportUpdate(ctx, iblockType, iblockID, exactMatches[0], row, oneCMeta, contractMeta, dryRun)
 			if err != nil {
 				return nil, err
@@ -162,7 +162,7 @@ func (s *bitrixSyncService) SyncServicePointsFromDailyReport(ctx context.Context
 		if err := s.repo.UpdateServicePointSyncData(ctx, &bitrix.ServicePoint{
 			B24ElementID:  resolved.B24ElementID,
 			Name:          resolved.ServicePointName,
-			OneCCode:      &resolved.ContractorID,
+			OneCCode:      &resolved.ServicePointCode,
 			ContractOn:    &contractOn,
 			ContractType:  &contractType,
 			ContractStart: resolved.StartDate,
@@ -430,7 +430,7 @@ func (s *bitrixSyncService) applyServicePointReportUpdate(
 func toContractResolution(pointID int64, row contractsvc.ContractReportRow) ServicePointContractResolution {
 	return ServicePointContractResolution{
 		B24ElementID:     pointID,
-		ContractorID:     row.ContractorID,
+		ServicePointCode: row.ServicePointCode,
 		ServicePointName: row.ServicePointName,
 		ContractOn:       row.ContractOn,
 		ContractType:     row.ContractType,

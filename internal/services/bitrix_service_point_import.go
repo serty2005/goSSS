@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"etalon-server/internal/domain/bitrix"
 	b24 "etalon-server/internal/infra/plugins/bitrix"
 	"etalon-server/internal/pkg/spreadsheet"
 )
@@ -557,17 +558,19 @@ func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, ib
 		return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
 	}
 
+	cachedPoints := make([]bitrix.ServicePoint, 0, len(items))
 	for _, item := range items {
 		currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
-		contractType := normalizeContractType(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
-		contractOn := contractTypeToBool(contractType)
+		rawContractType := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
+		normalizedContractType := normalizeContractType(rawContractType)
+		contractOn := contractTypeToBool(normalizedContractType)
 		state := bitrixServicePointState{
 			ID:                  item.ID,
 			Name:                item.Name,
 			Properties:          item.Properties,
 			CurrentCode:         currentCode,
 			CurrentContract:     contractOn,
-			CurrentContractType: contractType,
+			CurrentContractType: rawContractType,
 			FilledFields:        countFilledElementFields(item),
 		}
 		normalizedName := normalizePointName(item.Name)
@@ -575,6 +578,19 @@ func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, ib
 			continue
 		}
 		statesByName[normalizedName] = append(statesByName[normalizedName], state)
+		cachedPoints = append(cachedPoints, bitrix.ServicePoint{
+			B24ElementID: item.ID,
+			Name:         item.Name,
+			OneCCode:     nullableStringValue(currentCode),
+			ContractOn:   contractOn,
+			ContractType: nullableStringValue(normalizedContractType),
+			RawJSON:      item.RawJSON,
+			UpdatedAt:    time.Now(),
+		})
+	}
+
+	if err := s.repo.ReplaceServicePoints(ctx, cachedPoints); err != nil {
+		s.log.Warn("не удалось обновить локальный кэш точек Bitrix24 по данным preview", "error", err)
 	}
 
 	return statesByName, nil

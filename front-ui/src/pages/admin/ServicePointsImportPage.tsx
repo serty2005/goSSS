@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Button,
@@ -7,68 +7,177 @@ import {
   Col,
   Descriptions,
   Empty,
+  Popconfirm,
   Row,
   Space,
   Statistic,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowLeftOutlined, MailOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  ClearOutlined,
+  CloseOutlined,
+  ExclamationCircleOutlined,
+  PlayCircleOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
+import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
 import { useAuthStore } from '@/store/authStore';
-import type { ContractMailImportDTO, ContractSyncQueueItemDTO } from '@/types/api';
+import type {
+  ApiResponse,
+  ContractMailImportDTO,
+  ContractSyncExecuteResultDTO,
+  ContractSyncFieldDiffDTO,
+  ContractSyncQueueItemDTO,
+  ContractSyncStateDTO,
+} from '@/types/api';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
-const formatDateTime = (value?: string) => {
-  if (!value) {
-    return '—';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleString('ru-RU');
+type UpsertFilter = 'all' | 'create' | 'update';
+type DeleteFilter = 'all' | 'mapped' | 'unmapped';
+type QueueFilter = 'all' | 'create' | 'update' | 'delete' | 'errors';
+type PageTabKey = 'sync' | 'history';
+type QueueRow = ContractSyncQueueItemDTO & {
+  queue_order: number;
+  execution_errors: string[];
+  has_execution_errors: boolean;
 };
 
-const shortValue = (value?: string, size = 10) => {
-  if (!value) {
-    return '—';
-  }
-  if (value.length <= size * 2) {
-    return value;
-  }
-  return `${value.slice(0, size)}…${value.slice(-size)}`;
+type HeaderHintButtonProps = {
+  icon: React.ReactNode;
+  title: string;
+  content: React.ReactNode;
+  danger?: boolean;
+  active?: boolean;
+};
+
+const actionOrder: Record<ContractSyncQueueItemDTO['action'], number> = { create: 0, update: 1, delete: 2 };
+
+const formatDateTime = (value?: string) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ru-RU');
+};
+
+const shortValue = (value?: string, size = 10) => (!value ? '—' : value.length <= size * 2 ? value : `${value.slice(0, size)}…${value.slice(-size)}`);
+const displayValue = (value?: string | number | null) => String(value ?? '').trim() || '—';
+const normalizeSearch = (value: string) => value.trim().toLowerCase().replace(/ё/g, 'е');
+const isChangedValue = (left?: string | number | null, right?: string | number | null) => String(left ?? '').trim() !== String(right ?? '').trim();
+
+const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, content, danger = false, active = false }) => {
+  const [isPinned, setIsPinned] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const isOpen = isPinned || isHovered;
+
+  return (
+    <div
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => {
+        if (!isPinned) {
+          setIsHovered(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (isPinned) {
+            setIsPinned(false);
+            setIsHovered(false);
+            return;
+          }
+          setIsPinned(true);
+          setIsHovered(true);
+        }}
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          border: `1px solid ${danger && active ? '#ff4d4f' : '#d9d9d9'}`,
+          background: danger && active ? '#fff2f0' : '#ffffff',
+          color: danger && active ? '#cf1322' : '#595959',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+        }}
+      >
+        {icon}
+      </button>
+      {isOpen ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            right: 0,
+            zIndex: 3000,
+            width: 360,
+            maxWidth: 'min(360px, calc(100vw - 32px))',
+            padding: 12,
+            borderRadius: 12,
+            border: '1px solid #d9d9d9',
+            background: '#ffffff',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <strong>{title}</strong>
+            {isPinned ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setIsPinned(false);
+                  setIsHovered(false);
+                }}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  border: '1px solid #d9d9d9',
+                  background: '#ffffff',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <CloseOutlined />
+              </button>
+            ) : null}
+          </div>
+          <div>{content}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 };
 
 const importStatusTag = (status: string) => {
-  switch (status) {
-    case 'processed':
-      return <Tag color="green">Обработан</Tag>;
-    case 'failed':
-      return <Tag color="red">Ошибка</Tag>;
-    default:
-      return <Tag>{status || '—'}</Tag>;
-  }
+  if (status === 'processed') return <Tag color="green">Обработан</Tag>;
+  if (status === 'failed') return <Tag color="red">Ошибка</Tag>;
+  return <Tag>{status || '—'}</Tag>;
 };
 
 const actionTag = (action: ContractSyncQueueItemDTO['action']) => {
-  switch (action) {
-    case 'create':
-      return <Tag color="green">Создать</Tag>;
-    case 'update':
-      return <Tag color="blue">Обновить</Tag>;
-    case 'delete':
-      return <Tag color="volcano">Удалить</Tag>;
-    default:
-      return <Tag>{action}</Tag>;
-  }
+  if (action === 'create') return <Tag color="green">Создать</Tag>;
+  if (action === 'update') return <Tag color="blue">Обновить</Tag>;
+  if (action === 'delete') return <Tag color="volcano">Удалить</Tag>;
+  return <Tag>{action}</Tag>;
 };
 
 const getQueryErrorText = (error: unknown) => {
@@ -76,17 +185,144 @@ const getQueryErrorText = (error: unknown) => {
   return payload?.response?.data?.error?.error || payload?.message || 'Не удалось загрузить состояние синхронизации';
 };
 
+const removeAppliedItemsFromState = (current: ApiResponse<ContractSyncStateDTO> | undefined, appliedKeys: Set<string>) => {
+  if (!current?.data || appliedKeys.size === 0) return current;
+  const nextUpsertItems = current.data.upsert_items.filter((item) => !appliedKeys.has(item.key));
+  const nextDeleteItems = current.data.delete_items.filter((item) => !appliedKeys.has(item.key));
+  return {
+    ...current,
+    data: {
+      ...current.data,
+      upsert_items: nextUpsertItems,
+      delete_items: nextDeleteItems,
+      to_create: nextUpsertItems.filter((item) => item.action === 'create').length,
+      to_update: nextUpsertItems.filter((item) => item.action === 'update').length,
+      to_delete: nextDeleteItems.length,
+    },
+  };
+};
+
+const countByAction = (items: ContractSyncQueueItemDTO[]) => ({
+  create: items.filter((item) => item.action === 'create').length,
+  update: items.filter((item) => item.action === 'update').length,
+  delete: items.filter((item) => item.action === 'delete').length,
+});
+
+const itemSearchText = (item: ContractSyncQueueItemDTO) =>
+  normalizeSearch(
+    [
+      item.service_point_name,
+      item.service_point_code,
+      item.contract_type,
+      item.current_name,
+      item.current_code,
+      item.current_contract_type,
+      item.contractor_name,
+      item.contractor_id,
+      item.reason,
+      item.b24_element_id,
+      item.matched_point_ids?.join(' '),
+      ...(item.change_set || []).flatMap((diff) => [diff.label, diff.current_value, diff.next_value]),
+    ].join(' '),
+  );
+
+const matchesSearch = (item: ContractSyncQueueItemDTO, searchValue: string) => !searchValue || itemSearchText(item).includes(searchValue);
+
+const buildErrorMap = (result?: ContractSyncExecuteResultDTO | null) => (result?.error_details || []).reduce<Record<string, string[]>>((acc, item) => {
+  const key = String(item.key || '').trim();
+  const msg = String(item.message || '').trim();
+  if (key && msg) {
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(msg);
+  }
+  return acc;
+}, {});
+
+const fieldBlock = (label: string, value?: string | number | null, strong = false) => (
+  <Space orientation="vertical" size={0}>
+    <Text type="secondary">{label}</Text>
+    <Text strong={strong}>{displayValue(value)}</Text>
+  </Space>
+);
+
+const diffBlock = (diff: ContractSyncFieldDiffDTO) => (
+  <Space key={`${diff.field}-${diff.label}`} orientation="vertical" size={0}>
+    <Text strong>{diff.label}</Text>
+    <Text type="secondary">Сейчас: {displayValue(diff.current_value)}</Text>
+    <Text>После запуска: {displayValue(diff.next_value)}</Text>
+  </Space>
+);
+
+const renderUpsertChanges = (item: ContractSyncQueueItemDTO) => {
+  if (item.action === 'create') {
+    return (
+      <Space orientation="vertical" size={4}>
+        {fieldBlock('Название из отчёта', item.service_point_name, true)}
+        {fieldBlock('Код из отчёта', item.service_point_code)}
+        {fieldBlock('Тип контракта из отчёта', item.contract_type)}
+      </Space>
+    );
+  }
+  if (item.change_set?.length) {
+    return (
+      <Space orientation="vertical" size={6}>
+        <Space wrap>
+          {item.change_set.map((diff) => (
+            <Tag key={`${item.key}-${diff.field}`} color="blue">{diff.label}</Tag>
+          ))}
+        </Space>
+        {item.change_set.map(diffBlock)}
+      </Space>
+    );
+  }
+  return <Text type="secondary">Изменения не детализированы</Text>;
+};
+
+const renderDeleteRisk = (item: ContractSyncQueueItemDTO) => (
+  <Space orientation="vertical" size={6}>
+    <Space wrap>
+      <Tag color={item.is_mapped ? 'blue' : 'orange'}>{item.is_mapped ? 'Есть сопоставление' : 'Без сопоставления'}</Tag>
+      <Tag color={item.filled_fields ? 'gold' : 'default'}>Заполнено полей: {item.filled_fields ?? 0}</Tag>
+      <Tag color={(item.matched_point_ids?.length || 0) > 1 ? 'volcano' : 'default'}>Дублей: {item.matched_point_ids?.length || 0}</Tag>
+    </Space>
+    {fieldBlock('Bitrix24 ID', item.b24_element_id)}
+    {fieldBlock('Текущий код', item.current_code || item.service_point_code)}
+    {fieldBlock('Текущий тип контракта', item.current_contract_type || item.contract_type)}
+    <Text type="secondary">Группа дублей: {item.matched_point_ids?.length ? item.matched_point_ids.join(', ') : '—'}</Text>
+  </Space>
+);
+
+const rowClassName = (item: ContractSyncQueueItemDTO | QueueRow) => {
+  if ('has_execution_errors' in item && item.has_execution_errors) return 'contract-sync-row-error';
+  if (item.action === 'create') return 'contract-sync-row-create';
+  if (item.action === 'update') return 'contract-sync-row-update';
+  if (item.action === 'delete') return 'contract-sync-row-delete';
+  return '';
+};
+
 const ServicePointsImportPage: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { setHeaderConfig } = useLayoutHeader();
   const abortRef = useRef<AbortController | null>(null);
 
+  const [activeTab, setActiveTab] = useState<PageTabKey>('sync');
   const [selectedUpsertKeys, setSelectedUpsertKeys] = useState<React.Key[]>([]);
   const [selectedDeleteKeys, setSelectedDeleteKeys] = useState<React.Key[]>([]);
   const [selectedQueueKeys, setSelectedQueueKeys] = useState<React.Key[]>([]);
   const [queueItems, setQueueItems] = useState<ContractSyncQueueItemDTO[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
+  const [upsertFilter, setUpsertFilter] = useState<UpsertFilter>('all');
+  const [deleteFilter, setDeleteFilter] = useState<DeleteFilter>('all');
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>('all');
+  const [lastExecutionResult, setLastExecutionResult] = useState<ContractSyncExecuteResultDTO | null>(null);
+  const [queueErrorMap, setQueueErrorMap] = useState<Record<string, string[]>>({});
+
+  const deferredSearch = useDeferredValue(searchValue);
+  const search = useMemo(() => normalizeSearch(deferredSearch), [deferredSearch]);
 
   const contractSyncQuery = useQuery({
     queryKey: ['bitrix', 'contract-sync-state'],
@@ -106,45 +342,68 @@ const ServicePointsImportPage: React.FC = () => {
     setSelectedUpsertKeys([]);
     setSelectedDeleteKeys([]);
     setSelectedQueueKeys([]);
+    setLastExecutionResult(null);
+    setQueueErrorMap({});
   }, [activeReportImport?.attachment_hash]);
 
   const queueKeySet = useMemo(() => new Set(queueItems.map((item) => item.key)), [queueItems]);
-
-  const upsertItems = useMemo(
-    () => baseUpsertItems.filter((item) => !queueKeySet.has(item.key)),
-    [baseUpsertItems, queueKeySet],
+  const upsertItems = useMemo(() => baseUpsertItems.filter((item) => !queueKeySet.has(item.key)), [baseUpsertItems, queueKeySet]);
+  const deleteItems = useMemo(() => baseDeleteItems.filter((item) => !queueKeySet.has(item.key)), [baseDeleteItems, queueKeySet]);
+  const filteredUpsertItems = useMemo(
+    () => upsertItems.filter((item) => (upsertFilter === 'all' || item.action === upsertFilter) && matchesSearch(item, search)),
+    [search, upsertFilter, upsertItems],
   );
-  const deleteItems = useMemo(
-    () => baseDeleteItems.filter((item) => !queueKeySet.has(item.key)),
-    [baseDeleteItems, queueKeySet],
+  const filteredDeleteItems = useMemo(
+    () => deleteItems.filter((item) => (deleteFilter !== 'mapped' || item.is_mapped) && (deleteFilter !== 'unmapped' || !item.is_mapped) && matchesSearch(item, search)),
+    [deleteFilter, deleteItems, search],
   );
+  const queueRows = useMemo<QueueRow[]>(
+    () => queueItems.map((item, index) => ({
+      ...item,
+      queue_order: index + 1,
+      execution_errors: queueErrorMap[item.key] || [],
+      has_execution_errors: Boolean(queueErrorMap[item.key]?.length),
+    })),
+    [queueErrorMap, queueItems],
+  );
+  const filteredQueueItems = useMemo(
+    () => queueRows.filter((item) => (queueFilter === 'all' || (queueFilter === 'errors' ? item.has_execution_errors : item.action === queueFilter)) && matchesSearch(item, search)),
+    [queueFilter, queueRows, search],
+  );
+  const upsertVisibleStats = useMemo(() => countByAction(filteredUpsertItems), [filteredUpsertItems]);
+  const upsertStats = useMemo(() => countByAction(upsertItems), [upsertItems]);
+  const deleteMappedCount = useMemo(() => deleteItems.filter((item) => item.is_mapped).length, [deleteItems]);
+  const deleteUnmappedCount = useMemo(() => deleteItems.filter((item) => !item.is_mapped).length, [deleteItems]);
+  const queueStats = useMemo(() => countByAction(queueItems), [queueItems]);
+  const queueErrorCount = useMemo(() => Object.values(queueErrorMap).reduce((sum, values) => sum + values.length, 0), [queueErrorMap]);
+  const hasHeaderWarnings = Boolean(syncState?.blocked_rows || queueStats.delete || latestImport?.status === 'failed');
 
-  const addItemsToQueue = (items: ContractSyncQueueItemDTO[], selectedKeys: React.Key[], clearSelection: () => void) => {
-    const selected = items.filter((item) => selectedKeys.includes(item.key));
-    if (selected.length === 0) {
-      return;
-    }
-
-    setQueueItems((current) => {
-      const existing = new Set(current.map((item) => item.key));
-      const next = [...current];
-      selected.forEach((item) => {
-        if (!existing.has(item.key)) {
-          next.push(item);
-        }
-      });
-      return next;
-    });
-    clearSelection();
+  const clearQueueState = () => {
+    setQueueItems([]);
+    setSelectedQueueKeys([]);
+    setQueueErrorMap({});
   };
 
-  const removeItemsFromQueue = () => {
-    const selected = new Set(selectedQueueKeys.map(String));
-    if (selected.size === 0) {
-      return;
-    }
-    setQueueItems((current) => current.filter((item) => !selected.has(item.key)));
-    setSelectedQueueKeys([]);
+  const removeQueueItemsByKeys = (keys: string[]) => {
+    const keySet = new Set(keys);
+    if (!keySet.size) return;
+    setQueueItems((current) => current.filter((item) => !keySet.has(item.key)));
+    setSelectedQueueKeys((current) => current.filter((key) => !keySet.has(String(key))));
+    setQueueErrorMap((current) => {
+      const next = { ...current };
+      for (const key of keySet) delete next[key];
+      return next;
+    });
+  };
+
+  const addItemsToQueue = (items: ContractSyncQueueItemDTO[], selectedKeys: React.Key[]) => {
+    const selectedSet = new Set(selectedKeys.map(String));
+    const picked = items.filter((item) => selectedSet.has(item.key));
+    if (!picked.length) return;
+    setQueueItems((current) => {
+      const existing = new Set(current.map((item) => item.key));
+      return [...current, ...picked.filter((item) => !existing.has(item.key))];
+    });
   };
 
   const executeQueue = async () => {
@@ -152,37 +411,48 @@ const ServicePointsImportPage: React.FC = () => {
       abortRef.current?.abort();
       return;
     }
-    if (queueItems.length === 0) {
-      return;
-    }
+    if (!queueItems.length) return;
 
     const controller = new AbortController();
     abortRef.current = controller;
     setIsExecuting(true);
-
     try {
       const result = await bitrixAdminApi.executeContractSync(
-        { selected_keys: queueItems.map((item) => item.key) },
+        { selected_keys: queueItems.map((item) => item.key), queue_items: queueItems },
         controller.signal,
       );
       const payload = result.data;
+      setLastExecutionResult(payload);
+      setQueueErrorMap(buildErrorMap(payload));
+
       const parts = [
         payload.created ? `создано ${payload.created}` : '',
         payload.updated ? `обновлено ${payload.updated}` : '',
         payload.deleted ? `удалено ${payload.deleted}` : '',
       ].filter(Boolean);
-
-      if (payload.errors && payload.errors.length > 0) {
-        message.warning(`Очередь выполнена с ошибками: ${payload.errors.join('; ')}`);
+      const errorCount = payload.error_details?.length || payload.errors?.length || 0;
+      if (errorCount > 0) {
+        message.warning(`${parts.length ? parts.join(', ') : 'Очередь выполнена'}. Строк с ошибками: ${errorCount}`);
       } else {
-        message.success(parts.length > 0 ? parts.join(', ') : 'Очередь выполнена');
+        message.success(parts.length ? parts.join(', ') : 'Очередь выполнена');
       }
 
-      setQueueItems([]);
-      setSelectedQueueKeys([]);
-      await contractSyncQuery.refetch();
+      const appliedKeys = new Set(payload.applied_keys || []);
+      if (appliedKeys.size > 0) {
+        setQueueItems((current) => current.filter((item) => !appliedKeys.has(item.key)));
+        setSelectedQueueKeys((current) => current.filter((key) => !appliedKeys.has(String(key))));
+        setQueueErrorMap((current) => {
+          const next = { ...current };
+          for (const key of appliedKeys) delete next[key];
+          return next;
+        });
+        queryClient.setQueryData<ApiResponse<ContractSyncStateDTO>>(
+          ['bitrix', 'contract-sync-state'],
+          (current) => removeAppliedItemsFromState(current, appliedKeys),
+        );
+      }
     } catch (error) {
-      const axiosError = error as { code?: string; name?: string; message?: string };
+      const axiosError = error as { code?: string; name?: string };
       if (axiosError.code === 'ERR_CANCELED' || axiosError.name === 'CanceledError') {
         message.info('Выполнение очереди остановлено');
       } else {
@@ -196,53 +466,13 @@ const ServicePointsImportPage: React.FC = () => {
 
   const importColumns = useMemo<ColumnsType<ContractMailImportDTO>>(
     () => [
-      {
-        title: 'Статус',
-        dataIndex: 'status',
-        key: 'status',
-        width: 120,
-        render: (value: string) => importStatusTag(value),
-      },
-      {
-        title: 'Вложение',
-        dataIndex: 'attachment_name',
-        key: 'attachment_name',
-        ellipsis: true,
-      },
-      {
-        title: 'Строк',
-        dataIndex: 'rows_count',
-        key: 'rows_count',
-        width: 90,
-      },
-      {
-        title: 'Получено',
-        dataIndex: 'received_at',
-        key: 'received_at',
-        width: 180,
-        render: (value?: string) => formatDateTime(value),
-      },
-      {
-        title: 'Обработано',
-        dataIndex: 'processed_at',
-        key: 'processed_at',
-        width: 180,
-        render: (value?: string) => formatDateTime(value),
-      },
-      {
-        title: 'Хэш',
-        dataIndex: 'attachment_hash',
-        key: 'attachment_hash',
-        width: 180,
-        render: (value: string) => shortValue(value, 8),
-      },
-      {
-        title: 'Ошибка',
-        dataIndex: 'error_text',
-        key: 'error_text',
-        ellipsis: true,
-        render: (value?: string) => value || '—',
-      },
+      { title: 'Статус', dataIndex: 'status', key: 'status', width: 120, render: (value: string) => importStatusTag(value) },
+      { title: 'Вложение', dataIndex: 'attachment_name', key: 'attachment_name', ellipsis: true },
+      { title: 'Строк', dataIndex: 'rows_count', key: 'rows_count', width: 90 },
+      { title: 'Получено', dataIndex: 'received_at', key: 'received_at', width: 180, render: (value?: string) => formatDateTime(value) },
+      { title: 'Обработано', dataIndex: 'processed_at', key: 'processed_at', width: 180, render: (value?: string) => formatDateTime(value) },
+      { title: 'Хэш', dataIndex: 'attachment_hash', key: 'attachment_hash', width: 180, render: (value: string) => shortValue(value, 8) },
+      { title: 'Ошибка', dataIndex: 'error_text', key: 'error_text', ellipsis: true, render: (value?: string) => value || '—' },
     ],
     [],
   );
@@ -250,57 +480,42 @@ const ServicePointsImportPage: React.FC = () => {
   const upsertColumns = useMemo<ColumnsType<ContractSyncQueueItemDTO>>(
     () => [
       {
-        title: 'Действие',
+        title: 'Операция',
         dataIndex: 'action',
         key: 'action',
-        width: 120,
-        render: (value: ContractSyncQueueItemDTO['action']) => actionTag(value),
+        width: 180,
+        sorter: (a, b) => actionOrder[a.action] - actionOrder[b.action],
+        render: (value: ContractSyncQueueItemDTO['action'], item) => (
+          <Space orientation="vertical" size={2}>
+            {actionTag(value)}
+            {item.b24_element_id ? <Text type="secondary">B24 #{item.b24_element_id}</Text> : <Text type="secondary">Новый элемент</Text>}
+          </Space>
+        ),
       },
       {
-        title: 'Точка обслуживания',
-        dataIndex: 'service_point_name',
-        key: 'service_point_name',
-        ellipsis: true,
+        title: 'Данные из отчёта',
+        key: 'report_state',
+        width: 340,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            {fieldBlock('Название', item.service_point_name, isChangedValue(item.service_point_name, item.current_name))}
+            {fieldBlock('Код', item.service_point_code, isChangedValue(item.service_point_code, item.current_code))}
+            {fieldBlock('Тип контракта', item.contract_type, isChangedValue(item.contract_type, item.current_contract_type))}
+            {item.contractor_name ? <Text type="secondary">Контрагент: {item.contractor_name}</Text> : null}
+          </Space>
+        ),
       },
       {
-        title: 'Код точки',
-        dataIndex: 'service_point_code',
-        key: 'service_point_code',
-        width: 150,
-      },
-      {
-        title: 'Контракт',
-        dataIndex: 'contract_type',
-        key: 'contract_type',
-        width: 140,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Bitrix ID',
-        dataIndex: 'b24_element_id',
-        key: 'b24_element_id',
-        width: 110,
-        render: (value?: number) => value || '—',
-      },
-      {
-        title: 'Текущий код',
-        dataIndex: 'current_code',
-        key: 'current_code',
-        width: 150,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Текущий контракт',
-        dataIndex: 'current_contract_type',
-        key: 'current_contract_type',
-        width: 150,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Причина',
-        dataIndex: 'reason',
-        key: 'reason',
-        ellipsis: true,
+        title: 'Текущее состояние',
+        key: 'current_state',
+        width: 340,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            {fieldBlock('Название', item.current_name, isChangedValue(item.current_name, item.service_point_name))}
+            {fieldBlock('Код', item.current_code, isChangedValue(item.current_code, item.service_point_code))}
+            {fieldBlock('Тип контракта', item.current_contract_type, isChangedValue(item.current_contract_type, item.contract_type))}
+          </Space>
+        ),
       },
     ],
     [],
@@ -309,105 +524,245 @@ const ServicePointsImportPage: React.FC = () => {
   const deleteColumns = useMemo<ColumnsType<ContractSyncQueueItemDTO>>(
     () => [
       {
-        title: 'Bitrix ID',
-        dataIndex: 'b24_element_id',
-        key: 'b24_element_id',
-        width: 110,
-        render: (value?: number) => value || '—',
+        title: 'Кандидат на удаление',
+        key: 'delete_target',
+        width: 300,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Space wrap>
+              <Text strong>{item.service_point_name || '—'}</Text>
+              {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : null}
+            </Space>
+            {fieldBlock('Текущий код', item.current_code || item.service_point_code)}
+            {fieldBlock('Текущий тип контракта', item.current_contract_type || item.contract_type)}
+          </Space>
+        ),
       },
-      {
-        title: 'Точка обслуживания',
-        dataIndex: 'service_point_name',
-        key: 'service_point_name',
-        ellipsis: true,
-      },
-      {
-        title: 'Код точки',
-        dataIndex: 'service_point_code',
-        key: 'service_point_code',
-        width: 150,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Заполнено полей',
-        dataIndex: 'filled_fields',
-        key: 'filled_fields',
-        width: 130,
-        render: (value?: number) => value ?? '—',
-      },
-      {
-        title: 'Группа дублей',
-        dataIndex: 'matched_point_ids',
-        key: 'matched_point_ids',
-        width: 220,
-        render: (value?: number[]) => (value && value.length > 0 ? value.join(', ') : '—'),
-      },
-      {
-        title: 'Причина удаления',
-        dataIndex: 'reason',
-        key: 'reason',
-        ellipsis: true,
-      },
+      { title: 'Риск и контекст', key: 'risk', width: 360, render: (_, item) => renderDeleteRisk(item) },
+      { title: 'Причина удаления', dataIndex: 'reason', key: 'reason', width: 300, render: (value?: string) => value || '—' },
     ],
     [],
   );
 
-  const queueColumns = useMemo<ColumnsType<ContractSyncQueueItemDTO>>(
+  const queueColumns = useMemo<ColumnsType<QueueRow>>(
     () => [
       {
-        title: 'Действие',
-        dataIndex: 'action',
-        key: 'action',
+        title: 'Порядок',
+        dataIndex: 'queue_order',
+        key: 'queue_order',
+        width: 90,
+        sorter: (a, b) => a.queue_order - b.queue_order,
+      },
+      { title: 'Операция', dataIndex: 'action', key: 'action', width: 120, render: (value: ContractSyncQueueItemDTO['action']) => actionTag(value) },
+      {
+        title: 'Строка',
+        key: 'identity',
+        width: 320,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Space wrap>
+              <Text strong>{item.service_point_name || '—'}</Text>
+              {item.b24_element_id ? <Tag color="processing">B24 #{item.b24_element_id}</Tag> : <Tag>Новый элемент</Tag>}
+            </Space>
+            <Text type="secondary">Код: {displayValue(item.service_point_code)}</Text>
+            <Text type="secondary">Тип контракта: {displayValue(item.contract_type)}</Text>
+          </Space>
+        ),
+      },
+      {
+        title: 'Что произойдёт',
+        key: 'changes',
+        width: 360,
+        render: (_, item) => (item.action === 'delete' ? renderDeleteRisk(item) : renderUpsertChanges(item)),
+      },
+      {
+        title: 'Статус',
+        key: 'status',
+        width: 320,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            {item.has_execution_errors ? <Tag color="red">Ошибка выполнения</Tag> : actionTag(item.action)}
+            <Text type="secondary">{item.reason || '—'}</Text>
+            {item.execution_errors.map((errorText, index) => (
+              <Text key={`${item.key}-error-${index}`} type="danger">{errorText}</Text>
+            ))}
+          </Space>
+        ),
+      },
+      {
+        title: 'Вернуть',
+        key: 'queue_action',
         width: 120,
-        render: (value: ContractSyncQueueItemDTO['action']) => actionTag(value),
-      },
-      {
-        title: 'Точка обслуживания',
-        dataIndex: 'service_point_name',
-        key: 'service_point_name',
-        ellipsis: true,
-      },
-      {
-        title: 'Код точки',
-        dataIndex: 'service_point_code',
-        key: 'service_point_code',
-        width: 150,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Контракт',
-        dataIndex: 'contract_type',
-        key: 'contract_type',
-        width: 140,
-        render: (value?: string) => value || '—',
-      },
-      {
-        title: 'Bitrix ID',
-        dataIndex: 'b24_element_id',
-        key: 'b24_element_id',
-        width: 110,
-        render: (value?: number) => value || '—',
-      },
-      {
-        title: 'Причина',
-        dataIndex: 'reason',
-        key: 'reason',
-        ellipsis: true,
+        fixed: 'right',
+        render: (_, item) => (
+          <Button size="small" disabled={isExecuting} onClick={() => removeQueueItemsByKeys([item.key])}>
+            Вернуть
+          </Button>
+        ),
       },
     ],
+    [isExecuting],
+  );
+
+  const infoPopoverContent = useMemo(
+    () => (
+      <div style={{ display: 'grid', gap: 4 }}>
+        <Text style={{ lineHeight: '20px' }}>Для расчёта очереди используется последний успешно разобранный отчёт из почты.</Text>
+        <Text style={{ lineHeight: '20px' }}>Контракты компаний в ServiceDesk обновляются автоматически по нему, а изменения Bitrix24 выполняются только вручную через очередь.</Text>
+        <Text style={{ lineHeight: '20px' }}>Очередь исполняется строго по снимку UI: `update` не может незаметно превратиться в `create`.</Text>
+        <Text style={{ lineHeight: '20px' }}>После частичного прогона успешные строки уйдут с экрана, а проблемные останутся в очереди с ошибками.</Text>
+      </div>
+    ),
     [],
   );
+
+  const warningPopoverContent = useMemo(
+    () => (
+      <div style={{ display: 'grid', gap: 4 }}>
+        {syncState?.blocked_rows ? (
+          <Text style={{ lineHeight: '20px' }}>Заблокировано строк: {syncState.blocked_rows}. Для них нельзя выбрать безопасное действие автоматически.</Text>
+        ) : null}
+        {queueStats.delete ? (
+          <Text style={{ lineHeight: '20px' }}>В очереди сейчас {queueStats.delete} операций удаления. Перед запуском проверьте `B24ElementID`, сопоставление и дубль-группу.</Text>
+        ) : null}
+        {latestImport?.status === 'failed' ? (
+          <Text style={{ lineHeight: '20px' }}>Последний почтовый прогон завершился ошибкой: {latestImport.error_text || 'подробности отсутствуют в журнале.'}</Text>
+        ) : null}
+        {!hasHeaderWarnings ? <Text style={{ lineHeight: '20px' }}>Критичных предупреждений сейчас нет.</Text> : null}
+      </div>
+    ),
+    [hasHeaderWarnings, latestImport?.error_text, latestImport?.status, queueStats.delete, syncState?.blocked_rows],
+  );
+
+  const headerControls = useMemo(() => {
+    const commonControls = (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <Button icon={<ReloadOutlined />} loading={contractSyncQuery.isFetching} onClick={() => void contractSyncQuery.refetch()}>
+          Обновить
+        </Button>
+        <HeaderHintButton icon={<QuestionCircleOutlined />} title="Как устроен экран" content={infoPopoverContent} active />
+        <HeaderHintButton
+          icon={<ExclamationCircleOutlined />}
+          title="Предупреждения"
+          content={warningPopoverContent}
+          active={hasHeaderWarnings}
+          danger
+        />
+      </div>
+    );
+
+    if (activeTab !== 'sync') {
+      return commonControls;
+    }
+
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 420px) minmax(0, 1fr)',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          maxWidth: 1080,
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 0 }}>
+          <select
+            value={upsertFilter}
+            onChange={(event) => setUpsertFilter(event.target.value as UpsertFilter)}
+            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
+          >
+            <option value="all">Изменения: {upsertItems.length}</option>
+            <option value="create">Create: {upsertStats.create}</option>
+            <option value="update">Update: {upsertStats.update}</option>
+          </select>
+          <select
+            value={deleteFilter}
+            onChange={(event) => setDeleteFilter(event.target.value as DeleteFilter)}
+            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
+          >
+            <option value="all">Удаления: {deleteItems.length}</option>
+            <option value="mapped">С сопоставлением: {deleteMappedCount}</option>
+            <option value="unmapped">Без сопоставления: {deleteUnmappedCount}</option>
+          </select>
+          <select
+            value={queueFilter}
+            onChange={(event) => setQueueFilter(event.target.value as QueueFilter)}
+            style={{ height: 36, borderRadius: 10, border: '1px solid #d9d9d9', padding: '0 12px', background: '#fff', flexShrink: 0 }}
+          >
+            <option value="all">Очередь: {queueItems.length}</option>
+            <option value="create">Create: {queueStats.create}</option>
+            <option value="update">Update: {queueStats.update}</option>
+            <option value="delete">Delete: {queueStats.delete}</option>
+            <option value="errors">Ошибки: {queueErrorCount}</option>
+          </select>
+        </div>
+        <input
+          type="search"
+          placeholder="Поиск по точке, коду, типу, компании или B24 ID"
+          value={searchValue}
+          onChange={(event) => setSearchValue(event.target.value)}
+          style={{
+            width: '100%',
+            minWidth: 0,
+            height: 36,
+            padding: '0 12px',
+            borderRadius: 10,
+            border: '1px solid #d9d9d9',
+            outline: 'none',
+          }}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', minWidth: 0 }}>
+          {commonControls}
+        </div>
+      </div>
+    );
+  }, [
+    activeTab,
+    contractSyncQuery.isFetching,
+    deleteMappedCount,
+    deleteFilter,
+    deleteItems.length,
+    deleteUnmappedCount,
+    hasHeaderWarnings,
+    infoPopoverContent,
+    queueErrorCount,
+    queueFilter,
+    queueItems.length,
+    queueStats.create,
+    queueStats.delete,
+    queueStats.update,
+    searchValue,
+    upsertFilter,
+    upsertItems.length,
+    upsertStats.create,
+    upsertStats.update,
+    warningPopoverContent,
+  ]);
+
+  useEffect(() => {
+    if (!isBitrixEnabled) {
+      setHeaderConfig(null);
+      return undefined;
+    }
+
+    setHeaderConfig({
+      mode: 'page-controls',
+      title: 'Ручная синхронизация',
+      controls: headerControls,
+    });
+    return () => setHeaderConfig(null);
+  }, [headerControls, isBitrixEnabled, setHeaderConfig]);
 
   if (!isBitrixEnabled) {
     return (
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/users')}>
-          Назад к сотрудникам
-        </Button>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/users')}>Назад к сотрудникам</Button>
         <Alert
           type="warning"
           showIcon
-          message="Интеграция Bitrix24 отключена"
+          title="Интеграция Bitrix24 отключена"
           description="Экран ручной синхронизации недоступен, пока ENABLE_BITRIX_GATEWAY=false."
         />
       </Space>
@@ -415,215 +770,294 @@ const ServicePointsImportPage: React.FC = () => {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin')}>
-          Назад
-        </Button>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => void contractSyncQuery.refetch()}
-          loading={contractSyncQuery.isFetching}
-        >
-          Обновить данные
-        </Button>
-      </Space>
+    <Space orientation="vertical" size={12} style={{ width: '100%', marginTop: -16 }}>
+      <style>{`.contract-sync-row-create td{background:#f6ffed}.contract-sync-row-update td{background:#f0f5ff}.contract-sync-row-delete td{background:#fff2e8}.contract-sync-row-error td{background:#fff1f0!important}`}</style>
 
       {contractSyncQuery.isError ? (
         <Alert
           type="error"
           showIcon
-          message="Не удалось загрузить состояние синхронизации"
+          title="Не удалось загрузить состояние синхронизации"
           description={getQueryErrorText(contractSyncQuery.error)}
         />
       ) : null}
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={6}>
-          <Card className="glass-panel">
-            <Statistic title="Строк в активном отчёте" value={syncState?.report_rows || 0} />
-          </Card>
-        </Col>
-        <Col xs={24} md={6}>
-          <Card className="glass-panel">
-            <Statistic title="К созданию / обновлению" value={(syncState?.to_create || 0) + (syncState?.to_update || 0)} />
-          </Card>
-        </Col>
-        <Col xs={24} md={6}>
-          <Card className="glass-panel">
-            <Statistic title="К удалению дублей" value={syncState?.to_delete || 0} />
-          </Card>
-        </Col>
-        <Col xs={24} md={6}>
-          <Card className="glass-panel">
-            <Statistic title="Заблокировано дублями" value={syncState?.blocked_rows || 0} />
-          </Card>
-        </Col>
-      </Row>
-
-      <Card
-        className="glass-panel"
-        title="Удаление неактуальных дублей"
-        extra={
-          <Button
-            type="primary"
-            disabled={selectedDeleteKeys.length === 0}
-            onClick={() => addItemsToQueue(deleteItems, selectedDeleteKeys, () => setSelectedDeleteKeys([]))}
-          >
-            Добавить в очередь выполнения
-          </Button>
-        }
-      >
-        {deleteItems.length === 0 ? (
-          <Alert
-            type="success"
-            showIcon
-            message="Неактуальных дублей нет"
-            description="Сейчас в Bitrix24 нет дублей точек обслуживания, подпадающих под правила ручного удаления."
-          />
-        ) : (
-          <Table<ContractSyncQueueItemDTO>
-            rowKey="key"
-            dataSource={deleteItems}
-            columns={deleteColumns}
-            rowSelection={{
-              selectedRowKeys: selectedDeleteKeys,
-              onChange: setSelectedDeleteKeys,
-            }}
-            pagination={{ pageSize: 10, hideOnSinglePage: true }}
-            scroll={{ x: 1100 }}
-          />
-        )}
-      </Card>
-
-      <Card
-        className="glass-panel"
-        title="Обновления точек обслуживания"
-        extra={
-          <Button
-            type="primary"
-            disabled={selectedUpsertKeys.length === 0}
-            onClick={() => addItemsToQueue(upsertItems, selectedUpsertKeys, () => setSelectedUpsertKeys([]))}
-          >
-            Добавить в очередь выполнения
-          </Button>
-        }
-      >
-        {upsertItems.length === 0 ? (
-          <Alert
-            type="info"
-            showIcon
-            message="Новых изменений нет"
-            description="Последний отчёт не требует создания или обновления точек в Bitrix24."
-          />
-        ) : (
-          <Table<ContractSyncQueueItemDTO>
-            rowKey="key"
-            dataSource={upsertItems}
-            columns={upsertColumns}
-            rowSelection={{
-              selectedRowKeys: selectedUpsertKeys,
-              onChange: setSelectedUpsertKeys,
-            }}
-            pagination={{ pageSize: 10, hideOnSinglePage: true }}
-            scroll={{ x: 1200 }}
-          />
-        )}
-      </Card>
-
-      <Card
-        className="glass-panel"
-        title="Очередь выполнения"
-        extra={
-          <Space>
-            <Button
-              icon={isExecuting ? <StopOutlined /> : <PlayCircleOutlined />}
-              type="primary"
-              disabled={!isExecuting && queueItems.length === 0}
-              loading={isExecuting}
-              onClick={() => void executeQueue()}
-            >
-              {isExecuting ? 'Стоп' : 'Пуск'}
-            </Button>
-            <Button disabled={selectedQueueKeys.length === 0} onClick={removeItemsFromQueue}>
-              Отменить
-            </Button>
-          </Space>
-        }
-      >
-        {queueItems.length === 0 ? (
-          <Empty description="Очередь выполнения пуста" />
-        ) : (
-          <Table<ContractSyncQueueItemDTO>
-            rowKey="key"
-            dataSource={queueItems}
-            columns={queueColumns}
-            rowSelection={{
-              selectedRowKeys: selectedQueueKeys,
-              onChange: setSelectedQueueKeys,
-            }}
-            pagination={{ pageSize: 10, hideOnSinglePage: true }}
-            scroll={{ x: 1100 }}
-          />
-        )}
-      </Card>
-
-      <Card className="glass-panel">
-        <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Space size={10}>
-            <MailOutlined style={{ fontSize: 18 }} />
-            <Title level={4} style={{ margin: 0 }}>
-              Отчёты и журнал обработки
-            </Title>
-          </Space>
-          <Text type="secondary">
-            Для расчёта очереди используется последний успешно разобранный отчёт из почты. Контракты компаний в
-            ServiceDesk обновляются автоматически по нему, а изменения Bitrix24 выполняются только вручную через очередь.
-          </Text>
-          {latestImport?.status === 'failed' ? (
-            <Alert
-              type="error"
-              showIcon
-              message="Последний прогон завершился ошибкой"
-              description={latestImport.error_text || 'Подробности ошибки отсутствуют в журнале импорта.'}
-            />
-          ) : null}
-        </Space>
-      </Card>
-
-      <Card className="glass-panel" title="Используемый отчёт">
-        {activeReportImport ? (
-          <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
-            <Descriptions.Item label="Статус">{importStatusTag(activeReportImport.status)}</Descriptions.Item>
-            <Descriptions.Item label="Вложение">{activeReportImport.attachment_name || '—'}</Descriptions.Item>
-            <Descriptions.Item label="Получено">{formatDateTime(activeReportImport.received_at)}</Descriptions.Item>
-            <Descriptions.Item label="Обработано">{formatDateTime(activeReportImport.processed_at)}</Descriptions.Item>
-            <Descriptions.Item label="Строк">{activeReportImport.rows_count}</Descriptions.Item>
-            <Descriptions.Item label="Хэш">{shortValue(activeReportImport.attachment_hash, 8)}</Descriptions.Item>
-            <Descriptions.Item label="Message-ID" span={2}>
-              {activeReportImport.message_id || '—'}
-            </Descriptions.Item>
-          </Descriptions>
-        ) : (
-          <Empty description="Нет успешно обработанного отчёта" />
-        )}
-      </Card>
-
-      <Card
-        className="glass-panel"
-        title="История почтовых импортов"
-        extra={<Text type="secondary">Показываются последние 20 прогонов</Text>}
-      >
-        <Table<ContractMailImportDTO>
-          rowKey="id"
-          dataSource={recentImports}
-          columns={importColumns}
-          loading={contractSyncQuery.isLoading}
-          pagination={{ pageSize: 10, hideOnSinglePage: true }}
-          scroll={{ x: 1000 }}
-          locale={{ emptyText: 'История импортов пуста' }}
+      {lastExecutionResult ? (
+        <Alert
+          type={(lastExecutionResult.error_details?.length || lastExecutionResult.errors?.length || 0) > 0 ? 'warning' : 'success'}
+          showIcon
+          title="Результат последнего запуска"
+          description={`Создано ${lastExecutionResult.created}, обновлено ${lastExecutionResult.updated}, удалено ${lastExecutionResult.deleted}, обработано ${lastExecutionResult.processed}. Ошибок по строкам: ${lastExecutionResult.error_details?.length || 0}.`}
         />
-      </Card>
+      ) : null}
+
+      <Tabs
+        activeKey={activeTab}
+        destroyOnHidden
+        onChange={(key) => setActiveTab(key as PageTabKey)}
+        tabBarExtraContent={{
+          left: (
+            <div style={{ marginInlineEnd: 16 }}>
+              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin')}>
+                Назад
+              </Button>
+            </div>
+          ),
+        }}
+        items={[
+          {
+            key: 'sync',
+            label: 'Синхронизация',
+            children: (
+              <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+                <Row gutter={[16, 16]}>
+                  <Col xs={12} md={8} xl={4}><Card className="glass-panel"><Statistic title="К созданию" value={syncState?.to_create || 0} /></Card></Col>
+                  <Col xs={12} md={8} xl={4}><Card className="glass-panel"><Statistic title="К обновлению" value={syncState?.to_update || 0} /></Card></Col>
+                  <Col xs={12} md={8} xl={4}><Card className="glass-panel"><Statistic title="К удалению" value={syncState?.to_delete || 0} /></Card></Col>
+                  <Col xs={12} md={8} xl={4}><Card className="glass-panel"><Statistic title="Заблокировано" value={syncState?.blocked_rows || 0} /></Card></Col>
+                  <Col xs={24} md={8} xl={8}>
+                    <Card className="glass-panel">
+                      <Statistic
+                        title="Сейчас в очереди"
+                        value={queueItems.length}
+                        suffix={<Text type="secondary">создать {queueStats.create} / обновить {queueStats.update} / удалить {queueStats.delete}</Text>}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
+
+                <Card
+                  className="glass-panel"
+                  title="Обновления и создания точек обслуживания"
+                  extra={(
+                    <Button
+                      type="primary"
+                      disabled={isExecuting || selectedUpsertKeys.length === 0}
+                      onClick={() => {
+                        addItemsToQueue(filteredUpsertItems, selectedUpsertKeys);
+                        const moved = new Set(filteredUpsertItems.filter((item) => selectedUpsertKeys.includes(item.key)).map((item) => item.key));
+                        setSelectedUpsertKeys((current) => current.filter((key) => !moved.has(String(key))));
+                      }}
+                    >
+                      Добавить выбранное
+                    </Button>
+                  )}
+                >
+                  {upsertItems.length === 0 ? (
+                    <Alert type="info" showIcon title="Новых изменений нет" description="Последний отчёт не требует создания или обновления точек в Bitrix24." />
+                  ) : (
+                    <Table<ContractSyncQueueItemDTO>
+                      className="contract-sync-table"
+                      rowKey="key"
+                      rowClassName={rowClassName}
+                      dataSource={filteredUpsertItems}
+                      columns={upsertColumns}
+                      loading={contractSyncQuery.isLoading}
+                      rowSelection={{
+                        selectedRowKeys: selectedUpsertKeys,
+                        preserveSelectedRowKeys: true,
+                        onChange: setSelectedUpsertKeys,
+                        getCheckboxProps: () => ({ disabled: isExecuting }),
+                      }}
+                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                      scroll={{ x: 880 }}
+                      locale={{ emptyText: search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
+                    />
+                  )}
+                </Card>
+
+                <Card
+                  className="glass-panel"
+                  title="Удаление неактуальных дублей"
+                  extra={(
+                    <Button
+                      type="primary"
+                      danger
+                      disabled={isExecuting || selectedDeleteKeys.length === 0}
+                      onClick={() => {
+                        addItemsToQueue(filteredDeleteItems, selectedDeleteKeys);
+                        const moved = new Set(filteredDeleteItems.filter((item) => selectedDeleteKeys.includes(item.key)).map((item) => item.key));
+                        setSelectedDeleteKeys((current) => current.filter((key) => !moved.has(String(key))));
+                      }}
+                    >
+                      Добавить выбранное
+                    </Button>
+                  )}
+                >
+                  {deleteItems.length === 0 ? (
+                    <Alert
+                      type="success"
+                      showIcon
+                      title="Неактуальных дублей нет"
+                      description="Сейчас в Bitrix24 нет дублей точек обслуживания, подпадающих под правила ручного удаления."
+                    />
+                  ) : (
+                    <Table<ContractSyncQueueItemDTO>
+                      className="contract-sync-table"
+                      rowKey="key"
+                      rowClassName={rowClassName}
+                      dataSource={filteredDeleteItems}
+                      columns={deleteColumns}
+                      loading={contractSyncQuery.isLoading}
+                      rowSelection={{
+                        selectedRowKeys: selectedDeleteKeys,
+                        preserveSelectedRowKeys: true,
+                        onChange: setSelectedDeleteKeys,
+                        getCheckboxProps: () => ({ disabled: isExecuting }),
+                      }}
+                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                      scroll={{ x: 1350 }}
+                      locale={{ emptyText: search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
+                    />
+                  )}
+                </Card>
+
+                <Card
+                  className="glass-panel"
+                  title="Очередь выполнения"
+                  extra={(
+                    <Space wrap>
+                      <Button
+                        type="primary"
+                        disabled={isExecuting || upsertVisibleStats.create === 0}
+                        onClick={() => addItemsToQueue(
+                          filteredUpsertItems.filter((item) => item.action === 'create'),
+                          filteredUpsertItems.filter((item) => item.action === 'create').map((item) => item.key),
+                        )}
+                      >
+                        Добавить все create ({upsertVisibleStats.create})
+                      </Button>
+                      <Button
+                        type="primary"
+                        disabled={isExecuting || upsertVisibleStats.update === 0}
+                        onClick={() => addItemsToQueue(
+                          filteredUpsertItems.filter((item) => item.action === 'update'),
+                          filteredUpsertItems.filter((item) => item.action === 'update').map((item) => item.key),
+                        )}
+                      >
+                        Добавить все update ({upsertVisibleStats.update})
+                      </Button>
+                      <Button
+                        danger
+                        disabled={isExecuting || filteredDeleteItems.length === 0}
+                        onClick={() => addItemsToQueue(filteredDeleteItems, filteredDeleteItems.map((item) => item.key))}
+                      >
+                        Добавить все delete ({filteredDeleteItems.length})
+                      </Button>
+                      <Button icon={<ClearOutlined />} disabled={isExecuting || queueItems.length === 0} onClick={clearQueueState}>
+                        Очистить очередь
+                      </Button>
+                      <Button
+                        disabled={isExecuting || queueErrorCount === 0}
+                        onClick={() => {
+                          const failedKeys = new Set(Object.keys(queueErrorMap).filter((key) => queueErrorMap[key]?.length));
+                          if (!failedKeys.size) {
+                            message.info('В очереди нет строк с ошибками выполнения');
+                            return;
+                          }
+                          setQueueItems((current) => current.filter((item) => failedKeys.has(item.key)));
+                          setSelectedQueueKeys((current) => current.filter((key) => failedKeys.has(String(key))));
+                        }}
+                      >
+                        Оставить только ошибки ({queueErrorCount})
+                      </Button>
+                      {isExecuting || queueStats.delete === 0 ? (
+                        <Button
+                          icon={isExecuting ? <StopOutlined /> : <PlayCircleOutlined />}
+                          type="primary"
+                          disabled={!isExecuting && queueItems.length === 0}
+                          onClick={() => void executeQueue()}
+                        >
+                          {isExecuting ? 'Стоп' : 'Пуск'}
+                        </Button>
+                      ) : (
+                        <Popconfirm
+                          title="В очереди есть удаление"
+                          description={`Будет удалено ${queueStats.delete} строк. Запустить очередь?`}
+                          okText="Да, запустить"
+                          cancelText="Отмена"
+                          onConfirm={() => void executeQueue()}
+                        >
+                          <Button icon={<PlayCircleOutlined />} type="primary" disabled={queueItems.length === 0}>Пуск</Button>
+                        </Popconfirm>
+                      )}
+                      <Button disabled={isExecuting || selectedQueueKeys.length === 0} onClick={() => removeQueueItemsByKeys(selectedQueueKeys.map(String))}>
+                        Отменить выбранное
+                      </Button>
+                    </Space>
+                  )}
+                >
+                  {queueItems.length === 0 ? (
+                    <Empty description="Очередь выполнения пуста" />
+                  ) : (
+                    <Table<QueueRow>
+                      className="contract-sync-table"
+                      rowKey="key"
+                      rowClassName={rowClassName}
+                      dataSource={filteredQueueItems}
+                      columns={queueColumns}
+                      rowSelection={{
+                        selectedRowKeys: selectedQueueKeys,
+                        preserveSelectedRowKeys: true,
+                        onChange: setSelectedQueueKeys,
+                        getCheckboxProps: () => ({ disabled: isExecuting }),
+                      }}
+                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                      scroll={{ x: 1450 }}
+                      locale={{ emptyText: search ? 'По текущему поиску и фильтрам в очереди совпадений нет' : 'Очередь выполнения пуста' }}
+                    />
+                  )}
+                </Card>
+              </Space>
+            ),
+          },
+          {
+            key: 'history',
+            label: 'История и отчёт',
+            children: (
+              <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+                <Card className="glass-panel" title="Используемый отчёт">
+                  {activeReportImport ? (
+                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+                      {latestImport?.status === 'failed' ? (
+                        <Alert
+                          type="error"
+                          showIcon
+                          title="Последний прогон завершился ошибкой"
+                          description={latestImport.error_text || 'Подробности ошибки отсутствуют в журнале импорта.'}
+                        />
+                      ) : null}
+                      <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
+                        <Descriptions.Item label="Статус">{importStatusTag(activeReportImport.status)}</Descriptions.Item>
+                        <Descriptions.Item label="Вложение">{activeReportImport.attachment_name || '—'}</Descriptions.Item>
+                        <Descriptions.Item label="Получено">{formatDateTime(activeReportImport.received_at)}</Descriptions.Item>
+                        <Descriptions.Item label="Обработано">{formatDateTime(activeReportImport.processed_at)}</Descriptions.Item>
+                        <Descriptions.Item label="Строк">{activeReportImport.rows_count}</Descriptions.Item>
+                        <Descriptions.Item label="Хэш">{shortValue(activeReportImport.attachment_hash, 8)}</Descriptions.Item>
+                        <Descriptions.Item label="Message-ID" span={2}>{activeReportImport.message_id || '—'}</Descriptions.Item>
+                      </Descriptions>
+                    </Space>
+                  ) : (
+                    <Empty description="Нет успешно обработанного отчёта" />
+                  )}
+                </Card>
+
+                <Card className="glass-panel" title="История почтовых импортов" extra={<Text type="secondary">Показываются последние 20 прогонов</Text>}>
+                  <Table<ContractMailImportDTO>
+                    rowKey="id"
+                    dataSource={recentImports}
+                    columns={importColumns}
+                    loading={contractSyncQuery.isLoading}
+                    pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                    scroll={{ x: 1000 }}
+                    locale={{ emptyText: 'История импортов пуста' }}
+                  />
+                </Card>
+              </Space>
+            ),
+          },
+        ]}
+      />
     </Space>
   );
 };

@@ -267,6 +267,15 @@ func (r *bitrixRepo) ListServicePointsByIDs(ctx context.Context, ids []int64) ([
 	return items, err
 }
 
+func (r *bitrixRepo) DeleteServicePointsByIDs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).
+		Where("b24_element_id IN ?", ids).
+		Delete(&bitrix.ServicePoint{}).Error
+}
+
 func (r *bitrixRepo) UpsertCompanyServicePointMapping(ctx context.Context, item *bitrix.CompanyServicePointMapping) error {
 	if item == nil {
 		return nil

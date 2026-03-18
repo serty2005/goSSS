@@ -394,14 +394,24 @@ export interface ContractSyncQueueItemDTO {
   service_point_name: string;
   service_point_code: string;
   contractor_id?: string;
+  contractor_name?: string;
   contract_type?: string;
   b24_element_id?: number;
+  current_name?: string;
   current_code?: string;
   current_contract_type?: string;
+  change_set?: ContractSyncFieldDiffDTO[];
   matched_point_ids?: number[];
   filled_fields?: number;
   is_mapped?: boolean;
   reason?: string;
+}
+
+export interface ContractSyncFieldDiffDTO {
+  field: string;
+  label: string;
+  current_value?: string;
+  next_value?: string;
 }
 
 export interface ContractSyncStateDTO {
@@ -424,6 +434,16 @@ export interface ContractSyncExecuteResultDTO {
   deleted: number;
   applied_keys?: string[];
   errors?: string[];
+  error_details?: ContractSyncExecuteErrorDTO[];
+}
+
+export interface ContractSyncExecuteErrorDTO {
+  key: string;
+  action: 'create' | 'update' | 'delete';
+  service_point_name?: string;
+  service_point_code?: string;
+  b24_element_id?: number;
+  message: string;
 }
 
 export interface TicketHistoryDTO {

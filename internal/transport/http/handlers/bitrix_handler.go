@@ -191,12 +191,13 @@ func (h *BitrixHandler) ExecuteContractSync(w http.ResponseWriter, r *http.Reque
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, api.ContractSyncExecuteResultDTO{
-		Processed:   result.Processed,
-		Created:     result.Created,
-		Updated:     result.Updated,
-		Deleted:     result.Deleted,
-		AppliedKeys: result.AppliedKeys,
-		Errors:      result.Errors,
+		Processed:    result.Processed,
+		Created:      result.Created,
+		Updated:      result.Updated,
+		Deleted:      result.Deleted,
+		AppliedKeys:  result.AppliedKeys,
+		Errors:       result.Errors,
+		ErrorDetails: mapContractSyncExecuteErrors(result.ErrorDetails),
 	})
 }
 
@@ -460,14 +461,45 @@ func mapContractSyncQueueItems(items []services.ContractReportSyncPlanItem) []ap
 			ServicePointName:    item.ServicePointName,
 			ServicePointCode:    item.ServicePointCode,
 			ContractorID:        item.ContractorID,
+			ContractorName:      item.ContractorName,
 			ContractType:        item.ContractType,
 			B24ElementID:        item.B24ElementID,
+			CurrentName:         item.CurrentName,
 			CurrentCode:         item.CurrentCode,
 			CurrentContractType: item.CurrentContractType,
+			ChangeSet:           mapContractSyncFieldDiffs(item.ChangeSet),
 			MatchedPointIDs:     item.MatchedPointIDs,
 			FilledFields:        item.FilledFields,
 			IsMapped:            item.IsMapped,
 			Reason:              item.Reason,
+		})
+	}
+	return result
+}
+
+func mapContractSyncFieldDiffs(items []services.ContractReportSyncFieldDiff) []api.ContractSyncFieldDiffDTO {
+	result := make([]api.ContractSyncFieldDiffDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncFieldDiffDTO{
+			Field:        item.Field,
+			Label:        item.Label,
+			CurrentValue: item.CurrentValue,
+			NextValue:    item.NextValue,
+		})
+	}
+	return result
+}
+
+func mapContractSyncExecuteErrors(items []services.ContractReportSyncErrorDetail) []api.ContractSyncExecuteErrorDTO {
+	result := make([]api.ContractSyncExecuteErrorDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncExecuteErrorDTO{
+			Key:              item.Key,
+			Action:           string(item.Action),
+			ServicePointName: item.ServicePointName,
+			ServicePointCode: item.ServicePointCode,
+			B24ElementID:     item.B24ElementID,
+			Message:          item.Message,
 		})
 	}
 	return result

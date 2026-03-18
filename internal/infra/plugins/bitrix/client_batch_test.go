@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +112,120 @@ func TestUserGetAll_UsesBatchPagination(t *testing.T) {
 	if gotUserGetCalls != 1 {
 		t.Fatalf("ожидался 1 прямой вызов user.get, получено %d", gotUserGetCalls)
 	}
+	if gotBatchCalls != 1 {
+		t.Fatalf("ожидался 1 batch-вызов, получено %d", gotBatchCalls)
+	}
+}
+
+func TestListsElementBatchGetByIDs_UsesBatchAndReturnsItems(t *testing.T) {
+	var (
+		mu         sync.Mutex
+		batchCalls int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		defer r.Body.Close()
+
+		if !strings.HasSuffix(r.URL.Path, "/batch.json") {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+
+		var body struct {
+			Cmd map[string]string `json:"cmd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		batchCalls++
+		mu.Unlock()
+
+		if len(body.Cmd) != 2 {
+			t.Fatalf("ожидалось 2 команды в batch, получено %d", len(body.Cmd))
+		}
+
+		for key, rawCmd := range body.Cmd {
+			if !strings.HasPrefix(rawCmd, "lists.element.get?") {
+				t.Fatalf("ожидалась команда lists.element.get, получено %q", rawCmd)
+			}
+			params, err := url.ParseQuery(strings.TrimPrefix(rawCmd, "lists.element.get?"))
+			if err != nil {
+				t.Fatalf("не удалось распарсить batch-команду %q: %v", rawCmd, err)
+			}
+			if params.Get("IBLOCK_TYPE_ID") != "lists" {
+				t.Fatalf("ожидался IBLOCK_TYPE_ID=lists, получено %q", params.Get("IBLOCK_TYPE_ID"))
+			}
+			if params.Get("IBLOCK_ID") != "101" {
+				t.Fatalf("ожидался IBLOCK_ID=101, получено %q", params.Get("IBLOCK_ID"))
+			}
+			if params.Get("ELEMENT_ID") == "" {
+				t.Fatalf("в batch-команде %q не указан ELEMENT_ID", key)
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{
+				"result": map[string]any{
+					"element_101": []map[string]any{
+						{
+							"ID":   "101",
+							"NAME": "Точка 101",
+							"PROPERTY_681": map[string]any{
+								"1": "CODE-101",
+							},
+						},
+					},
+					"element_102": []map[string]any{
+						{
+							"ID":   "102",
+							"NAME": "Точка 102",
+							"PROPERTY_681": map[string]any{
+								"2": "CODE-102",
+							},
+						},
+					},
+				},
+				"result_error": map[string]any{},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		BitrixBaseURL:         server.URL + "/rest/1/key",
+		RequestTimeout:        2 * time.Second,
+		BitrixRateLimitPerMin: 120,
+		BitrixRateLimitBurst:  50,
+	}
+	client := NewClient(cfg, logger.New("", "test", "error", true))
+
+	result, err := client.ListsElementBatchGetByIDs(context.Background(), "lists", 101, []int64{101, 102, 101}, nil)
+	if err != nil {
+		t.Fatalf("ошибка ListsElementBatchGetByIDs: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("не ожидались ошибки получения элементов, получено: %#v", result.Errors)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("ожидалось 2 элемента, получено %d", len(result.Items))
+	}
+	if result.Items[101].Name != "Точка 101" {
+		t.Fatalf("ожидалось имя 'Точка 101', получено %q", result.Items[101].Name)
+	}
+	if result.Items[102].Name != "Точка 102" {
+		t.Fatalf("ожидалось имя 'Точка 102', получено %q", result.Items[102].Name)
+	}
+
+	mu.Lock()
+	gotBatchCalls := batchCalls
+	mu.Unlock()
 	if gotBatchCalls != 1 {
 		t.Fatalf("ожидался 1 batch-вызов, получено %d", gotBatchCalls)
 	}

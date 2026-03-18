@@ -1,14 +1,14 @@
 import React, { createContext, useContext } from 'react';
 
-export type ReportHeaderConfig = {
-  mode: 'reports';
-  title: React.ReactNode;
+export type LayoutHeaderConfig = {
+  mode: 'reports' | 'page-controls';
+  title?: React.ReactNode;
   controls?: React.ReactNode;
 };
 
 type LayoutHeaderContextValue = {
-  headerConfig: ReportHeaderConfig | null;
-  setHeaderConfig: (config: ReportHeaderConfig | null) => void;
+  headerConfig: LayoutHeaderConfig | null;
+  setHeaderConfig: (config: LayoutHeaderConfig | null) => void;
   headerAddon: React.ReactNode | null;
   setHeaderAddon: (node: React.ReactNode | null) => void;
 };
