@@ -64,6 +64,29 @@ type ListElement struct {
 	RawJSON    string
 }
 
+type ListElementBatchAction string
+
+const (
+	ListElementBatchActionAdd    ListElementBatchAction = "add"
+	ListElementBatchActionUpdate ListElementBatchAction = "update"
+	ListElementBatchActionDelete ListElementBatchAction = "delete"
+)
+
+type ListElementBatchCommand struct {
+	Key          string
+	Action       ListElementBatchAction
+	IBlockTypeID string
+	IBlockID     int
+	ElementID    int64
+	ElementCode  string
+	Fields       map[string]interface{}
+}
+
+type ListElementBatchResult struct {
+	CreatedIDs map[string]int64
+	Errors     map[string]error
+}
+
 type User struct {
 	ID         int64
 	Name       string
@@ -540,6 +563,84 @@ func (c *Client) ListsElementDelete(
 	}
 	_, _, _, err := c.call(ctx, "lists.element.delete", body)
 	return err
+}
+
+func (c *Client) ListsElementBatch(ctx context.Context, commands []ListElementBatchCommand) (*ListElementBatchResult, error) {
+	result := &ListElementBatchResult{
+		CreatedIDs: make(map[string]int64),
+		Errors:     make(map[string]error),
+	}
+	if len(commands) == 0 {
+		return result, nil
+	}
+
+	for offset := 0; offset < len(commands); offset += bitrixBatchLimit {
+		chunk := commands[offset:min(offset+bitrixBatchLimit, len(commands))]
+		batchCommands := make([]batchCommand, 0, len(chunk))
+		for _, item := range chunk {
+			key := strings.TrimSpace(item.Key)
+			if key == "" {
+				return nil, errors.New("batch-команда списков должна содержать ключ")
+			}
+
+			var (
+				method string
+				params map[string]any
+			)
+
+			switch item.Action {
+			case ListElementBatchActionAdd:
+				method = "lists.element.add"
+				params = map[string]any{
+					"IBLOCK_TYPE_ID": item.IBlockTypeID,
+					"IBLOCK_ID":      item.IBlockID,
+					"ELEMENT_CODE":   item.ElementCode,
+					"FIELDS":         item.Fields,
+				}
+			case ListElementBatchActionUpdate:
+				method = "lists.element.update"
+				params = map[string]any{
+					"IBLOCK_TYPE_ID": item.IBlockTypeID,
+					"IBLOCK_ID":      item.IBlockID,
+					"ELEMENT_ID":     item.ElementID,
+					"FIELDS":         item.Fields,
+				}
+			case ListElementBatchActionDelete:
+				method = "lists.element.delete"
+				params = map[string]any{
+					"IBLOCK_TYPE_ID": item.IBlockTypeID,
+					"IBLOCK_ID":      item.IBlockID,
+					"ELEMENT_ID":     item.ElementID,
+				}
+			default:
+				return nil, fmt.Errorf("неподдерживаемое batch-действие для списков: %s", item.Action)
+			}
+
+			batchCommands = append(batchCommands, batchCommand{
+				ID:     key,
+				Method: method,
+				Params: params,
+			})
+		}
+
+		batchResult, err := c.callBatch(ctx, false, batchCommands)
+		if err != nil {
+			return nil, err
+		}
+		for key, batchErr := range batchResult.Errors {
+			result.Errors[key] = batchErr
+		}
+		for _, item := range chunk {
+			if _, failed := result.Errors[item.Key]; failed {
+				continue
+			}
+			if item.Action == ListElementBatchActionAdd {
+				result.CreatedIDs[item.Key] = toInt64(batchResult.Results[item.Key])
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (c *Client) ListsFieldGet(ctx context.Context, iblockTypeID string, iblockID int, fieldID string) (map[string]interface{}, error) {

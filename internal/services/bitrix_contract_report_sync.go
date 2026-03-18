@@ -352,13 +352,13 @@ func (s *bitrixSyncService) applyServicePointReportCreate(
 	contractMeta *bitrixListFieldMeta,
 	dryRun bool,
 ) (int64, bool, error) {
-	contractValue, err := prepareContractFieldValue(contractMeta, row.ContractOn)
+	contractValue, err := prepareContractFieldValue(contractMeta, row.ContractType)
 	if err != nil {
 		return 0, false, err
 	}
 	fields := map[string]any{
 		"NAME":                             row.ServicePointName,
-		bitrixServicePointOneCCodeProperty: prepareBitrixFieldValue(oneCMeta, row.ContractorID),
+		bitrixServicePointOneCCodeProperty: prepareBitrixFieldValue(oneCMeta, row.ServicePointCode),
 		bitrixServicePointContractProperty: contractValue,
 	}
 
@@ -366,7 +366,7 @@ func (s *bitrixSyncService) applyServicePointReportCreate(
 		s.log.Info(
 			"Bitrix24 dry-run: пропущено создание точки обслуживания",
 			"service_point_name", row.ServicePointName,
-			"contractor_id", row.ContractorID,
+			"service_point_code", row.ServicePointCode,
 			"iblock_type", iblockType,
 			"iblock_id", iblockID,
 			"fields", fields,
@@ -393,7 +393,7 @@ func (s *bitrixSyncService) applyServicePointReportUpdate(
 	contractMeta *bitrixListFieldMeta,
 	dryRun bool,
 ) (bool, error) {
-	contractValue, err := prepareContractFieldValue(contractMeta, row.ContractOn)
+	contractValue, err := prepareContractFieldValue(contractMeta, row.ContractType)
 	if err != nil {
 		return false, err
 	}
@@ -404,7 +404,7 @@ func (s *bitrixSyncService) applyServicePointReportUpdate(
 	for propKey, propValue := range state.Properties {
 		fields[propKey] = normalizePropertyValueForWrite(propValue)
 	}
-	fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, row.ContractorID)
+	fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, row.ServicePointCode)
 	fields[bitrixServicePointContractProperty] = contractValue
 
 	if dryRun {
@@ -412,7 +412,7 @@ func (s *bitrixSyncService) applyServicePointReportUpdate(
 			"Bitrix24 dry-run: пропущено обновление точки обслуживания",
 			"point_id", state.ID,
 			"service_point_name", row.ServicePointName,
-			"contractor_id", row.ContractorID,
+			"service_point_code", row.ServicePointCode,
 			"iblock_type", iblockType,
 			"iblock_id", iblockID,
 			"fields", fields,

@@ -1,18 +1,16 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	xlsreader "github.com/shakinm/xlsReader/xls"
-	"github.com/xuri/excelize/v2"
+	b24 "etalon-server/internal/infra/plugins/bitrix"
+	"etalon-server/internal/pkg/spreadsheet"
 )
 
 const (
@@ -107,11 +105,13 @@ type bitrixListFieldMeta struct {
 }
 
 type bitrixServicePointState struct {
-	ID              int64
-	Name            string
-	Properties      map[string]interface{}
-	CurrentCode     string
-	CurrentContract *bool
+	ID                  int64
+	Name                string
+	Properties          map[string]interface{}
+	CurrentCode         string
+	CurrentContract     *bool
+	CurrentContractType string
+	FilledFields        int
 }
 
 func (s *bitrixSyncService) PreviewServicePointsImport(_ context.Context, fileName string, content []byte) (*ServicePointImportPreview, error) {
@@ -265,7 +265,7 @@ func (s *bitrixSyncService) ImportServicePoints(
 			}
 			fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, item.OneCCode)
 			if contractOn, ok := contractLabelToBool(item.ContractLabel); ok {
-				contractValue, convErr := prepareContractFieldValue(contractMeta, contractOn)
+				contractValue, convErr := prepareContractBoolFieldValue(contractMeta, contractOn)
 				if convErr != nil {
 					result.Errors = append(result.Errors, convErr.Error())
 					continue
@@ -300,7 +300,7 @@ func (s *bitrixSyncService) ImportServicePoints(
 			}
 			fields[bitrixServicePointOneCCodeProperty] = prepareBitrixFieldValue(oneCMeta, item.OneCCode)
 			if contractOn, ok := contractLabelToBool(item.ContractLabel); ok {
-				contractValue, convErr := prepareContractFieldValue(contractMeta, contractOn)
+				contractValue, convErr := prepareContractBoolFieldValue(contractMeta, contractOn)
 				if convErr != nil {
 					result.Errors = append(result.Errors, convErr.Error())
 					continue
@@ -552,21 +552,23 @@ func syncPlanDeleteKey(pointID int64) string {
 
 func (s *bitrixSyncService) fetchBitrixServicePointState(ctx context.Context, iblockType string, iblockID int) (map[string][]bitrixServicePointState, error) {
 	statesByName := make(map[string][]bitrixServicePointState)
-	items, err := s.client.ListsElementGetAll(ctx, iblockType, iblockID, bitrixServicePointSelectFields)
+	items, err := s.client.ListsElementGetAll(ctx, iblockType, iblockID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось выгрузить точки Bitrix24: %w", err)
 	}
 
 	for _, item := range items {
 		currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
-		contractValue := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
-		contractOn := parseContractStatus(contractValue)
+		contractType := normalizeContractType(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
+		contractOn := contractTypeToBool(contractType)
 		state := bitrixServicePointState{
-			ID:              item.ID,
-			Name:            item.Name,
-			Properties:      item.Properties,
-			CurrentCode:     currentCode,
-			CurrentContract: contractOn,
+			ID:                  item.ID,
+			Name:                item.Name,
+			Properties:          item.Properties,
+			CurrentCode:         currentCode,
+			CurrentContract:     contractOn,
+			CurrentContractType: contractType,
+			FilledFields:        countFilledElementFields(item),
 		}
 		normalizedName := normalizePointName(item.Name)
 		if normalizedName == "" {
@@ -685,117 +687,7 @@ func parseImportedServicePointRows(fileName string, content []byte, mapping Serv
 }
 
 func parseSpreadsheetRows(fileName string, content []byte) ([][]string, error) {
-	if len(content) == 0 {
-		return nil, errors.New("файл пустой")
-	}
-
-	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
-	if ext == ".xls" {
-		rows, err := parseXLSRows(content)
-		if err == nil {
-			return rows, nil
-		}
-		rows, xlsxErr := parseXLSXRows(content)
-		if xlsxErr == nil {
-			return rows, nil
-		}
-		return nil, fmt.Errorf("не удалось разобрать XLS файл: %v", err)
-	}
-
-	if ext == ".xlsx" || ext == ".xlsm" || ext == ".xltx" || ext == ".xltm" {
-		rows, err := parseXLSXRows(content)
-		if err == nil {
-			return rows, nil
-		}
-		rows, xlsErr := parseXLSRows(content)
-		if xlsErr == nil {
-			return rows, nil
-		}
-		return nil, fmt.Errorf("не удалось разобрать XLSX файл: %v", err)
-	}
-
-	rows, err := parseXLSXRows(content)
-	if err == nil {
-		return rows, nil
-	}
-	rows, xlsErr := parseXLSRows(content)
-	if xlsErr == nil {
-		return rows, nil
-	}
-
-	return nil, errors.New("поддерживаются только файлы .xls и .xlsx")
-}
-
-func parseXLSXRows(content []byte) ([][]string, error) {
-	book, err := excelize.OpenReader(bytes.NewReader(content))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = book.Close() }()
-
-	sheets := book.GetSheetList()
-	if len(sheets) == 0 {
-		return nil, errors.New("в файле нет листов")
-	}
-
-	rows, err := book.GetRows(sheets[0])
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, errors.New("в файле нет данных")
-	}
-
-	return rows, nil
-}
-
-func parseXLSRows(content []byte) ([][]string, error) {
-	book, err := xlsreader.OpenReader(bytes.NewReader(content))
-	if err != nil {
-		return nil, err
-	}
-
-	sheet, err := book.GetSheet(0)
-	if err != nil || sheet == nil {
-		return nil, errors.New("в файле нет листов")
-	}
-
-	rowCount := sheet.GetNumberRows()
-	if rowCount == 0 {
-		return nil, errors.New("в файле нет данных")
-	}
-
-	maxCols := 0
-	for i := 0; i < rowCount; i++ {
-		row, rowErr := sheet.GetRow(i)
-		if rowErr != nil || row == nil {
-			continue
-		}
-		if len(row.GetCols()) > maxCols {
-			maxCols = len(row.GetCols())
-		}
-	}
-	if maxCols == 0 {
-		maxCols = 1
-	}
-
-	rows := make([][]string, 0, rowCount)
-	for i := 0; i < rowCount; i++ {
-		values := make([]string, maxCols)
-		row, rowErr := sheet.GetRow(i)
-		if rowErr == nil && row != nil {
-			for c := 0; c < maxCols; c++ {
-				cell, cellErr := row.GetCol(c)
-				if cellErr != nil || cell == nil {
-					continue
-				}
-				values[c] = normalizeCell(cell.GetString())
-			}
-		}
-		rows = append(rows, trimRightEmpty(values))
-	}
-
-	return rows, nil
+	return spreadsheet.ParseRows(fileName, content)
 }
 
 func detectColumns(rows [][]string) (int, []ServicePointImportColumn, error) {
@@ -980,6 +872,16 @@ func contractBoolToLabel(v *bool) string {
 	return "Нет"
 }
 
+func contractBoolToType(v *bool) string {
+	if v == nil {
+		return ""
+	}
+	if *v {
+		return "TS Standart"
+	}
+	return "Не активен"
+}
+
 func contractLabelToBool(label string) (bool, bool) {
 	parsed := parseContractStatus(label)
 	if parsed == nil {
@@ -996,10 +898,14 @@ func prepareBitrixFieldValue(meta *bitrixListFieldMeta, value string) interface{
 	return normalized
 }
 
-func prepareContractFieldValue(meta *bitrixListFieldMeta, contractOn bool) (interface{}, error) {
-	label := "Нет"
-	if contractOn {
-		label = "Да"
+func prepareContractBoolFieldValue(meta *bitrixListFieldMeta, contractOn bool) (interface{}, error) {
+	return prepareContractFieldValue(meta, contractBoolToType(&contractOn))
+}
+
+func prepareContractFieldValue(meta *bitrixListFieldMeta, contractType string) (interface{}, error) {
+	label := normalizeContractType(contractType)
+	if label == "" {
+		label = "Не активен"
 	}
 
 	if meta != nil && len(meta.ListValueToID) > 0 {
@@ -1017,6 +923,50 @@ func prepareContractFieldValue(meta *bitrixListFieldMeta, contractOn bool) (inte
 		return []string{label}, nil
 	}
 	return label, nil
+}
+
+func normalizeContractType(value string) string {
+	switch strings.ToLower(normalizeCell(value)) {
+	case "":
+		return ""
+	case "нет", "не активен", "неактивен":
+		return "Не активен"
+	case "да", "ts standart", "ts standard":
+		return "TS Standart"
+	case "ts cloud":
+		return "TS Cloud"
+	default:
+		return normalizeCell(value)
+	}
+}
+
+func contractTypeToBool(contractType string) *bool {
+	switch normalizeContractType(contractType) {
+	case "TS Cloud", "TS Standart":
+		v := true
+		return &v
+	case "Не активен":
+		v := false
+		return &v
+	default:
+		return nil
+	}
+}
+
+func countFilledElementFields(item b24.ListElement) int {
+	count := 0
+	if normalizeCell(item.Name) != "" {
+		count++
+	}
+	if normalizeCell(item.Code) != "" {
+		count++
+	}
+	for _, value := range item.Properties {
+		if normalizeCell(extractPropertyFirstValue(value)) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func normalizePropertyValueForWrite(value interface{}) interface{} {

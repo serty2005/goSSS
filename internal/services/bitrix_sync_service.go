@@ -58,6 +58,8 @@ type BitrixSyncService interface {
 	PreviewServicePointsSync(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping) (*ServicePointSyncPreview, error)
 	ImportServicePoints(ctx context.Context, fileName string, content []byte, mapping ServicePointImportMapping, options ServicePointSyncApplyOptions) (*ServicePointSyncApplyResult, error)
 	SyncServicePointsFromDailyReport(ctx context.Context, rows []contractsvc.ContractReportRow) (*ServicePointContractSyncResult, error)
+	PreviewContractReportSync(ctx context.Context, rows []contractsvc.ContractReportRow) (*ContractReportSyncPreview, error)
+	ExecuteContractReportSync(ctx context.Context, rows []contractsvc.ContractReportRow, options ContractReportSyncExecuteOptions) (*ContractReportSyncExecuteResult, error)
 }
 
 type bitrixSyncService struct {

@@ -383,28 +383,47 @@ export interface ContractMailImportDTO {
   status: string;
   error_text?: string;
   processed_at?: string;
+  rows_count: number;
   created_at: string;
   updated_at: string;
 }
 
-export interface ContractServicePointConflictDTO {
-  id: string;
-  conflict_type: string;
+export interface ContractSyncQueueItemDTO {
+  key: string;
+  action: 'create' | 'update' | 'delete';
   service_point_name: string;
+  service_point_code: string;
   contractor_id?: string;
-  message_id?: string;
-  attachment_hash?: string;
+  contract_type?: string;
+  b24_element_id?: number;
+  current_code?: string;
+  current_contract_type?: string;
   matched_point_ids?: number[];
-  mapped_point_ids?: number[];
-  deletion_candidate_ids?: number[];
-  created_at: string;
-  updated_at: string;
+  filled_fields?: number;
+  is_mapped?: boolean;
+  reason?: string;
 }
 
 export interface ContractSyncStateDTO {
   latest_import?: ContractMailImportDTO;
+  active_report_import?: ContractMailImportDTO;
   recent_imports: ContractMailImportDTO[];
-  conflicts: ContractServicePointConflictDTO[];
+  report_rows: number;
+  to_create: number;
+  to_update: number;
+  to_delete: number;
+  blocked_rows: number;
+  upsert_items: ContractSyncQueueItemDTO[];
+  delete_items: ContractSyncQueueItemDTO[];
+}
+
+export interface ContractSyncExecuteResultDTO {
+  processed: number;
+  created: number;
+  updated: number;
+  deleted: number;
+  applied_keys?: string[];
+  errors?: string[];
 }
 
 export interface TicketHistoryDTO {

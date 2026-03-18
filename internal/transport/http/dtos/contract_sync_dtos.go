@@ -12,28 +12,46 @@ type ContractMailImportDTO struct {
 	Status         string     `json:"status"`
 	ErrorText      *string    `json:"error_text,omitempty"`
 	ProcessedAt    *time.Time `json:"processed_at,omitempty"`
+	RowsCount      int        `json:"rows_count"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
-// ContractServicePointConflictDTO описывает актуальный конфликт дублей по точкам Bitrix24.
-type ContractServicePointConflictDTO struct {
-	ID                   string    `json:"id"`
-	ConflictType         string    `json:"conflict_type"`
-	ServicePointName     string    `json:"service_point_name"`
-	ContractorID         *string   `json:"contractor_id,omitempty"`
-	MessageID            *string   `json:"message_id,omitempty"`
-	AttachmentHash       *string   `json:"attachment_hash,omitempty"`
-	MatchedPointIDs      []int64   `json:"matched_point_ids,omitempty"`
-	MappedPointIDs       []int64   `json:"mapped_point_ids,omitempty"`
-	DeletionCandidateIDs []int64   `json:"deletion_candidate_ids,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+type ContractSyncQueueItemDTO struct {
+	Key                 string  `json:"key"`
+	Action              string  `json:"action"`
+	ServicePointName    string  `json:"service_point_name"`
+	ServicePointCode    string  `json:"service_point_code"`
+	ContractorID        string  `json:"contractor_id,omitempty"`
+	ContractType        string  `json:"contract_type,omitempty"`
+	B24ElementID        *int64  `json:"b24_element_id,omitempty"`
+	CurrentCode         string  `json:"current_code,omitempty"`
+	CurrentContractType string  `json:"current_contract_type,omitempty"`
+	MatchedPointIDs     []int64 `json:"matched_point_ids,omitempty"`
+	FilledFields        int     `json:"filled_fields,omitempty"`
+	IsMapped            bool    `json:"is_mapped,omitempty"`
+	Reason              string  `json:"reason,omitempty"`
 }
 
 // ContractSyncStateDTO возвращает оператору текущее состояние почтовой синхронизации.
 type ContractSyncStateDTO struct {
-	LatestImport  *ContractMailImportDTO            `json:"latest_import,omitempty"`
-	RecentImports []ContractMailImportDTO           `json:"recent_imports"`
-	Conflicts     []ContractServicePointConflictDTO `json:"conflicts"`
+	LatestImport       *ContractMailImportDTO     `json:"latest_import,omitempty"`
+	ActiveReportImport *ContractMailImportDTO     `json:"active_report_import,omitempty"`
+	RecentImports      []ContractMailImportDTO    `json:"recent_imports"`
+	ReportRows         int                        `json:"report_rows"`
+	ToCreate           int                        `json:"to_create"`
+	ToUpdate           int                        `json:"to_update"`
+	ToDelete           int                        `json:"to_delete"`
+	BlockedRows        int                        `json:"blocked_rows"`
+	UpsertItems        []ContractSyncQueueItemDTO `json:"upsert_items"`
+	DeleteItems        []ContractSyncQueueItemDTO `json:"delete_items"`
+}
+
+type ContractSyncExecuteResultDTO struct {
+	Processed   int      `json:"processed"`
+	Created     int      `json:"created"`
+	Updated     int      `json:"updated"`
+	Deleted     int      `json:"deleted"`
+	AppliedKeys []string `json:"applied_keys,omitempty"`
+	Errors      []string `json:"errors,omitempty"`
 }

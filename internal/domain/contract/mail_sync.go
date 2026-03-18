@@ -14,13 +14,14 @@ const (
 
 type MailImport struct {
 	common.Base
-	MessageID      string     `json:"message_id" gorm:"type:text;index"`
-	AttachmentName string     `json:"attachment_name" gorm:"type:text;not null"`
-	AttachmentHash string     `json:"attachment_hash" gorm:"type:char(64);uniqueIndex;not null"`
-	ReceivedAt     *time.Time `json:"received_at"`
-	Status         string     `json:"status" gorm:"type:varchar(32);not null;index"`
-	ErrorText      *string    `json:"error_text" gorm:"type:text"`
-	ProcessedAt    *time.Time `json:"processed_at"`
+	MessageID      string         `json:"message_id" gorm:"type:text;index"`
+	AttachmentName string         `json:"attachment_name" gorm:"type:text;not null"`
+	AttachmentHash string         `json:"attachment_hash" gorm:"type:char(64);uniqueIndex;not null"`
+	ReceivedAt     *time.Time     `json:"received_at"`
+	Status         string         `json:"status" gorm:"type:varchar(32);not null;index"`
+	ErrorText      *string        `json:"error_text" gorm:"type:text"`
+	ProcessedAt    *time.Time     `json:"processed_at"`
+	ReportRows     datatypes.JSON `json:"report_rows" gorm:"type:jsonb"`
 }
 
 func (MailImport) TableName() string { return "contract_mail_imports" }
@@ -41,6 +42,7 @@ type DailyCompanyContractSnapshot struct {
 	CompanyID        string
 	ServicePointID   int64
 	ServicePointName string
+	ServicePointCode string
 	ContractorID     string
 	ContractType     string
 	Active           bool

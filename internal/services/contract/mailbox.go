@@ -42,7 +42,7 @@ func NewContractMailboxClient(cfg *config.Config, log logger.LoggerInterface) Co
 	return &contractMailboxClient{cfg: cfg, log: log}
 }
 
-// FetchReports подключается к IMAP, читает письма из Inbox и извлекает из них zip-отчеты.
+// FetchReports подключается к IMAP, читает письма из Inbox и извлекает из них отчеты.
 func (c *contractMailboxClient) FetchReports(ctx context.Context) ([]ContractMailReport, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (c *contractMailboxClient) FetchReports(ctx context.Context) ([]ContractMai
 	return reports, nil
 }
 
-// extractReportsFromMessage разбирает MIME-письмо и преобразует zip-вложения в набор отчетов.
+// extractReportsFromMessage разбирает MIME-письмо и преобразует вложения в набор отчетов.
 func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *imap.Message) ([]ContractMailReport, error) {
 	parsed, err := mail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
@@ -145,10 +145,10 @@ func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *i
 	}
 
 	messageID := messageIDFromMail(parsed, envelopeMessageID(message))
-	subject := strings.TrimSpace(cmpOr(parsed.Header.Get("Subject"), envelopeSubject(message)))
+	subject := decodeMIMEHeaderValue(cmpOr(parsed.Header.Get("Subject"), envelopeSubject(message)))
 	receivedAt := envelopeDate(message)
 
-	attachments, err := extractZIPAttachments(parsed.Header, mustReadAll(parsed.Body))
+	attachments, err := extractReportAttachments(c.log, parsed.Header, mustReadAll(parsed.Body))
 	if err != nil {
 		return nil, err
 	}
@@ -156,22 +156,38 @@ func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *i
 		return nil, nil
 	}
 	c.log.Info(
-		"IMAP: в письме найдены zip-вложения с контрактами",
+		"IMAP: в письме найдены вложения с контрактами",
 		"message_id", messageID,
 		"subject", subject,
 		"attachments_count", len(attachments),
 	)
 
 	reports := make([]ContractMailReport, 0, len(attachments))
+	parseErrors := make([]error, 0, len(attachments))
 	now := time.Now().UTC()
 	for _, attachment := range attachments {
 		if len(attachment.Content) > c.cfg.ContractZipMaxBytes {
-			return nil, fmt.Errorf("архив %q превышает допустимый размер %d байт", attachment.FileName, c.cfg.ContractZipMaxBytes)
+			parseErrors = append(parseErrors, fmt.Errorf("вложение %q превышает допустимый размер %d байт", attachment.FileName, c.cfg.ContractZipMaxBytes))
+			continue
 		}
 
-		rows, attachmentHash, err := parseContractReportArchive(attachment.FileName, attachment.Content, now)
+		c.log.Debug(
+			"IMAP: начинаем разбор вложения с контрактами",
+			"message_id", messageID,
+			"attachment_name", attachment.FileName,
+			"attachment_size", len(attachment.Content),
+		)
+
+		rows, attachmentHash, err := parseContractReportArchive(c.log, attachment.FileName, attachment.Content, now)
 		if err != nil {
-			return nil, err
+			c.log.Debug(
+				"IMAP: вложение не удалось разобрать, продолжаем обработку остальных",
+				"message_id", messageID,
+				"attachment_name", attachment.FileName,
+				"error", err,
+			)
+			parseErrors = append(parseErrors, fmt.Errorf("не удалось разобрать вложение %q: %w", attachment.FileName, err))
+			continue
 		}
 		c.log.Info(
 			"IMAP: вложение с контрактами разобрано",
@@ -190,25 +206,41 @@ func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *i
 		})
 	}
 
+	if len(reports) == 0 && len(parseErrors) > 0 {
+		return nil, errors.Join(parseErrors...)
+	}
+
 	return reports, nil
 }
 
-type zipAttachment struct {
+type reportAttachment struct {
 	FileName string
 	Content  []byte
 }
 
-// extractZIPAttachments запускает рекурсивный поиск zip-вложений в MIME-письме.
-func extractZIPAttachments(header mail.Header, body []byte) ([]zipAttachment, error) {
-	return collectZIPAttachments(textproto.MIMEHeader(header), body)
+// extractReportAttachments запускает рекурсивный поиск поддерживаемых вложений в MIME-письме.
+func extractReportAttachments(log logger.LoggerInterface, header mail.Header, body []byte) ([]reportAttachment, error) {
+	return collectReportAttachments(log, textproto.MIMEHeader(header), body, 0)
 }
 
-// collectZIPAttachments обходит MIME-части письма и собирает только zip-вложения.
-func collectZIPAttachments(header textproto.MIMEHeader, body []byte) ([]zipAttachment, error) {
+// collectReportAttachments обходит MIME-части письма и собирает поддерживаемые вложения.
+func collectReportAttachments(log logger.LoggerInterface, header textproto.MIMEHeader, body []byte, depth int) ([]reportAttachment, error) {
 	mediaType, params, _ := mime.ParseMediaType(header.Get("Content-Type"))
+	dispositionType := attachmentDispositionType(header.Get("Content-Disposition"))
 	decodedBody, err := decodeTransferEncoding(body, header.Get("Content-Transfer-Encoding"))
 	if err != nil {
 		return nil, err
+	}
+	if log != nil {
+		log.Debug(
+			"IMAP: анализ MIME-части письма",
+			"mime_depth", depth,
+			"content_type", strings.TrimSpace(header.Get("Content-Type")),
+			"content_disposition", strings.TrimSpace(header.Get("Content-Disposition")),
+			"disposition_type", dispositionType,
+			"media_type", mediaType,
+			"decoded_size", len(decodedBody),
+		)
 	}
 
 	if strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
@@ -217,7 +249,7 @@ func collectZIPAttachments(header textproto.MIMEHeader, body []byte) ([]zipAttac
 			return nil, errors.New("multipart-письмо не содержит boundary")
 		}
 		reader := multipart.NewReader(bytes.NewReader(decodedBody), boundary)
-		collected := make([]zipAttachment, 0, 2)
+		collected := make([]reportAttachment, 0, 2)
 		for {
 			part, err := reader.NextPart()
 			if errors.Is(err, io.EOF) {
@@ -231,7 +263,7 @@ func collectZIPAttachments(header textproto.MIMEHeader, body []byte) ([]zipAttac
 			if readErr != nil {
 				return nil, fmt.Errorf("не удалось прочитать MIME-часть: %w", readErr)
 			}
-			nested, nestedErr := collectZIPAttachments(part.Header, partBody)
+			nested, nestedErr := collectReportAttachments(log, part.Header, partBody, depth+1)
 			if nestedErr != nil {
 				return nil, nestedErr
 			}
@@ -241,14 +273,36 @@ func collectZIPAttachments(header textproto.MIMEHeader, body []byte) ([]zipAttac
 	}
 
 	fileName := attachmentFileName(header)
-	if !isZIPAttachment(mediaType, fileName) {
+	isReport := isReportAttachment(mediaType, fileName)
+	skipAsBody := shouldSkipMessageBodyPart(mediaType, dispositionType, fileName)
+	if log != nil {
+		log.Debug(
+			"IMAP: MIME-часть проверена на отчёт",
+			"mime_depth", depth,
+			"media_type", mediaType,
+			"disposition_type", dispositionType,
+			"detected_file_name", fileName,
+			"is_report_attachment", isReport,
+			"skipped_as_message_body", skipAsBody,
+		)
+	}
+	if !isReport || skipAsBody {
 		return nil, nil
 	}
 	if fileName == "" {
-		fileName = "contract-report.zip"
+		fileName = defaultReportAttachmentName(mediaType)
+	}
+	if log != nil {
+		log.Debug(
+			"IMAP: найдено вложение отчёта",
+			"mime_depth", depth,
+			"attachment_name", fileName,
+			"media_type", mediaType,
+			"attachment_size", len(decodedBody),
+		)
 	}
 
-	return []zipAttachment{{
+	return []reportAttachment{{
 		FileName: fileName,
 		Content:  decodedBody,
 	}}, nil
@@ -286,14 +340,69 @@ func attachmentFileName(header textproto.MIMEHeader) string {
 	return ""
 }
 
-// isZIPAttachment проверяет MIME-часть на принадлежность к zip-вложению.
-func isZIPAttachment(mediaType string, fileName string) bool {
+// attachmentDispositionType извлекает тип disposition из заголовка Content-Disposition.
+func attachmentDispositionType(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if mediaType, _, err := mime.ParseMediaType(trimmed); err == nil {
+		return strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	mediaType, _, _ := strings.Cut(trimmed, ";")
+	return strings.ToLower(strings.TrimSpace(mediaType))
+}
+
+// shouldSkipMessageBodyPart отбрасывает html-тело письма, ошибочно похожее на вложение отчёта.
+func shouldSkipMessageBodyPart(mediaType, dispositionType, fileName string) bool {
+	if strings.TrimSpace(fileName) != "" || dispositionType == "attachment" {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "text/html", "application/html":
+		return true
+	default:
+		return false
+	}
+}
+
+// defaultReportAttachmentName возвращает fallback-имя вложения с расширением по MIME-типу.
+func defaultReportAttachmentName(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "application/zip", "application/x-zip", "application/x-zip-compressed":
+		return "contract-report.zip"
+	case "application/vnd.ms-excel", "application/msexcel", "application/x-msexcel":
+		return "contract-report.xls"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "contract-report.xlsx"
+	case "text/html", "application/html":
+		return "contract-report.html"
+	default:
+		return "contract-report"
+	}
+}
+
+// isReportAttachment проверяет MIME-часть на принадлежность к поддерживаемому вложению отчета.
+func isReportAttachment(mediaType string, fileName string) bool {
 	normalizedType := strings.ToLower(strings.TrimSpace(mediaType))
 	switch normalizedType {
 	case "application/zip", "application/x-zip", "application/x-zip-compressed":
 		return true
+	case "application/vnd.ms-excel", "application/msexcel", "application/x-msexcel":
+		return true
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return true
+	case "text/html", "application/html":
+		return true
 	}
-	return strings.EqualFold(filepathExt(fileName), ".zip")
+
+	switch strings.ToLower(filepathExt(fileName)) {
+	case ".zip", ".xls", ".xlsx", ".html", ".htm":
+		return true
+	default:
+		return false
+	}
 }
 
 // extractAttachmentNameFromHeader извлекает имя вложения даже из нестандартных MIME-заголовков.
@@ -363,12 +472,7 @@ func decodeAttachmentHeaderValue(raw string, isRFC2231 bool) string {
 		}
 	}
 
-	decoder := new(mime.WordDecoder)
-	if decoded, err := decoder.DecodeHeader(value); err == nil && strings.TrimSpace(decoded) != "" {
-		value = decoded
-	}
-
-	return strings.TrimSpace(value)
+	return decodeMIMEHeaderValue(value)
 }
 
 // decodeRFC2231Value декодирует значение параметра filename*=charset”value.
@@ -397,6 +501,21 @@ func decodeRFC2231Value(raw string) (string, error) {
 		return value, err
 	}
 	return decoded, nil
+}
+
+// decodeMIMEHeaderValue декодирует RFC 2047 encoded-word и возвращает исходное значение при неудаче.
+func decodeMIMEHeaderValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	decoder := new(mime.WordDecoder)
+	if decoded, err := decoder.DecodeHeader(value); err == nil && strings.TrimSpace(decoded) != "" {
+		return strings.TrimSpace(decoded)
+	}
+
+	return value
 }
 
 // envelopeMessageID читает Message-ID из IMAP envelope.

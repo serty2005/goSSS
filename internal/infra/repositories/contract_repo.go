@@ -158,6 +158,7 @@ func (r *contractRepo) UpsertMailImport(ctx context.Context, item *contract.Mail
 			"status",
 			"error_text",
 			"processed_at",
+			"report_rows",
 			"updated_at",
 			"last_updated_by",
 		}),

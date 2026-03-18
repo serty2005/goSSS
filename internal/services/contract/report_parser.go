@@ -15,11 +15,15 @@ import (
 	"strings"
 	"time"
 
+	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/pkg/spreadsheet"
+
 	"golang.org/x/net/html"
 )
 
 const (
 	reportColumnContractorID = "идентификатор контрагента"
+	reportColumnPointCode    = "точка обслуживания.код"
 	reportColumnPointName    = "точка обслуживания"
 	reportColumnServiced     = "обслуживается"
 	reportColumnFree         = "бесплатное обслуживание"
@@ -39,6 +43,7 @@ type ContractMailReport struct {
 
 type ContractReportRow struct {
 	ContractorID     string
+	ServicePointCode string
 	ServicePointName string
 	ContractOn       bool
 	ContractType     string
@@ -47,41 +52,194 @@ type ContractReportRow struct {
 	ClientOrder      string
 }
 
-// parseContractReportArchive открывает zip-архив и извлекает из него первый подходящий HTML-отчет.
-func parseContractReportArchive(fileName string, content []byte, now time.Time) ([]ContractReportRow, string, error) {
+// parseContractReportArchive разбирает вложение отчета в одном из поддерживаемых форматов.
+func parseContractReportArchive(log logger.LoggerInterface, fileName string, content []byte, now time.Time) ([]ContractReportRow, string, error) {
 	if len(content) == 0 {
-		return nil, "", errors.New("архив с контрактами пустой")
+		return nil, "", errors.New("вложение с контрактами пустое")
 	}
 
 	hash := sha256.Sum256(content)
 	archiveHash := hex.EncodeToString(hash[:])
-
-	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
-	if err != nil {
-		return nil, "", fmt.Errorf("не удалось открыть zip-архив %q: %w", fileName, err)
+	if log != nil {
+		log.Debug(
+			"контракты: определяем формат вложения",
+			"attachment_name", fileName,
+			"attachment_ext", strings.ToLower(filepath.Ext(strings.TrimSpace(fileName))),
+			"attachment_size", len(content),
+			"attachment_hash", archiveHash,
+		)
 	}
 
-	for _, file := range reader.File {
-		if !strings.EqualFold(filepath.Ext(file.Name), ".html") && !strings.EqualFold(filepath.Ext(file.Name), ".htm") {
+	rows, err := parseContractReportFile(log, fileName, content, now)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return rows, archiveHash, nil
+}
+
+func parseContractReportFile(log logger.LoggerInterface, fileName string, content []byte, now time.Time) ([]ContractReportRow, error) {
+	extension := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	if log != nil {
+		log.Debug(
+			"контракты: выбор парсера вложения",
+			"file_name", fileName,
+			"file_ext", extension,
+			"file_size", len(content),
+		)
+	}
+
+	switch extension {
+	case ".zip":
+		return parseContractReportZIP(log, fileName, content, now)
+	case ".html", ".htm":
+		return parseContractReportHTML(content, now)
+	case ".xls", ".xlsx":
+		return parseContractReportSpreadsheet(fileName, content, now)
+	default:
+		if log != nil {
+			log.Debug("контракты: расширение файла не распознано, запускаем резервные парсеры", "file_name", fileName)
+		}
+		if rows, err := parseContractReportSpreadsheet(fileName, content, now); err == nil {
+			if log != nil {
+				log.Debug("контракты: резервный парсер spreadsheet успешно отработал", "file_name", fileName, "rows_count", len(rows))
+			}
+			return rows, nil
+		}
+		if rows, err := parseContractReportHTML(content, now); err == nil {
+			if log != nil {
+				log.Debug("контракты: резервный парсер html успешно отработал", "file_name", fileName, "rows_count", len(rows))
+			}
+			return rows, nil
+		}
+		return nil, fmt.Errorf("формат вложения %q не поддерживается", fileName)
+	}
+}
+
+func parseContractReportZIP(log logger.LoggerInterface, fileName string, content []byte, now time.Time) ([]ContractReportRow, error) {
+	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		return nil, fmt.Errorf("не удалось открыть zip-архив %q: %w", fileName, err)
+	}
+	if log != nil {
+		log.Debug("контракты: zip-архив открыт", "archive_name", fileName, "files_total", len(reader.File))
+	}
+
+	files := prioritizeReportFiles(reader.File)
+	if log != nil {
+		log.Debug("контракты: выбраны кандидаты внутри архива", "archive_name", fileName, "candidate_files", zipFileNames(files))
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("в архиве %q не найден поддерживаемый отчет", fileName)
+	}
+
+	var lastErr error
+	for _, file := range files {
+		if file == nil {
 			continue
+		}
+		if log != nil {
+			log.Debug(
+				"контракты: пробуем файл из архива",
+				"archive_name", fileName,
+				"inner_file_name", file.Name,
+				"inner_file_size", file.UncompressedSize64,
+			)
 		}
 		rc, err := file.Open()
 		if err != nil {
-			return nil, "", fmt.Errorf("не удалось открыть файл %q внутри архива: %w", file.Name, err)
+			lastErr = fmt.Errorf("не удалось открыть файл %q внутри архива: %w", file.Name, err)
+			if log != nil {
+				log.Debug("контракты: не удалось открыть файл внутри архива", "archive_name", fileName, "inner_file_name", file.Name, "error", err)
+			}
+			continue
 		}
 		htmlContent, readErr := io.ReadAll(rc)
 		_ = rc.Close()
 		if readErr != nil {
-			return nil, "", fmt.Errorf("не удалось прочитать файл %q внутри архива: %w", file.Name, readErr)
+			lastErr = fmt.Errorf("не удалось прочитать файл %q внутри архива: %w", file.Name, readErr)
+			if log != nil {
+				log.Debug("контракты: не удалось прочитать файл внутри архива", "archive_name", fileName, "inner_file_name", file.Name, "error", readErr)
+			}
+			continue
 		}
-		rows, err := parseContractReportHTML(htmlContent, now)
+		rows, err := parseContractReportFile(log, file.Name, htmlContent, now)
 		if err != nil {
-			return nil, "", fmt.Errorf("не удалось разобрать html-отчёт %q: %w", file.Name, err)
+			lastErr = fmt.Errorf("не удалось разобрать файл %q внутри архива: %w", file.Name, err)
+			if log != nil {
+				log.Debug("контракты: файл внутри архива не подошёл", "archive_name", fileName, "inner_file_name", file.Name, "error", err)
+			}
+			continue
 		}
-		return rows, archiveHash, nil
+		if log != nil {
+			log.Debug("контракты: файл внутри архива успешно разобран", "archive_name", fileName, "inner_file_name", file.Name, "rows_count", len(rows))
+		}
+		return rows, nil
 	}
 
-	return nil, "", fmt.Errorf("в архиве %q не найден html-документ", fileName)
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("в архиве %q не найден поддерживаемый отчет", fileName)
+}
+
+func zipFileNames(files []*zip.File) []string {
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		if file == nil {
+			continue
+		}
+		names = append(names, file.Name)
+	}
+	return names
+}
+
+func prioritizeReportFiles(files []*zip.File) []*zip.File {
+	priorities := map[string]int{
+		".xlsx": 0,
+		".xls":  1,
+		".html": 2,
+		".htm":  3,
+		".zip":  4,
+	}
+
+	type candidate struct {
+		file     *zip.File
+		priority int
+	}
+
+	candidates := make([]candidate, 0, len(files))
+	for _, file := range files {
+		priority, ok := priorities[strings.ToLower(filepath.Ext(strings.TrimSpace(file.Name)))]
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			file:     file,
+			priority: priority,
+		})
+	}
+
+	slices.SortFunc(candidates, func(left, right candidate) int {
+		if left.priority != right.priority {
+			return cmp.Compare(left.priority, right.priority)
+		}
+		return strings.Compare(left.file.Name, right.file.Name)
+	})
+
+	result := make([]*zip.File, 0, len(candidates))
+	for _, item := range candidates {
+		result = append(result, item.file)
+	}
+	return result
+}
+
+func parseContractReportSpreadsheet(fileName string, content []byte, now time.Time) ([]ContractReportRow, error) {
+	rows, err := spreadsheet.ParseRows(fileName, content)
+	if err != nil {
+		return nil, err
+	}
+	return parseContractReportTableRows(rows, now)
 }
 
 // parseContractReportHTML разбирает HTML-таблицу отчета и преобразует ее в нормализованные строки.
@@ -96,6 +254,10 @@ func parseContractReportHTML(content []byte, now time.Time) ([]ContractReportRow
 		return nil, errors.New("в html-отчёте не найдена таблица с данными")
 	}
 
+	return parseContractReportTableRows(rows, now)
+}
+
+func parseContractReportTableRows(rows [][]string, now time.Time) ([]ContractReportRow, error) {
 	headerRow, headerMap, err := detectContractReportHeader(rows)
 	if err != nil {
 		return nil, err
@@ -104,22 +266,30 @@ func parseContractReportHTML(content []byte, now time.Time) ([]ContractReportRow
 	parsed := make([]ContractReportRow, 0, len(rows)-headerRow-1)
 	for rowIndex := headerRow + 1; rowIndex < len(rows); rowIndex++ {
 		row := rows[rowIndex]
+		pointCode := normalizeCell(valueByColumn(row, headerMap, reportColumnPointCode))
 		item := ContractReportRow{
 			ContractorID:     normalizeCell(valueByColumn(row, headerMap, reportColumnContractorID)),
+			ServicePointCode: pointCode,
 			ServicePointName: normalizeCell(valueByColumn(row, headerMap, reportColumnPointName)),
 			ClientOrder:      normalizeCell(valueByColumn(row, headerMap, reportColumnClientOrder)),
 		}
-		if item.ContractorID == "" && item.ServicePointName == "" {
+		if item.ServicePointCode == "" {
+			item.ServicePointCode = item.ContractorID
+		}
+		if item.ContractorID == "" && item.ServicePointCode == "" && item.ServicePointName == "" {
 			continue
 		}
 
 		serviced := parseContractStatus(valueByColumn(row, headerMap, reportColumnServiced))
 		item.StartDate = parseReportDate(valueByColumn(row, headerMap, reportColumnStartDate))
 		item.EndDate = parseReportDate(valueByColumn(row, headerMap, reportColumnEndDate))
-		item.ContractType = detectContractType(valueByColumn(row, headerMap, reportColumnFree))
+		item.ContractType = detectContractType(
+			valueByColumn(row, headerMap, reportColumnServiced),
+			valueByColumn(row, headerMap, reportColumnFree),
+		)
 		item.ContractOn = resolveContractActivity(serviced, item.StartDate, item.EndDate, now)
 
-		if item.ContractorID == "" || item.ServicePointName == "" {
+		if item.ServicePointName == "" || item.ServicePointCode == "" {
 			continue
 		}
 		parsed = append(parsed, item)
@@ -128,7 +298,6 @@ func parseContractReportHTML(content []byte, now time.Time) ([]ContractReportRow
 	if len(parsed) == 0 {
 		return nil, errors.New("в html-отчёте не найдено строк с контрактами")
 	}
-
 	return AggregateContractReportRows(parsed), nil
 }
 
@@ -138,10 +307,7 @@ func AggregateContractReportRows(rows []ContractReportRow) []ContractReportRow {
 	order := make([]string, 0, len(rows))
 
 	for _, row := range rows {
-		key := normalizeCell(row.ContractorID)
-		if key == "" {
-			key = normalizePointName(row.ServicePointName)
-		}
+		key := contractReportRowGroupKey(row)
 		if key == "" {
 			continue
 		}
@@ -161,10 +327,32 @@ func AggregateContractReportRows(rows []ContractReportRow) []ContractReportRow {
 	return result
 }
 
+func contractReportRowGroupKey(row ContractReportRow) string {
+	code := normalizeCell(cmp.Or(row.ServicePointCode, row.ContractorID))
+	name := normalizePointName(row.ServicePointName)
+	switch {
+	case code != "" && name != "":
+		return code + "|" + name
+	case code != "":
+		return code
+	default:
+		return name
+	}
+}
+
 // compareContractRows задает приоритет выбора строки при агрегации дублей внутри отчета.
 func compareContractRows(a, b ContractReportRow) int {
 	if a.ContractOn != b.ContractOn {
 		if a.ContractOn {
+			return -1
+		}
+		return 1
+	}
+
+	aOpenEnded := a.EndDate == nil
+	bOpenEnded := b.EndDate == nil
+	if aOpenEnded != bOpenEnded {
+		if aOpenEnded {
 			return -1
 		}
 		return 1
@@ -214,8 +402,13 @@ func resolveContractActivity(serviced *bool, startDate, endDate *time.Time, now 
 	return true
 }
 
-// detectContractType определяет тип контракта по признаку бесплатного обслуживания.
-func detectContractType(freeServiceRaw string) string {
+// detectContractType определяет тип контракта по признакам обслуживания и бесплатного режима.
+func detectContractType(servicedRaw string, freeServiceRaw string) string {
+	serviced := parseContractStatus(servicedRaw)
+	if serviced == nil || !*serviced {
+		return "Не активен"
+	}
+
 	freeService := parseContractStatus(freeServiceRaw)
 	if freeService != nil && *freeService {
 		return "TS Cloud"

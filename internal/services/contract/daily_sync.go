@@ -160,6 +160,7 @@ func buildSnapshotAttributes(snapshot contract.DailyCompanyContractSnapshot) (da
 	payload := map[string]any{
 		"service_point_id":   snapshot.ServicePointID,
 		"service_point_name": snapshot.ServicePointName,
+		"service_point_code": snapshot.ServicePointCode,
 		"contractor_id":      snapshot.ContractorID,
 		"client_order":       snapshot.ClientOrder,
 		"source_hash":        snapshot.SourceHash,

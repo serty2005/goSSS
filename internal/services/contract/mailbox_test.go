@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestExtractZIPAttachmentsHandlesFoldedFilename проверяет разбор zip-вложения с нестандартным заголовком REG.RU.
-func TestExtractZIPAttachmentsHandlesFoldedFilename(t *testing.T) {
+// TestExtractReportAttachmentsHandlesFoldedFilename проверяет разбор вложения с нестандартным заголовком REG.RU.
+func TestExtractReportAttachmentsHandlesFoldedFilename(t *testing.T) {
 	body := base64.StdEncoding.EncodeToString([]byte("zip-content"))
 	header := textproto.MIMEHeader{
 		"Content-Type":              {`application/zip; name="=?utf-8?B?0YLQtdGB0YIuemlw?="`},
@@ -21,7 +21,7 @@ func TestExtractZIPAttachmentsHandlesFoldedFilename(t *testing.T) {
 		}, "\r\n")},
 	}
 
-	attachments, err := collectZIPAttachments(header, []byte(body))
+	attachments, err := collectReportAttachments(nil, header, []byte(body), 0)
 	if err != nil {
 		t.Fatalf("ожидалось успешное извлечение zip-вложения, получена ошибка: %v", err)
 	}
@@ -39,21 +39,65 @@ func TestExtractZIPAttachmentsHandlesFoldedFilename(t *testing.T) {
 	}
 }
 
-// TestCollectZIPAttachmentsByMediaType проверяет извлечение zip-части даже без имени файла.
-func TestCollectZIPAttachmentsByMediaType(t *testing.T) {
-	header := textproto.MIMEHeader{
-		"Content-Type":              {"application/zip"},
-		"Content-Transfer-Encoding": {"base64"},
+// TestCollectReportAttachmentsByMediaType проверяет fallback-имя вложения по MIME-типу.
+func TestCollectReportAttachmentsByMediaType(t *testing.T) {
+	testCases := []struct {
+		name        string
+		mediaType   string
+		disposition string
+		expected    string
+	}{
+		{name: "zip", mediaType: "application/zip", expected: "contract-report.zip"},
+		{name: "xls", mediaType: "application/vnd.ms-excel", expected: "contract-report.xls"},
+		{name: "xlsx", mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", expected: "contract-report.xlsx"},
+		{name: "html", mediaType: "text/html", disposition: "attachment", expected: "contract-report.html"},
 	}
 
-	attachments, err := collectZIPAttachments(header, []byte(base64.StdEncoding.EncodeToString([]byte("zip-content"))))
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			header := textproto.MIMEHeader{
+				"Content-Type":              {tc.mediaType},
+				"Content-Transfer-Encoding": {"base64"},
+			}
+			if tc.disposition != "" {
+				header["Content-Disposition"] = []string{tc.disposition}
+			}
+
+			attachments, err := collectReportAttachments(nil, header, []byte(base64.StdEncoding.EncodeToString([]byte("report-content"))), 0)
+			if err != nil {
+				t.Fatalf("ожидалось успешное извлечение вложения %s, получена ошибка: %v", tc.mediaType, err)
+			}
+			if len(attachments) != 1 {
+				t.Fatalf("ожидалось одно вложение, получено: %d", len(attachments))
+			}
+			if attachments[0].FileName != tc.expected {
+				t.Fatalf("ожидалось fallback-имя %q, получено: %q", tc.expected, attachments[0].FileName)
+			}
+		})
+	}
+}
+
+// TestCollectReportAttachmentsSkipsInlineHTMLBody проверяет, что html-тело письма не считается вложением отчёта.
+func TestCollectReportAttachmentsSkipsInlineHTMLBody(t *testing.T) {
+	header := textproto.MIMEHeader{
+		"Content-Type": {"text/html; charset=utf-8"},
+	}
+
+	attachments, err := collectReportAttachments(nil, header, []byte("<html><body>служебный текст</body></html>"), 0)
 	if err != nil {
-		t.Fatalf("ожидалось успешное извлечение zip-вложения, получена ошибка: %v", err)
+		t.Fatalf("не ожидалась ошибка при разборе html-тела письма: %v", err)
 	}
-	if len(attachments) != 1 {
-		t.Fatalf("ожидалось одно вложение, получено: %d", len(attachments))
+	if len(attachments) != 0 {
+		t.Fatalf("html-тело письма не должно считаться вложением отчёта, получено вложений: %d", len(attachments))
 	}
-	if attachments[0].FileName != "contract-report.zip" {
-		t.Fatalf("ожидалось fallback-имя contract-report.zip, получено: %q", attachments[0].FileName)
+}
+
+// TestDecodeMIMEHeaderValue проверяет декодирование кириллицы в теме письма.
+func TestDecodeMIMEHeaderValue(t *testing.T) {
+	raw := "=?utf-8?B?0YDQsNGB0YHRi9C70LrQsCDQtNC70Y8g0LjQvdGC0LXQs9GA0LDRhtC4?= =?utf-8?B?0LggINGC0L7Rh9C10LogINGBINCx0LjRgtGA0LjQutGB0L7QvCDQvtGCIDEwLjA=?= =?utf-8?B?My4yMDI2?="
+	expected := "рассылка для интеграции  точек  с битриксом от 10.03.2026"
+
+	if decoded := decodeMIMEHeaderValue(raw); decoded != expected {
+		t.Fatalf("ожидалась декодированная тема %q, получено: %q", expected, decoded)
 	}
 }

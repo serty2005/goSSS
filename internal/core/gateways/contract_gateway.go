@@ -155,23 +155,9 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 	g.logger.Info("Цикл актуализации контрактов из почты завершён", "reports_count", len(reports))
 }
 
-// applyReport синхронизирует точки Bitrix24, сохраняет конфликты и пересчитывает контракты компаний.
+// applyReport пересчитывает контракты компаний по последнему отчету, не меняя Bitrix24 автоматически.
 func (g *contractGatewayImpl) applyReport(ctx context.Context, report contractsvc.ContractMailReport) error {
-	syncResult, err := g.bitrixSync.SyncServicePointsFromDailyReport(ctx, report.Rows)
-	if err != nil {
-		return err
-	}
-
-	if err := g.replaceConflicts(ctx, report, syncResult.Conflicts); err != nil {
-		return err
-	}
-	g.logger.Info(
-		"Конфликты точек обслуживания обновлены",
-		"attachment_name", report.AttachmentName,
-		"conflicts_count", len(syncResult.Conflicts),
-	)
-
-	snapshots, stats, err := g.buildDailySnapshots(ctx, report.AttachmentHash, syncResult.Resolved)
+	snapshots, stats, err := g.buildDailySnapshots(ctx, report.AttachmentHash, report.Rows)
 	if err != nil {
 		return err
 	}
@@ -183,17 +169,9 @@ func (g *contractGatewayImpl) applyReport(ctx context.Context, report contractsv
 	g.logger.Info(
 		"Почтовый отчёт по контрактам применён",
 		"attachment_name", report.AttachmentName,
-		"processed_rows", syncResult.Processed,
 		"extracted_service_points", len(report.Rows),
 		"extracted_unique_contractors", countUniqueContractors(report.Rows),
-		"planned_created_points", syncResult.Created,
-		"planned_updated_points", syncResult.Updated,
-		"applied_created_points", syncResult.AppliedCreated,
-		"applied_updated_points", syncResult.AppliedUpdated,
-		"uploaded_to_bitrix", syncResult.AppliedCreated+syncResult.AppliedUpdated,
-		"bitrix_dry_run", syncResult.DryRun,
-		"conflicts", len(syncResult.Conflicts),
-		"deletion_candidates", countConflictDeletionCandidates(syncResult.Conflicts),
+		"matched_report_rows", stats.MatchedRows,
 		"mapped_companies", stats.MappedCompanies,
 		"unmapped_companies", stats.UnmappedCompanies,
 		"available_mappings", stats.TotalMappings,
@@ -234,13 +212,14 @@ type contractSnapshotBuildStats struct {
 	TotalMappings     int
 	MappedCompanies   int
 	UnmappedCompanies int
+	MatchedRows       int
 }
 
-// buildDailySnapshots превращает текущие mapping компании к точке в снимок контрактов для доменного сервиса.
+// buildDailySnapshots превращает текущие mapping компании к точке в снимок контрактов по последнему отчету.
 func (g *contractGatewayImpl) buildDailySnapshots(
 	ctx context.Context,
 	sourceHash string,
-	resolved []services.ServicePointContractResolution,
+	rows []contractsvc.ContractReportRow,
 ) ([]contractdom.DailyCompanyContractSnapshot, contractSnapshotBuildStats, error) {
 	mappings, err := g.bitrixRepo.ListCompanyServicePointMappings(ctx)
 	if err != nil {
@@ -250,11 +229,7 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 		return []contractdom.DailyCompanyContractSnapshot{}, contractSnapshotBuildStats{}, nil
 	}
 
-	resolvedByPointID := make(map[int64]services.ServicePointContractResolution, len(resolved))
 	pointIDs := make([]int64, 0, len(mappings))
-	for _, item := range resolved {
-		resolvedByPointID[item.B24ElementID] = item
-	}
 	for _, mapping := range mappings {
 		pointIDs = append(pointIDs, mapping.BitrixServicePointID)
 	}
@@ -268,6 +243,7 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 		pointsByID[point.B24ElementID] = point
 	}
 
+	rowsByCode, rowsByName := buildReportRowIndexes(rows)
 	snapshots := make([]contractdom.DailyCompanyContractSnapshot, 0, len(mappings))
 	stats := contractSnapshotBuildStats{TotalMappings: len(mappings)}
 	for _, mapping := range mappings {
@@ -277,27 +253,27 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 			SourceHash:     sourceHash,
 		}
 
-		if resolvedPoint, ok := resolvedByPointID[mapping.BitrixServicePointID]; ok {
-			snapshot.ServicePointName = resolvedPoint.ServicePointName
-			snapshot.ContractorID = resolvedPoint.ContractorID
-			snapshot.ContractType = resolvedPoint.ContractType
-			snapshot.Active = resolvedPoint.ContractOn
-			snapshot.StartDate = resolvedPoint.StartDate
-			snapshot.EndDate = resolvedPoint.EndDate
-			snapshot.ClientOrder = resolvedPoint.ClientOrder
-			snapshots = append(snapshots, snapshot)
-			stats.MappedCompanies++
-			continue
-		}
-
 		if point, ok := pointsByID[mapping.BitrixServicePointID]; ok {
 			snapshot.ServicePointName = point.Name
+			snapshot.ServicePointCode = dereferenceString(point.OneCCode)
 			snapshot.ContractorID = dereferenceString(point.OneCCode)
 			snapshot.ContractType = dereferenceString(point.ContractType)
 			snapshot.Active = false
 			snapshot.StartDate = point.ContractStart
 			snapshot.EndDate = point.ContractEnd
 			snapshot.ClientOrder = dereferenceString(point.ClientOrder)
+
+			if row, matched := matchReportRowToPoint(point, rowsByCode, rowsByName); matched {
+				snapshot.ServicePointName = row.ServicePointName
+				snapshot.ServicePointCode = row.ServicePointCode
+				snapshot.ContractorID = row.ContractorID
+				snapshot.ContractType = row.ContractType
+				snapshot.Active = row.ContractOn
+				snapshot.StartDate = row.StartDate
+				snapshot.EndDate = row.EndDate
+				snapshot.ClientOrder = row.ClientOrder
+				stats.MatchedRows++
+			}
 		}
 
 		if strings.TrimSpace(snapshot.ServicePointName) != "" {
@@ -318,6 +294,13 @@ func (g *contractGatewayImpl) storeMailImportStatus(ctx context.Context, report 
 		text := syncErr.Error()
 		errText = &text
 	}
+
+	var reportRows json.RawMessage
+	if status == contractdom.MailImportStatusProcessed && len(report.Rows) > 0 {
+		if encoded, err := json.Marshal(report.Rows); err == nil {
+			reportRows = encoded
+		}
+	}
 	now := time.Now().UTC()
 	item := &contractdom.MailImport{
 		MessageID:      strings.TrimSpace(report.MessageID),
@@ -327,12 +310,55 @@ func (g *contractGatewayImpl) storeMailImportStatus(ctx context.Context, report 
 		Status:         status,
 		ErrorText:      errText,
 		ProcessedAt:    &now,
+		ReportRows:     datatypes.JSON(reportRows),
 	}
 	item.LastUpdatedBy = contractMailSyncUpdatedBy
 
 	if err := g.contractRepo.UpsertMailImport(ctx, item); err != nil {
 		g.logger.Error("Не удалось сохранить статус обработки почтового отчёта", "attachment_hash", report.AttachmentHash, "error", err)
 	}
+}
+
+func buildReportRowIndexes(rows []contractsvc.ContractReportRow) (map[string]contractsvc.ContractReportRow, map[string][]contractsvc.ContractReportRow) {
+	aggregated := contractsvc.AggregateContractReportRows(rows)
+	rowsByCode := make(map[string]contractsvc.ContractReportRow, len(aggregated))
+	rowsByName := make(map[string][]contractsvc.ContractReportRow, len(aggregated))
+	for _, row := range aggregated {
+		code := strings.TrimSpace(row.ServicePointCode)
+		if code != "" {
+			rowsByCode[code] = row
+		}
+		name := normalizePointName(row.ServicePointName)
+		if name != "" {
+			rowsByName[name] = append(rowsByName[name], row)
+		}
+	}
+	return rowsByCode, rowsByName
+}
+
+func matchReportRowToPoint(
+	point bitrix.ServicePoint,
+	rowsByCode map[string]contractsvc.ContractReportRow,
+	rowsByName map[string][]contractsvc.ContractReportRow,
+) (contractsvc.ContractReportRow, bool) {
+	if code := strings.TrimSpace(dereferenceString(point.OneCCode)); code != "" {
+		if row, ok := rowsByCode[code]; ok {
+			return row, true
+		}
+	}
+
+	matches := rowsByName[normalizePointName(point.Name)]
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+
+	return contractsvc.ContractReportRow{}, false
+}
+
+func normalizePointName(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, "ё", "е")
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 // nullableString возвращает nil для пустых строк перед сохранением в БД.
