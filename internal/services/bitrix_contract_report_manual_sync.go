@@ -81,11 +81,29 @@ type contractReportSyncPlan struct {
 	queueSnapshot map[string]ContractReportSyncPlanItem
 	upsertTargets map[string]contractReportSyncUpsertTarget
 	deleteTargets map[string]bitrixServicePointState
+	rebinds       []contractReportDuplicateRebind
 }
 
 type contractReportSyncUpsertTarget struct {
 	Row   contractsvc.ContractReportRow
 	State *bitrixServicePointState
+}
+
+type contractReportDuplicateRebind struct {
+	CompanyID string
+	FromState bitrixServicePointState
+	ToState   bitrixServicePointState
+}
+
+func (r contractReportDuplicateRebind) key() string {
+	return fmt.Sprintf("%s:%d->%d", strings.TrimSpace(r.CompanyID), r.FromState.ID, r.ToState.ID)
+}
+
+type contractReportDuplicateResolution struct {
+	StatesByName   map[string][]bitrixServicePointState
+	StatesByCode   map[string][]bitrixServicePointState
+	MappedPointIDs map[int64]struct{}
+	Rebinds        []contractReportDuplicateRebind
 }
 
 func (s *bitrixSyncService) PreviewContractReportSync(ctx context.Context, rows []contractsvc.ContractReportRow) (*ContractReportSyncPreview, error) {
@@ -121,10 +139,36 @@ func (s *bitrixSyncService) ExecuteContractReportSync(
 		return nil, err
 	}
 
+	rebindErrorsByPointID := make(map[int64]string, len(plan.rebinds)*2)
+	for _, rebind := range plan.rebinds {
+		if err := s.applyContractReportDuplicateRebind(ctx, rebind); err != nil {
+			msg := fmt.Sprintf(
+				"не удалось перенести сопоставление компании %q с точки %d на более заполненный дубль %d: %v",
+				rebind.CompanyID,
+				rebind.FromState.ID,
+				rebind.ToState.ID,
+				err,
+			)
+			result.Errors = append(result.Errors, msg)
+			rebindErrorsByPointID[rebind.FromState.ID] = msg
+			rebindErrorsByPointID[rebind.ToState.ID] = msg
+		}
+	}
+
 	appliedPoints := make([]bitrix.ServicePoint, 0, len(selectedKeys))
 	deletedPointIDs := make([]int64, 0, len(selectedKeys))
 	for index, key := range selectedKeys {
 		snapshot, hasSnapshot := plan.queueSnapshot[key]
+		if pointID, ok := contractReportPlanPointID(key, plan); ok {
+			if msg, failed := rebindErrorsByPointID[pointID]; failed {
+				if hasSnapshot {
+					appendContractReportSyncItemError(result, snapshot, msg)
+				} else {
+					result.Errors = append(result.Errors, msg)
+				}
+				continue
+			}
+		}
 		if target, ok := plan.upsertTargets[key]; ok {
 			var currentElement *b24.ListElement
 			if target.State != nil {
@@ -288,9 +332,20 @@ func (s *bitrixSyncService) buildContractReportExecutePlan(
 		snapshotByKey[item.Key] = item
 	}
 
+	statesByName, err := s.fetchBitrixServicePointState(ctx, iblockType, iblockID)
+	if err != nil {
+		return nil, err
+	}
+	mappings, err := s.repo.ListCompanyServicePointMappings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	duplicateResolution := s.buildContractReportDuplicateResolution(statesByName, mappings, false)
+
 	upsertTargets := make(map[string]contractReportSyncUpsertTarget, len(options.SelectedKeys))
 	deleteTargets := make(map[string]bitrixServicePointState, len(options.SelectedKeys))
-	for _, key := range uniqueStrings(options.SelectedKeys) {
+	selectedKeys := uniqueStrings(options.SelectedKeys)
+	for _, key := range selectedKeys {
 		snapshot, ok := snapshotByKey[key]
 		if !ok {
 			return nil, fmt.Errorf("элемент очереди %q отсутствует в снимке UI", key)
@@ -343,6 +398,7 @@ func (s *bitrixSyncService) buildContractReportExecutePlan(
 		queueSnapshot: snapshotByKey,
 		upsertTargets: upsertTargets,
 		deleteTargets: deleteTargets,
+		rebinds:       collectContractReportSelectedRebinds(selectedKeys, snapshotByKey, upsertTargets, deleteTargets, duplicateResolution.Rebinds),
 	}, nil
 }
 
@@ -412,18 +468,15 @@ func (s *bitrixSyncService) buildContractReportSyncPlan(
 	if err != nil {
 		return nil, err
 	}
-	statesByCode := buildStatesByCode(statesByName)
 
 	mappings, err := s.repo.ListCompanyServicePointMappings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	mappedPointIDs := make(map[int64]struct{}, len(mappings))
-	for _, mapping := range mappings {
-		if mapping.BitrixServicePointID > 0 {
-			mappedPointIDs[mapping.BitrixServicePointID] = struct{}{}
-		}
-	}
+	duplicateResolution := s.buildContractReportDuplicateResolution(statesByName, mappings, true)
+	statesByNameForMatch := duplicateResolution.StatesByName
+	statesByCode := duplicateResolution.StatesByCode
+	mappedPointIDs := duplicateResolution.MappedPointIDs
 
 	preview := &ContractReportSyncPreview{
 		UpsertItems: make([]ContractReportSyncPlanItem, 0, len(rows)),
@@ -461,7 +514,7 @@ func (s *bitrixSyncService) buildContractReportSyncPlan(
 			continue
 		}
 
-		nameMatches := statesByName[normalizePointName(row.ServicePointName)]
+		nameMatches := statesByNameForMatch[normalizePointName(row.ServicePointName)]
 		switch len(nameMatches) {
 		case 0:
 			item, target, _ := buildContractReportUpsertItem(key, row, nil, contractorName)
@@ -503,6 +556,7 @@ func (s *bitrixSyncService) buildContractReportSyncPlan(
 		contractMeta:  contractMeta,
 		upsertTargets: upsertTargets,
 		deleteTargets: deleteTargets,
+		rebinds:       duplicateResolution.Rebinds,
 	}, nil
 }
 
@@ -666,6 +720,230 @@ func buildContractReportDeleteItems(
 		}
 	}
 	return items
+}
+
+func (s *bitrixSyncService) buildContractReportDuplicateResolution(
+	statesByName map[string][]bitrixServicePointState,
+	mappings []bitrix.CompanyServicePointMapping,
+	logDecision bool,
+) contractReportDuplicateResolution {
+	mappingByPointID := make(map[int64]bitrix.CompanyServicePointMapping, len(mappings))
+	mappedPointIDs := make(map[int64]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.BitrixServicePointID <= 0 {
+			continue
+		}
+		mappingByPointID[mapping.BitrixServicePointID] = mapping
+		mappedPointIDs[mapping.BitrixServicePointID] = struct{}{}
+	}
+
+	statesByNameForMatch := make(map[string][]bitrixServicePointState, len(statesByName))
+	statesByCode := make(map[string][]bitrixServicePointState, len(statesByName))
+	rebinds := make([]contractReportDuplicateRebind, 0, 8)
+	for normalizedName, group := range statesByName {
+		if rebind, ok := buildContractReportDuplicateRebind(group, mappingByPointID); ok {
+			delete(mappedPointIDs, rebind.FromState.ID)
+			mappedPointIDs[rebind.ToState.ID] = struct{}{}
+			statesByNameForMatch[normalizedName] = []bitrixServicePointState{rebind.ToState}
+			rebinds = append(rebinds, rebind)
+			if logDecision {
+				s.log.Debug(
+					"Bitrix24 manual sync: для группы дублей выбран более заполненный элемент",
+					"company_id", rebind.CompanyID,
+					"from_element_id", rebind.FromState.ID,
+					"to_element_id", rebind.ToState.ID,
+					"from_filled_fields", rebind.FromState.FilledFields,
+					"to_filled_fields", rebind.ToState.FilledFields,
+					"service_point_name", rebind.ToState.Name,
+				)
+			}
+			for _, state := range group {
+				appendEffectiveStateByCode(statesByCode, state.CurrentCode, rebind.ToState)
+			}
+			continue
+		}
+
+		statesByNameForMatch[normalizedName] = slices.Clone(group)
+		for _, state := range group {
+			appendEffectiveStateByCode(statesByCode, state.CurrentCode, state)
+		}
+	}
+
+	return contractReportDuplicateResolution{
+		StatesByName:   statesByNameForMatch,
+		StatesByCode:   statesByCode,
+		MappedPointIDs: mappedPointIDs,
+		Rebinds:        rebinds,
+	}
+}
+
+func buildContractReportDuplicateRebind(
+	group []bitrixServicePointState,
+	mappingByPointID map[int64]bitrix.CompanyServicePointMapping,
+) (contractReportDuplicateRebind, bool) {
+	if len(group) < 2 {
+		return contractReportDuplicateRebind{}, false
+	}
+
+	preferred := choosePreferredServicePointState(group)
+	mappedStates := make([]bitrixServicePointState, 0, 2)
+	for _, state := range group {
+		if _, mapped := mappingByPointID[state.ID]; !mapped {
+			continue
+		}
+		mappedStates = append(mappedStates, state)
+	}
+	if len(mappedStates) != 1 {
+		return contractReportDuplicateRebind{}, false
+	}
+
+	mappedState := mappedStates[0]
+	if preferred.ID == mappedState.ID || preferred.FilledFields <= mappedState.FilledFields {
+		return contractReportDuplicateRebind{}, false
+	}
+
+	mapping := mappingByPointID[mappedState.ID]
+	if strings.TrimSpace(mapping.CompanyID) == "" {
+		return contractReportDuplicateRebind{}, false
+	}
+
+	return contractReportDuplicateRebind{
+		CompanyID: strings.TrimSpace(mapping.CompanyID),
+		FromState: mappedState,
+		ToState:   preferred,
+	}, true
+}
+
+func choosePreferredServicePointState(group []bitrixServicePointState) bitrixServicePointState {
+	preferred := group[0]
+	for _, state := range group[1:] {
+		switch {
+		case state.FilledFields > preferred.FilledFields:
+			preferred = state
+		case state.FilledFields == preferred.FilledFields && state.ID < preferred.ID:
+			preferred = state
+		}
+	}
+	return preferred
+}
+
+func appendEffectiveStateByCode(
+	statesByCode map[string][]bitrixServicePointState,
+	code string,
+	state bitrixServicePointState,
+) {
+	normalizedCode := normalizeCell(code)
+	if normalizedCode == "" {
+		return
+	}
+	if slices.ContainsFunc(statesByCode[normalizedCode], func(item bitrixServicePointState) bool {
+		return item.ID == state.ID
+	}) {
+		return
+	}
+	statesByCode[normalizedCode] = append(statesByCode[normalizedCode], state)
+}
+
+func collectContractReportSelectedRebinds(
+	selectedKeys []string,
+	snapshotByKey map[string]ContractReportSyncPlanItem,
+	upsertTargets map[string]contractReportSyncUpsertTarget,
+	deleteTargets map[string]bitrixServicePointState,
+	rebinds []contractReportDuplicateRebind,
+) []contractReportDuplicateRebind {
+	if len(selectedKeys) == 0 || len(rebinds) == 0 {
+		return nil
+	}
+
+	rebindsByPointID := make(map[int64][]contractReportDuplicateRebind, len(rebinds)*2)
+	for _, rebind := range rebinds {
+		rebindsByPointID[rebind.FromState.ID] = append(rebindsByPointID[rebind.FromState.ID], rebind)
+		rebindsByPointID[rebind.ToState.ID] = append(rebindsByPointID[rebind.ToState.ID], rebind)
+	}
+
+	result := make([]contractReportDuplicateRebind, 0, len(rebinds))
+	seen := make(map[string]struct{}, len(rebinds))
+	for _, key := range selectedKeys {
+		pointID := int64(0)
+		switch {
+		case deleteTargets[key].ID > 0:
+			pointID = deleteTargets[key].ID
+		case upsertTargets[key].State != nil:
+			pointID = upsertTargets[key].State.ID
+		case snapshotByKey[key].B24ElementID != nil:
+			pointID = *snapshotByKey[key].B24ElementID
+		}
+		for _, rebind := range rebindsByPointID[pointID] {
+			if _, exists := seen[rebind.key()]; exists {
+				continue
+			}
+			seen[rebind.key()] = struct{}{}
+			result = append(result, rebind)
+		}
+	}
+	return result
+}
+
+func contractReportPlanPointID(key string, plan *contractReportSyncPlan) (int64, bool) {
+	if plan == nil {
+		return 0, false
+	}
+	if target, ok := plan.deleteTargets[key]; ok && target.ID > 0 {
+		return target.ID, true
+	}
+	if target, ok := plan.upsertTargets[key]; ok && target.State != nil && target.State.ID > 0 {
+		return target.State.ID, true
+	}
+	if snapshot, ok := plan.queueSnapshot[key]; ok && snapshot.B24ElementID != nil && *snapshot.B24ElementID > 0 {
+		return *snapshot.B24ElementID, true
+	}
+	return 0, false
+}
+
+func (s *bitrixSyncService) applyContractReportDuplicateRebind(ctx context.Context, rebind contractReportDuplicateRebind) error {
+	if s.repo == nil {
+		return fmt.Errorf("репозиторий сопоставлений Bitrix24 не настроен")
+	}
+	if strings.TrimSpace(rebind.CompanyID) == "" {
+		return fmt.Errorf("не указан идентификатор компании для переноса сопоставления")
+	}
+	if rebind.FromState.ID <= 0 || rebind.ToState.ID <= 0 || rebind.FromState.ID == rebind.ToState.ID {
+		return nil
+	}
+
+	s.log.Info(
+		"Bitrix24 manual sync: переносим сопоставление на более заполненный дубль",
+		"company_id", rebind.CompanyID,
+		"from_element_id", rebind.FromState.ID,
+		"to_element_id", rebind.ToState.ID,
+		"from_filled_fields", rebind.FromState.FilledFields,
+		"to_filled_fields", rebind.ToState.FilledFields,
+		"service_point_name", rebind.ToState.Name,
+	)
+
+	migratedTickets := int64(0)
+	if s.ticketRepo != nil {
+		updated, err := s.ticketRepo.RebindBitrixServicePoint(ctx, rebind.FromState.ID, rebind.ToState.ID)
+		if err != nil {
+			return fmt.Errorf("не удалось перепривязать тикеты: %w", err)
+		}
+		migratedTickets = updated
+	}
+	if err := s.repo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
+		CompanyID:            rebind.CompanyID,
+		BitrixServicePointID: rebind.ToState.ID,
+	}); err != nil {
+		return fmt.Errorf("не удалось обновить сопоставление компании: %w", err)
+	}
+
+	s.log.Info(
+		"Bitrix24 manual sync: сопоставление перенесено на более заполненный дубль",
+		"company_id", rebind.CompanyID,
+		"from_element_id", rebind.FromState.ID,
+		"to_element_id", rebind.ToState.ID,
+		"migrated_tickets", migratedTickets,
+	)
+	return nil
 }
 
 func (s *bitrixSyncService) buildContractReportUpsertFields(

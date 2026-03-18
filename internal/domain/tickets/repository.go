@@ -91,6 +91,7 @@ type TicketRepository interface {
 	ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]Ticket, error)
 	ListExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]Ticket, error)
 	ArchiveStale(ctx context.Context, threshold time.Duration) (int64, error)
+	RebindBitrixServicePoint(ctx context.Context, fromID, toID int64) (int64, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

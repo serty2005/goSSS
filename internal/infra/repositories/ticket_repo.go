@@ -51,6 +51,21 @@ func (r *ticketRepo) Update(ctx context.Context, ticket *tickets.Ticket) error {
 	return r.db.WithContext(ctx).Omit(clause.Associations).Save(ticket).Error
 }
 
+func (r *ticketRepo) RebindBitrixServicePoint(ctx context.Context, fromID, toID int64) (int64, error) {
+	if fromID <= 0 || toID <= 0 || fromID == toID {
+		return 0, nil
+	}
+
+	tx := r.db.WithContext(ctx).
+		Model(&tickets.Ticket{}).
+		Where("bitrix_service_point_id = ?", fromID).
+		Update("bitrix_service_point_id", toID)
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	return tx.RowsAffected, nil
+}
+
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket
 	err := r.db.WithContext(ctx).
