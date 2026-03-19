@@ -414,6 +414,17 @@ export interface ContractSyncFieldDiffDTO {
   next_value?: string;
 }
 
+export interface ContractSyncBlockedItemDTO {
+  key: string;
+  service_point_name?: string;
+  service_point_code?: string;
+  contractor_id?: string;
+  contractor_name?: string;
+  reason: string;
+  resolution_hint?: string;
+  matched_point_ids?: number[];
+}
+
 export interface ContractSyncStateDTO {
   latest_import?: ContractMailImportDTO;
   active_report_import?: ContractMailImportDTO;
@@ -423,6 +434,7 @@ export interface ContractSyncStateDTO {
   to_update: number;
   to_delete: number;
   blocked_rows: number;
+  blocked_items?: ContractSyncBlockedItemDTO[];
   upsert_items: ContractSyncQueueItemDTO[];
   delete_items: ContractSyncQueueItemDTO[];
 }

@@ -827,7 +827,15 @@ func normalizeCell(value string) string {
 func normalizePointName(name string) string {
 	normalized := strings.ToLower(normalizeCell(name))
 	normalized = strings.ReplaceAll(normalized, "ё", "е")
-	return normalized
+	normalized = strings.Map(func(r rune) rune {
+		switch r {
+		case '"', '\'', '`', '«', '»', '“', '”', '„', '‟', '‘', '’', '‚', '‛':
+			return -1
+		default:
+			return r
+		}
+	}, normalized)
+	return normalizeCell(normalized)
 }
 
 func parseContractStatus(raw string) *bool {

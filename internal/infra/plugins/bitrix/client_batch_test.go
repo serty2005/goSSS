@@ -3,6 +3,7 @@ package bitrix
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -228,6 +229,19 @@ func TestListsElementBatchGetByIDs_UsesBatchAndReturnsItems(t *testing.T) {
 	mu.Unlock()
 	if gotBatchCalls != 1 {
 		t.Fatalf("ожидался 1 batch-вызов, получено %d", gotBatchCalls)
+	}
+}
+
+func TestRedactWebhookError_HidesWebhookKeyInHTTPError(t *testing.T) {
+	err := redactWebhookError(errors.New(`Post "https://my-horeca.bitrix24.ru/rest/457/zeh3e90kbomibgb0/lists.element.delete.json": context deadline exceeded`))
+	if err == nil {
+		t.Fatalf("ожидалась ошибка после маскирования webhook")
+	}
+	if strings.Contains(err.Error(), "zeh3e90kbomibgb0") {
+		t.Fatalf("секрет webhook не должен оставаться в тексте ошибки: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Fatalf("в тексте ошибки ожидалась маска REDACTED, получено %q", err.Error())
 	}
 }
 

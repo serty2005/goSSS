@@ -43,18 +43,30 @@ type ContractSyncFieldDiffDTO struct {
 	NextValue    string `json:"next_value,omitempty"`
 }
 
+type ContractSyncBlockedItemDTO struct {
+	Key              string  `json:"key"`
+	ServicePointName string  `json:"service_point_name,omitempty"`
+	ServicePointCode string  `json:"service_point_code,omitempty"`
+	ContractorID     string  `json:"contractor_id,omitempty"`
+	ContractorName   string  `json:"contractor_name,omitempty"`
+	Reason           string  `json:"reason"`
+	ResolutionHint   string  `json:"resolution_hint,omitempty"`
+	MatchedPointIDs  []int64 `json:"matched_point_ids,omitempty"`
+}
+
 // ContractSyncStateDTO возвращает оператору текущее состояние почтовой синхронизации.
 type ContractSyncStateDTO struct {
-	LatestImport       *ContractMailImportDTO     `json:"latest_import,omitempty"`
-	ActiveReportImport *ContractMailImportDTO     `json:"active_report_import,omitempty"`
-	RecentImports      []ContractMailImportDTO    `json:"recent_imports"`
-	ReportRows         int                        `json:"report_rows"`
-	ToCreate           int                        `json:"to_create"`
-	ToUpdate           int                        `json:"to_update"`
-	ToDelete           int                        `json:"to_delete"`
-	BlockedRows        int                        `json:"blocked_rows"`
-	UpsertItems        []ContractSyncQueueItemDTO `json:"upsert_items"`
-	DeleteItems        []ContractSyncQueueItemDTO `json:"delete_items"`
+	LatestImport       *ContractMailImportDTO       `json:"latest_import,omitempty"`
+	ActiveReportImport *ContractMailImportDTO       `json:"active_report_import,omitempty"`
+	RecentImports      []ContractMailImportDTO      `json:"recent_imports"`
+	ReportRows         int                          `json:"report_rows"`
+	ToCreate           int                          `json:"to_create"`
+	ToUpdate           int                          `json:"to_update"`
+	ToDelete           int                          `json:"to_delete"`
+	BlockedRows        int                          `json:"blocked_rows"`
+	BlockedItems       []ContractSyncBlockedItemDTO `json:"blocked_items,omitempty"`
+	UpsertItems        []ContractSyncQueueItemDTO   `json:"upsert_items"`
+	DeleteItems        []ContractSyncQueueItemDTO   `json:"delete_items"`
 }
 
 type ContractSyncExecuteResultDTO struct {

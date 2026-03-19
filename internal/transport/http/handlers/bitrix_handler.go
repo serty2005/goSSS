@@ -149,6 +149,7 @@ func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Requ
 	payload.ToUpdate = preview.ToUpdate
 	payload.ToDelete = preview.ToDelete
 	payload.BlockedRows = preview.BlockedRows
+	payload.BlockedItems = mapContractSyncBlockedItems(preview.BlockedItems)
 	payload.UpsertItems = mapContractSyncQueueItems(preview.UpsertItems)
 	payload.DeleteItems = mapContractSyncQueueItems(preview.DeleteItems)
 
@@ -485,6 +486,23 @@ func mapContractSyncFieldDiffs(items []services.ContractReportSyncFieldDiff) []a
 			Label:        item.Label,
 			CurrentValue: item.CurrentValue,
 			NextValue:    item.NextValue,
+		})
+	}
+	return result
+}
+
+func mapContractSyncBlockedItems(items []services.ContractReportSyncBlockedItem) []api.ContractSyncBlockedItemDTO {
+	result := make([]api.ContractSyncBlockedItemDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncBlockedItemDTO{
+			Key:              item.Key,
+			ServicePointName: item.ServicePointName,
+			ServicePointCode: item.ServicePointCode,
+			ContractorID:     item.ContractorID,
+			ContractorName:   item.ContractorName,
+			Reason:           item.Reason,
+			ResolutionHint:   item.ResolutionHint,
+			MatchedPointIDs:  item.MatchedPointIDs,
 		})
 	}
 	return result

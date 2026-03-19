@@ -853,8 +853,8 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			lastErr = err
-			c.logger.Error("Bitrix24 ошибка HTTP-запроса", "method", method, "url", redactedURL, "attempt", attempt+1, "error", err)
+			lastErr = redactWebhookError(err)
+			c.logger.Error("Bitrix24 ошибка HTTP-запроса", "method", method, "url", redactedURL, "attempt", attempt+1, "error", lastErr)
 			continue
 		}
 
@@ -1140,6 +1140,17 @@ func redactWebhookURL(url string) string {
 		return url
 	}
 	return bitrixWebhookKeyRe.ReplaceAllString(url, "${1}REDACTED${3}")
+}
+
+func redactWebhookError(err error) error {
+	if err == nil {
+		return nil
+	}
+	redacted := redactWebhookURL(err.Error())
+	if redacted == err.Error() {
+		return err
+	}
+	return errors.New(redacted)
 }
 func parseDeals(raw interface{}) []Deal {
 	items, ok := raw.([]interface{})

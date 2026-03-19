@@ -38,6 +38,7 @@ import { useAuthStore } from '@/store/authStore';
 import type {
   ApiResponse,
   ContractMailImportDTO,
+  ContractSyncBlockedItemDTO,
   ContractSyncExecuteResultDTO,
   ContractSyncFieldDiffDTO,
   ContractSyncQueueItemDTO,
@@ -93,6 +94,9 @@ const buildQueueIdentitySummary = (item: ContractSyncQueueItemDTO) => joinCompac
 const buildDuplicateGroupSummary = (item: ContractSyncQueueItemDTO) => item.matched_point_ids?.length
   ? `Группа дублей: ${item.matched_point_ids.join(', ')}`
   : 'Группа дублей не определена';
+const buildBlockedDuplicateSummary = (item: ContractSyncBlockedItemDTO) => item.matched_point_ids?.length
+  ? `Конфликтующие B24 ID: ${item.matched_point_ids.join(', ')}`
+  : 'B24 ID конфликтующих точек не определены';
 
 const HeaderHintButton: React.FC<HeaderHintButtonProps> = ({ icon, title, content, danger = false, active = false }) => {
   const { token } = antTheme.useToken();
@@ -250,6 +254,21 @@ const itemSearchText = (item: ContractSyncQueueItemDTO) =>
 
 const matchesSearch = (item: ContractSyncQueueItemDTO, searchValue: string) => !searchValue || itemSearchText(item).includes(searchValue);
 
+const blockedItemSearchText = (item: ContractSyncBlockedItemDTO) =>
+  normalizeSearch(
+    [
+      item.service_point_name,
+      item.service_point_code,
+      item.contractor_name,
+      item.contractor_id,
+      item.reason,
+      item.resolution_hint,
+      item.matched_point_ids?.join(' '),
+    ].join(' '),
+  );
+
+const matchesBlockedSearch = (item: ContractSyncBlockedItemDTO, searchValue: string) => !searchValue || blockedItemSearchText(item).includes(searchValue);
+
 const buildErrorMap = (result?: ContractSyncExecuteResultDTO | null) => (result?.error_details || []).reduce<Record<string, string[]>>((acc, item) => {
   const key = String(item.key || '').trim();
   const msg = String(item.message || '').trim();
@@ -380,6 +399,7 @@ const ServicePointsImportPage: React.FC = () => {
   const latestImport = syncState?.latest_import;
   const activeReportImport = syncState?.active_report_import;
   const recentImports = syncState?.recent_imports || [];
+  const blockedItems = syncState?.blocked_items || [];
   const baseUpsertItems = syncState?.upsert_items || [];
   const baseDeleteItems = syncState?.delete_items || [];
 
@@ -415,6 +435,10 @@ const ServicePointsImportPage: React.FC = () => {
   const filteredQueueItems = useMemo(
     () => queueRows.filter((item) => (queueFilter === 'all' || (queueFilter === 'errors' ? item.has_execution_errors : item.action === queueFilter)) && matchesSearch(item, search)),
     [queueFilter, queueRows, search],
+  );
+  const filteredBlockedItems = useMemo(
+    () => blockedItems.filter((item) => matchesBlockedSearch(item, search)),
+    [blockedItems, search],
   );
   const upsertVisibleStats = useMemo(() => countByAction(filteredUpsertItems), [filteredUpsertItems]);
   const upsertStats = useMemo(() => countByAction(upsertItems), [upsertItems]);
@@ -496,6 +520,7 @@ const ServicePointsImportPage: React.FC = () => {
           ['bitrix', 'contract-sync-state'],
           (current) => removeAppliedItemsFromState(current, appliedKeys),
         );
+        await queryClient.invalidateQueries({ queryKey: ['bitrix', 'contract-sync-state'] });
       }
     } catch (error) {
       const axiosError = error as { code?: string; name?: string };
@@ -611,6 +636,63 @@ const ServicePointsImportPage: React.FC = () => {
     [],
   );
 
+  const blockedColumns = useMemo<ColumnsType<ContractSyncBlockedItemDTO>>(
+    () => [
+      {
+        title: 'Строка отчёта',
+        key: 'report_row',
+        width: 340,
+        render: (_, item) => {
+          const summary = joinCompactParts(
+            hasValue(item.service_point_code) ? `Код ${displayValue(item.service_point_code)}` : '',
+            hasValue(item.contractor_name) ? `Контрагент ${displayValue(item.contractor_name)}` : '',
+            hasValue(item.contractor_id) ? `ID ${displayValue(item.contractor_id)}` : '',
+          );
+          return (
+            <Space orientation="vertical" size={4}>
+              <Text strong className="contract-sync-inline-text" title={item.service_point_name || '—'}>
+                {item.service_point_name || '—'}
+              </Text>
+              <Text type="secondary" className="contract-sync-inline-text" title={summary || '—'}>
+                {summary || '—'}
+              </Text>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Причина блокировки',
+        key: 'blocked_reason',
+        width: 360,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Tag color="red">Требует ручной разбор</Tag>
+            <Text className="contract-sync-inline-text" title={item.reason}>
+              {item.reason}
+            </Text>
+            {item.matched_point_ids?.length ? (
+              <Text type="secondary" className="contract-sync-inline-text" title={buildBlockedDuplicateSummary(item)}>
+                {buildBlockedDuplicateSummary(item)}
+              </Text>
+            ) : null}
+          </Space>
+        ),
+      },
+      {
+        title: 'Что сделать',
+        dataIndex: 'resolution_hint',
+        key: 'resolution_hint',
+        width: 340,
+        render: (value?: string) => (
+          <Text className="contract-sync-inline-text" title={value || '—'}>
+            {value || '—'}
+          </Text>
+        ),
+      },
+    ],
+    [],
+  );
+
   const queueColumns = useMemo<ColumnsType<QueueRow>>(
     () => [
       {
@@ -696,6 +778,7 @@ const ServicePointsImportPage: React.FC = () => {
         <Text style={{ lineHeight: '20px' }}>Для расчёта очереди используется последний успешно разобранный отчёт из почты.</Text>
         <Text style={{ lineHeight: '20px' }}>Контракты компаний в ServiceDesk обновляются автоматически по нему, а изменения Bitrix24 выполняются только вручную через очередь.</Text>
         <Text style={{ lineHeight: '20px' }}>Очередь исполняется строго по снимку UI: `update` не может незаметно превратиться в `create`.</Text>
+        <Text style={{ lineHeight: '20px' }}>Если строка попала в блокировку, ниже появится отдельная таблица с причиной и подсказкой, что исправить.</Text>
         <Text style={{ lineHeight: '20px' }}>После частичного прогона успешные строки уйдут с экрана, а проблемные останутся в очереди с ошибками.</Text>
       </div>
     ),
@@ -706,7 +789,7 @@ const ServicePointsImportPage: React.FC = () => {
     () => (
       <div style={{ display: 'grid', gap: 4 }}>
         {syncState?.blocked_rows ? (
-          <Text style={{ lineHeight: '20px' }}>Заблокировано строк: {syncState.blocked_rows}. Для них нельзя выбрать безопасное действие автоматически.</Text>
+          <Text style={{ lineHeight: '20px' }}>Заблокировано строк: {syncState.blocked_rows}. Для них нельзя выбрать безопасное действие автоматически, детали показаны в таблице ниже.</Text>
         ) : null}
         {queueStats.delete ? (
           <Text style={{ lineHeight: '20px' }}>В очереди сейчас {queueStats.delete} операций удаления. Перед запуском проверьте `B24ElementID`, сопоставление и дубль-группу.</Text>
@@ -919,6 +1002,29 @@ const ServicePointsImportPage: React.FC = () => {
                     </Card>
                   </Col>
                 </Row>
+
+                <Card className="glass-panel" title={`Заблокированные строки${blockedItems.length ? ` (${blockedItems.length})` : ''}`}>
+                  {blockedItems.length === 0 ? (
+                    <Alert
+                      type="success"
+                      showIcon
+                      title="Заблокированных строк нет"
+                      description="Все строки последнего отчёта либо попали в очередь изменений, либо уже актуальны."
+                    />
+                  ) : (
+                    <Table<ContractSyncBlockedItemDTO>
+                      className="contract-sync-table"
+                      size="small"
+                      rowKey="key"
+                      dataSource={filteredBlockedItems}
+                      columns={blockedColumns}
+                      loading={contractSyncQuery.isLoading}
+                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                      scroll={{ x: 980 }}
+                      locale={{ emptyText: search ? 'По текущему поиску среди заблокированных строк совпадений нет' : 'Заблокированные строки отсутствуют' }}
+                    />
+                  )}
+                </Card>
 
                 <Card
                   className="glass-panel"
