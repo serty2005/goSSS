@@ -88,12 +88,11 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 	)
 
 	dto := api.TicketCreateInternalDTO{
-		Subject:         "Тест автосопоставления",
-		Description:     "Описание",
-		Type:            tickets.TypeIncident,
-		CompanyID:       comp.ID,
-		AssigneeID:      &assignee.ID,
-		BitrixDealTitle: "Сделка для теста",
+		Subject:     "Тест автосопоставления",
+		Description: "Описание",
+		Type:        tickets.TypeIncident,
+		CompanyID:   comp.ID,
+		AssigneeID:  &assignee.ID,
 	}
 
 	item, err := svc.CreateInternal(context.Background(), dto, author.ID)
@@ -102,6 +101,9 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 	}
 	if item.BitrixServicePointID == nil || *item.BitrixServicePointID != 501 {
 		t.Fatalf("ожидали автосопоставленную точку 501, получили %v", item.BitrixServicePointID)
+	}
+	if item.BitrixDealTitle != "" {
+		t.Fatalf("ожидали пустой заголовок сделки Bitrix24 до входящего хука, получили %q", item.BitrixDealTitle)
 	}
 }
 

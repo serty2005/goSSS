@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
 import { contractsApi } from '@/api/contracts';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 
 const { Title, Text } = Typography;
 
@@ -19,8 +20,7 @@ const normalizeServices = (raw: unknown): string[] => {
 
 const ContractDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const goBack = useBackNavigation('/companies');
   const queryClient = useQueryClient();
   const [form] = Form.useForm<{ state: string; contract_type: string }>();
   const [hasInitialized, setHasInitialized] = useState(false);
@@ -74,20 +74,11 @@ const ContractDetails: React.FC = () => {
     setHasInitialized(true);
   }
 
-  const handleBack = () => {
-    const backTo = (location.state as { backTo?: string } | null)?.backTo;
-    if (backTo) {
-      navigate(backTo);
-      return;
-    }
-    navigate(-1);
-  };
-
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Space align="center">
-          <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
+          <Button icon={<ArrowLeftOutlined />} onClick={goBack} />
           <div>
             <Title level={4} style={{ margin: 0 }}>Контракт</Title>
             <Text type="secondary">{contract.id}</Text>
@@ -116,7 +107,7 @@ const ContractDetails: React.FC = () => {
 
           <Space>
             <Button type="primary" htmlType="submit" loading={updateMutation.isPending}>Сохранить</Button>
-            <Button onClick={handleBack}>Закрыть</Button>
+            <Button onClick={goBack}>Закрыть</Button>
           </Space>
         </Form>
       </Card>

@@ -11,13 +11,14 @@ import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
 import { equipmentApi } from '@/api/equipment';
-import { CompanyModel, ConnectionCopyStatDTO, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 
@@ -67,6 +68,14 @@ const historySourceLabel = (source?: string) => {
   if (source === 'bitrix') return 'Bitrix24';
   if (source === 'servicedesk') return 'ServiceDesk';
   return 'System';
+};
+
+const historyActorLabel = (entry: TicketHistoryDTO) => {
+  if (entry.user_name) return entry.user_name;
+  if (entry.source === 'bitrix') return 'Bitrix24';
+  if (entry.source === 'servicedesk') return 'ServiceDesk';
+  if (entry.source === 'ui') return 'Сотрудник';
+  return 'Система';
 };
 
 const resolveTicketCreatedSource = (metadata?: TicketDetailsDTO['metadata']) => {
@@ -149,6 +158,7 @@ const TicketDetailsPage: React.FC = () => {
   const createParam = searchParams.get('create') || '';
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
+  const goBack = useBackNavigation('/tickets');
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const commentsNewFirst = ((user?.profile_config as any)?.tickets?.comments_new_first) !== false;
   const ticketSubscriptions = useMemo<string[]>(() => {
@@ -440,28 +450,6 @@ const TicketDetailsPage: React.FC = () => {
   const workstationItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Workstation'), [infrastructure]);
   const fiscalItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'FiscalRegister'), [infrastructure]);
 
-  const { data: connectionStatsResponse } = useQuery({
-    queryKey: ['ticket-connection-stats', id],
-    queryFn: () => ticketsApi.getConnectionCopyStats(id),
-    enabled: Boolean(id) && Boolean(metadata?.company_id),
-    staleTime: 15_000,
-  });
-
-  const connectionStatsMap = useMemo(() => {
-    const map = new Map<string, { count: number; lastCopiedAt: number }>();
-    (connectionStatsResponse?.data || []).forEach((item: ConnectionCopyStatDTO) => {
-      const entityType = String(item.entity_type || '').trim();
-      const entityID = String(item.entity_id || '').trim();
-      if (!entityType || !entityID) return;
-      const key = `${entityType}:${entityID}`;
-      map.set(key, {
-        count: Number(item.copy_count || 0),
-        lastCopiedAt: item.last_copied_at ? dayjs(item.last_copied_at).valueOf() : 0,
-      });
-    });
-    return map;
-  }, [connectionStatsResponse?.data]);
-
   const buildServerConnectionCards = (items: InfrastructureItem[], keyPrefix: string) => {
     return items
       .map((item) => {
@@ -469,14 +457,12 @@ const TicketDetailsPage: React.FC = () => {
         const entityID = String(dataRow.uuid || '').trim();
         const address = String(dataRow.ip || '').trim();
         if (!entityID || !address) return null;
-        const stats = connectionStatsMap.get(`Server:${entityID}`);
         return {
           key: `${keyPrefix}-Server-${entityID}`,
           entityType: 'Server' as const,
           entityID,
           entityPath: `/servers/${entityID}`,
           title: resolveEntityTitle(item),
-          statsCount: stats?.count || 0,
           rows: [{ label: 'Адрес сервера', field: 'ip', value: address }],
         };
       })
@@ -486,10 +472,13 @@ const TicketDetailsPage: React.FC = () => {
       entityID: string;
       entityPath: string;
       title: string;
-      statsCount: number;
       rows: Array<{ label: string; field: string; value: string }>;
     }>;
   };
+
+  const sortConnectionCardsByTitle = <T extends { title: string }>(items: T[]) => (
+    items.slice().sort((left, right) => left.title.localeCompare(right.title, 'ru'))
+  );
 
   const ownConnectionCards = useMemo(() => {
     const serverCards = buildServerConnectionCards(serverItems, 'own');
@@ -507,15 +496,12 @@ const TicketDetailsPage: React.FC = () => {
           { label: 'RDP', field: 'rdp', value: String(dataRow.rdp || '').trim() },
         ].filter((row) => row.value);
         if (rows.length === 0) return null;
-        const stats = connectionStatsMap.get(`Workstation:${entityID}`);
         return {
           key: `Workstation-${entityID}`,
           entityType: 'Workstation' as const,
           entityID,
           entityPath: `/workstations/${entityID}`,
           title: resolveEntityTitle(item),
-          statsCount: stats?.count || 0,
-          statsLastCopiedAt: stats?.lastCopiedAt || 0,
           rows,
         };
       })
@@ -525,23 +511,15 @@ const TicketDetailsPage: React.FC = () => {
       entityID: string;
       entityPath: string;
       title: string;
-      statsCount: number;
-      statsLastCopiedAt: number;
       rows: Array<{ label: string; field: string; value: string }>;
     }>;
 
-    workstationCards.sort((a, b) => {
-      if (b.statsCount !== a.statsCount) return b.statsCount - a.statsCount;
-      if (b.statsLastCopiedAt !== a.statsLastCopiedAt) return b.statsLastCopiedAt - a.statsLastCopiedAt;
-      return a.title.localeCompare(b.title, 'ru');
-    });
-
-    return [...serverCards, ...workstationCards];
-  }, [serverItems, workstationItems, connectionStatsMap]);
+    return sortConnectionCardsByTitle([...serverCards, ...workstationCards]);
+  }, [serverItems, workstationItems]);
 
   const parentConnectionCards = useMemo(
-    () => buildServerConnectionCards(parentServerItems, 'parent'),
-    [parentServerItems, connectionStatsMap],
+    () => sortConnectionCardsByTitle(buildServerConnectionCards(parentServerItems, 'parent')),
+    [parentServerItems],
   );
 
   const attachments = useMemo(() => {
@@ -999,7 +977,7 @@ const TicketDetailsPage: React.FC = () => {
           <Button onClick={() => void toggleTicketSubscription()}>
             {ticketSubscriptions.includes(id) ? 'Отписаться' : 'Подписаться на тикет'}
           </Button>
-          <Button onClick={() => navigate('/tickets')}>К списку</Button>
+          <Button onClick={goBack}>Назад</Button>
         </Space>
       </Space>
 
@@ -1383,7 +1361,13 @@ const TicketDetailsPage: React.FC = () => {
                                     <List.Item key={`${item.id}-${item.created_at}`}>
                                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
                                         <Text strong>{historyLabel(item)}</Text>
-                                        <Text type="secondary">{dayjs(item.created_at).format('DD.MM.YYYY HH:mm')} в {historySourceLabel(item.source)}</Text>
+                                        <Text type="secondary">
+                                          {dayjs(item.created_at).format('DD.MM.YYYY HH:mm')}
+                                          {' • '}
+                                          {historyActorLabel(item)}
+                                          {' • '}
+                                          {historySourceLabel(item.source)}
+                                        </Text>
                                         {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
                                         {item.new_value && (
                                           item.action === 'connection_copied' ?

@@ -123,3 +123,69 @@ func TestBitrixIncomingService_ApplyDealSnapshot_AssigneeResolvedByExternalID(t 
 		t.Fatalf("ожидался user_map для b24_user_id=%d и etalon_user_id=%d", assignedBy, assignee.ID)
 	}
 }
+
+func TestBitrixIncomingService_ApplyDealSnapshot_StoresBitrixDealTitle(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(
+		&user.User{},
+		&user.Role{},
+		&user.Integration{},
+		&company.Company{},
+		&tickets.Ticket{},
+	); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := context.Background()
+	ticketRepo := repositories.NewTicketRepo(db)
+
+	ticket := &tickets.Ticket{
+		Subject:         "Исходный тикет",
+		Description:     "Описание",
+		Status:          tickets.StatusNew,
+		SyncWithBitrix:  true,
+		BitrixDealTitle: "",
+	}
+	if err := ticketRepo.Create(ctx, ticket); err != nil {
+		t.Fatalf("не удалось создать тикет: %v", err)
+	}
+
+	loadedTicket, err := ticketRepo.GetByID(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось загрузить тикет перед проверкой: %v", err)
+	}
+
+	svc := &bitrixIncomingService{
+		log:        logger.New("", "test", "error", true),
+		ticketRepo: ticketRepo,
+		history:    nil,
+	}
+
+	deal := &b24.Deal{
+		ID:      6001,
+		StageID: "C17:NEW",
+		Title:   "Автоматический заголовок из Bitrix24",
+		Raw: map[string]interface{}{
+			"UF_CRM_1766060620": "Описание из Bitrix24",
+		},
+	}
+
+	if err := svc.applyDealSnapshotToTicket(ctx, loadedTicket, deal); err != nil {
+		t.Fatalf("applyDealSnapshotToTicket завершился ошибкой: %v", err)
+	}
+
+	stored, err := ticketRepo.GetByID(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать тикет: %v", err)
+	}
+	if stored == nil {
+		t.Fatalf("ожидался сохранённый тикет")
+	}
+	if stored.BitrixDealTitle != "Автоматический заголовок из Bitrix24" {
+		t.Fatalf("ожидали сохранённый заголовок Bitrix24, получили %q", stored.BitrixDealTitle)
+	}
+}

@@ -31,9 +31,9 @@ import {
   ReloadOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
 import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import type {
   ApiResponse,
@@ -368,7 +368,7 @@ const ServicePointsImportPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
-  const navigate = useNavigate();
+  const goBack = useBackNavigation('/admin');
   const queryClient = useQueryClient();
   const { setHeaderConfig } = useLayoutHeader();
   const abortRef = useRef<AbortController | null>(null);
@@ -959,12 +959,12 @@ const ServicePointsImportPage: React.FC = () => {
   }, [headerControls, isBitrixEnabled, setHeaderConfig]);
 
   if (!isBitrixEnabled) {
-    return (
-      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/users')}>Назад к сотрудникам</Button>
-        <Alert
-          type="warning"
-          showIcon
+      return (
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={goBack}>Назад</Button>
+          <Alert
+            type="warning"
+            showIcon
           title="Интеграция Bitrix24 отключена"
           description="Экран ручной синхронизации недоступен, пока ENABLE_BITRIX_GATEWAY=false."
         />
@@ -1008,7 +1008,7 @@ const ServicePointsImportPage: React.FC = () => {
         tabBarExtraContent={{
           left: (
             <div style={{ marginInlineEnd: 16 }}>
-              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin')}>
+              <Button icon={<ArrowLeftOutlined />} onClick={goBack}>
                 Назад
               </Button>
             </div>

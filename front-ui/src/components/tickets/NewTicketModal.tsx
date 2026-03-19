@@ -7,6 +7,7 @@ import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { normalizeServerAddress } from '@/utils/formatters';
+import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 import { getTicketStatusMeta } from '@/constants/ticketStatus';
@@ -135,7 +136,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (syncWithBitrix === false) {
       form.setFieldValue('bitrix_service_point_id', undefined);
-      form.setFieldValue('bitrix_deal_title', undefined);
     }
   }, [syncWithBitrix, form]);
 
@@ -368,7 +368,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   };
 
   const createMutation = useMutation({
-    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; bitrix_deal_title?: string }) => {
+    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number }) => {
       const description = values.description.trim();
       const effectiveSyncWithBitrix = isBitrixEnabled && (canDisableBitrixSync ? values.sync_with_bitrix !== false : true);
       return ticketsApi.createTicket({
@@ -379,7 +379,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         assignee_id: values.assignee_id,
         sync_with_bitrix: effectiveSyncWithBitrix,
         bitrix_service_point_id: effectiveSyncWithBitrix ? values.bitrix_service_point_id : undefined,
-        bitrix_deal_title: effectiveSyncWithBitrix ? values.bitrix_deal_title?.trim() : undefined,
       });
     },
     onSuccess: () => {
@@ -474,7 +473,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                 <Text strong>#{ticket.number}</Text>
                                 <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
                               </Space>
-                              <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
+                              <Paragraph
+                                style={{ margin: 0, whiteSpace: 'pre-wrap' }}
+                                ellipsis={{ rows: 4 }}
+                              >
+                                {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                              </Paragraph>
                               <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
                             </Space>
                           </Card>
@@ -503,7 +507,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                 <Text strong>#{ticket.number}</Text>
                                 <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
                               </Space>
-                              <Text>{ticket.subject || ticket.description || 'Без описания'}</Text>
+                              <Paragraph
+                                style={{ margin: 0, whiteSpace: 'pre-wrap' }}
+                                ellipsis={{ rows: 4 }}
+                              >
+                                {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                              </Paragraph>
                               <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
                             </Space>
                           </Card>
@@ -641,23 +650,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                   />
                 </Form.Item>
 
-                <Form.Item
-                  name="bitrix_deal_title"
-                  label="Заголовок сделки (Bitrix24)"
-                  rules={[
-                    {
-                      validator: (_, value) => {
-                        if (syncWithBitrix === false) return Promise.resolve();
-                        if (!String(value || '').trim()) {
-                          return Promise.reject(new Error('Заполните заголовок сделки Bitrix24'));
-                        }
-                        return Promise.resolve();
-                      },
-                    },
-                  ]}
-                >
-                  <Input placeholder="Введите заголовок сделки для Bitrix24" disabled={syncWithBitrix === false} />
-                </Form.Item>
               </>
             )}
 

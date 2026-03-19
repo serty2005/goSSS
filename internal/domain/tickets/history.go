@@ -37,6 +37,7 @@ type TicketHistory struct {
 	ID        uint              `json:"id" gorm:"primaryKey"`
 	TicketID  string            `json:"ticket_id" gorm:"type:text;index;not null"`
 	UserID    *uint             `json:"user_id" gorm:"index"`
+	UserName  string            `json:"user_name,omitempty" gorm:"-"`
 	Action    string            `json:"action" gorm:"type:varchar(50);index;not null;default:'field_changed'"`
 	Field     string            `json:"field" gorm:"type:varchar(100)"`
 	Source    string            `json:"source" gorm:"type:varchar(50);index;not null;default:'system'"`

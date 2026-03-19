@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
@@ -16,6 +16,7 @@ import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect'
 import EntityHierarchyExplorer from '@/components/entities/EntityHierarchyExplorer';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -95,8 +96,8 @@ const ServerDetails: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
   const queryClient = useQueryClient();
+  const goBack = useBackNavigation('/servers');
   const [activeField, setActiveField] = useState<string | null>(null);
   const [companySearch, setCompanySearch] = useState<string>('');
   const user = useAuthStore((state) => state.user);
@@ -274,15 +275,6 @@ const ServerDetails: React.FC = () => {
     updateMutation.mutate({ [field]: value } as UpdateServerPayload);
   };
 
-  const handleBack = () => {
-    const backTo = (location.state as { backTo?: string } | null)?.backTo;
-    if (backTo) {
-      navigate(backTo);
-      return;
-    }
-    navigate(-1);
-  };
-
   const serverRecord = server as unknown as Record<string, unknown>;
   const fixedRenderedKeys = new Set([
     'id',
@@ -315,7 +307,7 @@ const ServerDetails: React.FC = () => {
     <div>
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Space align="center">
-          <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
+          <Button icon={<ArrowLeftOutlined />} onClick={goBack} />
           <Space>
             <div style={{ fontSize: 24, color: token.colorPrimary }}>{getEntityIcon('Server')}</div>
             <div>

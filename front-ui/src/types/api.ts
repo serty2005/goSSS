@@ -462,6 +462,7 @@ export interface TicketHistoryDTO {
   id: number;
   ticket_id: string;
   user_id?: number;
+  user_name?: string;
   action: string;
   field: string;
   source?: 'ui' | 'bitrix' | 'servicedesk' | 'system' | string;

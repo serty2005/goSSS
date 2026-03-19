@@ -12,6 +12,7 @@ import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
 import TicketTable from '@/components/tickets/TicketTable';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
@@ -54,6 +55,7 @@ const CompanyPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const goBack = useBackNavigation('/companies');
   const queryClient = useQueryClient();
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
@@ -845,9 +847,9 @@ const CompanyPage: React.FC = () => {
     <div>
       <Card className="glass-panel company-summary-card" style={{ marginBottom: 12 }} size="small" bodyStyle={{ padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <Link to="/companies" style={{ display: 'inline-flex', alignItems: 'center', color: token.colorTextSecondary }}>
-            <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад к списку
-          </Link>
+          <Button type="link" onClick={goBack} style={{ padding: 0, color: token.colorTextSecondary }}>
+            <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад
+          </Button>
           {canEditBase && (
             <Button icon={<EditOutlined />} size="small" onClick={openCompanyEdit}>Редактировать</Button>
           )}

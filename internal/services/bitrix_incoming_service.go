@@ -1039,6 +1039,7 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 	changed := false
 	oldStatus := strings.TrimSpace(ticket.Status)
 	oldDescription := strings.TrimSpace(ticket.Description)
+	oldBitrixDealTitle := strings.TrimSpace(ticket.BitrixDealTitle)
 	oldAssigneeID := uint(0)
 	if ticket.AssigneeID != nil {
 		oldAssigneeID = *ticket.AssigneeID
@@ -1047,6 +1048,10 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 	subject := strings.TrimSpace(deal.Title)
 	if subject != "" && strings.TrimSpace(ticket.Subject) != subject {
 		ticket.Subject = subject
+		changed = true
+	}
+	if subject != "" && strings.TrimSpace(ticket.BitrixDealTitle) != subject {
+		ticket.BitrixDealTitle = subject
 		changed = true
 	}
 	description := extractIncomingDealDescription(deal)
@@ -1128,6 +1133,16 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 				Source:   tickets.HistorySourceBitrix,
 				OldValue: oldDescription,
 				NewValue: strings.TrimSpace(ticket.Description),
+			})
+		}
+		if oldBitrixDealTitle != strings.TrimSpace(ticket.BitrixDealTitle) {
+			s.history.Write(ctx, TicketHistoryWriteRequest{
+				TicketID: ticket.ID,
+				Action:   tickets.HistoryActionFieldChanged,
+				Field:    "bitrix_deal_title",
+				Source:   tickets.HistorySourceBitrix,
+				OldValue: oldBitrixDealTitle,
+				NewValue: strings.TrimSpace(ticket.BitrixDealTitle),
 			})
 		}
 		newAssigneeID := uint(0)

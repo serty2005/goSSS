@@ -922,6 +922,8 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	historyItems := filterTicketHistoryForRoles(details.History, getUserRolesFromContext(r))
+
 	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"metadata": safeMetadataDTO{
 			ID:                   details.Metadata.ID,
@@ -956,10 +958,34 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			BitrixDealURL:        details.Metadata.BitrixDealURL,
 		},
 		"company_name": details.CompanyName,
-		"history":      details.History,
+		"history":      historyItems,
 		"attachments":  details.Attachments,
 		"comments":     comments,
 	})
+}
+
+func filterTicketHistoryForRoles(items []tickets.TicketHistory, roles []string) []tickets.TicketHistory {
+	if hasUserRole(roles, "admin") || len(items) == 0 {
+		return items
+	}
+
+	filtered := make([]tickets.TicketHistory, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.Action) == tickets.HistoryActionConnectionCopied {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func hasUserRole(roles []string, role string) bool {
+	for _, item := range roles {
+		if strings.TrimSpace(item) == role {
+			return true
+		}
+	}
+	return false
 }
 
 // LinkAssetRequest тело запроса для привязки.

@@ -8,6 +8,7 @@ import { ticketsApi } from '@/api/tickets';
 import dayjs from 'dayjs';
 import { TicketListItemDTO, TicketStatus } from '@/types/api';
 import { getTicketStatusMeta, isClosedLikeTicketStatus } from '@/constants/ticketStatus';
+import { normalizeTicketPreview } from '@/utils/ticketText';
 
 interface Props {
   companyId?: string;
@@ -19,23 +20,6 @@ type DateRangeValue = [Dayjs | null, Dayjs | null] | null;
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
-
-const normalizeDescription = (value?: string) => {
-  if (!value) return '';
-  return value
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/p>\s*<p>/gi, '\n')
-    .replace(/<\/?p[^>]*>/gi, '\n')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-};
 
 const formatDateTime = (value?: string) => {
   if (!value) return '-';
@@ -188,7 +172,14 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
       title: 'Описание',
       dataIndex: 'description',
       key: 'subject',
-      render: (textValue?: string) => <Text>{normalizeDescription(textValue) || 'Без описания'}</Text>,
+      render: (textValue?: string) => (
+        <Typography.Paragraph
+          style={{ margin: 0, whiteSpace: 'pre-wrap' }}
+          ellipsis={{ rows: 4 }}
+        >
+          {normalizeTicketPreview(textValue) || 'Без описания'}
+        </Typography.Paragraph>
+      ),
     },
     {
       title: 'Статус',

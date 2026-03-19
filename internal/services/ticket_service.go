@@ -226,10 +226,6 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if syncWithBitrix && resolvedBitrixServicePointID == nil {
 		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 	}
-	if syncWithBitrix && strings.TrimSpace(dto.BitrixDealTitle) == "" {
-		return nil, fmt.Errorf("не заполнен заголовок сделки Bitrix24")
-	}
-
 	ticket := &tickets.Ticket{
 		Subject:              dto.Subject,
 		Description:          dto.Description,
@@ -1115,6 +1111,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 
 	// Загрузка истории
 	history, _ := s.ticketRepo.GetHistory(ctx, ticketID)
+	s.enrichTicketHistoryUsers(ctx, history)
 
 	// Загрузка вложений
 	attachments, _ := s.ticketRepo.GetAttachments(ctx, ticketID)
@@ -1620,6 +1617,38 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 
 	s.recordHistory(ctx, ticketID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldAsset, tickets.HistorySourceUI, oldAsset, newAsset, nil)
 	return nil
+}
+
+func (s *ticketServiceImpl) enrichTicketHistoryUsers(ctx context.Context, history []tickets.TicketHistory) {
+	if len(history) == 0 || s.userRepo == nil {
+		return
+	}
+
+	userNames := make(map[uint]string, len(history))
+	for i := range history {
+		if history[i].UserID == nil || *history[i].UserID == 0 {
+			continue
+		}
+
+		userID := *history[i].UserID
+		if cachedName, ok := userNames[userID]; ok {
+			history[i].UserName = cachedName
+			continue
+		}
+
+		userItem, err := s.userRepo.GetByID(ctx, userID)
+		if err != nil || userItem == nil {
+			userNames[userID] = ""
+			continue
+		}
+
+		fullName := strings.TrimSpace(userItem.FullName)
+		if fullName == "" {
+			fullName = strings.TrimSpace(userItem.Username)
+		}
+		userNames[userID] = fullName
+		history[i].UserName = fullName
+	}
 }
 
 // recordHistory - вспомогательный метод для записи аудита.

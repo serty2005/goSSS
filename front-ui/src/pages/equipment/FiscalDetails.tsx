@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Popconfirm, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -15,6 +15,7 @@ import { canEditEquipment, isAdmin } from '@/utils/permissions';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import { useBackNavigation } from '@/hooks/useBackNavigation';
 
 const { Title, Text } = Typography;
 
@@ -59,8 +60,8 @@ const FiscalDetails: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
   const queryClient = useQueryClient();
+  const goBack = useBackNavigation('/fiscals');
   const [activeField, setActiveField] = useState<string | null>(null);
   const [companySearch, setCompanySearch] = useState<string>('');
   const [activeObservationID, setActiveObservationID] = useState<number | undefined>(undefined);
@@ -189,15 +190,6 @@ const FiscalDetails: React.FC = () => {
     updateMutation.mutate({ owner_id: value } as UpdateFiscalPayload);
   };
 
-  const handleBack = () => {
-    const backTo = (location.state as { backTo?: string } | null)?.backTo;
-    if (backTo) {
-      navigate(backTo);
-      return;
-    }
-    navigate(-1);
-  };
-
   const renderActor = (record: EntityOwnerHistoryItemDTO) => {
     if (record.changed_by_user_id) {
       return `Пользователь ${record.changed_by_user_id}`;
@@ -224,7 +216,7 @@ const FiscalDetails: React.FC = () => {
     <div>
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Space align="center">
-          <Button icon={<ArrowLeftOutlined />} onClick={handleBack} />
+          <Button icon={<ArrowLeftOutlined />} onClick={goBack} />
           <Space>
             <div style={{ fontSize: 24, color: token.colorPrimary }}>{getEntityIcon('FiscalRegister')}</div>
             <div>
