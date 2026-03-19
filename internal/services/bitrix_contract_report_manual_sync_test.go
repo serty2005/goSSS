@@ -1100,6 +1100,101 @@ func TestPreviewContractReportSync_FallsBackToUniqueCodeMatchBeforeCreate(t *tes
 	}
 }
 
+func TestPreviewContractReportSync_TreatsLegacyBitrixContractValueAsPendingUpdate(t *testing.T) {
+	ctx := t.Context()
+	svc := &bitrixSyncService{
+		cfg: &config.Config{
+			EnableBitrixGateway:         true,
+			RequestTimeout:              2 * time.Second,
+			BitrixServicePointsIBlockID: 101,
+			BitrixRateLimitPerMin:       120,
+			BitrixRateLimitBurst:        50,
+		},
+		log:  logger.New("", "test", "error", true),
+		repo: repositories.NewBitrixRepo(mustOpenSyncTestDB(t, &bitrix.ServicePoint{}, &bitrix.CompanyServicePointMapping{})),
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		defer r.Body.Close()
+
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/lists.get.iblock.type.id.json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": "lists"})
+		case strings.HasSuffix(r.URL.Path, "/lists.field.get.json"):
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			fieldID, _ := body["FIELD_ID"].(string)
+			switch fieldID {
+			case bitrixServicePointOneCCodeProperty:
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{fieldID: map[string]any{"MULTIPLE": "N"}}})
+			case bitrixServicePointContractProperty:
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"result": map[string]any{
+						fieldID: map[string]any{
+							"MULTIPLE": "N",
+							"DISPLAY_VALUES_FORM": map[string]any{
+								"10": "Не активен",
+								"20": "TS Cloud",
+								"30": "TS Standart",
+							},
+						},
+					},
+				})
+			default:
+				http.Error(w, "unexpected field", http.StatusBadRequest)
+			}
+		case strings.HasSuffix(r.URL.Path, "/lists.element.get.json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": []map[string]any{
+					{
+						"ID":           "1501",
+						"NAME":         "Легаси точка",
+						"PROPERTY_681": map[string]any{"1": "LEGACY-001"},
+						"PROPERTY_361": map[string]any{"2": "Да"},
+					},
+				},
+				"total": 1,
+			})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	svc.cfg.BitrixBaseURL = server.URL + "/rest/457/secret"
+	svc.client = b24.NewClient(svc.cfg, logger.New("", "test", "error", true))
+
+	row := contractsvc.ContractReportRow{
+		ContractorID:     "company-legacy",
+		ServicePointCode: "LEGACY-001",
+		ServicePointName: "Легаси точка",
+		ContractType:     "TS Standart",
+	}
+	preview, err := svc.PreviewContractReportSync(ctx, []contractsvc.ContractReportRow{row})
+	if err != nil {
+		t.Fatalf("PreviewContractReportSync завершился ошибкой: %v", err)
+	}
+	if preview.ToUpdate != 1 || len(preview.UpsertItems) != 1 {
+		t.Fatalf("ожидалось одно обновление для миграции legacy значения, получено to_update=%d items=%d", preview.ToUpdate, len(preview.UpsertItems))
+	}
+	if preview.UpsertItems[0].CurrentContractType != "Да" {
+		t.Fatalf("ожидалось legacy значение \"Да\", получено %q", preview.UpsertItems[0].CurrentContractType)
+	}
+	if len(preview.UpsertItems[0].ChangeSet) == 0 {
+		t.Fatal("ожидалось изменение поля контракта для legacy значения")
+	}
+	if preview.UpsertItems[0].ChangeSet[0].CurrentValue != "Да" || preview.UpsertItems[0].ChangeSet[0].NextValue != "TS Standart" {
+		t.Fatalf("ожидался diff legacy->TS Standart, получено %#v", preview.UpsertItems[0].ChangeSet[0])
+	}
+}
+
 func TestPreviewContractReportSync_ReturnsBlockedItemsWithReason(t *testing.T) {
 	ctx := t.Context()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

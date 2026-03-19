@@ -3,6 +3,7 @@ package gateways
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 type ContractGateway interface {
 	Start(ctx context.Context)
+	RefreshLatestReport(ctx context.Context) error
 }
 
 type contractGatewayImpl struct {
@@ -80,15 +82,54 @@ func (g *contractGatewayImpl) Start(ctx context.Context) {
 	}
 }
 
+func (g *contractGatewayImpl) RefreshLatestReport(ctx context.Context) error {
+	if err := g.ensureReady(); err != nil {
+		return err
+	}
+
+	g.logger.Info("Запущен принудительный пересчёт контрактов по текущему состоянию почтового ящика")
+	reports, err := g.fetchSortedReports(ctx)
+	if err != nil {
+		return err
+	}
+	if len(reports) == 0 {
+		g.logger.Info("Принудительный пересчёт контрактов завершён: подходящие отчёты в почте не найдены")
+		return nil
+	}
+
+	report := reports[len(reports)-1]
+	g.logger.Info(
+		"Запущена принудительная обработка последнего почтового отчёта по контрактам",
+		"attachment_name", report.AttachmentName,
+		"attachment_hash", report.AttachmentHash,
+		"message_id", report.MessageID,
+		"received_at", report.ReceivedAt,
+		"extracted_service_points", len(report.Rows),
+	)
+	if err := g.applyReport(ctx, report); err != nil {
+		g.logger.Error("Не удалось выполнить принудительный пересчёт по последнему почтовому отчёту", "attachment_name", report.AttachmentName, "error", err)
+		g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusFailed, err)
+		return err
+	}
+
+	g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusProcessed, nil)
+	g.logger.Info(
+		"Принудительный пересчёт контрактов по последнему почтовому отчёту завершён",
+		"attachment_name", report.AttachmentName,
+		"attachment_hash", report.AttachmentHash,
+	)
+	return nil
+}
+
 // sync выполняет один цикл получения отчетов из почты и их последовательной обработки.
 func (g *contractGatewayImpl) sync(ctx context.Context) {
-	if g.mailbox == nil || g.bitrixSync == nil || g.contractSvc == nil || g.contractRepo == nil || g.bitrixRepo == nil {
-		g.logger.Error("Воркер актуализации контрактов инициализирован не полностью")
+	if err := g.ensureReady(); err != nil {
+		g.logger.Error("Воркер актуализации контрактов инициализирован не полностью", "error", err)
 		return
 	}
 	g.logger.Info("Запущен цикл актуализации контрактов из почты")
 
-	reports, err := g.mailbox.FetchReports(ctx)
+	reports, err := g.fetchSortedReports(ctx)
 	if err != nil {
 		g.logger.Error("Не удалось получить отчёты по контрактам из почты", "error", err)
 		return
@@ -98,24 +139,6 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 		return
 	}
 	g.logger.Info("Получены отчёты по контрактам из почты", "reports_count", len(reports))
-
-	slices.SortFunc(reports, func(a, b contractsvc.ContractMailReport) int {
-		aTime := time.Time{}
-		if a.ReceivedAt != nil {
-			aTime = *a.ReceivedAt
-		}
-		bTime := time.Time{}
-		if b.ReceivedAt != nil {
-			bTime = *b.ReceivedAt
-		}
-		if aTime.Before(bTime) {
-			return -1
-		}
-		if aTime.After(bTime) {
-			return 1
-		}
-		return strings.Compare(a.AttachmentHash, b.AttachmentHash)
-	})
 
 	for _, report := range reports {
 		if strings.TrimSpace(report.AttachmentHash) == "" {
@@ -153,6 +176,50 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 		g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusProcessed, nil)
 	}
 	g.logger.Info("Цикл актуализации контрактов из почты завершён", "reports_count", len(reports))
+}
+
+func (g *contractGatewayImpl) ensureReady() error {
+	switch {
+	case g.mailbox == nil:
+		return fmt.Errorf("не настроен клиент чтения почтовых отчётов")
+	case g.bitrixSync == nil:
+		return fmt.Errorf("не настроен сервис синхронизации Bitrix24")
+	case g.contractSvc == nil:
+		return fmt.Errorf("не настроен сервис контрактов")
+	case g.contractRepo == nil:
+		return fmt.Errorf("не настроен репозиторий контрактов")
+	case g.bitrixRepo == nil:
+		return fmt.Errorf("не настроен репозиторий Bitrix24")
+	default:
+		return nil
+	}
+}
+
+func (g *contractGatewayImpl) fetchSortedReports(ctx context.Context) ([]contractsvc.ContractMailReport, error) {
+	reports, err := g.mailbox.FetchReports(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить отчёты по контрактам из почты: %w", err)
+	}
+	slices.SortFunc(reports, compareContractMailReports)
+	return reports, nil
+}
+
+func compareContractMailReports(a, b contractsvc.ContractMailReport) int {
+	aTime := time.Time{}
+	if a.ReceivedAt != nil {
+		aTime = *a.ReceivedAt
+	}
+	bTime := time.Time{}
+	if b.ReceivedAt != nil {
+		bTime = *b.ReceivedAt
+	}
+	if aTime.Before(bTime) {
+		return -1
+	}
+	if aTime.After(bTime) {
+		return 1
+	}
+	return strings.Compare(a.AttachmentHash, b.AttachmentHash)
 }
 
 // applyReport пересчитывает контракты компаний по последнему отчету, не меняя Bitrix24 автоматически.

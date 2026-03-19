@@ -684,7 +684,7 @@ func buildContractReportUpsertItem(
 			NextValue:    row.ServicePointCode,
 		})
 	}
-	if normalizeContractType(state.CurrentContractType) != normalizeContractType(row.ContractType) {
+	if !isBitrixContractValueCurrent(state.CurrentContractType, row.ContractType) {
 		changeSet = append(changeSet, ContractReportSyncFieldDiff{
 			Field:        "contract_type",
 			Label:        "Тип контракта",

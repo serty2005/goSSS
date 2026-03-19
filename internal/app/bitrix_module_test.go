@@ -16,7 +16,7 @@ func TestBitrixModuleRegisterProtectedRoutes_RegistersContractSyncExecute(t *tes
 		cfg: &config.Config{
 			EnableBitrixGateway: true,
 		},
-		bitrixHandler: handlers.NewBitrixHandler(nil, nil),
+		bitrixHandler: handlers.NewBitrixHandler(nil, nil, nil),
 	}
 
 	router := chi.NewRouter()
@@ -26,5 +26,25 @@ func TestBitrixModuleRegisterProtectedRoutes_RegistersContractSyncExecute(t *tes
 	matched := router.Match(routeContext, "POST", "/bitrix/service-points/contract-sync/execute")
 	if !matched {
 		t.Fatal("ожидался маршрут POST /bitrix/service-points/contract-sync/execute")
+	}
+}
+
+func TestBitrixModuleRegisterProtectedRoutes_RegistersContractSyncRefresh(t *testing.T) {
+	t.Parallel()
+
+	module := &bitrixModule{
+		cfg: &config.Config{
+			EnableBitrixGateway: true,
+		},
+		bitrixHandler: handlers.NewBitrixHandler(nil, nil, nil),
+	}
+
+	router := chi.NewRouter()
+	module.registerProtectedRoutes(router)
+
+	routeContext := chi.NewRouteContext()
+	matched := router.Match(routeContext, "POST", "/bitrix/service-points/contract-sync/refresh")
+	if !matched {
+		t.Fatal("ожидался маршрут POST /bitrix/service-points/contract-sync/refresh")
 	}
 }

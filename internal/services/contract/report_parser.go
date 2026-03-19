@@ -45,6 +45,7 @@ type ContractReportRow struct {
 	ContractorID     string
 	ServicePointCode string
 	ServicePointName string
+	Serviced         *bool
 	ContractOn       bool
 	ContractType     string
 	StartDate        *time.Time
@@ -281,6 +282,7 @@ func parseContractReportTableRows(rows [][]string, now time.Time) ([]ContractRep
 		}
 
 		serviced := parseContractStatus(valueByColumn(row, headerMap, reportColumnServiced))
+		item.Serviced = serviced
 		item.StartDate = parseReportDate(valueByColumn(row, headerMap, reportColumnStartDate))
 		item.EndDate = parseReportDate(valueByColumn(row, headerMap, reportColumnEndDate))
 		item.ContractType = detectContractType(
@@ -328,20 +330,24 @@ func AggregateContractReportRows(rows []ContractReportRow) []ContractReportRow {
 }
 
 func contractReportRowGroupKey(row ContractReportRow) string {
-	code := normalizeCell(cmp.Or(row.ServicePointCode, row.ContractorID))
 	name := normalizePointName(row.ServicePointName)
-	switch {
-	case code != "" && name != "":
-		return code + "|" + name
-	case code != "":
-		return code
-	default:
+	if name != "" {
 		return name
 	}
+	return normalizeCell(cmp.Or(row.ServicePointCode, row.ContractorID))
 }
 
 // compareContractRows задает приоритет выбора строки при агрегации дублей внутри отчета.
 func compareContractRows(a, b ContractReportRow) int {
+	aServiced := a.Serviced != nil && *a.Serviced
+	bServiced := b.Serviced != nil && *b.Serviced
+	if aServiced != bServiced {
+		if aServiced {
+			return -1
+		}
+		return 1
+	}
+
 	if a.ContractOn != b.ContractOn {
 		if a.ContractOn {
 			return -1

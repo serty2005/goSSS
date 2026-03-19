@@ -28,6 +28,11 @@ export const bitrixAdminApi = {
     return response.data;
   },
 
+  refreshContractSyncState: async () => {
+    const response = await apiClient.post<ApiResponse<ContractSyncStateDTO>>('/bitrix/service-points/contract-sync/refresh');
+    return response.data;
+  },
+
   executeContractSync: async (payload: { selected_keys: string[]; queue_items: ContractSyncQueueItemDTO[] }, signal?: AbortSignal) => {
     const response = await apiClient.post<ApiResponse<ContractSyncExecuteResultDTO>>(
       '/bitrix/service-points/contract-sync/execute',

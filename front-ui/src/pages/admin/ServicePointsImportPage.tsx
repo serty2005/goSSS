@@ -383,6 +383,7 @@ const ServicePointsImportPage: React.FC = () => {
   const [upsertFilter, setUpsertFilter] = useState<UpsertFilter>('all');
   const [deleteFilter, setDeleteFilter] = useState<DeleteFilter>('all');
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('all');
+  const [isRefreshingContractSync, setIsRefreshingContractSync] = useState(false);
   const [lastExecutionResult, setLastExecutionResult] = useState<ContractSyncExecuteResultDTO | null>(null);
   const [queueErrorMap, setQueueErrorMap] = useState<Record<string, string[]>>({});
 
@@ -402,6 +403,15 @@ const ServicePointsImportPage: React.FC = () => {
   const blockedItems = syncState?.blocked_items || [];
   const baseUpsertItems = syncState?.upsert_items || [];
   const baseDeleteItems = syncState?.delete_items || [];
+
+  const resetSyncScreenState = () => {
+    setQueueItems([]);
+    setSelectedUpsertKeys([]);
+    setSelectedDeleteKeys([]);
+    setSelectedQueueKeys([]);
+    setLastExecutionResult(null);
+    setQueueErrorMap({});
+  };
 
   useEffect(() => {
     setQueueItems([]);
@@ -452,6 +462,22 @@ const ServicePointsImportPage: React.FC = () => {
     setQueueItems([]);
     setSelectedQueueKeys([]);
     setQueueErrorMap({});
+  };
+
+  const refreshContractSyncState = async () => {
+    if (isRefreshingContractSync) return;
+    setIsRefreshingContractSync(true);
+    try {
+      const nextState = await bitrixAdminApi.refreshContractSyncState();
+      resetSyncScreenState();
+      queryClient.setQueryData<ApiResponse<ContractSyncStateDTO>>(['bitrix', 'contract-sync-state'], nextState);
+      const attachmentName = nextState.data?.active_report_import?.attachment_name;
+      message.success(attachmentName ? `Состояние пересчитано по отчёту: ${attachmentName}` : 'Состояние синхронизации пересчитано по текущему ящику');
+    } catch (error) {
+      message.error(getQueryErrorText(error));
+    } finally {
+      setIsRefreshingContractSync(false);
+    }
   };
 
   const removeQueueItemsByKeys = (keys: string[]) => {
@@ -775,7 +801,8 @@ const ServicePointsImportPage: React.FC = () => {
   const infoPopoverContent = useMemo(
     () => (
       <div style={{ display: 'grid', gap: 4 }}>
-        <Text style={{ lineHeight: '20px' }}>Для расчёта очереди используется последний успешно разобранный отчёт из почты.</Text>
+        <Text style={{ lineHeight: '20px' }}>Для расчёта очереди используется последний отчёт из почты, сохранённый после автосинхронизации или кнопки `Обновить`.</Text>
+        <Text style={{ lineHeight: '20px' }}>Кнопка `Обновить` перечитывает текущий почтовый ящик, заново применяет последний отчёт и пересобирает очередь для Bitrix24.</Text>
         <Text style={{ lineHeight: '20px' }}>Контракты компаний в ServiceDesk обновляются автоматически по нему, а изменения Bitrix24 выполняются только вручную через очередь.</Text>
         <Text style={{ lineHeight: '20px' }}>Очередь исполняется строго по снимку UI: `update` не может незаметно превратиться в `create`.</Text>
         <Text style={{ lineHeight: '20px' }}>Если строка попала в блокировку, ниже появится отдельная таблица с причиной и подсказкой, что исправить.</Text>
@@ -806,7 +833,12 @@ const ServicePointsImportPage: React.FC = () => {
   const headerControls = useMemo(() => {
     const commonControls = (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-        <Button icon={<ReloadOutlined />} loading={contractSyncQuery.isFetching} onClick={() => void contractSyncQuery.refetch()}>
+        <Button
+          icon={<ReloadOutlined />}
+          loading={isRefreshingContractSync}
+          disabled={isExecuting}
+          onClick={() => void refreshContractSyncState()}
+        >
           Обновить
         </Button>
         <HeaderHintButton icon={<QuestionCircleOutlined />} title="Как устроен экран" content={infoPopoverContent} active />
@@ -890,13 +922,14 @@ const ServicePointsImportPage: React.FC = () => {
     );
   }, [
     activeTab,
-    contractSyncQuery.isFetching,
     deleteMappedCount,
     deleteFilter,
     deleteItems.length,
     deleteUnmappedCount,
     hasHeaderWarnings,
     infoPopoverContent,
+    isExecuting,
+    isRefreshingContractSync,
     queueErrorCount,
     queueFilter,
     queueItems.length,

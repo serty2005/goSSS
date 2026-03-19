@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"etalon-server/internal/core/gateways"
 	contractdom "etalon-server/internal/domain/contract"
 	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
@@ -20,18 +22,21 @@ import (
 type BitrixHandler struct {
 	service      services.BitrixSyncService
 	contractRepo contractdom.Repository
+	contractSync gateways.ContractGateway
 }
 
-func NewBitrixHandler(service services.BitrixSyncService, contractRepo contractdom.Repository) *BitrixHandler {
+func NewBitrixHandler(service services.BitrixSyncService, contractRepo contractdom.Repository, contractSync gateways.ContractGateway) *BitrixHandler {
 	return &BitrixHandler{
 		service:      service,
 		contractRepo: contractRepo,
+		contractSync: contractSync,
 	}
 }
 
 func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/service-points", h.ListServicePoints)
 	r.Get("/service-points/contract-sync/state", h.GetContractSyncState)
+	r.Post("/service-points/contract-sync/refresh", h.RefreshContractSyncState)
 	r.Post("/service-points/contract-sync/execute", h.ExecuteContractSync)
 	r.Post("/service-points/refresh", h.RefreshServicePoints)
 	r.Get("/users/suggest", h.SuggestUser)
@@ -80,21 +85,45 @@ func (h *BitrixHandler) RefreshServicePoints(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.buildContractSyncState(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, payload)
+}
+
+func (h *BitrixHandler) RefreshContractSyncState(w http.ResponseWriter, r *http.Request) {
+	if h.contractSync == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "воркер контрактной синхронизации не инициализирован")
+		return
+	}
+	if err := h.contractSync.RefreshLatestReport(r.Context()); err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	payload, err := h.buildContractSyncState(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, payload)
+}
+
+func (h *BitrixHandler) buildContractSyncState(ctx context.Context) (api.ContractSyncStateDTO, error) {
 	if h.contractRepo == nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "репозиторий контрактов не инициализирован")
-		return
+		return api.ContractSyncStateDTO{}, fmt.Errorf("репозиторий контрактов не инициализирован")
 	}
 
-	imports, err := h.contractRepo.ListMailImports(r.Context(), 20)
+	imports, err := h.contractRepo.ListMailImports(ctx, 20)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
+		return api.ContractSyncStateDTO{}, err
 	}
 
-	conflicts, err := h.contractRepo.ListServicePointSyncConflicts(r.Context())
+	conflicts, err := h.contractRepo.ListServicePointSyncConflicts(ctx)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
+		return api.ContractSyncStateDTO{}, err
 	}
 
 	items := make([]api.ContractMailImportDTO, 0, len(imports))
@@ -126,20 +155,17 @@ func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Requ
 
 	activeImport := findActiveReportImport(imports)
 	if activeImport == nil {
-		response.RespondWithJSON(w, http.StatusOK, payload)
-		return
+		return payload, nil
 	}
 
 	rows, err := decodeContractReportRows(activeImport.ReportRows)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
+		return api.ContractSyncStateDTO{}, err
 	}
 
-	preview, err := h.service.PreviewContractReportSync(r.Context(), rows)
+	preview, err := h.service.PreviewContractReportSync(ctx, rows)
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
-		return
+		return api.ContractSyncStateDTO{}, err
 	}
 
 	activeImportDTO := mapMailImportToDTO(*activeImport)
@@ -152,8 +178,7 @@ func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Requ
 	payload.BlockedItems = mapContractSyncBlockedItems(preview.BlockedItems)
 	payload.UpsertItems = mapContractSyncQueueItems(preview.UpsertItems)
 	payload.DeleteItems = mapContractSyncQueueItems(preview.DeleteItems)
-
-	response.RespondWithJSON(w, http.StatusOK, payload)
+	return payload, nil
 }
 
 func (h *BitrixHandler) ExecuteContractSync(w http.ResponseWriter, r *http.Request) {

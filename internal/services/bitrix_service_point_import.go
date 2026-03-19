@@ -964,6 +964,29 @@ func normalizeContractType(value string) string {
 	}
 }
 
+func normalizeBitrixContractValue(value string) string {
+	switch strings.ToLower(normalizeCell(value)) {
+	case "":
+		return ""
+	case "ts standart", "ts standard":
+		return "TS Standart"
+	case "ts cloud":
+		return "TS Cloud"
+	case "не активен", "неактивен":
+		return "Не активен"
+	default:
+		return normalizeCell(value)
+	}
+}
+
+func isBitrixContractValueCurrent(currentValue string, contractType string) bool {
+	desired := normalizeContractType(contractType)
+	if desired == "" {
+		desired = "Не активен"
+	}
+	return normalizeBitrixContractValue(currentValue) == desired
+}
+
 func contractTypeToBool(contractType string) *bool {
 	switch normalizeContractType(contractType) {
 	case "TS Cloud", "TS Standart":

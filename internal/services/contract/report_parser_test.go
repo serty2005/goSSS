@@ -77,3 +77,44 @@ func TestAggregateContractReportRowsPrefersActiveRow(t *testing.T) {
 		t.Fatalf("ожидали тип TS Cloud после агрегации, получили %q", rows[0].ContractType)
 	}
 }
+
+func TestAggregateContractReportRows_PrefersServicedDuplicateByName(t *testing.T) {
+	openEndedStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	expiredEnd := time.Date(2025, time.October, 31, 0, 0, 0, 0, time.UTC)
+	serviced := true
+	notServiced := false
+
+	rows := AggregateContractReportRows([]ContractReportRow{
+		{
+			ContractorID:     "point-42",
+			ServicePointCode: "OLD-42",
+			ServicePointName: "Дублирующаяся точка",
+			Serviced:         &notServiced,
+			ContractOn:       false,
+			ContractType:     "Не активен",
+			EndDate:          &expiredEnd,
+		},
+		{
+			ContractorID:     "point-42",
+			ServicePointCode: "NEW-42",
+			ServicePointName: "Дублирующаяся точка",
+			Serviced:         &serviced,
+			ContractOn:       true,
+			ContractType:     "TS Standart",
+			StartDate:        &openEndedStart,
+		},
+	})
+
+	if len(rows) != 1 {
+		t.Fatalf("ожидали одну агрегированную строку, получили %d", len(rows))
+	}
+	if rows[0].ServicePointCode != "NEW-42" {
+		t.Fatalf("ожидали, что агрегатор оставит обслуживаемую строку, получили код %q", rows[0].ServicePointCode)
+	}
+	if rows[0].ContractType != "TS Standart" {
+		t.Fatalf("ожидали тип TS Standart, получили %q", rows[0].ContractType)
+	}
+	if !rows[0].ContractOn {
+		t.Fatal("ожидали активный контракт у выбранной строки")
+	}
+}

@@ -81,6 +81,7 @@ func (m *bitrixModule) registerProtectedRoutes(r chi.Router) {
 	r.Route("/bitrix", func(r chi.Router) {
 		r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", m.bitrixHandler.ListServicePoints)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/service-points/contract-sync/state", m.bitrixHandler.GetContractSyncState)
+		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/contract-sync/refresh", m.bitrixHandler.RefreshContractSyncState)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/contract-sync/execute", m.bitrixHandler.ExecuteContractSync)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", m.bitrixHandler.SuggestUser)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/users/refresh", m.bitrixHandler.RefreshUsers)
