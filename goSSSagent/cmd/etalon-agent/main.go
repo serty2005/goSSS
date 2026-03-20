@@ -9,6 +9,7 @@ import (
 
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
+	"etalon-agent/internal/elevation"
 	"etalon-agent/internal/runtime"
 )
 
@@ -17,6 +18,15 @@ var AgentVersion = "0.1.0-dev"
 func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	relaunched, err := elevation.EnsureAdmin()
+	if err != nil {
+		log.Fatalf("Не удалось запросить запуск от имени администратора: %v", err)
+	}
+	if relaunched {
+		log.Println("Запрошен перезапуск агента с правами администратора")
+		return
+	}
 
 	cfg, err := config.Load(AgentVersion)
 	if err != nil {
