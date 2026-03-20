@@ -3,14 +3,19 @@ package protocol
 import (
 	"encoding/json"
 	"time"
+
+	"etalon-agent/internal/adapters"
+	"etalon-agent/internal/inventory"
 )
 
 type AgentDataDTO struct {
-	Hostname     string `json:"hostname"`
-	CurrentTime  string `json:"current_time"`
-	AgentVersion string `json:"agent_version"`
-	AgentUUID    string `json:"uuid,omitempty"`
-	AgentType    string `json:"agent_type,omitempty"`
+	Hostname        string              `json:"hostname"`
+	CurrentTime     string              `json:"current_time"`
+	AgentVersion    string              `json:"agent_version"`
+	AgentUUID       string              `json:"uuid,omitempty"`
+	AgentType       string              `json:"agent_type,omitempty"`
+	Inventory       *inventory.Snapshot `json:"inventory,omitempty"`
+	AdapterStatuses []adapters.Status   `json:"adapter_statuses,omitempty"`
 }
 
 type RegistrationRequestDTO struct {
@@ -30,8 +35,9 @@ type AgentTaskDTO struct {
 }
 
 type HeartbeatResponseDTO struct {
-	Status string         `json:"status"`
-	Tasks  []AgentTaskDTO `json:"tasks,omitempty"`
+	Status           string                  `json:"status"`
+	Tasks            []AgentTaskDTO          `json:"tasks,omitempty"`
+	AdapterManifests []adapters.ManifestItem `json:"adapter_manifests,omitempty"`
 }
 
 type AgentRegistrationResponseDTO struct {

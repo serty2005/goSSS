@@ -24,11 +24,13 @@ type Config struct {
 	AgentVersion           string
 	RegistryPath           string
 	DataDir                string
+	AdapterDir             string
 	ServerURL              string
 	BootstrapAPIKey        string
 	AgentType              string
 	HeartbeatInterval      time.Duration
 	UpdateCheckInterval    time.Duration
+	InventoryInterval      time.Duration
 	AccessTokenGracePeriod time.Duration
 }
 
@@ -51,11 +53,13 @@ func Load(version string) (Config, error) {
 		AgentVersion:           strings.TrimSpace(version),
 		RegistryPath:           `Software\` + company + `\` + agentName,
 		DataDir:                dataDir,
+		AdapterDir:             filepath.Join(dataDir, "adapters"),
 		ServerURL:              strings.TrimRight(BootstrapServerURL, "/"),
 		BootstrapAPIKey:        BootstrapAPIKey,
 		AgentType:              "sssruner",
 		HeartbeatInterval:      15 * time.Second,
 		UpdateCheckInterval:    60 * time.Second,
+		InventoryInterval:      5 * time.Minute,
 		AccessTokenGracePeriod: 2 * time.Minute,
 	}, nil
 }

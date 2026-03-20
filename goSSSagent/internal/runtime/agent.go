@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"etalon-agent/internal/adapters"
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
+	"etalon-agent/internal/inventory"
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/services"
 	"etalon-agent/internal/state"
@@ -34,6 +36,8 @@ type Agent struct {
 	registryStore      *state.RegistryStore
 	identity           *state.Identity
 	tokens             *state.Tokens
+	inventoryService   *inventory.Service
+	adapterManager     *adapters.Manager
 	machineFingerprint string
 	mu                 sync.Mutex
 }
@@ -44,20 +48,35 @@ func NewAgent(cfg config.Config, cli *client.ServiceDeskClient) (*Agent, error) 
 	}
 
 	a := &Agent{
-		cfg:           cfg,
-		client:        cli,
-		scheduler:     services.NewScheduler(),
-		workflows:     make(map[string]workflow),
-		registryStore: state.NewRegistryStore(cfg.RegistryPath),
+		cfg:              cfg,
+		client:           cli,
+		scheduler:        services.NewScheduler(),
+		workflows:        make(map[string]workflow),
+		registryStore:    state.NewRegistryStore(cfg.RegistryPath),
+		inventoryService: inventory.NewService(cfg.InventoryInterval),
+		adapterManager:   adapters.NewManager(cfg.AdapterDir, cli),
 	}
 	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(cfg.AgentVersion, updater.NewService(cfg.DataDir, cli)))
 	return a, nil
 }
 
 func (a *Agent) Run(ctx context.Context) error {
+	if err := a.adapterManager.EnsureLayout(); err != nil {
+		return fmt.Errorf("не удалось подготовить каталог адаптеров: %w", err)
+	}
+	if _, err := a.inventoryService.CollectNow(ctx); err != nil {
+		log.Printf("Первичный inventory не собран: %v", err)
+	}
+
 	if err := a.bootstrapIdentityAndTokens(ctx); err != nil {
 		return err
 	}
+
+	a.scheduler.AddTask("inventory-refresh", a.inventoryService.Interval(), func(ctx context.Context) {
+		if _, err := a.inventoryService.CollectNow(ctx); err != nil {
+			log.Printf("Ошибка обновления inventory: %v", err)
+		}
+	})
 
 	a.scheduler.AddTask("heartbeat", a.cfg.HeartbeatInterval, func(ctx context.Context) {
 		if err := a.heartbeat(ctx); err != nil {
@@ -199,13 +218,11 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 		return err
 	}
 
-	payload := protocol.AgentDataDTO{
-		Hostname:     a.hostname(),
-		CurrentTime:  time.Now().Format(time.RFC3339),
-		AgentVersion: a.cfg.AgentVersion,
-		AgentUUID:    a.identity.UUID,
-		AgentType:    a.cfg.AgentType,
+	payload, err := a.buildHeartbeatPayload()
+	if err != nil {
+		return err
 	}
+
 	resp, err := a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 	if err != nil {
 		var httpErr *client.HTTPError
@@ -215,6 +232,10 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 			if authErr := a.ensureAuthLocked(ctx); authErr != nil {
 				return fmt.Errorf("не удалось восстановить авторизацию агента: %w", authErr)
 			}
+			payload, err = a.buildHeartbeatPayload()
+			if err != nil {
+				return err
+			}
 			resp, err = a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 		}
 	}
@@ -222,13 +243,38 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 		return err
 	}
 
-	log.Printf("Heartbeat отправлен: status=%s tasks=%d", resp.Status, len(resp.Tasks))
+	log.Printf("Heartbeat отправлен: status=%s tasks=%d manifests=%d", resp.Status, len(resp.Tasks), len(resp.AdapterManifests))
 	for _, task := range resp.Tasks {
 		if err := a.executeTask(ctx, task); err != nil {
 			log.Printf("Задача id=%d type=%s завершилась с ошибкой: %v", task.ID, task.Type, err)
 		}
 	}
+	if len(resp.AdapterManifests) > 0 {
+		if _, err := a.adapterManager.Sync(ctx, resp.AdapterManifests); err != nil {
+			log.Printf("Синхронизация адаптеров завершилась с ошибкой: %v", err)
+		}
+	}
 	return nil
+}
+
+func (a *Agent) buildHeartbeatPayload() (protocol.AgentDataDTO, error) {
+	adapterStatuses, err := a.adapterManager.ListStatuses()
+	if err != nil {
+		return protocol.AgentDataDTO{}, fmt.Errorf("не удалось получить статусы адаптеров: %w", err)
+	}
+
+	payload := protocol.AgentDataDTO{
+		Hostname:        a.hostname(),
+		CurrentTime:     time.Now().Format(time.RFC3339),
+		AgentVersion:    a.cfg.AgentVersion,
+		AgentUUID:       a.identity.UUID,
+		AgentType:       a.cfg.AgentType,
+		AdapterStatuses: adapterStatuses,
+	}
+	if snapshot, ok := a.inventoryService.Snapshot(); ok {
+		payload.Inventory = &snapshot
+	}
+	return payload, nil
 }
 
 func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) error {
