@@ -330,6 +330,7 @@ const MainLayout: React.FC = () => {
     { key: '/servers', label: 'Серверы' },
     { key: '/workstations', label: 'Рабочие станции' },
     { key: '/fiscals', label: 'ФР' },
+    { key: '/agents', label: 'Агенты' },
   ];
 
   if (canAccessAcceptance) {

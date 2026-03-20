@@ -1,15 +1,16 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { ArrowLeftOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { agentObservationsApi } from '@/api/agentObservations';
 import { AgentObservationFeedRowDTO } from '@/types/api';
 import { useSSE } from '@/features/realtime/useSSE';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 type SortField = 'latest' | 'v_time' | 'current_time';
 type SortOrder = 'asc' | 'desc';
@@ -20,13 +21,32 @@ type LocalRow = AgentObservationFeedRowDTO & {
 };
 
 const parseDate = (value?: string) => {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const parsed = dayjs(value);
-  if (!parsed.isValid()) return null;
+  if (!parsed.isValid()) {
+    return null;
+  }
   return parsed;
 };
 
+const getErrorMessage = (error: unknown) => {
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    const response = (error as { response?: { data?: { error?: { error?: string } } } }).response;
+    const apiMessage = response?.data?.error?.error;
+    if (apiMessage) {
+      return apiMessage;
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'Не удалось загрузить наблюдения агентов';
+};
+
 const AgentObservationsPage: React.FC = () => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const agentFilter = (searchParams.get('agent_uuid') || searchParams.get('agent') || '').trim();
   const workstationFilter = (searchParams.get('workstation_id') || '').trim();
@@ -92,7 +112,7 @@ const AgentObservationsPage: React.FC = () => {
     setSearchParams(params);
   };
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['agent-observations', sortField, sortOrder, agentFilter, workstationFilter, frFilter, refreshNonce],
     queryFn: async () => {
       const response = await agentObservationsApi.listFeed({
@@ -110,7 +130,9 @@ const AgentObservationsPage: React.FC = () => {
   });
 
   useEffect(() => {
-    if (!data) return;
+    if (!data) {
+      return;
+    }
     const nextRows = data.map((row) => ({
       ...row,
       rowKey: String(row.agent_uuid || row.observation_id),
@@ -132,7 +154,9 @@ const AgentObservationsPage: React.FC = () => {
     } catch {
       return;
     }
-    if (!payload) return;
+    if (!payload) {
+      return;
+    }
 
     const rowKey = String(payload.agent_uuid || payload.observation_id);
     const localRow: LocalRow = {
@@ -157,7 +181,9 @@ const AgentObservationsPage: React.FC = () => {
     });
 
     window.setTimeout(() => {
-      setSnapshotRows((prev) => prev.map((item) => (item.rowKey === rowKey ? { ...item, highlightedUntil: undefined } : item)));
+      setSnapshotRows((prev) => prev.map((item) => (
+        item.rowKey === rowKey ? { ...item, highlightedUntil: undefined } : item
+      )));
     }, 2200);
   }, [matchesFilters, paused, sortRows]);
 
@@ -178,16 +204,26 @@ const AgentObservationsPage: React.FC = () => {
       key: 'observation_id',
       width: 120,
       sorter: true,
-      render: (value: number) => <a onClick={() => setActiveObservationID(value)}>#{value}</a>,
+      render: (value: number) => (
+        <Button type="link" style={{ paddingInline: 0 }} onClick={() => setActiveObservationID(value)}>
+          #{value}
+        </Button>
+      ),
     },
     {
       title: 'UUID агента',
       dataIndex: 'agent_uuid',
       key: 'agent_uuid',
       render: (value?: string) => (
-        value
-          ? <a onClick={() => updateFilters({ agent_uuid: value, agent: undefined })}>{value}</a>
-          : '-'
+        value ? (
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            onClick={() => updateFilters({ agent_uuid: value, agent: undefined })}
+          >
+            {value}
+          </Button>
+        ) : '-'
       ),
     },
     {
@@ -202,7 +238,9 @@ const AgentObservationsPage: React.FC = () => {
       dataIndex: 'workstation_id',
       key: 'workstation_id',
       render: (_value: string | undefined, record) => {
-        if (!record.workstation_id) return '-';
+        if (!record.workstation_id) {
+          return '-';
+        }
         const linkText = (record.workstation_name || '').trim() || record.workstation_id;
         return (
           <div onClick={() => updateFilters({ workstation_id: record.workstation_id })}>
@@ -221,7 +259,9 @@ const AgentObservationsPage: React.FC = () => {
       dataIndex: 'fr_id',
       key: 'fr_id',
       render: (_value: string | undefined, record) => {
-        if (!record.fr_id) return '-';
+        if (!record.fr_id) {
+          return '-';
+        }
         const linkText = (record.fr_name || '').trim() || record.fr_id;
         return (
           <div onClick={() => updateFilters({ fr_id: record.fr_id })}>
@@ -241,7 +281,9 @@ const AgentObservationsPage: React.FC = () => {
       key: 'owner_match',
       width: 130,
       render: (value?: boolean) => {
-        if (typeof value !== 'boolean') return '-';
+        if (typeof value !== 'boolean') {
+          return '-';
+        }
         return value ? <Tag color="success">✓</Tag> : <Tag color="error">✗</Tag>;
       },
     },
@@ -269,41 +311,90 @@ const AgentObservationsPage: React.FC = () => {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Title level={4} style={{ margin: 0 }}>Наблюдения агентов</Title>
+      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+        <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+          <div>
+            <Title level={4} style={{ margin: 0 }}>Наблюдения агентов</Title>
+            <Text type="secondary">
+              Drill-down страница по сырому потоку наблюдений и диагностике агентов.
+            </Text>
+          </div>
+          {agentFilter ? (
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents')}>
+              К списку агентов
+            </Button>
+          ) : null}
+        </Space>
+      </Space>
+
       <Card className="glass-panel">
         <Space wrap style={{ marginBottom: 12 }}>
           {workstationFilter ? <Tag color="blue">РС: {workstationFilter}</Tag> : null}
           {frFilter ? <Tag color="blue">ФР: {frFilter}</Tag> : null}
           {agentFilter ? <Tag color="blue">Агент: {agentFilter}</Tag> : null}
         </Space>
-        {paused ? <Alert type="info" showIcon message="Список на паузе, входящие обновления продолжают накапливаться." style={{ marginBottom: 12 }} /> : null}
-        <Table<LocalRow>
-          rowKey="rowKey"
-          loading={isLoading}
-          columns={columns}
-          dataSource={rows}
-          onChange={(_pagination, _filters, sorter) => {
-            const sortConfig = Array.isArray(sorter) ? sorter[0] : sorter;
-            if (!sortConfig?.columnKey) {
-              setSortField('latest');
-              setSortOrder('desc');
-              return;
-            }
-            if (sortConfig.columnKey === 'observation_id') {
-              setSortField('latest');
-            } else if (sortConfig.columnKey === 'v_time') {
-              setSortField('v_time');
-            } else if (sortConfig.columnKey === 'current_time') {
-              setSortField('current_time');
-            } else {
-              setSortField('latest');
-            }
-            setSortOrder(sortConfig.order === 'ascend' ? 'asc' : 'desc');
-          }}
-          rowClassName={(record) => record.highlightedUntil ? 'agent-observation-row-highlight' : ''}
-          pagination={{ pageSize: 50 }}
-        />
+
+        {paused ? (
+          <Alert
+            type="info"
+            showIcon
+            message="Список на паузе, входящие обновления продолжают накапливаться."
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+
+        {isError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Не удалось загрузить наблюдения агентов"
+            description={getErrorMessage(error)}
+            action={(
+              <Button size="small" onClick={() => void refetch()}>
+                Повторить
+              </Button>
+            )}
+          />
+        ) : isLoading ? (
+          <Table<LocalRow>
+            rowKey="rowKey"
+            loading
+            columns={columns}
+            dataSource={[]}
+            pagination={false}
+          />
+        ) : rows.length === 0 ? (
+          <Empty description={agentFilter ? 'Для выбранного агента наблюдений пока нет' : 'Наблюдения агентов пока не найдены'} />
+        ) : (
+          <Table<LocalRow>
+            rowKey="rowKey"
+            columns={columns}
+            dataSource={rows}
+            onChange={(_pagination, _filters, sorter) => {
+              const sortConfig = Array.isArray(sorter) ? sorter[0] : sorter;
+              if (!sortConfig?.columnKey) {
+                setSortField('latest');
+                setSortOrder('desc');
+                return;
+              }
+              if (sortConfig.columnKey === 'observation_id') {
+                setSortField('latest');
+              } else if (sortConfig.columnKey === 'v_time') {
+                setSortField('v_time');
+              } else if (sortConfig.columnKey === 'current_time') {
+                setSortField('current_time');
+              } else {
+                setSortField('latest');
+              }
+              setSortOrder(sortConfig.order === 'ascend' ? 'asc' : 'desc');
+            }}
+            rowClassName={(record) => (record.highlightedUntil ? 'agent-observation-row-highlight' : '')}
+            pagination={{ pageSize: 50 }}
+            scroll={{ x: 1280 }}
+          />
+        )}
       </Card>
+
       <AgentObservationRawModal
         open={Boolean(activeObservationID)}
         observationID={activeObservationID}

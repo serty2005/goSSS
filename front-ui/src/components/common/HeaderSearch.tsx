@@ -122,8 +122,9 @@ const HeaderSearch: React.FC = () => {
   const isServersPage = location.pathname === '/servers';
   const isWorkstationsPage = location.pathname === '/workstations';
   const isFiscalsPage = location.pathname === '/fiscals';
+  const isAgentsPage = location.pathname === '/agents';
   const isAgentObservationsPage = location.pathname === '/agent-observations';
-  const isSectionSearchPage = isCompaniesPage || isServersPage || isWorkstationsPage || isFiscalsPage;
+  const isSectionSearchPage = isCompaniesPage || isServersPage || isWorkstationsPage || isFiscalsPage || isAgentsPage;
   const screens = useBreakpoint();
   const isCompact = !screens.xl;
   const isHeaderNarrow = !screens.xxl;
@@ -594,6 +595,7 @@ const HeaderSearch: React.FC = () => {
     if (isServersPage) return 'Поиск серверов: id, ip, название';
     if (isWorkstationsPage) return 'Поиск станций: id, название';
     if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
+    if (isAgentsPage) return 'Поиск агентов: hostname, uuid, владелец';
     return 'Поиск...';
   })();
 
