@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"etalon-agent/internal/adapters"
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
+	"etalon-agent/internal/connectivity"
 	"etalon-agent/internal/inventory"
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/state"
@@ -121,6 +123,25 @@ func (m stubRuntimeAdapterManager) Sync(ctx context.Context, manifests []adapter
 		return nil, nil
 	}
 	return m.syncFn(ctx, manifests)
+}
+
+func newTestConnectivityManager(t *testing.T) *connectivity.Manager {
+	t.Helper()
+
+	manager, err := connectivity.NewManager(filepath.Join(t.TempDir(), "connectivity-state.json"), connectivity.Policy{
+		BaseRetry:             15 * time.Second,
+		MaxRetry:              10 * time.Minute,
+		RegistrationCooldown:  30 * time.Minute,
+		AuthorizationCooldown: 24 * time.Hour,
+		RateLimitCooldown:     5 * time.Minute,
+		ConfigErrorCooldown:   time.Hour,
+		ProtocolErrorCooldown: 30 * time.Minute,
+		RetryJitterFactor:     0,
+	})
+	if err != nil {
+		t.Fatalf("не удалось создать manager связи: %v", err)
+	}
+	return manager
 }
 
 func TestAgentBuildHeartbeatPayloadIncludesInventoryAndAdapterStatuses(t *testing.T) {
@@ -520,5 +541,113 @@ func TestAgentRegisterAndFetchTokensUsesBootstrapKeyAndPersistsTokens(t *testing
 	}
 	if !savedTokens.RefreshTokenExpiresAt.Equal(refreshExpiresAt) {
 		t.Fatalf("ожидался refresh expires at %s, получено %s", refreshExpiresAt, savedTokens.RefreshTokenExpiresAt)
+	}
+}
+
+func TestAgentEnsureAuthLocked_Refresh403DoesNotFallbackToRegister(t *testing.T) {
+	t.Parallel()
+
+	var registerCalls int
+	agent := &Agent{
+		cfg: config.Config{
+			AgentType:              "sssruner",
+			AgentVersion:           "1.2.3",
+			ServerURL:              "http://localhost:8080",
+			AccessTokenGracePeriod: time.Minute,
+		},
+		client: stubRuntimeClient{
+			refreshFn: func(_ context.Context, req protocol.AgentTokenRefreshRequestDTO) (*protocol.AgentTokenRefreshResponseDTO, error) {
+				if req.AgentUUID != "agent-uuid" {
+					t.Fatalf("ожидался AgentUUID agent-uuid, получено %q", req.AgentUUID)
+				}
+				if req.RefreshToken != "refresh-token" {
+					t.Fatalf("ожидался refresh token refresh-token, получено %q", req.RefreshToken)
+				}
+				return nil, &client.HTTPError{StatusCode: 403, Body: "forbidden"}
+			},
+			registerFn: func(context.Context, string, protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+				registerCalls++
+				return nil, errors.New("register не должен вызываться при 403 от refresh")
+			},
+		},
+		identity: &state.Identity{UUID: "agent-uuid"},
+		tokens: &state.Tokens{
+			RefreshToken:          "refresh-token",
+			RefreshTokenExpiresAt: time.Now().Add(time.Hour),
+		},
+	}
+
+	operation, err := agent.ensureAuthLocked(context.Background())
+	if err == nil {
+		t.Fatal("ожидалась ошибка refresh 403")
+	}
+	var httpErr *client.HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("ожидалась HTTPError, получено %T", err)
+	}
+	if httpErr.StatusCode != 403 {
+		t.Fatalf("ожидался статус 403, получено %d", httpErr.StatusCode)
+	}
+	if operation != connectivity.OpRefreshToken {
+		t.Fatalf("ожидалась операция %s, получено %s", connectivity.OpRefreshToken, operation)
+	}
+	if registerCalls != 0 {
+		t.Fatalf("register не должен вызываться, получено %d вызовов", registerCalls)
+	}
+}
+
+func TestAgentCommunicateOnce_Register403SetsAuthorizationCooldown(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConnectivityManager(t)
+	agent := &Agent{
+		cfg: config.Config{
+			AgentProcessName:       "XenionAgent",
+			AgentType:              "sssruner",
+			AgentVersion:           "1.2.3",
+			BootstrapAPIKey:        "bootstrap-key",
+			ServerURL:              "http://localhost:8080",
+			HeartbeatInterval:      15 * time.Second,
+			UpdateCheckInterval:    60 * time.Second,
+			AccessTokenGracePeriod: time.Minute,
+		},
+		client: stubRuntimeClient{
+			registerFn: func(context.Context, string, protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+				return nil, &client.HTTPError{StatusCode: 403, Body: "forbidden"}
+			},
+		},
+		registryStore: stubRuntimeRegistryStore{
+			loadTokensFn: func() (*state.Tokens, error) {
+				return nil, nil
+			},
+			collectRegistrationInfoFunc: func(string) map[string]interface{} {
+				return map[string]interface{}{
+					"os":            "windows",
+					"arch":          "amd64",
+					"registry_path": `Software\MyHoreca\XenionAgent`,
+				}
+			},
+		},
+		identity:           &state.Identity{UUID: "agent-uuid"},
+		machineFingerprint: "fingerprint-hash",
+		inventoryService:   stubRuntimeInventoryService{},
+		adapterManager:     stubRuntimeAdapterManager{},
+		connectivity:       manager,
+	}
+
+	delay, err := agent.communicateOnce(context.Background())
+	if err == nil {
+		t.Fatal("ожидалась ошибка регистрации 403")
+	}
+	if delay != 24*time.Hour {
+		t.Fatalf("ожидался cooldown 24h, получено %s", delay)
+	}
+
+	status := manager.Status()
+	if status.State != connectivity.StateAuthorizationRejected {
+		t.Fatalf("ожидалось состояние %s, получено %s", connectivity.StateAuthorizationRejected, status.State)
+	}
+	if status.ReasonKind != connectivity.ReasonHTTP403 {
+		t.Fatalf("ожидалась причина %s, получено %s", connectivity.ReasonHTTP403, status.ReasonKind)
 	}
 }

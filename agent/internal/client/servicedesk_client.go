@@ -16,10 +16,72 @@ import (
 type HTTPError struct {
 	StatusCode int
 	Body       string
+	Method     string
+	URL        string
+	RetryAfter string
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("http %d: %s", e.StatusCode, e.Body)
+	if strings.TrimSpace(e.Method) == "" && strings.TrimSpace(e.URL) == "" {
+		return fmt.Sprintf("http %d: %s", e.StatusCode, e.Body)
+	}
+	return fmt.Sprintf("%s %s: http %d: %s", e.Method, e.URL, e.StatusCode, e.Body)
+}
+
+type RequestBuildError struct {
+	Method string
+	URL    string
+	Err    error
+}
+
+func (e *RequestBuildError) Error() string {
+	return fmt.Sprintf("не удалось создать запрос %s %s: %v", e.Method, e.URL, e.Err)
+}
+
+func (e *RequestBuildError) Unwrap() error {
+	return e.Err
+}
+
+type RequestEncodeError struct {
+	Method string
+	URL    string
+	Err    error
+}
+
+func (e *RequestEncodeError) Error() string {
+	return fmt.Sprintf("не удалось сериализовать запрос %s %s: %v", e.Method, e.URL, e.Err)
+}
+
+func (e *RequestEncodeError) Unwrap() error {
+	return e.Err
+}
+
+type ResponseDecodeError struct {
+	Method string
+	URL    string
+	Err    error
+}
+
+func (e *ResponseDecodeError) Error() string {
+	return fmt.Sprintf("не удалось прочитать JSON-ответ %s %s: %v", e.Method, e.URL, e.Err)
+}
+
+func (e *ResponseDecodeError) Unwrap() error {
+	return e.Err
+}
+
+type TransportError struct {
+	Method string
+	URL    string
+	Err    error
+}
+
+func (e *TransportError) Error() string {
+	return fmt.Sprintf("ошибка запроса %s %s: %v", e.Method, e.URL, e.Err)
+}
+
+func (e *TransportError) Unwrap() error {
+	return e.Err
 }
 
 type ServiceDeskClient struct {
@@ -62,16 +124,22 @@ func (c *ServiceDeskClient) SendHeartbeat(ctx context.Context, agentUUID string,
 func (c *ServiceDeskClient) DownloadFile(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось создать запрос на скачивание: %w", err)
+		return nil, &RequestBuildError{Method: http.MethodGet, URL: url, Err: err}
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка скачивания файла обновления: %w", err)
+		return nil, &TransportError{Method: http.MethodGet, URL: url, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+			Method:     http.MethodGet,
+			URL:        url,
+			RetryAfter: strings.TrimSpace(resp.Header.Get("Retry-After")),
+		}
 	}
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -93,18 +161,19 @@ type authHeader struct {
 }
 
 func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bodyIn any, bodyOut any, auth authHeader, okStatuses ...int) error {
+	fullURL := c.baseURL + path
 	var bodyReader io.Reader
 	if bodyIn != nil {
 		raw, err := json.Marshal(bodyIn)
 		if err != nil {
-			return fmt.Errorf("ошибка сериализации JSON: %w", err)
+			return &RequestEncodeError{Method: method, URL: fullURL, Err: err}
 		}
 		bodyReader = bytes.NewReader(raw)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
-		return fmt.Errorf("не удалось создать запрос: %w", err)
+		return &RequestBuildError{Method: method, URL: fullURL, Err: err}
 	}
 	if bodyIn != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -115,19 +184,25 @@ func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bod
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ошибка запроса к серверу: %w", err)
+		return &TransportError{Method: method, URL: fullURL, Err: err}
 	}
 	defer resp.Body.Close()
 
 	if !statusAllowed(resp.StatusCode, okStatuses) {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
+		return &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+			Method:     method,
+			URL:        fullURL,
+			RetryAfter: strings.TrimSpace(resp.Header.Get("Retry-After")),
+		}
 	}
 	if bodyOut == nil {
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(bodyOut); err != nil {
-		return fmt.Errorf("ошибка чтения JSON ответа: %w", err)
+		return &ResponseDecodeError{Method: method, URL: fullURL, Err: err}
 	}
 	return nil
 }

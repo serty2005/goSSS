@@ -32,6 +32,14 @@ type Config struct {
 	UpdateCheckInterval    time.Duration
 	InventoryInterval      time.Duration
 	AccessTokenGracePeriod time.Duration
+	ConnectivityBaseRetry  time.Duration
+	ConnectivityMaxRetry   time.Duration
+	RegistrationCooldown   time.Duration
+	AuthorizationCooldown  time.Duration
+	RateLimitCooldown      time.Duration
+	ConfigErrorCooldown    time.Duration
+	ProtocolErrorCooldown  time.Duration
+	RetryJitterFactor      float64
 }
 
 func Load(version string) (Config, error) {
@@ -61,6 +69,14 @@ func Load(version string) (Config, error) {
 		UpdateCheckInterval:    60 * time.Second,
 		InventoryInterval:      5 * time.Minute,
 		AccessTokenGracePeriod: 2 * time.Minute,
+		ConnectivityBaseRetry:  15 * time.Second,
+		ConnectivityMaxRetry:   10 * time.Minute,
+		RegistrationCooldown:   30 * time.Minute,
+		AuthorizationCooldown:  24 * time.Hour,
+		RateLimitCooldown:      5 * time.Minute,
+		ConfigErrorCooldown:    time.Hour,
+		ProtocolErrorCooldown:  30 * time.Minute,
+		RetryJitterFactor:      0.2,
 	}, nil
 }
 
