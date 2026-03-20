@@ -60,6 +60,9 @@ func (m *Manager) Sync(ctx context.Context, manifests []ManifestItem) ([]Status,
 
 	var errs []error
 	for _, item := range manifests {
+		if shouldSkipManifest(item) {
+			continue
+		}
 		if err := m.syncOne(ctx, item); err != nil {
 			errs = append(errs, fmt.Errorf("adapter_id=%s: %w", strings.TrimSpace(item.AdapterID), err))
 		}
@@ -160,6 +163,9 @@ func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
 
 	actualSHA := checksum(content)
 	if expected := strings.TrimSpace(item.SHA256); expected != "" && !strings.EqualFold(actualSHA, expected) {
+		if writeErr := m.writeErrorDescriptor(current, item, fmt.Sprintf("sha256 не совпадает: expected=%s actual=%s", expected, actualSHA)); writeErr != nil {
+			return errors.Join(fmt.Errorf("sha256 не совпадает: expected=%s actual=%s", expected, actualSHA), fmt.Errorf("не удалось сохранить descriptor ошибки: %w", writeErr))
+		}
 		return fmt.Errorf("sha256 не совпадает: expected=%s actual=%s", expected, actualSHA)
 	}
 
@@ -295,6 +301,38 @@ func descriptorToStatus(descriptor Descriptor) Status {
 func sameRevision(current Descriptor, next ManifestItem) bool {
 	return current.Version == strings.TrimSpace(next.Version) &&
 		(strings.TrimSpace(next.SHA256) == "" || strings.EqualFold(current.SHA256, strings.TrimSpace(next.SHA256)))
+}
+
+func shouldSkipManifest(item ManifestItem) bool {
+	return strings.TrimSpace(item.AdapterID) == "" ||
+		strings.TrimSpace(item.Version) == "" ||
+		strings.TrimSpace(item.DownloadURL) == ""
+}
+
+func (m *Manager) writeErrorDescriptor(current *Descriptor, item ManifestItem, lastError string) error {
+	now := time.Now().UTC()
+	descriptor := Descriptor{
+		ManifestItem: ManifestItem{
+			AdapterID:       strings.TrimSpace(item.AdapterID),
+			AdapterType:     strings.TrimSpace(item.AdapterType),
+			Version:         strings.TrimSpace(item.Version),
+			TargetOS:        strings.TrimSpace(item.TargetOS),
+			TargetArch:      strings.TrimSpace(item.TargetArch),
+			ProtocolVersion: strings.TrimSpace(item.ProtocolVersion),
+			DownloadURL:     strings.TrimSpace(item.DownloadURL),
+			SHA256:          strings.TrimSpace(item.SHA256),
+			FileName:        strings.TrimSpace(item.FileName),
+		},
+		Status:    "error",
+		LastError: strings.TrimSpace(lastError),
+		UpdatedAt: now,
+	}
+	if current != nil {
+		descriptor.InstalledAt = current.InstalledAt
+	}
+
+	descriptorPath := filepath.Join(m.descriptorsDir, descriptorFileName(descriptor.AdapterID, descriptor.Version))
+	return writeJSONAtomically(descriptorPath, descriptor)
 }
 
 func writeFileAtomically(path string, content []byte, perm os.FileMode) error {

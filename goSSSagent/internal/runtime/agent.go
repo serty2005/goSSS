@@ -28,16 +28,41 @@ type workflow interface {
 	Run(ctx context.Context, payload []byte) error
 }
 
+type serviceDeskClient interface {
+	Register(context.Context, string, protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error)
+	RefreshTokens(context.Context, protocol.AgentTokenRefreshRequestDTO) (*protocol.AgentTokenRefreshResponseDTO, error)
+	SendHeartbeat(context.Context, string, protocol.AgentDataDTO, string) (*protocol.HeartbeatResponseDTO, error)
+}
+
+type registryStore interface {
+	EnsureIdentity(string, func() (string, error)) (*state.Identity, error)
+	LoadTokens() (*state.Tokens, error)
+	SaveTokens(state.Tokens) error
+	CollectRegistrationSystemInfo(string) map[string]interface{}
+}
+
+type inventoryService interface {
+	Interval() time.Duration
+	CollectNow(context.Context) (inventory.Snapshot, error)
+	Snapshot() (inventory.Snapshot, bool)
+}
+
+type adapterManager interface {
+	EnsureLayout() error
+	ListStatuses() ([]adapters.Status, error)
+	Sync(context.Context, []adapters.ManifestItem) ([]adapters.Status, error)
+}
+
 type Agent struct {
 	cfg                config.Config
-	client             *client.ServiceDeskClient
+	client             serviceDeskClient
 	scheduler          *services.Scheduler
 	workflows          map[string]workflow
-	registryStore      *state.RegistryStore
+	registryStore      registryStore
 	identity           *state.Identity
 	tokens             *state.Tokens
-	inventoryService   *inventory.Service
-	adapterManager     *adapters.Manager
+	inventoryService   inventoryService
+	adapterManager     adapterManager
 	machineFingerprint string
 	mu                 sync.Mutex
 }
