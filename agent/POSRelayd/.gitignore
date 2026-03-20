@@ -1,0 +1,12 @@
+__pycache__/
+.idea/
+.venv/
+logs/
+date/
+gui/
+updater/
+uuid
+main-temp.py
+*.json
+*.exe
+*.txt
