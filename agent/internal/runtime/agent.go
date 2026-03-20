@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -92,6 +93,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if _, err := a.inventoryService.CollectNow(ctx); err != nil {
 		log.Printf("Первичный inventory не собран: %v", err)
 	}
+	a.logRuntimeConfiguration()
 
 	if err := a.bootstrapIdentityAndTokens(ctx); err != nil {
 		return err
@@ -176,29 +178,28 @@ func (a *Agent) ensureAuthLocked(ctx context.Context) error {
 		log.Printf("Не удалось обновить токены через refresh, выполняю bootstrap-регистрацию: %v", err)
 	}
 
-	return a.registerAndFetchTokens(ctx)
+	registrationReason := "access token отсутствует или просрочен"
+	switch {
+	case a.tokens == nil:
+		registrationReason = "локальные токены агента отсутствуют"
+	case strings.TrimSpace(a.tokens.RefreshToken) == "":
+		registrationReason = "локальный refresh token отсутствует"
+	case !now.Before(a.tokens.RefreshTokenExpiresAt):
+		registrationReason = fmt.Sprintf("локальный refresh token просрочен (%s)", a.tokens.RefreshTokenExpiresAt.Format(time.RFC3339))
+	}
+
+	return a.registerAndFetchTokens(ctx, registrationReason)
 }
 
-func (a *Agent) registerAndFetchTokens(ctx context.Context) error {
-	host := a.hostname()
-	req := protocol.RegistrationRequestDTO{
-		AgentUUID:          a.identity.UUID,
-		Hostname:           host,
-		AgentVersion:       a.cfg.AgentVersion,
-		MachineFingerprint: a.machineFingerprint,
-		InitialData: protocol.AgentDataDTO{
-			Hostname:     host,
-			CurrentTime:  time.Now().Format(time.RFC3339),
-			AgentUUID:    a.identity.UUID,
-			AgentType:    a.cfg.AgentType,
-			AgentVersion: a.cfg.AgentVersion,
-		},
-		SystemInfo: a.registryStore.CollectRegistrationSystemInfo(a.cfg.AgentProcessName),
-	}
+func (a *Agent) registerAndFetchTokens(ctx context.Context, reason string) error {
+	req := a.buildRegistrationRequest(time.Now())
+	a.logRegistrationAttempt(reason, req)
 	resp, err := a.client.Register(ctx, a.cfg.BootstrapAPIKey, req)
 	if err != nil {
+		a.logRegistrationFailure(reason, req, err)
 		return err
 	}
+	log.Printf("Bootstrap-регистрация завершена: agent_uuid=%s status=%s", req.AgentUUID, resp.Status)
 	return a.applyRegistrationResponse(*resp)
 }
 
@@ -215,6 +216,90 @@ func (a *Agent) applyRegistrationResponse(resp protocol.AgentRegistrationRespons
 	}
 	log.Printf("Получены токены агента (access до %s)", resp.AccessTokenExpiresAt.Format(time.RFC3339))
 	return nil
+}
+
+func (a *Agent) buildRegistrationRequest(now time.Time) protocol.RegistrationRequestDTO {
+	host := a.hostname()
+	return protocol.RegistrationRequestDTO{
+		AgentUUID:          a.identity.UUID,
+		Hostname:           host,
+		AgentVersion:       a.cfg.AgentVersion,
+		MachineFingerprint: a.machineFingerprint,
+		InitialData: protocol.AgentDataDTO{
+			Hostname:     host,
+			CurrentTime:  now.Format(time.RFC3339),
+			AgentUUID:    a.identity.UUID,
+			AgentType:    a.cfg.AgentType,
+			AgentVersion: a.cfg.AgentVersion,
+		},
+		SystemInfo: a.registryStore.CollectRegistrationSystemInfo(a.cfg.AgentProcessName),
+	}
+}
+
+func (a *Agent) logRuntimeConfiguration() {
+	log.Printf(
+		"Локальная конфигурация агента: source=встроена_в_бинарник server_url=%s agent_type=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s heartbeat_interval=%s inventory_interval=%s update_check_interval=%s",
+		a.cfg.ServerURL,
+		a.cfg.AgentType,
+		a.cfg.RegistryPath,
+		a.cfg.DataDir,
+		a.cfg.AdapterDir,
+		a.cfg.HeartbeatInterval,
+		a.cfg.InventoryInterval,
+		a.cfg.UpdateCheckInterval,
+	)
+}
+
+func (a *Agent) logRegistrationAttempt(reason string, req protocol.RegistrationRequestDTO) {
+	log.Printf(
+		"Старт bootstrap-регистрации: reason=%s endpoint=%s/api/agents/register auth=Authorization: Bearer <bootstrap_api_key> registry_path=HKLM\\%s payload=%s",
+		strings.TrimSpace(reason),
+		strings.TrimRight(a.cfg.ServerURL, "/"),
+		a.cfg.RegistryPath,
+		marshalLogJSON(req),
+	)
+}
+
+func (a *Agent) logRegistrationFailure(reason string, req protocol.RegistrationRequestDTO, err error) {
+	var httpErr *client.HTTPError
+	if errors.As(err, &httpErr) {
+		if httpErr.StatusCode == 401 {
+			log.Printf(
+				"Bootstrap-регистрация отклонена сервером: reason=%s status_code=%d agent_uuid=%s endpoint=%s/api/agents/register response_body=%q. Проверь соответствие BootstrapAPIKey агента и AGENT_API_KEY сервера.",
+				strings.TrimSpace(reason),
+				httpErr.StatusCode,
+				req.AgentUUID,
+				strings.TrimRight(a.cfg.ServerURL, "/"),
+				strings.TrimSpace(httpErr.Body),
+			)
+			return
+		}
+		log.Printf(
+			"Bootstrap-регистрация завершилась HTTP-ошибкой: reason=%s status_code=%d agent_uuid=%s endpoint=%s/api/agents/register response_body=%q",
+			strings.TrimSpace(reason),
+			httpErr.StatusCode,
+			req.AgentUUID,
+			strings.TrimRight(a.cfg.ServerURL, "/"),
+			strings.TrimSpace(httpErr.Body),
+		)
+		return
+	}
+
+	log.Printf(
+		"Bootstrap-регистрация завершилась ошибкой: reason=%s agent_uuid=%s endpoint=%s/api/agents/register error=%v",
+		strings.TrimSpace(reason),
+		req.AgentUUID,
+		strings.TrimRight(a.cfg.ServerURL, "/"),
+		err,
+	)
+}
+
+func marshalLogJSON(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf(`{"marshal_error":%q}`, err.Error())
+	}
+	return string(raw)
 }
 
 func (a *Agent) applyTokenRefreshResponse(resp protocol.AgentTokenRefreshResponseDTO) error {

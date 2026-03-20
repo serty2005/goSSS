@@ -32,6 +32,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации агента: %v", err)
 	}
+	log.Printf(
+		"Конфигурация запуска подготовлена: source=встроена_в_бинарник server_url=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s",
+		cfg.ServerURL,
+		cfg.RegistryPath,
+		cfg.DataDir,
+		cfg.AdapterDir,
+	)
 
 	httpClient := client.NewServiceDeskClient(cfg.ServerURL)
 	app, err := runtime.NewAgent(cfg, httpClient)

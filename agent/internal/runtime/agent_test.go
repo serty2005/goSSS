@@ -372,3 +372,153 @@ func TestAgentBuildHeartbeatPayloadUsesHostname(t *testing.T) {
 		t.Fatalf("ожидался hostname %q, получено %q", host, payload.Hostname)
 	}
 }
+
+func TestAgentBuildRegistrationRequestIncludesSystemInfo(t *testing.T) {
+	t.Parallel()
+
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("не удалось получить hostname системы: %v", err)
+	}
+
+	expectedSystemInfo := map[string]interface{}{
+		"agent_process": "XenionAgent",
+		"hostname":      host,
+		"os":            "windows",
+		"registry_path": `Software\MyHoreca\XenionAgent`,
+	}
+
+	agent := &Agent{
+		cfg: config.Config{
+			AgentProcessName: "XenionAgent",
+			AgentType:        "sssruner",
+			AgentVersion:     "1.2.3",
+		},
+		registryStore: stubRuntimeRegistryStore{
+			collectRegistrationInfoFunc: func(agentProcessName string) map[string]interface{} {
+				if agentProcessName != "XenionAgent" {
+					t.Fatalf("ожидалось имя процесса XenionAgent, получено %q", agentProcessName)
+				}
+				return expectedSystemInfo
+			},
+		},
+		identity:           &state.Identity{UUID: "agent-uuid"},
+		machineFingerprint: "fingerprint-hash",
+	}
+
+	now := time.Date(2026, time.March, 20, 15, 4, 5, 0, time.UTC)
+	req := agent.buildRegistrationRequest(now)
+
+	if req.AgentUUID != "agent-uuid" {
+		t.Fatalf("ожидался agent_uuid agent-uuid, получено %q", req.AgentUUID)
+	}
+	if req.Hostname != host {
+		t.Fatalf("ожидался hostname %q, получено %q", host, req.Hostname)
+	}
+	if req.AgentVersion != "1.2.3" {
+		t.Fatalf("ожидалась версия 1.2.3, получено %q", req.AgentVersion)
+	}
+	if req.MachineFingerprint != "fingerprint-hash" {
+		t.Fatalf("ожидался machine_fingerprint fingerprint-hash, получено %q", req.MachineFingerprint)
+	}
+	if !reflect.DeepEqual(req.SystemInfo, expectedSystemInfo) {
+		t.Fatalf("system_info отличается: %+v", req.SystemInfo)
+	}
+	if req.InitialData.Hostname != host {
+		t.Fatalf("в initial_data ожидался hostname %q, получено %q", host, req.InitialData.Hostname)
+	}
+	if req.InitialData.CurrentTime != now.Format(time.RFC3339) {
+		t.Fatalf("в initial_data ожидалось время %q, получено %q", now.Format(time.RFC3339), req.InitialData.CurrentTime)
+	}
+	if req.InitialData.AgentUUID != "agent-uuid" {
+		t.Fatalf("в initial_data ожидался uuid agent-uuid, получено %q", req.InitialData.AgentUUID)
+	}
+	if req.InitialData.AgentType != "sssruner" {
+		t.Fatalf("в initial_data ожидался agent_type sssruner, получено %q", req.InitialData.AgentType)
+	}
+	if req.InitialData.AgentVersion != "1.2.3" {
+		t.Fatalf("в initial_data ожидалась версия 1.2.3, получено %q", req.InitialData.AgentVersion)
+	}
+}
+
+func TestAgentRegisterAndFetchTokensUsesBootstrapKeyAndPersistsTokens(t *testing.T) {
+	t.Parallel()
+
+	accessExpiresAt := time.Date(2026, time.March, 21, 10, 0, 0, 0, time.UTC)
+	refreshExpiresAt := time.Date(2026, time.April, 20, 10, 0, 0, 0, time.UTC)
+
+	var capturedBootstrapKey string
+	var capturedReq protocol.RegistrationRequestDTO
+	var savedTokens state.Tokens
+
+	agent := &Agent{
+		cfg: config.Config{
+			AgentProcessName: "XenionAgent",
+			AgentType:        "sssruner",
+			AgentVersion:     "1.2.3",
+			BootstrapAPIKey:  "bootstrap-key",
+			ServerURL:        "http://localhost:8080",
+		},
+		client: stubRuntimeClient{
+			registerFn: func(_ context.Context, bootstrapAPIKey string, req protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+				capturedBootstrapKey = bootstrapAPIKey
+				capturedReq = req
+				return &protocol.AgentRegistrationResponseDTO{
+					Status:                "ok",
+					AgentUUID:             req.AgentUUID,
+					AccessToken:           "access-token",
+					AccessTokenExpiresAt:  accessExpiresAt,
+					RefreshToken:          "refresh-token",
+					RefreshTokenExpiresAt: refreshExpiresAt,
+				}, nil
+			},
+		},
+		registryStore: stubRuntimeRegistryStore{
+			collectRegistrationInfoFunc: func(string) map[string]interface{} {
+				return map[string]interface{}{
+					"os":            "windows",
+					"arch":          "amd64",
+					"registry_path": `Software\MyHoreca\XenionAgent`,
+				}
+			},
+			saveTokensFn: func(tokens state.Tokens) error {
+				savedTokens = tokens
+				return nil
+			},
+		},
+		identity:           &state.Identity{UUID: "agent-uuid"},
+		machineFingerprint: "fingerprint-hash",
+	}
+
+	if err := agent.registerAndFetchTokens(context.Background(), "тестовая регистрация"); err != nil {
+		t.Fatalf("registerAndFetchTokens завершился ошибкой: %v", err)
+	}
+
+	if capturedBootstrapKey != "bootstrap-key" {
+		t.Fatalf("ожидался bootstrap API key bootstrap-key, получено %q", capturedBootstrapKey)
+	}
+	if capturedReq.AgentUUID != "agent-uuid" {
+		t.Fatalf("ожидался agent_uuid agent-uuid, получено %q", capturedReq.AgentUUID)
+	}
+	if capturedReq.MachineFingerprint != "fingerprint-hash" {
+		t.Fatalf("ожидался machine_fingerprint fingerprint-hash, получено %q", capturedReq.MachineFingerprint)
+	}
+	if capturedReq.InitialData.AgentType != "sssruner" {
+		t.Fatalf("ожидался agent_type sssruner, получено %q", capturedReq.InitialData.AgentType)
+	}
+	if agent.tokens == nil {
+		t.Fatal("ожидалось, что токены будут сохранены в агенте")
+	}
+	if agent.tokens.AccessToken != "access-token" || agent.tokens.RefreshToken != "refresh-token" {
+		t.Fatalf("в агенте сохранены неожиданные токены: %+v", agent.tokens)
+	}
+	if savedTokens.AccessToken != "access-token" || savedTokens.RefreshToken != "refresh-token" {
+		t.Fatalf("в реестровое хранилище сохранены неожиданные токены: %+v", savedTokens)
+	}
+	if !savedTokens.AccessTokenExpiresAt.Equal(accessExpiresAt) {
+		t.Fatalf("ожидался access expires at %s, получено %s", accessExpiresAt, savedTokens.AccessTokenExpiresAt)
+	}
+	if !savedTokens.RefreshTokenExpiresAt.Equal(refreshExpiresAt) {
+		t.Fatalf("ожидался refresh expires at %s, получено %s", refreshExpiresAt, savedTokens.RefreshTokenExpiresAt)
+	}
+}
