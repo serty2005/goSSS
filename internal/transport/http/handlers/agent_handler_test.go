@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/services"
@@ -49,10 +50,14 @@ type stubAgentAuthService struct {
 	recordedStatuses []agentauth.RegistrationAttemptStatus
 	recordedErrors   []string
 	recordedUUIDs    []string
+	registerResp     *api.AgentRegistrationResponseDTO
+	registerErr      error
+	refreshResp      *api.AgentTokenRefreshResponseDTO
+	refreshErr       error
 }
 
 func (s *stubAgentAuthService) RegisterAndIssueTokens(_ context.Context, _ *api.RegistrationRequestDTO, _ agentauth.RegistrationAttemptMeta) (*api.AgentRegistrationResponseDTO, error) {
-	return nil, nil
+	return s.registerResp, s.registerErr
 }
 
 func (s *stubAgentAuthService) RecordRegistrationAttempt(_ context.Context, req *api.RegistrationRequestDTO, _ agentauth.RegistrationAttemptMeta, status agentauth.RegistrationAttemptStatus, errorText string) error {
@@ -67,7 +72,7 @@ func (s *stubAgentAuthService) RecordRegistrationAttempt(_ context.Context, req 
 }
 
 func (s *stubAgentAuthService) RefreshTokens(_ context.Context, _ *api.AgentTokenRefreshRequestDTO) (*api.AgentTokenRefreshResponseDTO, error) {
-	return nil, nil
+	return s.refreshResp, s.refreshErr
 }
 
 func (s *stubAgentAuthService) ValidateAccessToken(_ context.Context, _, _ string) error {
@@ -111,6 +116,12 @@ func TestPostAgentData_ПринимаетInventoryИAdapterStatuses(t *testing.T
 	require.Equal(t, "ws-phase0", service.lastData.Inventory.Hostname)
 	require.Len(t, service.lastData.AdapterStatuses, 1)
 	require.Equal(t, "atol", service.lastData.AdapterStatuses[0].AdapterID)
+
+	var responseBody map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &responseBody))
+	require.Equal(t, "ok", responseBody["status"])
+	_, hasEnvelope := responseBody["data"]
+	require.False(t, hasEnvelope, "heartbeat active-agent не должен возвращать API-конверт")
 }
 
 func TestPostAgentData_LegacyPayloadБезНовыхПолейПроходит(t *testing.T) {
@@ -203,4 +214,69 @@ func TestRegisterAgent_400ПриБитомJSONСохраняетПопытку(t
 	require.Equal(t, []agentauth.RegistrationAttemptStatus{agentauth.RegistrationAttemptStatusInvalidRequest}, authService.recordedStatuses)
 	require.Equal(t, []string{"Неверный формат тела запроса"}, authService.recordedErrors)
 	require.Equal(t, []string{""}, authService.recordedUUIDs)
+}
+
+func TestRegisterAgent_УспешныйОтветВозвращаетсяБезAPIEnvelope(t *testing.T) {
+	authService := &stubAgentAuthService{
+		registerResp: &api.AgentRegistrationResponseDTO{
+			Status:                "ok",
+			AgentUUID:             "agent-raw-register",
+			AccessToken:           "access-token",
+			RefreshToken:          "refresh-token",
+			AccessTokenExpiresAt:  time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC),
+			RefreshTokenExpiresAt: time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	handler := NewAgentHandler(&stubAgentService{}, authService, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/register", strings.NewReader(`{
+		"agent_uuid": "agent-raw-register",
+		"hostname": "ws-raw",
+		"agent_version": "0.1.0"
+	}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	handler.registerAgent(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var responseBody map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &responseBody))
+	require.Equal(t, "ok", responseBody["status"])
+	require.Equal(t, "agent-raw-register", responseBody["agent_uuid"])
+	require.Equal(t, "access-token", responseBody["access_token"])
+	_, hasEnvelope := responseBody["data"]
+	require.False(t, hasEnvelope, "bootstrap-регистрация не должна возвращать API-конверт")
+}
+
+func TestRefreshAgentToken_УспешныйОтветВозвращаетсяБезAPIEnvelope(t *testing.T) {
+	authService := &stubAgentAuthService{
+		refreshResp: &api.AgentTokenRefreshResponseDTO{
+			Status:                "ok",
+			AgentUUID:             "agent-refresh",
+			AccessToken:           "new-access-token",
+			RefreshToken:          "new-refresh-token",
+			AccessTokenExpiresAt:  time.Date(2026, 3, 21, 13, 0, 0, 0, time.UTC),
+			RefreshTokenExpiresAt: time.Date(2026, 4, 21, 13, 0, 0, 0, time.UTC),
+		},
+	}
+	handler := NewAgentHandler(&stubAgentService{}, authService, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/auth/refresh", strings.NewReader(`{
+		"agent_uuid": "agent-refresh",
+		"refresh_token": "old-refresh-token"
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.refreshAgentToken(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var responseBody map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &responseBody))
+	require.Equal(t, "ok", responseBody["status"])
+	require.Equal(t, "new-access-token", responseBody["access_token"])
+	_, hasEnvelope := responseBody["data"]
+	require.False(t, hasEnvelope, "refresh токенов не должен возвращать API-конверт")
 }

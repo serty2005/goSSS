@@ -238,6 +238,9 @@ func (a *Agent) registerAndFetchTokens(ctx context.Context, reason string) error
 }
 
 func (a *Agent) applyRegistrationResponse(resp protocol.AgentRegistrationResponseDTO) error {
+	if err := validateIssuedTokens(resp.AccessToken, resp.RefreshToken, resp.AccessTokenExpiresAt, resp.RefreshTokenExpiresAt); err != nil {
+		return err
+	}
 	a.tokens = &state.Tokens{
 		AccessToken:           resp.AccessToken,
 		RefreshToken:          resp.RefreshToken,
@@ -564,6 +567,9 @@ func (a *Agent) operationEndpoint(op connectivity.Operation) string {
 }
 
 func (a *Agent) applyTokenRefreshResponse(resp protocol.AgentTokenRefreshResponseDTO) error {
+	if err := validateIssuedTokens(resp.AccessToken, resp.RefreshToken, resp.AccessTokenExpiresAt, resp.RefreshTokenExpiresAt); err != nil {
+		return err
+	}
 	a.tokens = &state.Tokens{
 		AccessToken:           resp.AccessToken,
 		RefreshToken:          resp.RefreshToken,
@@ -576,6 +582,21 @@ func (a *Agent) applyTokenRefreshResponse(resp protocol.AgentTokenRefreshRespons
 	}
 	log.Printf("Токены агента обновлены (access до %s)", resp.AccessTokenExpiresAt.Format(time.RFC3339))
 	return nil
+}
+
+func validateIssuedTokens(accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time) error {
+	switch {
+	case strings.TrimSpace(accessToken) == "":
+		return fmt.Errorf("сервер вернул пустой access token агента")
+	case strings.TrimSpace(refreshToken) == "":
+		return fmt.Errorf("сервер вернул пустой refresh token агента")
+	case accessExpiresAt.IsZero():
+		return fmt.Errorf("сервер вернул access token без срока действия")
+	case refreshExpiresAt.IsZero():
+		return fmt.Errorf("сервер вернул refresh token без срока действия")
+	default:
+		return nil
+	}
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {

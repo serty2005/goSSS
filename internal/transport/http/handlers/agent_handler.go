@@ -93,7 +93,7 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Регистрация агента выполнена", "uuid", dto.AgentUUID, "agent_type", dto.InitialData.AgentType)
-	response.RespondWithJSON(w, http.StatusOK, respDTO)
+	response.RespondWithRawJSON(w, http.StatusOK, respDTO)
 }
 
 func (h *AgentHandler) refreshAgentToken(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +119,7 @@ func (h *AgentHandler) refreshAgentToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, respDTO)
+	response.RespondWithRawJSON(w, http.StatusOK, respDTO)
 }
 
 func (h *AgentHandler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +137,7 @@ func (h *AgentHandler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, config)
+	response.RespondWithRawJSON(w, http.StatusOK, config)
 }
 
 // postAgentData — heartbeat и данные нового активного агента.
@@ -166,7 +166,7 @@ func (h *AgentHandler) postAgentData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, respData)
+	response.RespondWithRawJSON(w, http.StatusOK, respData)
 }
 
 // handleAgentReport принимает данные через /report?key=TOKEN.

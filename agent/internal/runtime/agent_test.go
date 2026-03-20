@@ -367,6 +367,45 @@ func TestAgentHeartbeatRetriesAfter401(t *testing.T) {
 	}
 }
 
+func TestAgentApplyRegistrationResponseRejectsEmptyTokens(t *testing.T) {
+	t.Parallel()
+
+	agent := &Agent{}
+	err := agent.applyRegistrationResponse(protocol.AgentRegistrationResponseDTO{
+		Status:                "ok",
+		AgentUUID:             "agent-uuid",
+		AccessToken:           "",
+		RefreshToken:          "refresh-token",
+		AccessTokenExpiresAt:  time.Now().Add(time.Hour),
+		RefreshTokenExpiresAt: time.Now().Add(2 * time.Hour),
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка на пустом access token")
+	}
+	if agent.tokens != nil {
+		t.Fatalf("токены не должны сохраняться при невалидном ответе: %+v", agent.tokens)
+	}
+}
+
+func TestAgentApplyTokenRefreshResponseRejectsZeroExpiry(t *testing.T) {
+	t.Parallel()
+
+	agent := &Agent{}
+	err := agent.applyTokenRefreshResponse(protocol.AgentTokenRefreshResponseDTO{
+		Status:                "ok",
+		AgentUUID:             "agent-uuid",
+		AccessToken:           "access-token",
+		RefreshToken:          "refresh-token",
+		RefreshTokenExpiresAt: time.Now().Add(2 * time.Hour),
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка на нулевом сроке жизни access token")
+	}
+	if agent.tokens != nil {
+		t.Fatalf("токены не должны сохраняться при невалидном refresh-ответе: %+v", agent.tokens)
+	}
+}
+
 func TestAgentBuildHeartbeatPayloadUsesHostname(t *testing.T) {
 	t.Parallel()
 

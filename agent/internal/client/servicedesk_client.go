@@ -201,10 +201,33 @@ func (c *ServiceDeskClient) doJSON(ctx context.Context, method, path string, bod
 	if bodyOut == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(bodyOut); err != nil {
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &ResponseDecodeError{Method: method, URL: fullURL, Err: err}
+	}
+	if err := decodeJSONResponse(raw, bodyOut); err != nil {
 		return &ResponseDecodeError{Method: method, URL: fullURL, Err: err}
 	}
 	return nil
+}
+
+func decodeJSONResponse(raw []byte, bodyOut any) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return io.EOF
+	}
+
+	var envelope struct {
+		Status string          `json:"status"`
+		Data   json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(trimmed, &envelope); err == nil && len(bytes.TrimSpace(envelope.Data)) > 0 {
+		if err := json.Unmarshal(envelope.Data, bodyOut); err == nil {
+			return nil
+		}
+	}
+
+	return json.Unmarshal(trimmed, bodyOut)
 }
 
 func statusAllowed(actual int, allowed []int) bool {

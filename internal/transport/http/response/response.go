@@ -49,6 +49,12 @@ func RespondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	sendJSON(w, code, resp)
 }
 
+// RespondWithRawJSON отправляет успешный JSON без API-конверта.
+// Используется для машинных контрактов, где клиент ожидает DTO напрямую.
+func RespondWithRawJSON(w http.ResponseWriter, code int, payload interface{}) {
+	sendJSON(w, code, payload)
+}
+
 func sendJSON(w http.ResponseWriter, code int, payload interface{}) {
 	response, err := json.Marshal(payload)
 	if err != nil {

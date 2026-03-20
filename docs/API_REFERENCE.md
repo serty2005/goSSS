@@ -14,7 +14,14 @@
 
 ### 1.2. Формат ответов (Envelope Pattern)
 
-Все ответы API обёрнуты в единый конверт.
+Почти все ответы API обёрнуты в единый конверт.
+
+Исключение: машинные active-agent endpoints нового `goSSSagent` возвращают DTO напрямую, без envelope:
+
+- `POST /api/agents/register`
+- `POST /api/agents/auth/refresh`
+- `GET /api/agents/{uuid}/config`
+- `POST /api/agents/{uuid}/data`
 
 **Успешный ответ (200 OK, 201 Created, 202 Accepted):**
 ```json
