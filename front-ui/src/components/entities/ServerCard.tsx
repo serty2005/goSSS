@@ -13,6 +13,7 @@ import {
   isIikoWebAddress,
   normalizeServerAddress,
 } from '@/utils/formatters';
+import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 
 interface Props {
   data: ServerEntity;
@@ -41,6 +42,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
   const isCloud = isIikoWebAddress(rawAddress);
   const cloudHost = cleanWebUrl(rawAddress);
   const hasAccessData = Boolean(data.anydesk || data.teamviewer || data.rdp || data.litemanager);
+  const agentUpdate = getAgentUpdateMeta(data);
 
   const pollBadge = getPollBadge(data.operational_status);
   const licenseStatus = String(data.operational_status || data.status || '').trim().toLowerCase();
@@ -126,6 +128,28 @@ const ServerCard: React.FC<Props> = ({ data }) => {
       )}
       extra={(
         <Space size={8}>
+          {agentUpdate ? (
+            <Tooltip
+              title={agentUpdate.updatedAt
+                ? `Агент ${agentUpdate.updater}, ${new Date(agentUpdate.updatedAt).toLocaleString()}. Открыть диагностику агента.`
+                : `Агент ${agentUpdate.updater}. Открыть диагностику агента.`}
+            >
+              <Badge
+                color="#1677ff"
+                text={(
+                  <Text
+                    style={{ cursor: 'pointer' }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`);
+                    }}
+                  >
+                    Агент
+                  </Text>
+                )}
+              />
+            </Tooltip>
+          ) : null}
           <Badge status={pollBadge.status} text={pollBadge.text} />
           <ServerLicenseStatusTag
             serverID={String(data.uuid || '')}

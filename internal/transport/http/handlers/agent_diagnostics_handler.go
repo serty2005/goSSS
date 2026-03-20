@@ -137,7 +137,14 @@ func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListI
 		LastRegistrationStatus: agent.LastRegistrationStatus,
 		LastRegistrationError:  agent.LastRegistrationError,
 		MachineFingerprint:     agent.MachineFingerprint,
+		HasLatestInventory:     hasJSONPayload(agent.LatestInventorySnapshot),
+		HasAdapterStatuses:     hasJSONPayload(agent.LatestAdapterStatuses),
 	}
+}
+
+func hasJSONPayload(raw datatypes.JSON) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
 }
 
 func decodeJSONValue(raw datatypes.JSON) any {

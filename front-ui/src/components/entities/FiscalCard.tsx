@@ -64,10 +64,17 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
       extra={agentUpdate ? (
         <Tooltip
           title={agentUpdate.updatedAt
-            ? `Агент ${agentUpdate.updater}, ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm:ss')}`
-            : `Агент ${agentUpdate.updater}`}
+            ? `Агент ${agentUpdate.updater}, ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm:ss')}. Открыть диагностику агента.`
+            : `Агент ${agentUpdate.updater}. Открыть диагностику агента.`}
         >
-          <Tag color="blue" style={{ fontSize: 12, lineHeight: '22px', paddingInline: 10, marginRight: 0 }}>
+          <Tag
+            color="blue"
+            style={{ fontSize: 12, lineHeight: '22px', paddingInline: 10, marginRight: 0, cursor: 'pointer' }}
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`);
+            }}
+          >
             Агент
           </Tag>
         </Tooltip>

@@ -1164,6 +1164,113 @@ export interface AgentObservationFeedRowDTO {
   server_url?: string;
 }
 
+export interface AgentDiagnosticsListItemDTO {
+  uuid: string;
+  hostname?: string;
+  type?: string;
+  status?: string;
+  owner_id?: string;
+  workstation_id?: string;
+  last_observed_at?: string;
+  last_heartbeat?: string;
+  last_registration_at?: string;
+  last_registration_status?: string;
+  last_registration_error?: string;
+  machine_fingerprint?: string;
+  has_latest_inventory?: boolean;
+  has_adapter_statuses?: boolean;
+}
+
+export interface AgentInventoryNetworkInterfaceDTO {
+  name?: string;
+  index?: number;
+  mtu?: number;
+  hardware_addr?: string;
+  addresses?: string[];
+  flags?: string[];
+}
+
+export interface AgentInventoryCOMPortDTO {
+  name?: string;
+  device?: string;
+  source?: string;
+}
+
+export interface AgentInventoryInstalledSoftwareDTO {
+  name?: string;
+  version?: string;
+  publisher?: string;
+  install_location?: string;
+  uninstall_string?: string;
+  source?: string;
+}
+
+export interface AgentInventoryComponentEvidenceDTO {
+  type?: string;
+  source?: string;
+  value?: string;
+}
+
+export interface AgentInventoryKnownComponentDTO {
+  key?: string;
+  name?: string;
+  category?: string;
+  detected?: boolean;
+  version?: string;
+  evidence?: AgentInventoryComponentEvidenceDTO[];
+}
+
+export interface AgentInventorySnapshotDTO {
+  collected_at?: string;
+  hostname?: string;
+  os?: string;
+  arch?: string;
+  executable_path?: string;
+  network_interfaces?: AgentInventoryNetworkInterfaceDTO[];
+  com_ports?: AgentInventoryCOMPortDTO[];
+  installed_software?: AgentInventoryInstalledSoftwareDTO[];
+  known_components?: AgentInventoryKnownComponentDTO[];
+  [key: string]: unknown;
+}
+
+export interface AgentAdapterStatusDTO {
+  adapter_id?: string;
+  adapter_type?: string;
+  version?: string;
+  target_os?: string;
+  target_arch?: string;
+  protocol_version?: string;
+  status?: string;
+  local_path?: string;
+  file_size?: number;
+  sha256?: string;
+  last_error?: string;
+  installed_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface AgentRegistrationAttemptDTO {
+  id: number;
+  agent_uuid?: string;
+  status?: string;
+  error_text?: string;
+  machine_fingerprint?: string;
+  system_info?: unknown;
+  payload?: unknown;
+  remote_addr?: string;
+  created_at?: string;
+}
+
+export interface AgentDiagnosticsDetailsDTO {
+  agent: AgentDiagnosticsListItemDTO;
+  registration_payload?: unknown;
+  registration_system_info?: unknown;
+  latest_inventory?: AgentInventorySnapshotDTO | null;
+  latest_adapter_statuses?: AgentAdapterStatusDTO[] | null;
+  recent_registrations: AgentRegistrationAttemptDTO[];
+}
+
 export interface AgentListItemDTO {
   uuid: string;
   hostname?: string;

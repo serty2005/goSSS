@@ -66,6 +66,8 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 				UUID                   string `json:"uuid"`
 				LastRegistrationStatus string `json:"last_registration_status"`
 				MachineFingerprint     string `json:"machine_fingerprint"`
+				HasLatestInventory     bool   `json:"has_latest_inventory"`
+				HasAdapterStatuses     bool   `json:"has_adapter_statuses"`
 			} `json:"agent"`
 			RegistrationPayload map[string]any   `json:"registration_payload"`
 			LatestInventory     map[string]any   `json:"latest_inventory"`
@@ -81,6 +83,8 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 	require.Equal(t, agentUUID, body.Data.Agent.UUID)
 	require.Equal(t, models.AgentRegistrationStatusSuccess, body.Data.Agent.LastRegistrationStatus)
 	require.Equal(t, "fp-123", body.Data.Agent.MachineFingerprint)
+	require.True(t, body.Data.Agent.HasLatestInventory)
+	require.True(t, body.Data.Agent.HasAdapterStatuses)
 	require.Equal(t, "agent-phase1", body.Data.RegistrationPayload["agent_uuid"])
 	require.Equal(t, "cash-01", body.Data.LatestInventory["hostname"])
 	require.Len(t, body.Data.LatestAdapterStatus, 1)
@@ -115,6 +119,43 @@ func TestAgentDiagnosticsHandler_ListAgentsФильтруетПоСтатусу�
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "agent-failed")
 	require.NotContains(t, rec.Body.String(), "agent-success")
+}
+
+func TestAgentDiagnosticsHandler_ListAgentsОтдаётФлагиНаличияSnapshotов(t *testing.T) {
+	db := setupAgentDiagnosticsDB(t)
+	require.NoError(t, db.Create(&models.Agent{
+		UUID:                    "agent-with-snapshots",
+		Type:                    "sssruner",
+		Hostname:                "cash-phase1",
+		LastRegistrationStatus:  models.AgentRegistrationStatusSuccess,
+		LatestInventorySnapshot: datatypes.JSON([]byte(`{"hostname":"cash-phase1"}`)),
+		LatestAdapterStatuses:   datatypes.JSON([]byte(`[]`)),
+	}).Error)
+
+	handler := NewAgentDiagnosticsHandler(db)
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/agent-diagnostics?term=with-snapshots", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body struct {
+		Status string `json:"status"`
+		Data   []struct {
+			UUID               string `json:"uuid"`
+			HasLatestInventory bool   `json:"has_latest_inventory"`
+			HasAdapterStatuses bool   `json:"has_adapter_statuses"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "success", body.Status)
+	require.Len(t, body.Data, 1)
+	require.Equal(t, "agent-with-snapshots", body.Data[0].UUID)
+	require.True(t, body.Data[0].HasLatestInventory)
+	require.True(t, body.Data[0].HasAdapterStatuses)
 }
 
 func setupAgentDiagnosticsDB(t *testing.T) *gorm.DB {

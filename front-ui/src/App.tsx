@@ -31,6 +31,7 @@ const FiscalsPage = lazy(() => import('@/pages/equipment/FiscalsPage'));
 const UsersAdminPage = lazy(() => import('@/pages/admin/UsersAdminPage'));
 const ServicePointsImportPage = lazy(() => import('@/pages/admin/ServicePointsImportPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
+const AgentDiagnosticsPage = lazy(() => import('@/pages/AgentDiagnosticsPage'));
 const AgentObservationsPage = lazy(() => import('@/pages/AgentObservationsPage'));
 const CompanyContractsReportPage = lazy(() => import('@/pages/reports/CompanyContractsReportPage'));
 
@@ -179,6 +180,14 @@ const App: React.FC = () => {
                       element={(
                         <SupportOrAdminRoute>
                           <AgentsPage />
+                        </SupportOrAdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="agent-diagnostics/:uuid"
+                      element={(
+                        <SupportOrAdminRoute>
+                          <AgentDiagnosticsPage />
                         </SupportOrAdminRoute>
                       )}
                     />

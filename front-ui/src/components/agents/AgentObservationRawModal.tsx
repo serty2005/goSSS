@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Descriptions, Empty, Modal, Spin, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { agentObservationsApi } from '@/api/agentObservations';
+import JsonDataViewer from '@/components/common/JsonDataViewer';
 
 const { Text } = Typography;
 
@@ -177,26 +178,7 @@ const AgentObservationRawModal: React.FC<Props> = ({
             </Descriptions>
           ) : null}
 
-          <div>
-            <Text strong>Payload JSON</Text>
-          </div>
-
-          <pre
-            style={{
-              margin: 0,
-              maxHeight: 520,
-              overflow: 'auto',
-              padding: 12,
-              borderRadius: 8,
-              background: 'rgba(0, 0, 0, 0.04)',
-              fontSize: 12,
-              lineHeight: 1.45,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            {payload}
-          </pre>
+          <JsonDataViewer title="Payload JSON" value={payload} defaultExpanded />
         </div>
       )}
     </Modal>

@@ -216,13 +216,19 @@ const AgentObservationsPage: React.FC = () => {
       key: 'agent_uuid',
       render: (value?: string) => (
         value ? (
-          <Button
-            type="link"
-            style={{ paddingInline: 0 }}
-            onClick={() => updateFilters({ agent_uuid: value, agent: undefined })}
-          >
-            {value}
-          </Button>
+          <Space direction="vertical" size={0}>
+            <Link to={`/agent-diagnostics/${encodeURIComponent(value)}`}>
+              {value}
+            </Link>
+            <Button
+              type="link"
+              size="small"
+              style={{ paddingInline: 0, textAlign: 'left' }}
+              onClick={() => updateFilters({ agent_uuid: value, agent: undefined })}
+            >
+              Фильтр в ленте
+            </Button>
+          </Space>
         ) : '-'
       ),
     },
@@ -320,9 +326,14 @@ const AgentObservationsPage: React.FC = () => {
             </Text>
           </div>
           {agentFilter ? (
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents')}>
-              К списку агентов
-            </Button>
+            <Space wrap>
+              <Button onClick={() => navigate(`/agent-diagnostics/${encodeURIComponent(agentFilter)}`)}>
+                К диагностике агента
+              </Button>
+              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents')}>
+                К списку агентов
+              </Button>
+            </Space>
           ) : null}
         </Space>
       </Space>

@@ -15,6 +15,8 @@ type AgentDiagnosticsListItemDTO struct {
 	LastRegistrationStatus string     `json:"last_registration_status"`
 	LastRegistrationError  string     `json:"last_registration_error"`
 	MachineFingerprint     string     `json:"machine_fingerprint"`
+	HasLatestInventory     bool       `json:"has_latest_inventory"`
+	HasAdapterStatuses     bool       `json:"has_adapter_statuses"`
 }
 
 type AgentRegistrationAttemptDTO struct {

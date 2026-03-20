@@ -1,135 +1,25 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Empty, Input, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import 'dayjs/locale/ru';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { agentObservationsApi } from '@/api/agentObservations';
-import AgentObservationRawModal, { type AgentObservationRawSummary } from '@/components/agents/AgentObservationRawModal';
-import type { AgentListItemDTO, AgentObservationFeedRowDTO } from '@/types/api';
-
-dayjs.extend(relativeTime);
-dayjs.locale('ru');
+import { Alert, Button, Card, Empty, Input, Select, Skeleton, Space, Statistic, Table, Tag, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { agentDiagnosticsApi } from '@/api/agentDiagnostics';
+import { AgentDiagnosticsListItemDTO } from '@/types/api';
+import {
+  FRESH_HEARTBEAT_MINUTES,
+  formatDateTime,
+  formatRelativeTime,
+  getAgentStatusColor,
+  getHeartbeatAgeMinutes,
+  getHeartbeatFreshness,
+  getRegistrationStatusMeta,
+  isMeaningfulDate,
+} from '@/components/agents/agentDiagnosticsUtils';
 
 const { Title, Text } = Typography;
 
-const FRESH_HEARTBEAT_MINUTES = 5;
-const WARN_HEARTBEAT_MINUTES = 30;
-
-type LatestObservationModalState = {
-  open: boolean;
-  agent: AgentListItemDTO | null;
-  observationID?: number;
-  summary?: AgentObservationRawSummary;
-  lookupLoading: boolean;
-  lookupError?: string;
-  emptyDescription?: string;
-};
-
-const createInitialModalState = (): LatestObservationModalState => ({
-  open: false,
-  agent: null,
-  observationID: undefined,
-  summary: undefined,
-  lookupLoading: false,
-  lookupError: undefined,
-  emptyDescription: undefined,
-});
-
-const formatDateTime = (value?: string) => {
-  if (!value) {
-    return '-';
-  }
-  const parsed = dayjs(value);
-  if (!parsed.isValid()) {
-    return value;
-  }
-  return parsed.format('DD.MM.YYYY HH:mm:ss');
-};
-
-const formatRelativeTime = (value?: string, now = Date.now()) => {
-  if (!value) {
-    return '';
-  }
-  const parsed = dayjs(value);
-  if (!parsed.isValid()) {
-    return '';
-  }
-  return parsed.from(dayjs(now));
-};
-
-const getHeartbeatAgeMinutes = (value?: string, now = Date.now()) => {
-  if (!value) {
-    return null;
-  }
-  const parsed = dayjs(value);
-  if (!parsed.isValid()) {
-    return null;
-  }
-  return Math.max(0, dayjs(now).diff(parsed, 'minute', true));
-};
-
-const getHeartbeatFreshness = (value?: string, now = Date.now()) => {
-  const ageMinutes = getHeartbeatAgeMinutes(value, now);
-  if (ageMinutes === null) {
-    return {
-      color: 'error' as const,
-      label: 'Нет heartbeat',
-    };
-  }
-  if (ageMinutes <= FRESH_HEARTBEAT_MINUTES) {
-    return {
-      color: 'success' as const,
-      label: 'Свежий',
-    };
-  }
-  if (ageMinutes <= WARN_HEARTBEAT_MINUTES) {
-    return {
-      color: 'warning' as const,
-      label: 'Устаревает',
-    };
-  }
-  return {
-    color: 'error' as const,
-    label: 'Просрочен',
-  };
-};
-
-const getAgentStatusColor = (status?: string) => {
-  const normalized = String(status || '').trim().toLowerCase();
-  if (!normalized) {
-    return 'default';
-  }
-  if (['active', 'online', 'running', 'ok', 'healthy', 'connected'].includes(normalized)) {
-    return 'success';
-  }
-  if (['new', 'pending', 'processing', 'starting', 'unknown'].includes(normalized)) {
-    return 'processing';
-  }
-  if (['warning', 'degraded', 'stale'].includes(normalized)) {
-    return 'warning';
-  }
-  if (['offline', 'error', 'failed', 'disconnected', 'stopped'].includes(normalized)) {
-    return 'error';
-  }
-  return 'default';
-};
-
-const getAgentTypeColor = (type?: string) => {
-  const normalized = String(type || '').trim().toLowerCase();
-  if (normalized.includes('server')) {
-    return 'geekblue';
-  }
-  if (normalized.includes('workstation') || normalized.includes('station') || normalized.includes('ws')) {
-    return 'cyan';
-  }
-  if (normalized.includes('fr') || normalized.includes('fiscal') || normalized.includes('kkt')) {
-    return 'gold';
-  }
-  return 'default';
-};
+type HeartbeatFilterValue = 'all' | 'present' | 'missing';
+type InventoryFilterValue = 'all' | 'with' | 'without';
 
 const getErrorMessage = (error: unknown) => {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -142,30 +32,25 @@ const getErrorMessage = (error: unknown) => {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-  return 'Не удалось загрузить данные агентов';
+  return 'Не удалось загрузить список агентов';
 };
 
-const buildObservationSummary = (
-  agent: AgentListItemDTO,
-  latestObservation?: AgentObservationFeedRowDTO | null,
-): AgentObservationRawSummary => ({
-  agentUUID: latestObservation?.agent_uuid || agent.uuid || undefined,
-  serverURL: latestObservation?.server_url || undefined,
-  currentTime: latestObservation?.current_time || undefined,
-  vTime: latestObservation?.v_time || undefined,
-  workstation: latestObservation?.workstation_name || latestObservation?.workstation_id || agent.workstation_id || undefined,
-  fr: latestObservation?.fr_name || latestObservation?.fr_id || undefined,
-});
+const toSortTimestamp = (value?: string) => {
+  if (!isMeaningfulDate(value)) {
+    return 0;
+  }
+  return value ? new Date(value).getTime() : 0;
+};
 
 const AgentsPage: React.FC = () => {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const term = (searchParams.get('q') || '').trim();
+  const registrationFilter = (searchParams.get('registration_status') || '').trim();
+  const heartbeatFilter = ((searchParams.get('heartbeat') || 'all').trim() || 'all') as HeartbeatFilterValue;
+  const inventoryFilter = ((searchParams.get('inventory') || 'all').trim() || 'all') as InventoryFilterValue;
   const [searchValue, setSearchValue] = useState(term);
   const [now, setNow] = useState(() => Date.now());
-  const [latestModalState, setLatestModalState] = useState<LatestObservationModalState>(createInitialModalState);
-  const lookupRequestRef = useRef(0);
 
   useEffect(() => {
     setSearchValue(term);
@@ -178,21 +63,27 @@ const AgentsPage: React.FC = () => {
     return () => window.clearInterval(intervalID);
   }, []);
 
-  const updateSearch = useCallback((value: string) => {
+  const updateFilters = useCallback((next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(searchParams);
-    const nextValue = value.trim();
-    if (nextValue) {
-      params.set('q', nextValue);
-    } else {
-      params.delete('q');
-    }
+    Object.entries(next).forEach(([key, value]) => {
+      const normalized = String(value || '').trim();
+      if (!normalized || normalized === 'all') {
+        params.delete(key);
+      } else {
+        params.set(key, normalized);
+      }
+    });
     setSearchParams(params);
   }, [searchParams, setSearchParams]);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ['agents-list', term],
+    queryKey: ['agent-diagnostics-list', term, registrationFilter],
     queryFn: async () => {
-      const response = await agentObservationsApi.listAgents({ term: term || undefined, limit: 500 });
+      const response = await agentDiagnosticsApi.list({
+        term: term || undefined,
+        registration_status: registrationFilter && registrationFilter !== '__empty__' ? registrationFilter : undefined,
+        limit: 500,
+      });
       return response.data || [];
     },
     refetchOnWindowFocus: false,
@@ -200,101 +91,68 @@ const AgentsPage: React.FC = () => {
   });
 
   const rows = useMemo(() => {
-    return (data || []).slice().sort((left, right) => {
-      const leftHeartbeat = dayjs(left.last_heartbeat).isValid() ? dayjs(left.last_heartbeat).valueOf() : 0;
-      const rightHeartbeat = dayjs(right.last_heartbeat).isValid() ? dayjs(right.last_heartbeat).valueOf() : 0;
-      if (leftHeartbeat !== rightHeartbeat) {
-        return rightHeartbeat - leftHeartbeat;
-      }
+    return (data || [])
+      .filter((item) => {
+        if (registrationFilter === '__empty__' && item.last_registration_status) {
+          return false;
+        }
+        if (heartbeatFilter === 'present' && !isMeaningfulDate(item.last_heartbeat)) {
+          return false;
+        }
+        if (heartbeatFilter === 'missing' && isMeaningfulDate(item.last_heartbeat)) {
+          return false;
+        }
+        if (inventoryFilter === 'with' && !item.has_latest_inventory) {
+          return false;
+        }
+        if (inventoryFilter === 'without' && item.has_latest_inventory) {
+          return false;
+        }
+        return true;
+      })
+      .slice()
+      .sort((left, right) => {
+        const rightRegistration = toSortTimestamp(right.last_registration_at);
+        const leftRegistration = toSortTimestamp(left.last_registration_at);
+        if (rightRegistration !== leftRegistration) {
+          return rightRegistration - leftRegistration;
+        }
 
-      const leftObserved = dayjs(left.last_observed_at).isValid() ? dayjs(left.last_observed_at).valueOf() : 0;
-      const rightObserved = dayjs(right.last_observed_at).isValid() ? dayjs(right.last_observed_at).valueOf() : 0;
-      if (leftObserved !== rightObserved) {
-        return rightObserved - leftObserved;
-      }
+        const rightHeartbeat = toSortTimestamp(right.last_heartbeat);
+        const leftHeartbeat = toSortTimestamp(left.last_heartbeat);
+        if (rightHeartbeat !== leftHeartbeat) {
+          return rightHeartbeat - leftHeartbeat;
+        }
 
-      return String(left.hostname || left.uuid || '').localeCompare(String(right.hostname || right.uuid || ''), 'ru');
-    });
-  }, [data]);
+        const rightObserved = toSortTimestamp(right.last_observed_at);
+        const leftObserved = toSortTimestamp(left.last_observed_at);
+        if (rightObserved !== leftObserved) {
+          return rightObserved - leftObserved;
+        }
+
+        return String(left.hostname || left.uuid || '').localeCompare(String(right.hostname || right.uuid || ''), 'ru');
+      });
+  }, [data, heartbeatFilter, inventoryFilter, registrationFilter]);
 
   const summary = useMemo(() => {
-    const fresh = rows.filter((item) => {
+    const registered = rows.filter((item) => item.last_registration_status === 'success').length;
+    const registrationIssues = rows.filter((item) => item.last_registration_status && item.last_registration_status !== 'success').length;
+    const freshHeartbeat = rows.filter((item) => {
       const heartbeatAge = getHeartbeatAgeMinutes(item.last_heartbeat, now);
       return heartbeatAge !== null && heartbeatAge <= FRESH_HEARTBEAT_MINUTES;
     }).length;
+    const withInventory = rows.filter((item) => item.has_latest_inventory).length;
 
     return {
       total: rows.length,
-      fresh,
-      stale: rows.length - fresh,
+      registered,
+      registrationIssues,
+      freshHeartbeat,
+      withInventory,
     };
   }, [now, rows]);
 
-  const closeLatestModal = useCallback(() => {
-    lookupRequestRef.current += 1;
-    setLatestModalState(createInitialModalState());
-  }, []);
-
-  const openLatestObservation = useCallback(async (agent: AgentListItemDTO) => {
-    const requestID = lookupRequestRef.current + 1;
-    lookupRequestRef.current = requestID;
-
-    setLatestModalState({
-      open: true,
-      agent,
-      observationID: undefined,
-      summary: buildObservationSummary(agent),
-      lookupLoading: true,
-      lookupError: undefined,
-      emptyDescription: undefined,
-    });
-
-    try {
-      const latestObservation = await queryClient.fetchQuery({
-        queryKey: ['agent-observations-latest', agent.uuid],
-        queryFn: async () => {
-          const response = await agentObservationsApi.listFeed({
-            agent_uuid: agent.uuid,
-            sort_by: 'latest',
-            order: 'desc',
-            limit: 1,
-          });
-          return response.data?.[0] || null;
-        },
-        staleTime: 30_000,
-      });
-
-      if (lookupRequestRef.current !== requestID) {
-        return;
-      }
-
-      setLatestModalState({
-        open: true,
-        agent,
-        observationID: latestObservation?.observation_id,
-        summary: buildObservationSummary(agent, latestObservation),
-        lookupLoading: false,
-        lookupError: undefined,
-        emptyDescription: latestObservation ? undefined : 'У этого агента пока нет наблюдений.',
-      });
-    } catch (requestError) {
-      if (lookupRequestRef.current !== requestID) {
-        return;
-      }
-
-      setLatestModalState({
-        open: true,
-        agent,
-        observationID: undefined,
-        summary: buildObservationSummary(agent),
-        lookupLoading: false,
-        lookupError: getErrorMessage(requestError),
-        emptyDescription: undefined,
-      });
-    }
-  }, [queryClient]);
-
-  const columns: ColumnsType<AgentListItemDTO> = [
+  const columns: ColumnsType<AgentDiagnosticsListItemDTO> = [
     {
       title: 'Hostname',
       dataIndex: 'hostname',
@@ -302,7 +160,9 @@ const AgentsPage: React.FC = () => {
       width: 220,
       render: (value: string | undefined, record) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{value || record.uuid}</Text>
+          <Link to={`/agent-diagnostics/${encodeURIComponent(record.uuid)}`}>
+            {value || record.uuid}
+          </Link>
           <Text type="secondary" style={{ fontSize: 12 }}>
             {record.type || 'Тип не указан'}
           </Text>
@@ -315,31 +175,53 @@ const AgentsPage: React.FC = () => {
       key: 'uuid',
       width: 260,
       render: (value: string) => (
-        <Link to={`/agent-observations?agent_uuid=${encodeURIComponent(value)}`}>
-          {value}
-        </Link>
+        <Text copyable={{ text: value }} code>{value}</Text>
       ),
     },
     {
-      title: 'Тип',
-      dataIndex: 'type',
-      key: 'type',
-      width: 130,
-      render: (value?: string) => (
-        <Tag color={getAgentTypeColor(value)} style={{ marginInlineEnd: 0 }}>
-          {value || 'Не указан'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Статус',
+      title: 'Статус агента',
       dataIndex: 'status',
       key: 'status',
-      width: 150,
+      width: 160,
       render: (value?: string) => (
         <Tag color={getAgentStatusColor(value)} style={{ marginInlineEnd: 0 }}>
           {value || 'Не указан'}
         </Tag>
+      ),
+    },
+    {
+      title: 'Последняя регистрация',
+      dataIndex: 'last_registration_at',
+      key: 'last_registration_at',
+      width: 220,
+      render: (value?: string) => (
+        <Space direction="vertical" size={0}>
+          <Text>{formatDateTime(value)}</Text>
+          <Text type="secondary">{formatRelativeTime(value, now) || '-'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Статус регистрации',
+      dataIndex: 'last_registration_status',
+      key: 'last_registration_status',
+      width: 180,
+      render: (value?: string) => {
+        const meta = getRegistrationStatusMeta(value);
+        return (
+          <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>
+            {meta.label}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: 'Ошибка регистрации',
+      dataIndex: 'last_registration_error',
+      key: 'last_registration_error',
+      width: 260,
+      render: (value?: string) => (
+        value ? <Text ellipsis={{ tooltip: value }}>{value}</Text> : <Text type="secondary">-</Text>
       ),
     },
     {
@@ -349,8 +231,6 @@ const AgentsPage: React.FC = () => {
       width: 220,
       render: (value?: string) => {
         const freshness = getHeartbeatFreshness(value, now);
-        const relativeTime = formatRelativeTime(value, now);
-
         return (
           <Space direction="vertical" size={0}>
             <Text>{formatDateTime(value)}</Text>
@@ -358,7 +238,7 @@ const AgentsPage: React.FC = () => {
               <Tag color={freshness.color} style={{ marginInlineEnd: 0 }}>
                 {freshness.label}
               </Tag>
-              {relativeTime ? <Text type="secondary">{relativeTime}</Text> : null}
+              <Text type="secondary">{formatRelativeTime(value, now) || '-'}</Text>
             </Space>
           </Space>
         );
@@ -369,78 +249,71 @@ const AgentsPage: React.FC = () => {
       dataIndex: 'last_observed_at',
       key: 'last_observed_at',
       width: 220,
-      render: (value?: string) => {
-        const relativeTime = formatRelativeTime(value, now);
-        if (!value) {
-          return <Text type="secondary">Нет наблюдений</Text>;
-        }
-        return (
-          <Space direction="vertical" size={0}>
-            <Text>{formatDateTime(value)}</Text>
-            {relativeTime ? <Text type="secondary">{relativeTime}</Text> : null}
-          </Space>
-        );
-      },
-    },
-    {
-      title: 'Владелец',
-      dataIndex: 'owner_id',
-      key: 'owner_id',
-      width: 220,
       render: (value?: string) => (
-        value ? <Link to={`/companies/${value}`}>{value}</Link> : <Text type="secondary">Не указан</Text>
+        <Space direction="vertical" size={0}>
+          <Text>{formatDateTime(value)}</Text>
+          <Text type="secondary">{formatRelativeTime(value, now) || '-'}</Text>
+        </Space>
       ),
     },
     {
-      title: 'Рабочая станция',
-      dataIndex: 'workstation_id',
-      key: 'workstation_id',
-      width: 220,
-      render: (value?: string) => (
-        value ? <Link to={`/workstations/${value}`}>{value}</Link> : <Text type="secondary">Не привязана</Text>
+      title: 'Inventory',
+      dataIndex: 'has_latest_inventory',
+      key: 'has_latest_inventory',
+      width: 130,
+      render: (value?: boolean) => (
+        <Tag color={value ? 'success' : 'default'} style={{ marginInlineEnd: 0 }}>
+          {value ? 'Есть' : 'Нет'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Adapter statuses',
+      dataIndex: 'has_adapter_statuses',
+      key: 'has_adapter_statuses',
+      width: 160,
+      render: (value?: boolean) => (
+        <Tag color={value ? 'success' : 'default'} style={{ marginInlineEnd: 0 }}>
+          {value ? 'Есть' : 'Нет'}
+        </Tag>
       ),
     },
     {
       title: 'Действия',
       key: 'actions',
-      width: 280,
+      width: 260,
       fixed: 'right',
-      render: (_value: unknown, record) => {
-        const isRowLookupLoading = latestModalState.lookupLoading && latestModalState.agent?.uuid === record.uuid;
-
-        return (
-          <Space wrap size={4}>
-            <Button
-              type="link"
-              style={{ paddingInline: 0 }}
-              loading={isRowLookupLoading}
-              onClick={() => void openLatestObservation(record)}
-            >
-              Последние данные
-            </Button>
-            <Button
-              type="link"
-              style={{ paddingInline: 0 }}
-              onClick={() => navigate(`/agent-observations?agent_uuid=${encodeURIComponent(record.uuid)}`)}
-            >
-              Наблюдения
-            </Button>
-            <Button
-              type="link"
-              style={{ paddingInline: 0 }}
-              disabled={!record.workstation_id}
-              onClick={() => {
-                if (!record.workstation_id) {
-                  return;
-                }
-                navigate(`/workstations/${record.workstation_id}`);
-              }}
-            >
-              Открыть оборудование
-            </Button>
-          </Space>
-        );
-      },
+      render: (_value: unknown, record) => (
+        <Space wrap size={4}>
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            onClick={() => navigate(`/agent-diagnostics/${encodeURIComponent(record.uuid)}`)}
+          >
+            Диагностика
+          </Button>
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            onClick={() => navigate(`/agent-observations?agent_uuid=${encodeURIComponent(record.uuid)}`)}
+          >
+            Наблюдения
+          </Button>
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            disabled={!record.workstation_id}
+            onClick={() => {
+              if (!record.workstation_id) {
+                return;
+              }
+              navigate(`/workstations/${record.workstation_id}`);
+            }}
+          >
+            Оборудование
+          </Button>
+        </Space>
+      ),
     },
   ];
 
@@ -449,36 +322,74 @@ const AgentsPage: React.FC = () => {
       <div>
         <Title level={4} style={{ margin: 0 }}>Агенты</Title>
         <Text type="secondary">
-          Список агентских инстансов в разделе оборудования Etalon.
+          Диагностика bootstrap-регистрации, heartbeat snapshot и наличия inventory/adapters для нового goSSSagent.
         </Text>
       </div>
 
-      <Row gutter={[16, 16]}>
-        <Row gutter={[16, 16]} style={{ width: '100%' }}>
-          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-            <Card className="glass-panel">
-              <Statistic title="Всего агентов" value={summary.total} />
-            </Card>
-            <Card className="glass-panel">
-              <Statistic title="Heartbeat <= 5 минут" value={summary.fresh} valueStyle={{ color: '#389e0d' }} />
-            </Card>
-            <Card className="glass-panel">
-              <Statistic title="Без свежего heartbeat" value={summary.stale} valueStyle={{ color: '#cf1322' }} />
-            </Card>
-          </div>
-        </Row>
-      </Row>
+      <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+        <Card className="glass-panel">
+          <Statistic title="Всего агентов" value={summary.total} />
+        </Card>
+        <Card className="glass-panel">
+          <Statistic title="Регистрация успешна" value={summary.registered} valueStyle={{ color: '#389e0d' }} />
+        </Card>
+        <Card className="glass-panel">
+          <Statistic title="Ошибки регистрации" value={summary.registrationIssues} valueStyle={{ color: '#cf1322' }} />
+        </Card>
+        <Card className="glass-panel">
+          <Statistic title="Свежий heartbeat" value={summary.freshHeartbeat} valueStyle={{ color: '#1677ff' }} />
+        </Card>
+        <Card className="glass-panel">
+          <Statistic title="Есть inventory" value={summary.withInventory} />
+        </Card>
+      </div>
 
       <Card className="glass-panel">
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Input.Search
-            allowClear
-            placeholder="Поиск по hostname, uuid или владельцу"
-            value={searchValue}
-            onChange={(event) => setSearchValue(event.target.value)}
-            onSearch={updateSearch}
-            style={{ width: 420, maxWidth: '100%' }}
-          />
+          <Space wrap>
+            <Input.Search
+              allowClear
+              placeholder="Поиск по hostname, uuid, fingerprint или owner_id"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              onSearch={(value) => updateFilters({ q: value })}
+              style={{ width: 420, maxWidth: '100%' }}
+            />
+            <Select
+              value={registrationFilter || 'all'}
+              style={{ width: 220 }}
+              onChange={(value) => updateFilters({ registration_status: value === 'all' ? undefined : value })}
+              options={[
+                { value: 'all', label: 'Все регистрации' },
+                { value: 'success', label: 'Успешные' },
+                { value: 'unauthorized', label: 'Ошибка авторизации' },
+                { value: 'invalid_request', label: 'Неверный payload' },
+                { value: 'failed', label: 'Серверная ошибка' },
+                { value: '__empty__', label: 'Без попытки регистрации' },
+              ]}
+            />
+            <Select
+              value={heartbeatFilter}
+              style={{ width: 180 }}
+              onChange={(value: HeartbeatFilterValue) => updateFilters({ heartbeat: value })}
+              options={[
+                { value: 'all', label: 'Любой heartbeat' },
+                { value: 'present', label: 'Heartbeat есть' },
+                { value: 'missing', label: 'Heartbeat нет' },
+              ]}
+            />
+            <Select
+              value={inventoryFilter}
+              style={{ width: 180 }}
+              onChange={(value: InventoryFilterValue) => updateFilters({ inventory: value })}
+              options={[
+                { value: 'all', label: 'Любой inventory' },
+                { value: 'with', label: 'Inventory есть' },
+                { value: 'without', label: 'Inventory нет' },
+              ]}
+            />
+          </Space>
+
           <Space wrap>
             <Button onClick={() => void refetch()} loading={isFetching}>
               Обновить
@@ -504,40 +415,28 @@ const AgentsPage: React.FC = () => {
             )}
           />
         ) : isLoading ? (
-          <Table<AgentListItemDTO>
-            rowKey="uuid"
-            loading
-            dataSource={[]}
-            columns={columns}
-            pagination={false}
-          />
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Skeleton active paragraph={{ rows: 2 }} />
+            <Table<AgentDiagnosticsListItemDTO>
+              rowKey="uuid"
+              loading
+              columns={columns}
+              dataSource={[]}
+              pagination={false}
+            />
+          </Space>
         ) : rows.length === 0 ? (
           <Empty description={term ? `По запросу "${term}" агенты не найдены` : 'Агенты пока не найдены'} />
         ) : (
-          <Table<AgentListItemDTO>
+          <Table<AgentDiagnosticsListItemDTO>
             rowKey="uuid"
             dataSource={rows}
             columns={columns}
             pagination={{ pageSize: 20, showSizeChanger: true }}
-            scroll={{ x: 1650 }}
+            scroll={{ x: 2050 }}
           />
         )}
       </Card>
-
-      <AgentObservationRawModal
-        open={latestModalState.open}
-        observationID={latestModalState.observationID}
-        title={latestModalState.agent?.hostname
-          ? `Последние данные агента ${latestModalState.agent.hostname}`
-          : latestModalState.agent?.uuid
-            ? `Последние данные агента ${latestModalState.agent.uuid}`
-            : 'Последние данные агента'}
-        summary={latestModalState.summary}
-        lookupLoading={latestModalState.lookupLoading}
-        lookupError={latestModalState.lookupError}
-        emptyDescription={latestModalState.emptyDescription}
-        onClose={closeLatestModal}
-      />
     </Space>
   );
 };
