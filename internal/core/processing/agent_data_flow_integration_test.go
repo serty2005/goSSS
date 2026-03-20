@@ -2,6 +2,7 @@ package processing_test
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/core/processing"
 	"etalon-server/internal/domain/fiscal"
@@ -146,6 +147,70 @@ func TestAgentDataFlow_ЧерезOrchestratorЭквивалентенПрямо�
 	require.Equal(t, directSnapshot.workstations, eventSnapshot.workstations)
 	require.Equal(t, directSnapshot.fiscals, eventSnapshot.fiscals)
 	require.Equal(t, directSnapshot.agents, eventSnapshot.agents)
+}
+
+func TestAgentDataFlow_СохраняетPhase0ПоляВPayloadJSON(t *testing.T) {
+	log := logger.New("", "test", "error", true)
+	payload := &api.AgentDataDTO{
+		AgentUUID:   "agent-phase0",
+		AgentType:   "sssruner",
+		Hostname:    "ws-phase0",
+		CurrentTime: "2026-03-20 10:00:00",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC),
+			Hostname:    "ws-phase0",
+			OS:          "windows",
+			Arch:        "amd64",
+			NetworkInterfaces: []api.InventoryNetworkInterfaceDTO{
+				{
+					Name:      "Ethernet0",
+					Addresses: []string{"10.0.0.15/24"},
+				},
+			},
+		},
+		AdapterStatuses: []api.AdapterStatusDTO{
+			{
+				AdapterID: "atol",
+				Status:    "ready",
+				Version:   "1.0.0",
+			},
+		},
+	}
+
+	db, obsSvc := setupObsService(t)
+	agentRepo := infraRepos.NewAgentRepo(db)
+	bus := eventbus.NewInMemoryEventBus(64)
+	agentSvc := services.NewAgentService(log, agentRepo, nil, bus)
+	orchestrator := processing.NewOrchestrator(log, db, bus, nil, nil, nil, nil, nil, nil, nil, &noopProcessingEngine{}, obsSvc)
+	orchestrator.Start(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go bus.Start(ctx, log)
+
+	_, err := agentSvc.ProcessData(ctx, payload.AgentUUID, payload)
+	require.NoError(t, err)
+
+	var obs models.AgentObservation
+	require.Eventually(t, func() bool {
+		err := db.WithContext(ctx).Order("id desc").First(&obs).Error
+		return err == nil
+	}, 3*time.Second, 20*time.Millisecond)
+
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal(obs.PayloadJSON, &stored))
+
+	rawInventory, ok := stored["inventory"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "ws-phase0", rawInventory["hostname"])
+
+	rawStatuses, ok := stored["adapter_statuses"].([]any)
+	require.True(t, ok)
+	require.Len(t, rawStatuses, 1)
+	firstStatus, ok := rawStatuses[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "atol", firstStatus["adapter_id"])
+	require.Equal(t, "ready", firstStatus["status"])
 }
 
 func emulateLegacyProcessData(ctx context.Context, repo repositories.AgentRepo, obsSvc services.AgentObservationService, agentUUID string, data *api.AgentDataDTO) error {
