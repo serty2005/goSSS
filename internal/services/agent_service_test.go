@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/infra/logger"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 )
 
 type fakeAgentRepo struct {
@@ -127,4 +129,115 @@ func TestProcessData_ПубликуетСобытиеНаблюденияАге�
 	require.Equal(t, "agent-1", payload.Source)
 	require.Equal(t, "ws-1", payload.Data.Hostname)
 	require.Equal(t, 1, repo.updated)
+}
+
+func TestProcessData_SSSRunerВозвращаетAdapterManifestsИзКонфига(t *testing.T) {
+	manifestConfig, err := json.Marshal(api.AgentConfigDTO{
+		AdapterManifests: []api.AdapterManifestDTO{
+			{
+				AdapterID:       "atol",
+				AdapterType:     "fiscal",
+				Version:         "1.0.0",
+				ProtocolVersion: "phase0",
+				DownloadURL:     "https://example.test/atol.exe",
+				SHA256:          "abc123",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-sssruner",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+			Config:        datatypes.JSON(manifestConfig),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	resp, err := svc.ProcessData(context.Background(), "agent-sssruner", &api.AgentDataDTO{
+		AgentUUID: "agent-sssruner",
+		AgentType: "sssruner",
+		Hostname:  "ws-1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.AdapterManifests)
+	require.Len(t, *resp.AdapterManifests, 1)
+	require.Equal(t, "atol", (*resp.AdapterManifests)[0].AdapterID)
+}
+
+func TestProcessData_SSSRunerВозвращаетПустыеAdapterManifestsПриПустомКонфиге(t *testing.T) {
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-empty-config",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	resp, err := svc.ProcessData(context.Background(), "agent-empty-config", &api.AgentDataDTO{
+		AgentUUID: "agent-empty-config",
+		AgentType: "sssruner",
+		Hostname:  "ws-1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.AdapterManifests)
+	require.Empty(t, *resp.AdapterManifests)
+}
+
+func TestProcessData_SSSRunerБитыйКонфигНеЛомаетHeartbeat(t *testing.T) {
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-bad-config",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+			Config:        datatypes.JSON([]byte(`{"adapter_manifests":`)),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	resp, err := svc.ProcessData(context.Background(), "agent-bad-config", &api.AgentDataDTO{
+		AgentUUID: "agent-bad-config",
+		AgentType: "sssruner",
+		Hostname:  "ws-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.AdapterManifests)
+	require.Empty(t, *resp.AdapterManifests)
+}
+
+func TestProcessData_НеSSSRunerСохраняетПрежнееПоведение(t *testing.T) {
+	manifestConfig, err := json.Marshal(api.AgentConfigDTO{
+		AdapterManifests: []api.AdapterManifestDTO{{AdapterID: "atol"}},
+	})
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-workstation",
+			Type:          "workstation",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+			Config:        datatypes.JSON(manifestConfig),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	resp, err := svc.ProcessData(context.Background(), "agent-workstation", &api.AgentDataDTO{
+		AgentUUID: "agent-workstation",
+		Hostname:  "ws-1",
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.AdapterManifests)
+	require.Empty(t, resp.Tasks)
 }

@@ -173,6 +173,85 @@ func (lf LicensesField) MarshalJSON() ([]byte, error) {
 	return json.Marshal(lf.Legacy)
 }
 
+type InventorySnapshotDTO struct {
+	CollectedAt       time.Time                       `json:"collected_at"`
+	Hostname          string                          `json:"hostname"`
+	OS                string                          `json:"os"`
+	Arch              string                          `json:"arch"`
+	ExecutablePath    string                          `json:"executable_path,omitempty"`
+	NetworkInterfaces []InventoryNetworkInterfaceDTO  `json:"network_interfaces,omitempty"`
+	COMPorts          []InventoryCOMPortDTO           `json:"com_ports,omitempty"`
+	InstalledSoftware []InventoryInstalledSoftwareDTO `json:"installed_software,omitempty"`
+	KnownComponents   []InventoryKnownComponentDTO    `json:"known_components,omitempty"`
+}
+
+type InventoryNetworkInterfaceDTO struct {
+	Name         string   `json:"name"`
+	Index        int      `json:"index,omitempty"`
+	MTU          int      `json:"mtu,omitempty"`
+	HardwareAddr string   `json:"hardware_addr,omitempty"`
+	Addresses    []string `json:"addresses,omitempty"`
+	Flags        []string `json:"flags,omitempty"`
+}
+
+type InventoryCOMPortDTO struct {
+	Name   string `json:"name"`
+	Device string `json:"device,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+type InventoryInstalledSoftwareDTO struct {
+	Name            string `json:"name"`
+	Version         string `json:"version,omitempty"`
+	Publisher       string `json:"publisher,omitempty"`
+	InstallLocation string `json:"install_location,omitempty"`
+	UninstallString string `json:"uninstall_string,omitempty"`
+	Source          string `json:"source,omitempty"`
+}
+
+type InventoryKnownComponentDTO struct {
+	Key      string                          `json:"key"`
+	Name     string                          `json:"name"`
+	Category string                          `json:"category,omitempty"`
+	Detected bool                            `json:"detected"`
+	Version  string                          `json:"version,omitempty"`
+	Evidence []InventoryComponentEvidenceDTO `json:"evidence,omitempty"`
+}
+
+type InventoryComponentEvidenceDTO struct {
+	Type   string `json:"type"`
+	Source string `json:"source,omitempty"`
+	Value  string `json:"value,omitempty"`
+}
+
+type AdapterStatusDTO struct {
+	AdapterID       string    `json:"adapter_id"`
+	AdapterType     string    `json:"adapter_type,omitempty"`
+	Version         string    `json:"version,omitempty"`
+	TargetOS        string    `json:"target_os,omitempty"`
+	TargetArch      string    `json:"target_arch,omitempty"`
+	ProtocolVersion string    `json:"protocol_version,omitempty"`
+	Status          string    `json:"status,omitempty"`
+	LocalPath       string    `json:"local_path,omitempty"`
+	FileSize        int64     `json:"file_size,omitempty"`
+	SHA256          string    `json:"sha256,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	InstalledAt     time.Time `json:"installed_at,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
+type AdapterManifestDTO struct {
+	AdapterID       string `json:"adapter_id"`
+	AdapterType     string `json:"adapter_type,omitempty"`
+	Version         string `json:"version,omitempty"`
+	TargetOS        string `json:"target_os,omitempty"`
+	TargetArch      string `json:"target_arch,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	DownloadURL     string `json:"download_url,omitempty"`
+	SHA256          string `json:"sha256,omitempty"`
+	FileName        string `json:"file_name,omitempty"`
+}
+
 // AgentDataDTO определяет структуру данных, получаемых от агента.
 type AgentDataDTO struct {
 	ModelName        string        `json:"modelName"`
@@ -211,6 +290,9 @@ type AgentDataDTO struct {
 	AgentUUID string `json:"uuid,omitempty"`       // UUID, присылаемый самим агентом (из конфига или аргументов)
 	AgentType string `json:"agent_type,omitempty"` // Тип агента: "getad", "sssruner", "workstation"
 
+	Inventory       *InventorySnapshotDTO `json:"inventory,omitempty"`
+	AdapterStatuses []AdapterStatusDTO    `json:"adapter_statuses,omitempty"`
+
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -224,8 +306,9 @@ type AgentTaskDTO struct {
 
 // AgentHeartbeatResponseDTO — ответ сервера на передачу данных/пинг.
 type AgentHeartbeatResponseDTO struct {
-	Status string         `json:"status"`          // "ok", "accepted"
-	Tasks  []AgentTaskDTO `json:"tasks,omitempty"` // Список задач для выполнения (если агент sssruner)
+	Status           string                `json:"status"`                      // "ok", "accepted"
+	Tasks            []AgentTaskDTO        `json:"tasks,omitempty"`             // Список задач для выполнения (если агент sssruner)
+	AdapterManifests *[]AdapterManifestDTO `json:"adapter_manifests,omitempty"` // Манифесты адаптеров для активного агента
 }
 
 // TicketListDTO - DTO для списка заявок (для таблицы на UI).
@@ -408,6 +491,8 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "ofd_name")
 	delete(raw, "attribute_excise_str")
 	delete(raw, "attribute_marked_str")
+	delete(raw, "inventory")
+	delete(raw, "adapter_statuses")
 
 	a.AdditionalProperties = raw
 	return nil
@@ -425,11 +510,12 @@ type RegistrationRequestDTO struct {
 
 // AgentConfigDTO - структура конфигурации, отправляемая агенту.
 type AgentConfigDTO struct {
-	EtalonServerURL string            `json:"etalon_server_url"`
-	Mode            string            `json:"mode"`
-	Intervals       IntervalsDTO      `json:"intervals"`
-	Zabbix          ZabbixConfigDTO   `json:"zabbix"`
-	Workstation     WorkstationCfgDTO `json:"workstation,omitempty"`
+	EtalonServerURL  string               `json:"etalon_server_url"`
+	Mode             string               `json:"mode"`
+	Intervals        IntervalsDTO         `json:"intervals"`
+	Zabbix           ZabbixConfigDTO      `json:"zabbix"`
+	Workstation      WorkstationCfgDTO    `json:"workstation,omitempty"`
+	AdapterManifests []AdapterManifestDTO `json:"adapter_manifests,omitempty"`
 }
 
 type IntervalsDTO struct {

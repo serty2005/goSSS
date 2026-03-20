@@ -14,6 +14,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -148,6 +149,16 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
 	if agentType == "sssruner" {
+		manifests := make([]api.AdapterManifestDTO, 0)
+		response.AdapterManifests = &manifests
+
+		manifests, err := adapterManifestsFromConfig(agent)
+		if err != nil {
+			s.logger.Warn("Не удалось прочитать adapter_manifests из конфигурации агента", "uuid", targetUUID, "error", err)
+		} else {
+			response.AdapterManifests = &manifests
+		}
+
 		commands, err := s.agentRepo.GetPendingCommands(ctx, targetUUID)
 		if err == nil && len(commands) > 0 {
 			var commandIDs []uint
@@ -160,6 +171,22 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 	}
 
 	return response, nil
+}
+
+func adapterManifestsFromConfig(agent *models.Agent) ([]api.AdapterManifestDTO, error) {
+	if agent == nil || len(agent.Config) == 0 {
+		return []api.AdapterManifestDTO{}, nil
+	}
+
+	var config api.AgentConfigDTO
+	if err := json.Unmarshal(agent.Config, &config); err != nil {
+		return []api.AdapterManifestDTO{}, fmt.Errorf("не удалось распарсить конфигурацию агента: %w", err)
+	}
+	if len(config.AdapterManifests) == 0 {
+		return []api.AdapterManifestDTO{}, nil
+	}
+
+	return slices.Clone(config.AdapterManifests), nil
 }
 
 func (s *agentServiceImpl) GetAgentConfig(ctx context.Context, uuid string) (*api.AgentConfigDTO, error) {
