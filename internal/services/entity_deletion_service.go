@@ -60,6 +60,7 @@ type EntityDeletionService interface {
 	GetCandidateDetails(ctx context.Context, candidateID uint) (*EntityDeletionCandidateDetails, error)
 	ReplayDuplicateChoice(ctx context.Context, candidateID uint, keepEntityID, deleteEntityID string) (*models.EntityDeletionCandidate, error)
 	TryAutoMergeDuplicateGroup(ctx context.Context, entityType, field, value string, internalIDs []string) (bool, error)
+	CleanupStalePendingCandidates(ctx context.Context) (int, error)
 }
 
 type EntityDeletionCandidateAgentData struct {
@@ -136,6 +137,13 @@ func (s *entityDeletionServiceImpl) RequestDeletion(ctx context.Context, req Ent
 
 	var out *models.EntityDeletionCandidate
 	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+		handled, err := s.tryResolvePendingDuplicateCandidateTx(txCtx, req, &out)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
 		return s.requestDeletionTx(txCtx, req, &out)
 	})
 	return out, err
@@ -146,62 +154,14 @@ func (s *entityDeletionServiceImpl) ConfirmDeletion(ctx context.Context, candida
 	var out *models.EntityDeletionCandidate
 
 	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
-		db := s.dbOrTx(txCtx)
-
-		var candidate models.EntityDeletionCandidate
-		if err := db.Where("id = ?", candidateID).First(&candidate).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrDeletionCandidateNotFound
-			}
+		candidate, err := s.getPendingCandidateByIDTx(txCtx, candidateID)
+		if err != nil {
 			return err
 		}
-		if candidate.Status != models.EntityDeletionCandidateStatusPending {
-			return ErrDeletionCandidateInvalidState
-		}
-		if candidate.RequestedByUserID != nil && currentUserID != "" && strings.TrimSpace(*candidate.RequestedByUserID) == currentUserID {
-			return ErrDeletionSelfConfirmationForbidden
-		}
-
-		deleteIDs := s.getCandidateDeleteEntityIDs(candidate)
-		if len(deleteIDs) == 0 {
-			deleteIDs = []string{candidate.EntityID}
-		}
-		// На случай устаревшего meta после ручного replay всегда добавляем актуальный entity_id кандидата.
-		deleteIDs = uniqueTrimmedStrings(append(deleteIDs, strings.TrimSpace(candidate.EntityID)))
-		deletedAny := false
-		for _, deleteID := range uniqueTrimmedStrings(deleteIDs) {
-			if candidate.DuplicateOfEntityID != nil && strings.TrimSpace(*candidate.DuplicateOfEntityID) == deleteID {
-				continue
-			}
-			deleted, err := s.deleteEntityByID(txCtx, candidate.EntityType, deleteID)
-			if err != nil {
-				return err
-			}
-			if !deleted {
-				continue
-			}
-			deletedAny = true
-			s.writeEntityHistory(txCtx, candidate.EntityType, deleteID, models.OwnerChangeSourceDeleteConfirmed, fmt.Sprintf("Подтверждено удаление сущности (кандидат #%d)", candidate.ID), currentUserID)
-		}
-		if !deletedAny {
-			return ErrDeletionEntityNotFound
-		}
-
-		now := time.Now()
-		if err := db.Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(map[string]interface{}{
-			"status":               models.EntityDeletionCandidateStatusConfirmed,
-			"confirmed_at":         now,
-			"confirmed_by_user_id": edsStringPtrOrNil(currentUserID),
-		}).Error; err != nil {
+		if err := s.confirmDeletionCandidateTx(txCtx, &candidate, currentUserID, true); err != nil {
 			return err
 		}
-
-		candidate.Status = models.EntityDeletionCandidateStatusConfirmed
-		candidate.ConfirmedAt = &now
-		candidate.ConfirmedByUserID = edsStringPtrOrNil(currentUserID)
 		out = &candidate
-
-		s.writeEntityHistory(txCtx, candidate.EntityType, candidate.EntityID, models.OwnerChangeSourceDeleteConfirmed, fmt.Sprintf("Подтверждено удаление сущности (кандидат #%d)", candidate.ID), currentUserID)
 		return nil
 	})
 	return out, err
@@ -354,54 +314,12 @@ func (s *entityDeletionServiceImpl) ReplayDuplicateChoice(ctx context.Context, c
 
 	var out *models.EntityDeletionCandidate
 	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
-		db := s.dbOrTx(txCtx)
-		var candidate models.EntityDeletionCandidate
-		if err := db.Where("id = ?", candidateID).First(&candidate).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrDeletionCandidateNotFound
-			}
+		candidate, err := s.getPendingCandidateByIDTx(txCtx, candidateID)
+		if err != nil {
 			return err
 		}
-		if candidate.Status != models.EntityDeletionCandidateStatusPending {
-			return ErrDeletionCandidateInvalidState
-		}
-		if candidate.DuplicateOfEntityID == nil || strings.TrimSpace(*candidate.DuplicateOfEntityID) == "" {
-			return errors.New("переигрывание доступно только для кандидатов, созданных по дублям")
-		}
-
-		idA := strings.TrimSpace(candidate.EntityID)
-		idB := strings.TrimSpace(*candidate.DuplicateOfEntityID)
-		valid := (keepEntityID == idA && deleteEntityID == idB) || (keepEntityID == idB && deleteEntityID == idA)
-		if !valid {
-			return errors.New("выбранные сущности не соответствуют паре дублей кандидата")
-		}
-
-		if err := s.mergePairWithSelectedKeepTx(txCtx, candidate.EntityType, keepEntityID, deleteEntityID, derefString(candidate.DuplicateField), derefString(candidate.DuplicateValue)); err != nil {
+		if err := s.replayDuplicateChoiceTx(txCtx, &candidate, keepEntityID, deleteEntityID); err != nil {
 			return err
-		}
-
-		updateData := map[string]interface{}{
-			"entity_id":              deleteEntityID,
-			"duplicate_of_entity_id": keepEntityID,
-		}
-		meta := s.parseCandidateMeta(candidate)
-		meta["duplicate_entity_ids"] = []string{deleteEntityID}
-		meta["survivor_id"] = keepEntityID
-		meta["loser_id"] = deleteEntityID
-		if metaJSON, mErr := json.Marshal(meta); mErr == nil {
-			updateData["meta"] = datatypes.JSON(metaJSON)
-			candidate.Meta = datatypes.JSON(metaJSON)
-		}
-		if snap, _ := s.getEntitySnapshot(txCtx, candidate.EntityType, deleteEntityID, true); snap != nil {
-			updateData["entity_display_name"] = edsStringPtrOrNil(snap.DisplayName)
-		}
-		if err := db.Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(updateData).Error; err != nil {
-			return err
-		}
-		candidate.EntityID = deleteEntityID
-		candidate.DuplicateOfEntityID = &keepEntityID
-		if value, ok := updateData["entity_display_name"].(*string); ok {
-			candidate.EntityDisplayName = value
 		}
 		out = &candidate
 		return nil
@@ -429,6 +347,16 @@ func (s *entityDeletionServiceImpl) TryAutoMergeDuplicateGroup(ctx context.Conte
 		}
 	})
 	return true, err
+}
+
+func (s *entityDeletionServiceImpl) CleanupStalePendingCandidates(ctx context.Context) (int, error) {
+	var cleaned int
+	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+		var err error
+		cleaned, err = s.cleanupStalePendingCandidatesTx(txCtx, "")
+		return err
+	})
+	return cleaned, err
 }
 
 func (s *entityDeletionServiceImpl) requestDeletionTx(ctx context.Context, req EntityDeletionRequest, out **models.EntityDeletionCandidate) error {
@@ -495,6 +423,326 @@ func (s *entityDeletionServiceImpl) requestDeletionTx(ctx context.Context, req E
 		*out = item
 	}
 	return nil
+}
+
+func (s *entityDeletionServiceImpl) tryResolvePendingDuplicateCandidateTx(ctx context.Context, req EntityDeletionRequest, out **models.EntityDeletionCandidate) (bool, error) {
+	if req.Source != models.EntityDeletionSourceManual {
+		return false, nil
+	}
+	candidate, err := s.findPendingDuplicateCandidateByMemberTx(ctx, req.EntityType, req.EntityID)
+	if err != nil {
+		return false, err
+	}
+	if candidate == nil {
+		return false, nil
+	}
+	if !isPairCandidate(*candidate) {
+		return false, nil
+	}
+
+	deleteEntityID := strings.TrimSpace(req.EntityID)
+	keepEntityID := ""
+	for _, entityID := range pairCandidateEntityIDs(*candidate) {
+		if entityID != deleteEntityID {
+			keepEntityID = entityID
+			break
+		}
+	}
+	if keepEntityID == "" {
+		return false, nil
+	}
+
+	if strings.TrimSpace(candidate.EntityID) != deleteEntityID {
+		if err := s.replayDuplicateChoiceTx(ctx, candidate, keepEntityID, deleteEntityID); err != nil {
+			return true, err
+		}
+	}
+	if err := s.confirmDeletionCandidateTx(ctx, candidate, contextUserIDString(ctx), true); err != nil {
+		return true, err
+	}
+	if out != nil {
+		*out = candidate
+	}
+	return true, nil
+}
+
+func (s *entityDeletionServiceImpl) getPendingCandidateByIDTx(ctx context.Context, candidateID uint) (models.EntityDeletionCandidate, error) {
+	var candidate models.EntityDeletionCandidate
+	if err := s.dbOrTx(ctx).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.EntityDeletionCandidate{}, ErrDeletionCandidateNotFound
+		}
+		return models.EntityDeletionCandidate{}, err
+	}
+	if candidate.Status != models.EntityDeletionCandidateStatusPending {
+		return models.EntityDeletionCandidate{}, ErrDeletionCandidateInvalidState
+	}
+	return candidate, nil
+}
+
+func (s *entityDeletionServiceImpl) confirmDeletionCandidateTx(ctx context.Context, candidate *models.EntityDeletionCandidate, currentUserID string, enforceSelfConfirmation bool) error {
+	if candidate == nil {
+		return ErrDeletionCandidateNotFound
+	}
+	if candidate.Status != models.EntityDeletionCandidateStatusPending {
+		return ErrDeletionCandidateInvalidState
+	}
+	if enforceSelfConfirmation && candidate.RequestedByUserID != nil && currentUserID != "" && strings.TrimSpace(*candidate.RequestedByUserID) == currentUserID {
+		return ErrDeletionSelfConfirmationForbidden
+	}
+
+	deleteIDs := s.getCandidateDeleteEntityIDs(*candidate)
+	if len(deleteIDs) == 0 {
+		deleteIDs = []string{candidate.EntityID}
+	}
+	deleteIDs = uniqueTrimmedStrings(append(deleteIDs, strings.TrimSpace(candidate.EntityID)))
+	affectedEntityIDs := make([]string, 0, len(deleteIDs))
+	deletedAny := false
+
+	for _, deleteID := range deleteIDs {
+		if candidate.DuplicateOfEntityID != nil && strings.TrimSpace(*candidate.DuplicateOfEntityID) == deleteID {
+			continue
+		}
+		deleted, err := s.deleteEntityByID(ctx, candidate.EntityType, deleteID)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			deletedAny = true
+			affectedEntityIDs = append(affectedEntityIDs, deleteID)
+			s.writeEntityHistory(ctx, candidate.EntityType, deleteID, models.OwnerChangeSourceDeleteConfirmed, fmt.Sprintf("Подтверждено удаление сущности (кандидат #%d)", candidate.ID), currentUserID)
+			continue
+		}
+
+		alreadyDeleted, err := s.isEntityDeletedOrMissing(ctx, candidate.EntityType, deleteID)
+		if err != nil {
+			return err
+		}
+		if alreadyDeleted {
+			deletedAny = true
+			affectedEntityIDs = append(affectedEntityIDs, deleteID)
+		}
+	}
+
+	if !deletedAny {
+		return ErrDeletionEntityNotFound
+	}
+	if err := s.markCandidateConfirmedTx(ctx, candidate, currentUserID); err != nil {
+		return err
+	}
+	s.writeEntityHistory(ctx, candidate.EntityType, candidate.EntityID, models.OwnerChangeSourceDeleteConfirmed, fmt.Sprintf("Подтверждено удаление сущности (кандидат #%d)", candidate.ID), currentUserID)
+	return s.cleanupPendingCandidatesForDeletedEntitiesTx(ctx, candidate.EntityType, affectedEntityIDs, candidate.ID, currentUserID)
+}
+
+func (s *entityDeletionServiceImpl) replayDuplicateChoiceTx(ctx context.Context, candidate *models.EntityDeletionCandidate, keepEntityID, deleteEntityID string) error {
+	if candidate == nil {
+		return ErrDeletionCandidateNotFound
+	}
+	if candidate.Status != models.EntityDeletionCandidateStatusPending {
+		return ErrDeletionCandidateInvalidState
+	}
+	if candidate.DuplicateOfEntityID == nil || strings.TrimSpace(*candidate.DuplicateOfEntityID) == "" {
+		return errors.New("переигрывание доступно только для кандидатов, созданных по дублям")
+	}
+
+	idA := strings.TrimSpace(candidate.EntityID)
+	idB := strings.TrimSpace(*candidate.DuplicateOfEntityID)
+	valid := (keepEntityID == idA && deleteEntityID == idB) || (keepEntityID == idB && deleteEntityID == idA)
+	if !valid {
+		return errors.New("выбранные сущности не соответствуют паре дублей кандидата")
+	}
+
+	if err := s.mergePairWithSelectedKeepTx(ctx, candidate.EntityType, keepEntityID, deleteEntityID, derefString(candidate.DuplicateField), derefString(candidate.DuplicateValue)); err != nil {
+		return err
+	}
+
+	updateData := map[string]interface{}{
+		"entity_id":              deleteEntityID,
+		"duplicate_of_entity_id": keepEntityID,
+	}
+	meta := s.parseCandidateMeta(*candidate)
+	meta["duplicate_entity_ids"] = []string{deleteEntityID}
+	meta["survivor_id"] = keepEntityID
+	meta["loser_id"] = deleteEntityID
+	if metaJSON, mErr := json.Marshal(meta); mErr == nil {
+		updateData["meta"] = datatypes.JSON(metaJSON)
+		candidate.Meta = datatypes.JSON(metaJSON)
+	}
+	if snap, _ := s.getEntitySnapshot(ctx, candidate.EntityType, deleteEntityID, true); snap != nil {
+		updateData["entity_display_name"] = edsStringPtrOrNil(snap.DisplayName)
+	}
+	if err := s.dbOrTx(ctx).Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(updateData).Error; err != nil {
+		return err
+	}
+	candidate.EntityID = deleteEntityID
+	candidate.DuplicateOfEntityID = &keepEntityID
+	if value, ok := updateData["entity_display_name"].(*string); ok {
+		candidate.EntityDisplayName = value
+	}
+	return nil
+}
+
+func (s *entityDeletionServiceImpl) findPendingDuplicateCandidateByMemberTx(ctx context.Context, entityType, entityID string) (*models.EntityDeletionCandidate, error) {
+	entityType = normalizeEntityType(entityType)
+	entityID = strings.TrimSpace(entityID)
+	if entityType == "" || entityID == "" {
+		return nil, nil
+	}
+
+	var candidates []models.EntityDeletionCandidate
+	if err := s.dbOrTx(ctx).
+		Where("entity_type = ? AND status = ? AND source = ?", entityType, models.EntityDeletionCandidateStatusPending, models.EntityDeletionSourceDuplicateWorker).
+		Order("created_at ASC").
+		Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	for i := range candidates {
+		if containsString(s.getCandidateAllEntityIDs(candidates[i]), entityID) {
+			candidate := candidates[i]
+			return &candidate, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *entityDeletionServiceImpl) markCandidateConfirmedTx(ctx context.Context, candidate *models.EntityDeletionCandidate, currentUserID string) error {
+	if candidate == nil {
+		return nil
+	}
+	now := time.Now()
+	if err := s.dbOrTx(ctx).Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(map[string]interface{}{
+		"status":               models.EntityDeletionCandidateStatusConfirmed,
+		"confirmed_at":         now,
+		"confirmed_by_user_id": edsStringPtrOrNil(currentUserID),
+	}).Error; err != nil {
+		return err
+	}
+	candidate.Status = models.EntityDeletionCandidateStatusConfirmed
+	candidate.ConfirmedAt = &now
+	candidate.ConfirmedByUserID = edsStringPtrOrNil(currentUserID)
+	return nil
+}
+
+func (s *entityDeletionServiceImpl) isEntityDeletedOrMissing(ctx context.Context, entityType, entityID string) (bool, error) {
+	snap, err := s.getEntitySnapshot(ctx, entityType, entityID, true)
+	if err != nil {
+		return false, err
+	}
+	if snap == nil {
+		return true, nil
+	}
+	return snap.Deleted, nil
+}
+
+func (s *entityDeletionServiceImpl) cleanupPendingCandidatesForDeletedEntitiesTx(ctx context.Context, entityType string, deletedEntityIDs []string, excludedCandidateID uint, currentUserID string) error {
+	deletedEntityIDs = uniqueTrimmedStrings(deletedEntityIDs)
+	if len(deletedEntityIDs) == 0 {
+		return nil
+	}
+
+	var candidates []models.EntityDeletionCandidate
+	query := s.dbOrTx(ctx).Where("entity_type = ? AND status = ?", normalizeEntityType(entityType), models.EntityDeletionCandidateStatusPending)
+	if excludedCandidateID > 0 {
+		query = query.Where("id <> ?", excludedCandidateID)
+	}
+	if err := query.Order("created_at ASC").Find(&candidates).Error; err != nil {
+		return err
+	}
+	for i := range candidates {
+		if !hasAnyString(s.getCandidateAllEntityIDs(candidates[i]), deletedEntityIDs) {
+			continue
+		}
+		if _, err := s.reconcilePendingCandidateTx(ctx, &candidates[i], currentUserID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *entityDeletionServiceImpl) cleanupStalePendingCandidatesTx(ctx context.Context, currentUserID string) (int, error) {
+	var candidates []models.EntityDeletionCandidate
+	if err := s.dbOrTx(ctx).
+		Where("status = ?", models.EntityDeletionCandidateStatusPending).
+		Order("created_at ASC").
+		Find(&candidates).Error; err != nil {
+		return 0, err
+	}
+
+	cleaned := 0
+	for i := range candidates {
+		changed, err := s.reconcilePendingCandidateTx(ctx, &candidates[i], currentUserID)
+		if err != nil {
+			return cleaned, err
+		}
+		if changed {
+			cleaned++
+		}
+	}
+	return cleaned, nil
+}
+
+func (s *entityDeletionServiceImpl) reconcilePendingCandidateTx(ctx context.Context, candidate *models.EntityDeletionCandidate, currentUserID string) (bool, error) {
+	if candidate == nil || candidate.Status != models.EntityDeletionCandidateStatusPending {
+		return false, nil
+	}
+
+	currentDeleteIDs := s.getCandidateDeleteEntityIDs(*candidate)
+	remainingDeleteIDs := make([]string, 0, len(currentDeleteIDs))
+	for _, deleteID := range currentDeleteIDs {
+		deleted, err := s.isEntityDeletedOrMissing(ctx, candidate.EntityType, deleteID)
+		if err != nil {
+			return false, err
+		}
+		if !deleted {
+			remainingDeleteIDs = append(remainingDeleteIDs, deleteID)
+		}
+	}
+
+	survivorDeleted := false
+	if candidate.DuplicateOfEntityID != nil && strings.TrimSpace(*candidate.DuplicateOfEntityID) != "" {
+		var err error
+		survivorDeleted, err = s.isEntityDeletedOrMissing(ctx, candidate.EntityType, strings.TrimSpace(*candidate.DuplicateOfEntityID))
+		if err != nil {
+			return false, err
+		}
+	}
+	if len(remainingDeleteIDs) == 0 || (survivorDeleted && len(remainingDeleteIDs) == 1) {
+		if err := s.markCandidateConfirmedTx(ctx, candidate, currentUserID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	needsUpdate := !sameTrimmedStringSlices(currentDeleteIDs, remainingDeleteIDs) || !containsString(remainingDeleteIDs, candidate.EntityID)
+	if !needsUpdate {
+		return false, nil
+	}
+
+	meta := s.parseCandidateMeta(*candidate)
+	meta["duplicate_entity_ids"] = remainingDeleteIDs
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return false, err
+	}
+
+	updateData := map[string]interface{}{
+		"meta": datatypes.JSON(metaJSON),
+	}
+	candidate.Meta = datatypes.JSON(metaJSON)
+
+	if !containsString(remainingDeleteIDs, candidate.EntityID) {
+		nextDeleteID := remainingDeleteIDs[0]
+		updateData["entity_id"] = nextDeleteID
+		candidate.EntityID = nextDeleteID
+		if snap, err := s.getEntitySnapshot(ctx, candidate.EntityType, nextDeleteID, true); err == nil && snap != nil {
+			updateData["entity_display_name"] = edsStringPtrOrNil(snap.DisplayName)
+			candidate.EntityDisplayName = edsStringPtrOrNil(snap.DisplayName)
+		}
+	}
+	if err := s.dbOrTx(ctx).Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(updateData).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 type entitySnapshot struct {
@@ -1056,7 +1304,8 @@ func (s *entityDeletionServiceImpl) autoMergeServerDuplicatesTx(ctx context.Cont
 		if loser == nil || survivor == nil || loser.ID == survivor.ID {
 			continue
 		}
-		if pending, _ := s.GetActiveCandidateByEntity(ctx, "Server", loser.ID); pending != nil {
+		pending, _ := s.GetActiveCandidateByEntity(ctx, "Server", loser.ID)
+		if pending != nil && pending.Source != models.EntityDeletionSourceManual {
 			continue
 		}
 
@@ -1078,6 +1327,15 @@ func (s *entityDeletionServiceImpl) autoMergeServerDuplicatesTx(ctx context.Cont
 		s.writeEntityHistory(ctx, "Server", survivor.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Склейка дубля %s по полю %s=%s. %s", loser.ID, field, value, mergeNote), "")
 		s.writeEntityHistory(ctx, "Server", loser.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Запись признана дублем %s по полю %s=%s и подготовлена к удалению", survivor.ID, field, value), "")
 
+		if pending != nil && pending.Source == models.EntityDeletionSourceManual {
+			if err := s.attachDuplicateContextToCandidateTx(ctx, pending, survivor.ID, loser.ID, field, value); err != nil {
+				return err
+			}
+			if err := s.confirmDeletionCandidateTx(ctx, pending, "", false); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.ensureDuplicateWorkerCandidateTx(ctx, "Server", survivor.ID, loser.ID, field, value); err != nil && !errors.Is(err, ErrDeletionEntityNotFound) {
 			return err
 		}
@@ -1117,7 +1375,8 @@ func (s *entityDeletionServiceImpl) autoMergeWorkstationDuplicatesTx(ctx context
 		if loser == nil || survivor == nil || loser.ID == survivor.ID {
 			continue
 		}
-		if pending, _ := s.GetActiveCandidateByEntity(ctx, "Workstation", loser.ID); pending != nil {
+		pending, _ := s.GetActiveCandidateByEntity(ctx, "Workstation", loser.ID)
+		if pending != nil && pending.Source != models.EntityDeletionSourceManual {
 			continue
 		}
 
@@ -1139,6 +1398,15 @@ func (s *entityDeletionServiceImpl) autoMergeWorkstationDuplicatesTx(ctx context
 		s.writeEntityHistory(ctx, "Workstation", survivor.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Склейка дубля %s по полю %s=%s. %s", loser.ID, field, value, mergeNote), "")
 		s.writeEntityHistory(ctx, "Workstation", loser.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Запись признана дублем %s по полю %s=%s и подготовлена к удалению", survivor.ID, field, value), "")
 
+		if pending != nil && pending.Source == models.EntityDeletionSourceManual {
+			if err := s.attachDuplicateContextToCandidateTx(ctx, pending, survivor.ID, loser.ID, field, value); err != nil {
+				return err
+			}
+			if err := s.confirmDeletionCandidateTx(ctx, pending, "", false); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.ensureDuplicateWorkerCandidateTx(ctx, "Workstation", survivor.ID, loser.ID, field, value); err != nil && !errors.Is(err, ErrDeletionEntityNotFound) {
 			return err
 		}
@@ -1178,7 +1446,8 @@ func (s *entityDeletionServiceImpl) autoMergeFiscalDuplicatesTx(ctx context.Cont
 		if loser == nil || survivor == nil || loser.ID == survivor.ID {
 			continue
 		}
-		if pending, _ := s.GetActiveCandidateByEntity(ctx, "FiscalRegister", loser.ID); pending != nil {
+		pending, _ := s.GetActiveCandidateByEntity(ctx, "FiscalRegister", loser.ID)
+		if pending != nil && pending.Source != models.EntityDeletionSourceManual {
 			continue
 		}
 
@@ -1196,6 +1465,15 @@ func (s *entityDeletionServiceImpl) autoMergeFiscalDuplicatesTx(ctx context.Cont
 		s.writeEntityHistory(ctx, "FiscalRegister", survivor.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Склейка дубля %s по полю %s=%s. %s", loser.ID, field, value, mergeNote), "")
 		s.writeEntityHistory(ctx, "FiscalRegister", loser.ID, models.OwnerChangeSourceDuplicateMerge, fmt.Sprintf("Запись признана дублем %s по полю %s=%s и подготовлена к удалению", survivor.ID, field, value), "")
 
+		if pending != nil && pending.Source == models.EntityDeletionSourceManual {
+			if err := s.attachDuplicateContextToCandidateTx(ctx, pending, survivor.ID, loser.ID, field, value); err != nil {
+				return err
+			}
+			if err := s.confirmDeletionCandidateTx(ctx, pending, "", false); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.ensureDuplicateWorkerCandidateTx(ctx, "FiscalRegister", survivor.ID, loser.ID, field, value); err != nil && !errors.Is(err, ErrDeletionEntityNotFound) {
 			return err
 		}
@@ -1281,6 +1559,38 @@ func (s *entityDeletionServiceImpl) appendDuplicateEntityToCandidateTx(ctx conte
 	return nil
 }
 
+func (s *entityDeletionServiceImpl) attachDuplicateContextToCandidateTx(ctx context.Context, candidate *models.EntityDeletionCandidate, survivorID, loserID, field, value string) error {
+	if candidate == nil {
+		return nil
+	}
+	meta := s.parseCandidateMeta(*candidate)
+	meta["duplicate_entity_ids"] = uniqueTrimmedStrings(append(s.getCandidateDeleteEntityIDs(*candidate), loserID))
+	if strings.TrimSpace(survivorID) != "" {
+		meta["survivor_id"] = survivorID
+	}
+	if strings.TrimSpace(loserID) != "" {
+		meta["loser_id"] = loserID
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	updateData := map[string]interface{}{
+		"duplicate_of_entity_id": edsStringPtrOrNil(survivorID),
+		"duplicate_field":        edsStringPtrOrNil(field),
+		"duplicate_value":        edsStringPtrOrNil(value),
+		"meta":                   datatypes.JSON(metaJSON),
+	}
+	if err := s.dbOrTx(ctx).Model(&models.EntityDeletionCandidate{}).Where("id = ?", candidate.ID).Updates(updateData).Error; err != nil {
+		return err
+	}
+	candidate.Meta = datatypes.JSON(metaJSON)
+	candidate.DuplicateOfEntityID = edsStringPtrOrNil(survivorID)
+	candidate.DuplicateField = edsStringPtrOrNil(field)
+	candidate.DuplicateValue = edsStringPtrOrNil(value)
+	return nil
+}
+
 func (s *entityDeletionServiceImpl) parseCandidateMeta(candidate models.EntityDeletionCandidate) map[string]interface{} {
 	meta := map[string]interface{}{}
 	if len(candidate.Meta) > 0 {
@@ -1340,6 +1650,37 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func hasAnyString(values []string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if containsString(values, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameTrimmedStringSlices(left []string, right []string) bool {
+	left = uniqueTrimmedStrings(left)
+	right = uniqueTrimmedStrings(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func pairCandidateEntityIDs(candidate models.EntityDeletionCandidate) []string {
+	return uniqueTrimmedStrings([]string{candidate.EntityID, derefString(candidate.DuplicateOfEntityID)})
+}
+
+func isPairCandidate(candidate models.EntityDeletionCandidate) bool {
+	return len(pairCandidateEntityIDs(candidate)) == 2
 }
 
 func normalizeEntityType(entityType string) string {

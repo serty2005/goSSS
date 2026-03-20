@@ -64,6 +64,14 @@ func (g *duplicatesGatewayImpl) Start(ctx context.Context) {
 // runSearchCycle выполняет один полный цикл поиска по всем типам сущностей и полям.
 func (g *duplicatesGatewayImpl) runSearchCycle(ctx context.Context) {
 	g.logger.Info("Начало нового цикла поиска дубликатов.")
+	if g.deletionSvc != nil {
+		cleaned, err := g.deletionSvc.CleanupStalePendingCandidates(ctx)
+		if err != nil {
+			g.logger.Error("Не удалось очистить устаревшие кандидаты на удаление", "error", err)
+		} else if cleaned > 0 {
+			g.logger.Info("Очищены устаревшие кандидаты на удаление", "count", cleaned)
+		}
+	}
 
 	entityConfigs := []struct {
 		model      interface{}
