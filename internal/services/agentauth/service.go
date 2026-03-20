@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/models"
@@ -13,9 +14,11 @@ import (
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -29,12 +32,27 @@ var (
 	ErrTokenExpired = errors.New("токен агента просрочен")
 )
 
+type RegistrationAttemptStatus string
+
+const (
+	RegistrationAttemptStatusSuccess        RegistrationAttemptStatus = models.AgentRegistrationStatusSuccess
+	RegistrationAttemptStatusUnauthorized   RegistrationAttemptStatus = models.AgentRegistrationStatusUnauthorized
+	RegistrationAttemptStatusInvalidRequest RegistrationAttemptStatus = models.AgentRegistrationStatusInvalidRequest
+	RegistrationAttemptStatusFailed         RegistrationAttemptStatus = models.AgentRegistrationStatusFailed
+)
+
+type RegistrationAttemptMeta struct {
+	RemoteAddr string
+	RawPayload []byte
+}
+
 type AgentRegistrar interface {
 	RegisterAgent(ctx context.Context, req *api.RegistrationRequestDTO) (*models.Agent, error)
 }
 
 type Service interface {
-	RegisterAndIssueTokens(ctx context.Context, req *api.RegistrationRequestDTO) (*api.AgentRegistrationResponseDTO, error)
+	RegisterAndIssueTokens(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta) (*api.AgentRegistrationResponseDTO, error)
+	RecordRegistrationAttempt(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta, status RegistrationAttemptStatus, errorText string) error
 	RefreshTokens(ctx context.Context, req *api.AgentTokenRefreshRequestDTO) (*api.AgentTokenRefreshResponseDTO, error)
 	ValidateAccessToken(ctx context.Context, agentUUID, rawToken string) error
 }
@@ -55,9 +73,11 @@ func NewService(db *gorm.DB, log logger.LoggerInterface, agentRepo repositories.
 	}
 }
 
-func (s *service) RegisterAndIssueTokens(ctx context.Context, req *api.RegistrationRequestDTO) (*api.AgentRegistrationResponseDTO, error) {
+func (s *service) RegisterAndIssueTokens(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta) (*api.AgentRegistrationResponseDTO, error) {
 	if req == nil || strings.TrimSpace(req.AgentUUID) == "" {
-		return nil, fmt.Errorf("agent_uuid обязателен")
+		err := fmt.Errorf("agent_uuid обязателен")
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusInvalidRequest, err.Error())
+		return nil, err
 	}
 
 	if req.InitialData.AgentType == "" {
@@ -66,15 +86,20 @@ func (s *service) RegisterAndIssueTokens(ctx context.Context, req *api.Registrat
 
 	_, err := s.registrar.RegisterAgent(ctx, req)
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusFailed, err.Error())
 		return nil, err
 	}
 
 	agent, err := s.agentRepo.GetByUUID(ctx, req.AgentUUID)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось получить агента после регистрации: %w", err)
+		wrappedErr := fmt.Errorf("не удалось получить агента после регистрации: %w", err)
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusFailed, wrappedErr.Error())
+		return nil, wrappedErr
 	}
 	if agent == nil {
-		return nil, fmt.Errorf("агент не найден после регистрации")
+		err := fmt.Errorf("агент не найден после регистрации")
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusFailed, err.Error())
+		return nil, err
 	}
 
 	agent.Type = "sssruner"
@@ -91,17 +116,24 @@ func (s *service) RegisterAndIssueTokens(ctx context.Context, req *api.Registrat
 
 	pair, err := s.issueTokenPair(ctx, req.AgentUUID)
 	if err != nil {
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusFailed, err.Error())
 		return nil, err
 	}
 
-	return &api.AgentRegistrationResponseDTO{
+	resp := &api.AgentRegistrationResponseDTO{
 		Status:                "ok",
 		AgentUUID:             req.AgentUUID,
 		AccessToken:           pair.AccessToken,
 		AccessTokenExpiresAt:  pair.AccessExpiresAt,
 		RefreshToken:          pair.RefreshToken,
 		RefreshTokenExpiresAt: pair.RefreshExpiresAt,
-	}, nil
+	}
+	s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusSuccess, "")
+	return resp, nil
+}
+
+func (s *service) RecordRegistrationAttempt(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta, status RegistrationAttemptStatus, errorText string) error {
+	return s.recordRegistrationAttempt(ctx, req, meta, status, errorText)
 }
 
 func (s *service) RefreshTokens(ctx context.Context, req *api.AgentTokenRefreshRequestDTO) (*api.AgentTokenRefreshResponseDTO, error) {
@@ -255,4 +287,223 @@ func generateToken(prefix string) (string, error) {
 func tokenHash(raw string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(raw)))
 	return hex.EncodeToString(sum[:])
+}
+
+func (s *service) logRegistrationAttemptError(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta, status RegistrationAttemptStatus, errorText string) {
+	if err := s.recordRegistrationAttempt(ctx, req, meta, status, errorText); err != nil {
+		s.log.Warn(
+			"Не удалось сохранить диагностику регистрации агента",
+			"agent_uuid", agentUUIDFromRequest(req),
+			"status", string(status),
+			"error", err,
+		)
+	}
+}
+
+func (s *service) recordRegistrationAttempt(ctx context.Context, req *api.RegistrationRequestDTO, meta RegistrationAttemptMeta, status RegistrationAttemptStatus, errorText string) error {
+	now := time.Now().UTC()
+	payloadJSON := registrationPayloadJSON(req, meta.RawPayload)
+	systemInfoJSON := jsonMapToJSON(systemInfoFromRequest(req))
+	agentUUID := agentUUIDFromRequest(req)
+
+	if agentUUID != "" {
+		if err := s.upsertAgentRegistrationSnapshot(ctx, req, payloadJSON, systemInfoJSON, status, errorText, now); err != nil {
+			return err
+		}
+	}
+
+	attempt := &models.AgentRegistrationAttempt{
+		Status:             string(status),
+		MachineFingerprint: machineFingerprintFromRequest(req),
+		SystemInfo:         systemInfoJSON,
+		Payload:            payloadJSON,
+		RemoteAddr:         normalizeRemoteAddr(meta.RemoteAddr),
+		CreatedAt:          now,
+	}
+	if agentUUID != "" {
+		attempt.AgentUUID = stringPtr(agentUUID)
+	}
+	if trimmedError := strings.TrimSpace(errorText); trimmedError != "" {
+		attempt.ErrorText = stringPtr(trimmedError)
+	}
+
+	return s.db.WithContext(ctx).Create(attempt).Error
+}
+
+func (s *service) upsertAgentRegistrationSnapshot(
+	ctx context.Context,
+	req *api.RegistrationRequestDTO,
+	payloadJSON datatypes.JSON,
+	systemInfoJSON datatypes.JSON,
+	status RegistrationAttemptStatus,
+	errorText string,
+	recordedAt time.Time,
+) error {
+	agentUUID := agentUUIDFromRequest(req)
+	if agentUUID == "" {
+		return nil
+	}
+
+	agent, err := s.agentRepo.GetByUUID(ctx, agentUUID)
+	if err != nil {
+		return fmt.Errorf("не удалось получить агента для обновления snapshot регистрации: %w", err)
+	}
+
+	if agent == nil {
+		agent = &models.Agent{
+			UUID:     agentUUID,
+			Type:     registrationAgentType(req),
+			Status:   models.StatusRegistrationFailed,
+			Hostname: hostnameFromRequest(req),
+			Version:  versionFromRequest(req),
+		}
+	}
+
+	if host := hostnameFromRequest(req); host != "" {
+		agent.Hostname = host
+	}
+	if version := versionFromRequest(req); version != "" {
+		agent.Version = version
+	}
+	if agent.Type == "" {
+		agent.Type = registrationAgentType(req)
+	}
+
+	agent.LastRegistrationAt = &recordedAt
+	agent.LastRegistrationStatus = string(status)
+	agent.LastRegistrationError = strings.TrimSpace(errorText)
+	if fingerprint := machineFingerprintFromRequest(req); fingerprint != "" {
+		agent.MachineFingerprint = fingerprint
+	}
+	if len(systemInfoJSON) > 0 {
+		agent.RegistrationSystemInfo = systemInfoJSON
+	}
+	if len(payloadJSON) > 0 {
+		agent.RegistrationPayload = payloadJSON
+	}
+	if status == RegistrationAttemptStatusSuccess && agent.Status == models.StatusRegistrationFailed {
+		agent.Status = models.StatusPendingOwner
+	}
+
+	if existsInStorage(agent) {
+		return s.agentRepo.Update(ctx, agent)
+	}
+	return s.agentRepo.Create(ctx, agent)
+}
+
+func existsInStorage(agent *models.Agent) bool {
+	return agent != nil && agent.CreatedAt != (time.Time{})
+}
+
+func registrationPayloadJSON(req *api.RegistrationRequestDTO, rawPayload []byte) datatypes.JSON {
+	if normalized, ok := normalizeRawJSON(rawPayload); ok {
+		return normalized
+	}
+	if req == nil {
+		return nil
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil
+	}
+	return datatypes.JSON(raw)
+}
+
+func normalizeRawJSON(rawPayload []byte) (datatypes.JSON, bool) {
+	trimmed := strings.TrimSpace(string(rawPayload))
+	if trimmed == "" {
+		return nil, false
+	}
+	if json.Valid([]byte(trimmed)) {
+		return datatypes.JSON([]byte(trimmed)), true
+	}
+	wrapped, err := json.Marshal(map[string]string{
+		"raw_body": trimmed,
+	})
+	if err != nil {
+		return nil, false
+	}
+	return datatypes.JSON(wrapped), true
+}
+
+func jsonMapToJSON(payload map[string]any) datatypes.JSON {
+	if len(payload) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return datatypes.JSON(raw)
+}
+
+func agentUUIDFromRequest(req *api.RegistrationRequestDTO) string {
+	if req == nil {
+		return ""
+	}
+	return strings.TrimSpace(req.AgentUUID)
+}
+
+func hostnameFromRequest(req *api.RegistrationRequestDTO) string {
+	if req == nil {
+		return ""
+	}
+	if hostname := strings.TrimSpace(req.Hostname); hostname != "" {
+		return hostname
+	}
+	return strings.TrimSpace(req.InitialData.Hostname)
+}
+
+func versionFromRequest(req *api.RegistrationRequestDTO) string {
+	if req == nil {
+		return ""
+	}
+	if version := strings.TrimSpace(req.AgentVersion); version != "" {
+		return version
+	}
+	return strings.TrimSpace(req.InitialData.AgentVersion)
+}
+
+func registrationAgentType(req *api.RegistrationRequestDTO) string {
+	if req == nil {
+		return "sssruner"
+	}
+	if agentType := strings.TrimSpace(req.InitialData.AgentType); agentType != "" {
+		return agentType
+	}
+	return "sssruner"
+}
+
+func machineFingerprintFromRequest(req *api.RegistrationRequestDTO) string {
+	if req == nil {
+		return ""
+	}
+	return strings.TrimSpace(req.MachineFingerprint)
+}
+
+func systemInfoFromRequest(req *api.RegistrationRequestDTO) map[string]any {
+	if req == nil || len(req.SystemInfo) == 0 {
+		return nil
+	}
+	return req.SystemInfo
+}
+
+func normalizeRemoteAddr(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(value)
+	if err == nil {
+		return strings.TrimSpace(host)
+	}
+	return value
+}
+
+func stringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }

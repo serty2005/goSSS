@@ -146,6 +146,33 @@ type Agent struct {
 	// Используется для мониторинга активности агента.
 	LastHeartbeat time.Time
 
+	// LastRegistrationAt — время последней bootstrap-регистрации агента.
+	// Обновляется как при успешной регистрации, так и при диагностируемых отказах.
+	LastRegistrationAt *time.Time
+
+	// LastRegistrationStatus — итог последней попытки регистрации.
+	// Значения: success, unauthorized, invalid_request, failed.
+	LastRegistrationStatus string `gorm:"type:varchar(32);index"`
+
+	// LastRegistrationError — текст последней ошибки регистрации.
+	// Пустой при успешной регистрации.
+	LastRegistrationError string `gorm:"type:text"`
+
+	// MachineFingerprint — последний fingerprint машины, присланный агентом при регистрации.
+	MachineFingerprint string `gorm:"type:text"`
+
+	// RegistrationSystemInfo — последний system_info из registration payload.
+	RegistrationSystemInfo datatypes.JSON `gorm:"type:jsonb"`
+
+	// RegistrationPayload — последнее полное тело registration request.
+	RegistrationPayload datatypes.JSON `gorm:"type:jsonb"`
+
+	// LatestInventorySnapshot — последний inventory snapshot из heartbeat.
+	LatestInventorySnapshot datatypes.JSON `gorm:"type:jsonb"`
+
+	// LatestAdapterStatuses — последний срез adapter_statuses из heartbeat.
+	LatestAdapterStatuses datatypes.JSON `gorm:"type:jsonb"`
+
 	// Version — версия агента (sssruner).
 	// Используется для отслеживания обновлений.
 	Version string `gorm:"type:varchar(50)"`

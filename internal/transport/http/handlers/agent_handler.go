@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
@@ -9,6 +10,7 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
+	"io"
 	"net/http"
 	"strings"
 
@@ -45,16 +47,33 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 // Использует bootstrap API key и выдает access/refresh токены.
 func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 	log := middleware.GetLogger(r.Context())
-	if !h.authorizeBootstrapKey(w, r) {
+	rawBody, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Не удалось прочитать тело запроса")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+	var dto api.RegistrationRequestDTO
+	parseErr := json.Unmarshal(rawBody, &dto)
+	meta := agentauth.RegistrationAttemptMeta{
+		RemoteAddr: r.RemoteAddr,
+		RawPayload: rawBody,
+	}
+
+	if authError := h.validateBootstrapKey(r); authError != "" {
+		_ = h.agentAuth.RecordRegistrationAttempt(r.Context(), registrationRequestOrNil(parseErr, &dto), meta, agentauth.RegistrationAttemptStatusUnauthorized, authError)
+		response.RespondWithError(w, http.StatusUnauthorized, authError)
 		return
 	}
 
-	var dto api.RegistrationRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+	if parseErr != nil {
+		_ = h.agentAuth.RecordRegistrationAttempt(r.Context(), nil, meta, agentauth.RegistrationAttemptStatusInvalidRequest, "Неверный формат тела запроса")
 		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 	if strings.TrimSpace(dto.AgentUUID) == "" {
+		_ = h.agentAuth.RecordRegistrationAttempt(r.Context(), &dto, meta, agentauth.RegistrationAttemptStatusInvalidRequest, "Поле agent_uuid обязательно")
 		response.RespondWithError(w, http.StatusBadRequest, "Поле agent_uuid обязательно")
 		return
 	}
@@ -62,7 +81,7 @@ func (h *AgentHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 		dto.InitialData.AgentType = "sssruner"
 	}
 
-	respDTO, err := h.agentAuth.RegisterAndIssueTokens(r.Context(), &dto)
+	respDTO, err := h.agentAuth.RegisterAndIssueTokens(r.Context(), &dto, meta)
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {
 			response.RespondWithError(w, http.StatusConflict, "Агент с таким UUID уже зарегистрирован")
@@ -239,22 +258,19 @@ func (h *AgentHandler) HandleSubmitJSON(w http.ResponseWriter, r *http.Request) 
 	response.RespondWithJSON(w, http.StatusOK, respData)
 }
 
-func (h *AgentHandler) authorizeBootstrapKey(w http.ResponseWriter, r *http.Request) bool {
+func (h *AgentHandler) validateBootstrapKey(r *http.Request) string {
 	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authHeader == "" {
-		response.RespondWithError(w, http.StatusUnauthorized, "Отсутствует заголовок Authorization")
-		return false
+		return "Отсутствует заголовок Authorization"
 	}
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		response.RespondWithError(w, http.StatusUnauthorized, "Неверный формат заголовка Authorization")
-		return false
+		return "Неверный формат заголовка Authorization"
 	}
 	if h.apiKey == "" || parts[1] != h.apiKey {
-		response.RespondWithError(w, http.StatusUnauthorized, "Неверный bootstrap API key агента")
-		return false
+		return "Неверный bootstrap API key агента"
 	}
-	return true
+	return ""
 }
 
 func (h *AgentHandler) authorizeAgentAccessToken(w http.ResponseWriter, r *http.Request, agentUUID string) bool {
@@ -281,4 +297,11 @@ func (h *AgentHandler) authorizeAgentAccessToken(w http.ResponseWriter, r *http.
 		return false
 	}
 	return true
+}
+
+func registrationRequestOrNil(parseErr error, dto *api.RegistrationRequestDTO) *api.RegistrationRequestDTO {
+	if parseErr != nil || dto == nil {
+		return nil
+	}
+	return dto
 }

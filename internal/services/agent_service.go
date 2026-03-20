@@ -15,9 +15,11 @@ import (
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 )
 
 var (
@@ -104,21 +106,29 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		return nil, fmt.Errorf("ошибка поиска агента: %w", err)
 	}
 	if agent == nil {
+		observedAt := parseAgentObservedAt(data.CurrentTime)
 		agent = &models.Agent{
-			UUID:          targetUUID,
-			Type:          agentType,
-			Status:        models.StatusActive,
-			LastHeartbeat: time.Now(),
-			Hostname:      data.Hostname,
-			Version:       data.AgentVersion,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
+			UUID:                    targetUUID,
+			Type:                    agentType,
+			Status:                  models.StatusActive,
+			LastHeartbeat:           time.Now(),
+			LastObservedAt:          &observedAt,
+			Hostname:                data.Hostname,
+			Version:                 data.AgentVersion,
+			LatestInventorySnapshot: marshalAgentJSON(data.Inventory),
+			LatestAdapterStatuses:   marshalAgentJSON(data.AdapterStatuses),
+			CreatedAt:               time.Now(),
+			UpdatedAt:               time.Now(),
 		}
 		if err := s.agentRepo.Create(ctx, agent); err != nil {
 			return nil, fmt.Errorf("не удалось создать агента при авто-регистрации: %w", err)
 		}
 	} else {
 		agent.LastHeartbeat = time.Now()
+		observedAt := parseAgentObservedAt(data.CurrentTime)
+		if agent.LastObservedAt == nil || observedAt.After(*agent.LastObservedAt) {
+			agent.LastObservedAt = &observedAt
+		}
 		if data.AgentVersion != "" {
 			agent.Version = data.AgentVersion
 		}
@@ -127,6 +137,12 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		}
 		if data.Hostname != "" {
 			agent.Hostname = data.Hostname
+		}
+		if data.Inventory != nil {
+			agent.LatestInventorySnapshot = marshalAgentJSON(data.Inventory)
+		}
+		if data.AdapterStatuses != nil {
+			agent.LatestAdapterStatuses = marshalAgentJSON(data.AdapterStatuses)
 		}
 		if err := s.agentRepo.Update(ctx, agent); err != nil {
 			s.logger.Error("Не удалось обновить heartbeat агента", "uuid", targetUUID, "error", err)
@@ -187,6 +203,36 @@ func adapterManifestsFromConfig(agent *models.Agent) ([]api.AdapterManifestDTO, 
 	}
 
 	return slices.Clone(config.AdapterManifests), nil
+}
+
+func marshalAgentJSON(value any) datatypes.JSON {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return datatypes.JSON(raw)
+}
+
+func parseAgentObservedAt(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Now().UTC()
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Now().UTC()
 }
 
 func (s *agentServiceImpl) GetAgentConfig(ctx context.Context, uuid string) (*api.AgentConfigDTO, error) {

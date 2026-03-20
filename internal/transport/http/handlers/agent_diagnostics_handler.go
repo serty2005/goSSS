@@ -1,0 +1,155 @@
+package handlers
+
+import (
+	"encoding/json"
+	"etalon-server/internal/domain/models"
+	api "etalon-server/internal/transport/http/dtos"
+	"etalon-server/internal/transport/http/response"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
+)
+
+type AgentDiagnosticsHandler struct {
+	db *gorm.DB
+}
+
+func NewAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
+	return &AgentDiagnosticsHandler{db: db}
+}
+
+func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
+	r.Get("/agent-diagnostics", h.ListAgents)
+	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
+}
+
+func (h *AgentDiagnosticsHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
+	limit := 200
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	registrationStatus := strings.TrimSpace(r.URL.Query().Get("registration_status"))
+
+	query := h.db.WithContext(r.Context()).Model(&models.Agent{})
+	if term != "" {
+		likeTerm := "%" + term + "%"
+		query = query.Where(
+			"LOWER(uuid) LIKE LOWER(?) OR LOWER(hostname) LIKE LOWER(?) OR LOWER(machine_fingerprint) LIKE LOWER(?) OR LOWER(owner_id) LIKE LOWER(?)",
+			likeTerm,
+			likeTerm,
+			likeTerm,
+			likeTerm,
+		)
+	}
+	if registrationStatus != "" {
+		query = query.Where("last_registration_status = ?", registrationStatus)
+	}
+
+	var items []models.Agent
+	if err := query.
+		Order("CASE WHEN last_registration_at IS NULL THEN 1 ELSE 0 END, last_registration_at DESC, last_heartbeat DESC, updated_at DESC").
+		Limit(limit).
+		Find(&items).Error; err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить список агентов для диагностики")
+		return
+	}
+
+	out := make([]api.AgentDiagnosticsListItemDTO, 0, len(items))
+	for i := range items {
+		out = append(out, buildAgentDiagnosticsListItem(items[i]))
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
+	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	if agentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
+		return
+	}
+
+	var agent models.Agent
+	if err := h.db.WithContext(r.Context()).Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить данные агента")
+		return
+	}
+
+	var attempts []models.AgentRegistrationAttempt
+	if err := h.db.WithContext(r.Context()).
+		Where("agent_uuid = ?", agentUUID).
+		Order("created_at DESC, id DESC").
+		Limit(20).
+		Find(&attempts).Error; err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить историю регистрации агента")
+		return
+	}
+
+	out := api.AgentDiagnosticsDetailsDTO{
+		Agent:                  buildAgentDiagnosticsListItem(agent),
+		RegistrationPayload:    decodeJSONValue(agent.RegistrationPayload),
+		RegistrationSystemInfo: decodeJSONValue(agent.RegistrationSystemInfo),
+		LatestInventory:        decodeJSONValue(agent.LatestInventorySnapshot),
+		LatestAdapterStatuses:  decodeJSONValue(agent.LatestAdapterStatuses),
+		RecentRegistrations:    make([]api.AgentRegistrationAttemptDTO, 0, len(attempts)),
+	}
+
+	for i := range attempts {
+		out.RecentRegistrations = append(out.RecentRegistrations, api.AgentRegistrationAttemptDTO{
+			ID:                 attempts[i].ID,
+			AgentUUID:          attempts[i].AgentUUID,
+			Status:             attempts[i].Status,
+			ErrorText:          attempts[i].ErrorText,
+			MachineFingerprint: attempts[i].MachineFingerprint,
+			SystemInfo:         decodeJSONValue(attempts[i].SystemInfo),
+			Payload:            decodeJSONValue(attempts[i].Payload),
+			RemoteAddr:         attempts[i].RemoteAddr,
+			CreatedAt:          attempts[i].CreatedAt,
+		})
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListItemDTO {
+	return api.AgentDiagnosticsListItemDTO{
+		UUID:                   agent.UUID,
+		Hostname:               agent.Hostname,
+		Type:                   agent.Type,
+		Status:                 agent.Status,
+		OwnerID:                agent.OwnerID,
+		WorkstationID:          agent.WorkstationID,
+		LastObservedAt:         agent.LastObservedAt,
+		LastHeartbeat:          agent.LastHeartbeat,
+		LastRegistrationAt:     agent.LastRegistrationAt,
+		LastRegistrationStatus: agent.LastRegistrationStatus,
+		LastRegistrationError:  agent.LastRegistrationError,
+		MachineFingerprint:     agent.MachineFingerprint,
+	}
+}
+
+func decodeJSONValue(raw datatypes.JSON) any {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return map[string]any{
+			"raw": string(raw),
+		}
+	}
+	return value
+}

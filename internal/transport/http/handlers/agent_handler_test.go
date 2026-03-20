@@ -45,11 +45,25 @@ func (s *stubAgentService) GetAgentConfig(_ context.Context, _ string) (*api.Age
 }
 
 type stubAgentAuthService struct {
-	validateErr error
+	validateErr      error
+	recordedStatuses []agentauth.RegistrationAttemptStatus
+	recordedErrors   []string
+	recordedUUIDs    []string
 }
 
-func (s *stubAgentAuthService) RegisterAndIssueTokens(_ context.Context, _ *api.RegistrationRequestDTO) (*api.AgentRegistrationResponseDTO, error) {
+func (s *stubAgentAuthService) RegisterAndIssueTokens(_ context.Context, _ *api.RegistrationRequestDTO, _ agentauth.RegistrationAttemptMeta) (*api.AgentRegistrationResponseDTO, error) {
 	return nil, nil
+}
+
+func (s *stubAgentAuthService) RecordRegistrationAttempt(_ context.Context, req *api.RegistrationRequestDTO, _ agentauth.RegistrationAttemptMeta, status agentauth.RegistrationAttemptStatus, errorText string) error {
+	s.recordedStatuses = append(s.recordedStatuses, status)
+	s.recordedErrors = append(s.recordedErrors, errorText)
+	if req != nil {
+		s.recordedUUIDs = append(s.recordedUUIDs, req.AgentUUID)
+	} else {
+		s.recordedUUIDs = append(s.recordedUUIDs, "")
+	}
+	return nil
 }
 
 func (s *stubAgentAuthService) RefreshTokens(_ context.Context, _ *api.AgentTokenRefreshRequestDTO) (*api.AgentTokenRefreshResponseDTO, error) {
@@ -155,4 +169,38 @@ func TestHandleSubmitJSON_LegacyEndpointНеЛомается(t *testing.T) {
 	responseData, ok := responseBody["data"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "ok", responseData["status"])
+}
+
+func TestRegisterAgent_401БезAuthorizationСохраняетПричинуДиагностики(t *testing.T) {
+	authService := &stubAgentAuthService{}
+	handler := NewAgentHandler(&stubAgentService{}, authService, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/register", strings.NewReader(`{
+		"agent_uuid": "agent-auth-missing",
+		"hostname": "ws-01"
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.registerAgent(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.Equal(t, []agentauth.RegistrationAttemptStatus{agentauth.RegistrationAttemptStatusUnauthorized}, authService.recordedStatuses)
+	require.Equal(t, []string{"Отсутствует заголовок Authorization"}, authService.recordedErrors)
+	require.Equal(t, []string{"agent-auth-missing"}, authService.recordedUUIDs)
+}
+
+func TestRegisterAgent_400ПриБитомJSONСохраняетПопытку(t *testing.T) {
+	authService := &stubAgentAuthService{}
+	handler := NewAgentHandler(&stubAgentService{}, authService, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/register", strings.NewReader(`{"agent_uuid":`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	handler.registerAgent(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, []agentauth.RegistrationAttemptStatus{agentauth.RegistrationAttemptStatusInvalidRequest}, authService.recordedStatuses)
+	require.Equal(t, []string{"Неверный формат тела запроса"}, authService.recordedErrors)
+	require.Equal(t, []string{""}, authService.recordedUUIDs)
 }

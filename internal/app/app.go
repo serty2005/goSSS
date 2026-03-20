@@ -99,6 +99,7 @@ type Application struct {
 	NetworkCandidateHandler *handlers.NetworkCandidateHandler
 	OwnerHistoryHandler     *handlers.OwnerHistoryHandler
 	AgentObservationFeed    *handlers.AgentObservationFeedHandler
+	AgentDiagnosticsHandler *handlers.AgentDiagnosticsHandler
 	ReportHandler           *handlers.ReportHandler
 	EntityDeletionHandler   *handlers.EntityDeletionHandler
 	MaterialHandler         *handlers.MaterialHandler
@@ -434,6 +435,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
+	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
@@ -574,6 +576,7 @@ func (a *Application) setupRouter() *chi.Mux {
 		a.OwnerHistoryHandler.RegisterRoutes(r)
 		a.AgentObservationFeed.RegisterRoutes(r)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Group(func(r chi.Router) {
+			a.AgentDiagnosticsHandler.RegisterRoutes(r)
 			a.ReportHandler.RegisterRoutes(r)
 		})
 

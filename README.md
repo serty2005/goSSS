@@ -23,7 +23,7 @@
 
 ## 3. Технологический стек
 
--   **Язык:** Go 1.23+
+-   **Язык:** Go 1.24+
 -   **Веб-фреймворк:** `chi/v5`
 -   **База данных:** PostgreSQL
 -   **ORM:** `gorm`
@@ -34,7 +34,7 @@
 
 ### 4.1. Требования
 
--   Go (версия 1.23 или выше)
+-   Go (версия 1.24 или выше)
 -   PostgreSQL
 
 ### 4.2. Настройка окружения
@@ -116,8 +116,13 @@ go run ./cmd/etalon-server/main.go --seed
 -   `POST /api/tasks/{id}/create-entity-in-sd`: Создание сущности в ServiceDesk на основе задачи.
 -   `POST /api/agents/register`: Регистрация нового агента мониторинга.
 -   `POST /api/agents/{uuid}/data`: Отправка данных от агента.
+-   `GET /api/agent-diagnostics`: Диагностический список новых агентов для UI техподдержки.
+-   `GET /api/agent-diagnostics/{uuid}`: Детали регистрации и последние heartbeat snapshot конкретного агента.
 
-**Примечание:** Все эндпоинты в группе `/api`, кроме `/api/auth`, требуют `Authorization: Bearer <token>` заголовка. Эндпоинты в `/api/agents` требуют собственного ключа авторизации.
+**Примечание:** Все эндпоинты в группе `/api`, кроме `/api/auth` и bootstrap-контуров агентов, требуют `Authorization: Bearer <token>` пользовательского JWT.
+- `POST /api/agents/register` требует `Authorization: Bearer <AGENT_API_KEY>`.
+- `POST /api/agents/{uuid}/data` требует agent access token, который сервер выдает на bootstrap-регистрации.
+- `GET /api/agent-diagnostics*` предназначены для UI техподдержки и требуют обычный пользовательский JWT.
 ## 7. Интеграция Bitrix24 (Event-Driven)
 
 - Включение интеграции: `ENABLE_BITRIX_GATEWAY=true`.

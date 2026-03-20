@@ -241,3 +241,45 @@ func TestProcessData_НеSSSRunerСохраняетПрежнееПоведен�
 	require.Nil(t, resp.AdapterManifests)
 	require.Empty(t, resp.Tasks)
 }
+
+func TestProcessData_СохраняетПоследнийHeartbeatSnapshotВAgent(t *testing.T) {
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-phase1",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	_, err := svc.ProcessData(context.Background(), "agent-phase1", &api.AgentDataDTO{
+		AgentUUID:   "agent-phase1",
+		AgentType:   "sssruner",
+		Hostname:    "ws-phase1",
+		CurrentTime: "2026-03-21T09:30:00Z",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 21, 9, 30, 0, 0, time.UTC),
+			Hostname:    "ws-phase1",
+			OS:          "windows",
+			Arch:        "amd64",
+		},
+		AdapterStatuses: []api.AdapterStatusDTO{
+			{AdapterID: "atol", Status: "ready", Version: "1.0.0"},
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, repo.agent.LastObservedAt)
+	require.Equal(t, time.Date(2026, 3, 21, 9, 30, 0, 0, time.UTC), repo.agent.LastObservedAt.UTC())
+
+	var latestInventory map[string]any
+	require.NoError(t, json.Unmarshal(repo.agent.LatestInventorySnapshot, &latestInventory))
+	require.Equal(t, "ws-phase1", latestInventory["hostname"])
+
+	var latestStatuses []map[string]any
+	require.NoError(t, json.Unmarshal(repo.agent.LatestAdapterStatuses, &latestStatuses))
+	require.Len(t, latestStatuses, 1)
+	require.Equal(t, "atol", latestStatuses[0]["adapter_id"])
+}
