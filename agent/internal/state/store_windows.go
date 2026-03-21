@@ -184,6 +184,17 @@ func (s *RegistryStore) ClearTokens() error {
 	return nil
 }
 
+func (s *RegistryStore) DeleteAll() error {
+	registryPath := strings.Trim(strings.TrimSpace(s.registryPath), `\`)
+	if registryPath == "" {
+		return nil
+	}
+	if err := deleteRegistryTree(registry.LOCAL_MACHINE, registryPath); err != nil {
+		return fmt.Errorf("не удалось удалить HKLM\\%s: %w", registryPath, err)
+	}
+	return nil
+}
+
 func (s *RegistryStore) CollectRegistrationSystemInfo(agentProcessName string) map[string]interface{} {
 	host, _ := os.Hostname()
 	return map[string]interface{}{
@@ -217,6 +228,34 @@ func (s *RegistryStore) clearIdentityAndTokens(key registry.Key) error {
 		valueAccessTokenExpiresAt, valueRefreshTokenExpiresAt, valueLastTokenRefreshAt,
 	} {
 		_ = key.DeleteValue(name)
+	}
+	return nil
+}
+
+func deleteRegistryTree(root registry.Key, path string) error {
+	key, err := registry.OpenKey(root, path, registry.READ)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	subKeys, err := key.ReadSubKeyNames(-1)
+	key.Close()
+	if err != nil {
+		return err
+	}
+
+	for _, name := range subKeys {
+		childPath := path + `\` + strings.Trim(strings.TrimSpace(name), `\`)
+		if err := deleteRegistryTree(root, childPath); err != nil {
+			return err
+		}
+	}
+
+	if err := registry.DeleteKey(root, path); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return err
 	}
 	return nil
 }
