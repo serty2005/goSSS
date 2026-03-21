@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"etalon-agent/internal/hostinfo"
 )
 
 type collector struct{}
@@ -58,6 +60,14 @@ func (collector) Collect(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	snapshot.KnownComponents = knownComponents
+
+	hostSnapshot, err := hostinfo.Collect(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !hostSnapshot.Empty() {
+		snapshot.HostInfo = &hostSnapshot
+	}
 
 	return snapshot, nil
 }

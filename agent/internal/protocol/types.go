@@ -10,6 +10,11 @@ import (
 
 type AgentDataDTO struct {
 	Hostname        string              `json:"hostname"`
+	URLRms          string              `json:"url_rms,omitempty"`
+	TeamviewerID    string              `json:"teamviewer_id,omitempty"`
+	AnydeskID       string              `json:"anydesk_id,omitempty"`
+	LitemanagerID   string              `json:"litemanager_id,omitempty"`
+	RustdeskID      string              `json:"rustdesk_id,omitempty"`
 	CurrentTime     string              `json:"current_time"`
 	AgentVersion    string              `json:"agent_version"`
 	AgentUUID       string              `json:"uuid,omitempty"`

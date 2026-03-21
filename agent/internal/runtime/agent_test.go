@@ -13,6 +13,7 @@ import (
 	"etalon-agent/internal/client"
 	"etalon-agent/internal/config"
 	"etalon-agent/internal/connectivity"
+	"etalon-agent/internal/hostinfo"
 	"etalon-agent/internal/inventory"
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/state"
@@ -152,6 +153,13 @@ func TestAgentBuildHeartbeatPayloadIncludesInventoryAndAdapterStatuses(t *testin
 		Hostname:    "inventory-host",
 		OS:          "windows",
 		Arch:        "amd64",
+		HostInfo: &hostinfo.Snapshot{
+			CashServerURL: "https://demo.iiko.ru:443/resto/",
+			TeamviewerID:  "111111111",
+			AnydeskID:     "222222222",
+			LitemanagerID: "333333333",
+			RustdeskID:    "444444444",
+		},
 	}
 	statuses := []adapters.Status{{
 		AdapterID: "adapter-a",
@@ -189,6 +197,21 @@ func TestAgentBuildHeartbeatPayloadIncludesInventoryAndAdapterStatuses(t *testin
 	}
 	if !reflect.DeepEqual(payload.AdapterStatuses, statuses) {
 		t.Fatalf("adapter_statuses в payload отличаются: %+v", payload.AdapterStatuses)
+	}
+	if payload.URLRms != "https://demo.iiko.ru:443/resto/" {
+		t.Fatalf("ожидался url_rms из inventory, получено %q", payload.URLRms)
+	}
+	if payload.TeamviewerID != "111111111" {
+		t.Fatalf("ожидался teamviewer_id 111111111, получено %q", payload.TeamviewerID)
+	}
+	if payload.AnydeskID != "222222222" {
+		t.Fatalf("ожидался anydesk_id 222222222, получено %q", payload.AnydeskID)
+	}
+	if payload.LitemanagerID != "333333333" {
+		t.Fatalf("ожидался litemanager_id 333333333, получено %q", payload.LitemanagerID)
+	}
+	if payload.RustdeskID != "444444444" {
+		t.Fatalf("ожидался rustdesk_id 444444444, получено %q", payload.RustdeskID)
 	}
 }
 
@@ -489,6 +512,22 @@ func TestAgentBuildRegistrationRequestIncludesSystemInfo(t *testing.T) {
 		},
 		identity:           &state.Identity{UUID: "agent-uuid"},
 		machineFingerprint: "fingerprint-hash",
+		inventoryService: stubRuntimeInventoryService{
+			snapshot: SnapshotResult{
+				value: inventory.Snapshot{
+					CollectedAt: time.Unix(500, 0).UTC(),
+					Hostname:    "inventory-host",
+					HostInfo: &hostinfo.Snapshot{
+						CashServerURL: "https://demo.syrve.online/resto/",
+						TeamviewerID:  "tv-id",
+						AnydeskID:     "ad-id",
+						LitemanagerID: "lm-id",
+						RustdeskID:    "rd-id",
+					},
+				},
+				ok: true,
+			},
+		},
 	}
 
 	now := time.Date(2026, time.March, 20, 15, 4, 5, 0, time.UTC)
@@ -523,6 +562,24 @@ func TestAgentBuildRegistrationRequestIncludesSystemInfo(t *testing.T) {
 	}
 	if req.InitialData.AgentVersion != "1.2.3" {
 		t.Fatalf("в initial_data ожидалась версия 1.2.3, получено %q", req.InitialData.AgentVersion)
+	}
+	if req.InitialData.URLRms != "https://demo.syrve.online/resto/" {
+		t.Fatalf("в initial_data ожидался url_rms, получено %q", req.InitialData.URLRms)
+	}
+	if req.InitialData.TeamviewerID != "tv-id" {
+		t.Fatalf("в initial_data ожидался teamviewer_id, получено %q", req.InitialData.TeamviewerID)
+	}
+	if req.InitialData.AnydeskID != "ad-id" {
+		t.Fatalf("в initial_data ожидался anydesk_id, получено %q", req.InitialData.AnydeskID)
+	}
+	if req.InitialData.LitemanagerID != "lm-id" {
+		t.Fatalf("в initial_data ожидался litemanager_id, получено %q", req.InitialData.LitemanagerID)
+	}
+	if req.InitialData.RustdeskID != "rd-id" {
+		t.Fatalf("в initial_data ожидался rustdesk_id, получено %q", req.InitialData.RustdeskID)
+	}
+	if req.InitialData.Inventory == nil {
+		t.Fatal("в initial_data ожидался inventory snapshot")
 	}
 }
 

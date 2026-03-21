@@ -285,19 +285,22 @@ func (a *Agent) applyRegistrationResponse(resp protocol.AgentRegistrationRespons
 
 func (a *Agent) buildRegistrationRequest(now time.Time) protocol.RegistrationRequestDTO {
 	host := a.hostname()
+	initialData := protocol.AgentDataDTO{
+		Hostname:     host,
+		CurrentTime:  now.Format(time.RFC3339),
+		AgentUUID:    a.identity.UUID,
+		AgentType:    a.cfg.AgentType,
+		AgentVersion: a.cfg.AgentVersion,
+	}
+	a.attachInventoryData(&initialData)
+
 	return protocol.RegistrationRequestDTO{
 		AgentUUID:          a.identity.UUID,
 		Hostname:           host,
 		AgentVersion:       a.cfg.AgentVersion,
 		MachineFingerprint: a.machineFingerprint,
-		InitialData: protocol.AgentDataDTO{
-			Hostname:     host,
-			CurrentTime:  now.Format(time.RFC3339),
-			AgentUUID:    a.identity.UUID,
-			AgentType:    a.cfg.AgentType,
-			AgentVersion: a.cfg.AgentVersion,
-		},
-		SystemInfo: a.registryStore.CollectRegistrationSystemInfo(a.cfg.AgentProcessName),
+		InitialData:        initialData,
+		SystemInfo:         a.registryStore.CollectRegistrationSystemInfo(a.cfg.AgentProcessName),
 	}
 }
 
@@ -694,10 +697,30 @@ func (a *Agent) buildHeartbeatPayload() (protocol.AgentDataDTO, error) {
 		AgentType:       a.cfg.AgentType,
 		AdapterStatuses: adapterStatuses,
 	}
-	if snapshot, ok := a.inventoryService.Snapshot(); ok {
-		payload.Inventory = &snapshot
-	}
+	a.attachInventoryData(&payload)
 	return payload, nil
+}
+
+func (a *Agent) attachInventoryData(payload *protocol.AgentDataDTO) {
+	if payload == nil || a.inventoryService == nil {
+		return
+	}
+
+	snapshot, ok := a.inventoryService.Snapshot()
+	if !ok {
+		return
+	}
+
+	payload.Inventory = &snapshot
+	if snapshot.HostInfo == nil {
+		return
+	}
+
+	payload.URLRms = strings.TrimSpace(snapshot.HostInfo.CashServerURL)
+	payload.TeamviewerID = strings.TrimSpace(snapshot.HostInfo.TeamviewerID)
+	payload.AnydeskID = strings.TrimSpace(snapshot.HostInfo.AnydeskID)
+	payload.LitemanagerID = strings.TrimSpace(snapshot.HostInfo.LitemanagerID)
+	payload.RustdeskID = strings.TrimSpace(snapshot.HostInfo.RustdeskID)
 }
 
 func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) error {

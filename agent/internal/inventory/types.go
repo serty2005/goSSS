@@ -1,6 +1,10 @@
 package inventory
 
-import "time"
+import (
+	"time"
+
+	"etalon-agent/internal/hostinfo"
+)
 
 type Snapshot struct {
 	CollectedAt       time.Time           `json:"collected_at"`
@@ -8,6 +12,7 @@ type Snapshot struct {
 	OS                string              `json:"os"`
 	Arch              string              `json:"arch"`
 	ExecutablePath    string              `json:"executable_path,omitempty"`
+	HostInfo          *hostinfo.Snapshot  `json:"host_info,omitempty"`
 	NetworkInterfaces []NetworkInterface  `json:"network_interfaces,omitempty"`
 	COMPorts          []COMPort           `json:"com_ports,omitempty"`
 	InstalledSoftware []InstalledSoftware `json:"installed_software,omitempty"`
