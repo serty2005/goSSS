@@ -109,6 +109,16 @@ Inventory является сериализуемым снимком машин�
 - имя порта, например `COM4`;
 - исходное системное устройство;
 - источник обнаружения.
+- `enumerator` и `instance_id` устройства из `HKLM\SYSTEM\CurrentControlSet\Enum`;
+- `friendly_name`, `description`, `manufacturer`, `class`, `service`, `location`;
+- `hardware_ids[]` и `compatible_ids[]`;
+- нормализованная сигнатура `signature_key` вида `usb:vid_xxxx&pid_yyyy` или `pci:ven_xxxx&dev_yyyy`;
+- результат словарной классификации `classification`, если сигнатура уже известна.
+
+Примечание:
+
+- локальный словарь сигнатур должен пополняться только подтвержденными значениями с реальных клиентских машин;
+- на текущем этапе словарь может быть пустым, но inventory уже обязан отдавать признаки, достаточные для его пополнения оператором и сервером.
 
 ### Installed software
 

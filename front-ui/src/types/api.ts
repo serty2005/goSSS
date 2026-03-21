@@ -1192,10 +1192,44 @@ export interface AgentInventoryNetworkInterfaceDTO {
   flags?: string[];
 }
 
+export interface AgentInventoryHostInfoDTO {
+  roaming_app_data_path?: string;
+  cash_server_product?: string;
+  cash_server_config?: string;
+  cash_server_url?: string;
+  teamviewer_id?: string;
+  anydesk_id?: string;
+  litemanager_id?: string;
+  rustdesk_id?: string;
+}
+
+export interface AgentInventoryCOMPortClassificationDTO {
+  device_type?: string;
+  label?: string;
+  confidence?: string;
+  source?: string;
+  matched_signature?: string;
+  suggested_adapter?: string;
+}
+
 export interface AgentInventoryCOMPortDTO {
   name?: string;
   device?: string;
   source?: string;
+  enumerator?: string;
+  instance_id?: string;
+  friendly_name?: string;
+  description?: string;
+  manufacturer?: string;
+  service?: string;
+  class?: string;
+  location?: string;
+  hardware_ids?: string[];
+  compatible_ids?: string[];
+  vendor_id?: string;
+  product_id?: string;
+  signature_key?: string;
+  classification?: AgentInventoryCOMPortClassificationDTO | null;
 }
 
 export interface AgentInventoryInstalledSoftwareDTO {
@@ -1228,6 +1262,7 @@ export interface AgentInventorySnapshotDTO {
   os?: string;
   arch?: string;
   executable_path?: string;
+  host_info?: AgentInventoryHostInfoDTO | null;
   network_interfaces?: AgentInventoryNetworkInterfaceDTO[];
   com_ports?: AgentInventoryCOMPortDTO[];
   installed_software?: AgentInventoryInstalledSoftwareDTO[];

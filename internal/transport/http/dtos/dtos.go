@@ -179,10 +179,22 @@ type InventorySnapshotDTO struct {
 	OS                string                          `json:"os"`
 	Arch              string                          `json:"arch"`
 	ExecutablePath    string                          `json:"executable_path,omitempty"`
+	HostInfo          *InventoryHostInfoDTO           `json:"host_info,omitempty"`
 	NetworkInterfaces []InventoryNetworkInterfaceDTO  `json:"network_interfaces,omitempty"`
 	COMPorts          []InventoryCOMPortDTO           `json:"com_ports,omitempty"`
 	InstalledSoftware []InventoryInstalledSoftwareDTO `json:"installed_software,omitempty"`
 	KnownComponents   []InventoryKnownComponentDTO    `json:"known_components,omitempty"`
+}
+
+type InventoryHostInfoDTO struct {
+	RoamingAppDataPath string `json:"roaming_app_data_path,omitempty"`
+	CashServerProduct  string `json:"cash_server_product,omitempty"`
+	CashServerConfig   string `json:"cash_server_config,omitempty"`
+	CashServerURL      string `json:"cash_server_url,omitempty"`
+	TeamviewerID       string `json:"teamviewer_id,omitempty"`
+	AnydeskID          string `json:"anydesk_id,omitempty"`
+	LitemanagerID      string `json:"litemanager_id,omitempty"`
+	RustdeskID         string `json:"rustdesk_id,omitempty"`
 }
 
 type InventoryNetworkInterfaceDTO struct {
@@ -195,9 +207,32 @@ type InventoryNetworkInterfaceDTO struct {
 }
 
 type InventoryCOMPortDTO struct {
-	Name   string `json:"name"`
-	Device string `json:"device,omitempty"`
-	Source string `json:"source,omitempty"`
+	Name           string                             `json:"name"`
+	Device         string                             `json:"device,omitempty"`
+	Source         string                             `json:"source,omitempty"`
+	Enumerator     string                             `json:"enumerator,omitempty"`
+	InstanceID     string                             `json:"instance_id,omitempty"`
+	FriendlyName   string                             `json:"friendly_name,omitempty"`
+	Description    string                             `json:"description,omitempty"`
+	Manufacturer   string                             `json:"manufacturer,omitempty"`
+	Service        string                             `json:"service,omitempty"`
+	Class          string                             `json:"class,omitempty"`
+	Location       string                             `json:"location,omitempty"`
+	HardwareIDs    []string                           `json:"hardware_ids,omitempty"`
+	CompatibleIDs  []string                           `json:"compatible_ids,omitempty"`
+	VendorID       string                             `json:"vendor_id,omitempty"`
+	ProductID      string                             `json:"product_id,omitempty"`
+	SignatureKey   string                             `json:"signature_key,omitempty"`
+	Classification *InventoryCOMPortClassificationDTO `json:"classification,omitempty"`
+}
+
+type InventoryCOMPortClassificationDTO struct {
+	DeviceType       string `json:"device_type,omitempty"`
+	Label            string `json:"label,omitempty"`
+	Confidence       string `json:"confidence,omitempty"`
+	Source           string `json:"source,omitempty"`
+	MatchedSignature string `json:"matched_signature,omitempty"`
+	SuggestedAdapter string `json:"suggested_adapter,omitempty"`
 }
 
 type InventoryInstalledSoftwareDTO struct {

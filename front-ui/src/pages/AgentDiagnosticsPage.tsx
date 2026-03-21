@@ -16,6 +16,8 @@ import {
 import JsonDataViewer from '@/components/common/JsonDataViewer';
 import {
   AgentAdapterStatusDTO,
+  AgentInventoryCOMPortDTO,
+  AgentInventoryHostInfoDTO,
   AgentDiagnosticsDetailsDTO,
   AgentInventorySnapshotDTO,
   AgentRegistrationAttemptDTO,
@@ -102,6 +104,40 @@ const renderInventoryTableEmpty = (description: string) => (
   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />
 );
 
+type OperatorFlowStep = {
+  type: 'success' | 'info' | 'warning' | 'error';
+  title: string;
+  description: string;
+};
+
+const hasDetectedComponent = (components: AgentInventorySnapshotDTO['known_components'], keys: string[]) => {
+  const expected = new Set(keys.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  return (components || []).some((item) => {
+    const key = String(item?.key || '').trim().toLowerCase();
+    return Boolean(item?.detected) && expected.has(key);
+  });
+};
+
+const classificationTagColor = (confidence?: string | null) => {
+  const normalized = String(confidence || '').trim().toLowerCase();
+  if (normalized === 'high') {
+    return 'success';
+  }
+  if (normalized === 'medium') {
+    return 'processing';
+  }
+  if (normalized === 'low') {
+    return 'warning';
+  }
+  return 'default';
+};
+
+const describeCOMPort = (record: AgentInventoryCOMPortDTO) => {
+  const title = record.friendly_name || record.description || record.name || '-';
+  const meta = [record.manufacturer, record.class, record.location].filter(Boolean).join(' • ');
+  return { title, meta };
+};
+
 const AgentDiagnosticsPage: React.FC = () => {
   const { uuid = '' } = useParams<{ uuid: string }>();
   const navigate = useNavigate();
@@ -143,10 +179,104 @@ const AgentDiagnosticsPage: React.FC = () => {
     },
   });
 
-  const inventoryNetworkInterfaces = inventory?.network_interfaces || [];
-  const inventoryComPorts = inventory?.com_ports || [];
-  const inventorySoftware = inventory?.installed_software || [];
-  const inventoryComponents = inventory?.known_components || [];
+  const inventoryNetworkInterfaces = useMemo(() => inventory?.network_interfaces || [], [inventory?.network_interfaces]);
+  const inventoryHostInfo = (inventory?.host_info || null) as AgentInventoryHostInfoDTO | null;
+  const inventoryComPorts = useMemo(() => inventory?.com_ports || [], [inventory?.com_ports]);
+  const inventorySoftware = useMemo(() => inventory?.installed_software || [], [inventory?.installed_software]);
+  const inventoryComponents = useMemo(() => inventory?.known_components || [], [inventory?.known_components]);
+  const operatorFlow = useMemo<OperatorFlowStep[]>(() => {
+    const steps: OperatorFlowStep[] = [];
+
+    if (registrationApprovalPending) {
+      steps.push({
+        type: 'warning',
+        title: 'Шаг 1. Подтвердить bootstrap-регистрацию',
+        description: 'Сервер уже увидел новый агент, но токены ещё не выданы. После подтверждения агент сам повторит bootstrap и выйдет на heartbeat.',
+      });
+    } else if (registrationApprovalConfirmed) {
+      steps.push({
+        type: 'info',
+        title: 'Шаг 1. Дождаться повторного bootstrap агента',
+        description: 'Регистрация уже подтверждена оператором. Следующее ожидаемое событие — повторный запрос агента за токенами и переход к heartbeat.',
+      });
+    } else if (agent?.last_registration_status === 'success') {
+      steps.push({
+        type: 'success',
+        title: 'Шаг 1. Регистрация завершена',
+        description: 'Агент успешно получил токены и может стабильно работать через heartbeat.',
+      });
+    }
+
+    if (!heartbeatAvailable) {
+      steps.push({
+        type: 'warning',
+        title: 'Шаг 2. Дождаться первого heartbeat snapshot',
+        description: 'Пока нет inventory и статусов адаптеров. До этого шага не стоит назначать профиль машины или планировать task-адаптеры.',
+      });
+    } else {
+      steps.push({
+        type: 'success',
+        title: 'Шаг 2. Машина уже прислала inventory snapshot',
+        description: 'Теперь можно анализировать ПО, remote ID, COM-устройства и решать, какие адаптеры действительно нужны этой машине.',
+      });
+    }
+
+    if (inventoryComPorts.length > 0) {
+      const classifiedPorts = inventoryComPorts.filter((item) => item.classification?.device_type).length;
+      if (classifiedPorts > 0) {
+        steps.push({
+          type: 'success',
+          title: 'Шаг 3. Сигнатуры COM-оборудования уже частично распознаны',
+          description: `Распознано ${classifiedPorts} из ${inventoryComPorts.length} COM-портов. Можно использовать signature_key для автоматической выдачи нужного адаптера при следующих подключениях.`,
+        });
+      } else {
+        steps.push({
+          type: 'info',
+          title: 'Шаг 3. Зафиксировать сигнатуры COM-устройств',
+          description: 'Словарь сигнатур уже поддерживается агентом, но правила ещё не заполнены. Используйте поля signature_key, hardware_ids и friendly_name для накопления реальных VEN/DEV или VID/PID с клиентских машин.',
+        });
+      }
+    }
+
+    const cashSoftwareDetected = Boolean(inventoryHostInfo?.cash_server_url) || hasDetectedComponent(inventoryComponents, [
+      'iiko-front',
+      'iiko-cashserver',
+      'syrve-front',
+      'syrve-cashserver',
+    ]);
+    if (cashSoftwareDetected) {
+      steps.push({
+        type: 'info',
+        title: 'Шаг 4. Машина подходит под отдельный POS-адаптер',
+        description: 'По host_info и known_components видно признаки iiko/syrve. Логику сбора логов, конфигов и служебных метаданных этого ПО лучше держать в отдельном адаптере и подключать только на таких кассовых станциях.',
+      });
+    }
+
+    if (heartbeatAvailable && adapterStatuses.length === 0) {
+      steps.push({
+        type: 'warning',
+        title: 'Шаг 5. Набор адаптеров ещё не назначен',
+        description: 'Ядро агента уже готово к inventory и синхронизации бинарников, но операторский контур назначения adapter_manifests пока не автоматизирован. На текущем этапе это нужно делать через серверную конфигурацию вручную.',
+      });
+    } else if (adapterStatuses.length > 0) {
+      steps.push({
+        type: 'success',
+        title: 'Шаг 5. Агент уже отчитывается по локальным адаптерам',
+        description: 'После этого можно переходить к полевому тесту предметных адаптеров и только потом к отдельному saga-runner для задач.',
+      });
+    }
+
+    return steps;
+  }, [
+    adapterStatuses.length,
+    agent?.last_registration_status,
+    heartbeatAvailable,
+    inventoryComPorts,
+    inventoryComponents,
+    inventoryHostInfo?.cash_server_url,
+    registrationApprovalConfirmed,
+    registrationApprovalPending,
+  ]);
 
   const registrationHistoryColumns: ColumnsType<AgentRegistrationAttemptDTO> = [
     {
@@ -412,6 +542,20 @@ const AgentDiagnosticsPage: React.FC = () => {
             </Descriptions>
           </Card>
 
+          <Card className="glass-panel" title="Операторский флоу" size="small">
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              {operatorFlow.map((step) => (
+                <Alert
+                  key={step.title}
+                  type={step.type}
+                  showIcon
+                  message={step.title}
+                  description={step.description}
+                />
+              ))}
+            </Space>
+          </Card>
+
           <Card className="glass-panel" title="Последняя регистрация" size="small">
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
               <Alert
@@ -544,6 +688,40 @@ const AgentDiagnosticsPage: React.FC = () => {
                     </Descriptions>
 
                     <div>
+                      <Text strong>Host info</Text>
+                      <div style={{ marginTop: 8 }}>
+                        {inventoryHostInfo ? (
+                          <Descriptions bordered size="small" column={2}>
+                            <Descriptions.Item label="cash_server_product">
+                              {inventoryHostInfo.cash_server_product || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="cash_server_url">
+                              {inventoryHostInfo.cash_server_url || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="cash_server_config" span={2}>
+                              {inventoryHostInfo.cash_server_config || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="roaming_app_data_path" span={2}>
+                              {inventoryHostInfo.roaming_app_data_path || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="teamviewer_id">
+                              {inventoryHostInfo.teamviewer_id || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="anydesk_id">
+                              {inventoryHostInfo.anydesk_id || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="litemanager_id">
+                              {inventoryHostInfo.litemanager_id || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="rustdesk_id">
+                              {inventoryHostInfo.rustdesk_id || '-'}
+                            </Descriptions.Item>
+                          </Descriptions>
+                        ) : renderInventoryTableEmpty('host_info пока не пришёл')}
+                      </div>
+                    </div>
+
+                    <div>
                       <Text strong>Сетевые интерфейсы</Text>
                       <div style={{ marginTop: 8 }}>
                         {inventoryNetworkInterfaces.length === 0 ? renderInventoryTableEmpty('Сетевые интерфейсы не пришли') : (
@@ -580,16 +758,88 @@ const AgentDiagnosticsPage: React.FC = () => {
                       <Text strong>COM-порты</Text>
                       <div style={{ marginTop: 8 }}>
                         {inventoryComPorts.length === 0 ? renderInventoryTableEmpty('COM-порты не пришли') : (
-                          <Table
+                          <Table<AgentInventoryCOMPortDTO>
                             size="small"
-                            rowKey={(record, index) => `${record.name || 'com'}-${index}`}
+                            rowKey={(record) => `${record.name || 'com'}-${record.instance_id || record.device || 'na'}`}
                             pagination={false}
                             columns={[
-                              { title: 'name', dataIndex: 'name', key: 'name', render: (value?: string) => value || '-' },
-                              { title: 'device', dataIndex: 'device', key: 'device', render: (value?: string) => value || '-' },
-                              { title: 'source', dataIndex: 'source', key: 'source', render: (value?: string) => value || '-' },
+                              {
+                                title: 'Порт',
+                                dataIndex: 'name',
+                                key: 'name',
+                                width: 120,
+                                render: (value?: string, record?: AgentInventoryCOMPortDTO) => (
+                                  <Space direction="vertical" size={0}>
+                                    <Text code>{value || '-'}</Text>
+                                    <Text type="secondary">{record?.device || record?.enumerator || '-'}</Text>
+                                  </Space>
+                                ),
+                              },
+                              {
+                                title: 'Устройство',
+                                key: 'device_details',
+                                render: (_value?: unknown, record?: AgentInventoryCOMPortDTO) => {
+                                  const details = describeCOMPort(record || {});
+                                  return (
+                                    <Space direction="vertical" size={0}>
+                                      <Text>{details.title}</Text>
+                                      <Text type="secondary">{details.meta || '-'}</Text>
+                                    </Space>
+                                  );
+                                },
+                              },
+                              {
+                                title: 'Сигнатура',
+                                key: 'signature_key',
+                                width: 260,
+                                render: (_value?: unknown, record?: AgentInventoryCOMPortDTO) => (
+                                  <Space direction="vertical" size={0}>
+                                    <Text code>{record?.signature_key || '-'}</Text>
+                                    <Text type="secondary">
+                                      {[record?.vendor_id, record?.product_id].filter(Boolean).join(' / ') || '-'}
+                                    </Text>
+                                  </Space>
+                                ),
+                              },
+                              {
+                                title: 'Классификация',
+                                key: 'classification',
+                                width: 220,
+                                render: (_value?: unknown, record?: AgentInventoryCOMPortDTO) => (
+                                  record?.classification ? (
+                                    <Space direction="vertical" size={0}>
+                                      <Tag
+                                        color={classificationTagColor(record.classification.confidence)}
+                                        style={{ marginInlineEnd: 0, whiteSpace: 'normal' }}
+                                      >
+                                        {record.classification.label || record.classification.device_type || 'Есть правило'}
+                                      </Tag>
+                                      <Text type="secondary">
+                                        {[
+                                          record.classification.confidence,
+                                          record.classification.source,
+                                          record.classification.suggested_adapter,
+                                        ].filter(Boolean).join(' • ') || '-'}
+                                      </Text>
+                                    </Space>
+                                  ) : <Text type="secondary">Нет правила</Text>
+                                ),
+                              },
+                              {
+                                title: 'Instance / source',
+                                key: 'instance_id',
+                                render: (_value?: unknown, record?: AgentInventoryCOMPortDTO) => (
+                                  <Space direction="vertical" size={0}>
+                                    <Text ellipsis={{ tooltip: record?.instance_id || '-' }}>
+                                      {record?.instance_id || '-'}
+                                    </Text>
+                                    <Text type="secondary">{record?.source || '-'}</Text>
+                                  </Space>
+                                ),
+                              },
                             ]}
                             dataSource={inventoryComPorts}
+                            scroll={{ x: 1400 }}
                           />
                         )}
                       </div>

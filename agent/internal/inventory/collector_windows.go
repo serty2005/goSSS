@@ -13,44 +13,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-func collectCOMPorts() ([]COMPort, error) {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DEVICEMAP\SERIALCOMM`, registry.READ)
-	if err != nil {
-		if err == registry.ErrNotExist {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("не удалось открыть список COM-портов: %w", err)
-	}
-	defer key.Close()
-
-	names, err := key.ReadValueNames(-1)
-	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать список COM-портов: %w", err)
-	}
-
-	result := make([]COMPort, 0, len(names))
-	for _, device := range names {
-		value, _, err := key.GetStringValue(device)
-		if err != nil {
-			continue
-		}
-		name := strings.TrimSpace(value)
-		if name == "" {
-			continue
-		}
-		result = append(result, COMPort{
-			Name:   name,
-			Device: strings.TrimSpace(device),
-			Source: `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`,
-		})
-	}
-
-	slices.SortFunc(result, func(a, b COMPort) int {
-		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Device, b.Device))
-	})
-	return result, nil
-}
-
 func collectInstalledSoftware() ([]InstalledSoftware, error) {
 	paths := []struct {
 		root   registry.Key
