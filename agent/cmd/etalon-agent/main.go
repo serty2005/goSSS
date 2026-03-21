@@ -23,6 +23,7 @@ var AgentVersion = "0.1.0-dev"
 type startupOptions struct {
 	cleanup       bool
 	cleanupAndRun bool
+	configPath    string
 }
 
 func main() {
@@ -47,12 +48,13 @@ func main() {
 		return
 	}
 
-	cfg, err := config.Load(AgentVersion)
+	cfg, err := config.Load(AgentVersion, config.LoadOptions{ConfigPath: options.configPath})
 	if err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации агента: %v", err)
 	}
 	log.Printf(
-		"Конфигурация запуска подготовлена: source=встроена_в_бинарник server_url=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s",
+		"Конфигурация запуска подготовлена: source=%s server_url=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s",
+		cfg.ConfigSource,
 		cfg.ServerURL,
 		cfg.RegistryPath,
 		cfg.DataDir,
@@ -97,6 +99,7 @@ func parseStartupOptions(args []string) (startupOptions, error) {
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.cleanup, "cleanup", false, "очистить локальные данные агента и завершить процесс")
 	flags.BoolVar(&options.cleanupAndRun, "cleanup-and-run", false, "очистить локальные данные агента и продолжить запуск")
+	flags.StringVar(&options.configPath, "config", "", "путь к внешнему JSON-конфигу агента")
 
 	if err := flags.Parse(args); err != nil {
 		return startupOptions{}, err
@@ -113,6 +116,7 @@ func parseStartupOptions(args []string) (startupOptions, error) {
 func startupOptionsUsage() string {
 	return strings.Join([]string{
 		"Поддерживаемые режимы запуска etalon-agent:",
+		"  --config PATH      использовать внешний JSON-конфиг агента",
 		"  --cleanup          очистить локальные данные агента и завершить процесс",
 		"  --cleanup-and-run  очистить локальные данные агента и продолжить запуск с чистого состояния",
 	}, "\n")

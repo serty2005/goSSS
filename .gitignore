@@ -1,4 +1,5 @@
 *.json
+!agent/agent-config.json
 .env
 *.log
 *.gz

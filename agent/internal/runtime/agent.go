@@ -275,7 +275,8 @@ func (a *Agent) buildRegistrationRequest(now time.Time) protocol.RegistrationReq
 
 func (a *Agent) logRuntimeConfiguration() {
 	log.Printf(
-		"Локальная конфигурация агента: source=встроена_в_бинарник server_url=%s agent_type=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s heartbeat_interval=%s inventory_interval=%s update_check_interval=%s connectivity_state_file=%s connectivity_base_retry=%s connectivity_max_retry=%s authorization_cooldown=%s",
+		"Локальная конфигурация агента: source=%s server_url=%s agent_type=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s heartbeat_interval=%s inventory_interval=%s update_check_interval=%s connectivity_state_file=%s connectivity_base_retry=%s connectivity_max_retry=%s authorization_cooldown=%s",
+		a.cfg.ConfigSource,
 		a.cfg.ServerURL,
 		a.cfg.AgentType,
 		a.cfg.RegistryPath,

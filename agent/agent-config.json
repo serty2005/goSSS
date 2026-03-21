@@ -1,0 +1,18 @@
+{
+  "brand_name": "MyHoreca_Xenion",
+  "server_url": "http://localhost:8080",
+  "bootstrap_api_key": "92a077f5-bea8-4773-a23e-9d8f1450a81c",
+  "agent_type": "sssruner",
+  "heartbeat_interval": "5s",
+  "update_check_interval": "1m",
+  "inventory_interval": "5m",
+  "access_token_grace_period": "2m",
+  "connectivity_base_retry": "15s",
+  "connectivity_max_retry": "10m",
+  "registration_cooldown": "30m",
+  "authorization_cooldown": "24h",
+  "rate_limit_cooldown": "5m",
+  "config_error_cooldown": "1h",
+  "protocol_error_cooldown": "30m",
+  "retry_jitter_factor": 0.2
+}
