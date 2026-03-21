@@ -17,4 +17,9 @@ export const agentDiagnosticsApi = {
     const response = await apiClient.get<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}`);
     return response.data;
   },
+
+  approveRegistration: async (uuid: string) => {
+    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/approve-registration`);
+    return response.data;
+  },
 };

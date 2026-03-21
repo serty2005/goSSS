@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Descriptions, Empty, Skeleton, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -105,6 +105,7 @@ const renderInventoryTableEmpty = (description: string) => (
 const AgentDiagnosticsPage: React.FC = () => {
   const { uuid = '' } = useParams<{ uuid: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeAttempt, setActiveAttempt] = useState<AgentRegistrationAttemptDTO | null>(null);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -126,6 +127,21 @@ const AgentDiagnosticsPage: React.FC = () => {
   const adapterStatuses = useMemo(() => toAdapterStatuses(details?.latest_adapter_statuses), [details?.latest_adapter_statuses]);
   const systemInfo = asRecord(details?.registration_system_info);
   const heartbeatAvailable = Boolean(inventory || adapterStatuses.length > 0);
+  const registrationApprovedAt = agent?.registration_approved_at;
+  const registrationApprovedBy = (agent?.registration_approved_by || '').trim();
+  const registrationApprovalPending = agent?.last_registration_status === 'pending_approval' && !registrationApprovedAt;
+  const registrationApprovalConfirmed = agent?.last_registration_status === 'pending_approval' && Boolean(registrationApprovedAt);
+
+  const approveRegistrationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await agentDiagnosticsApi.approveRegistration(uuid);
+      return response.data;
+    },
+    onSuccess: async (nextDetails) => {
+      queryClient.setQueryData(['agent-diagnostics', uuid], nextDetails);
+      await queryClient.invalidateQueries({ queryKey: ['agent-diagnostics-list'] });
+    },
+  });
 
   const inventoryNetworkInterfaces = inventory?.network_interfaces || [];
   const inventoryComPorts = inventory?.com_ports || [];
@@ -405,6 +421,44 @@ const AgentDiagnosticsPage: React.FC = () => {
                 description={agent.last_registration_error || registrationStatus.helper}
               />
 
+              {registrationApprovalPending ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Требуется подтверждение оператора"
+                  description="Токены этому агенту пока не выданы. После подтверждения агент сам повторит bootstrap-регистрацию и перейдет к heartbeat."
+                  action={(
+                    <Button
+                      type="primary"
+                      loading={approveRegistrationMutation.isPending}
+                      onClick={() => approveRegistrationMutation.mutate()}
+                    >
+                      Подтвердить регистрацию
+                    </Button>
+                  )}
+                />
+              ) : null}
+
+              {registrationApprovalConfirmed ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Регистрация уже подтверждена"
+                  description={registrationApprovedBy
+                    ? `Подтвердил оператор ${registrationApprovedBy}. Ожидается повторный запрос агента для выдачи токенов.`
+                    : 'Ожидается повторный запрос агента для выдачи токенов.'}
+                />
+              ) : null}
+
+              {approveRegistrationMutation.isError ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Не удалось подтвердить регистрацию"
+                  description={getErrorMessage(approveRegistrationMutation.error)}
+                />
+              ) : null}
+
               <Descriptions bordered column={2} size="small">
                 <Descriptions.Item label="Время регистрации">
                   {formatDateTime(agent.last_registration_at)}
@@ -418,6 +472,12 @@ const AgentDiagnosticsPage: React.FC = () => {
                   {agent.machine_fingerprint ? (
                     <Text copyable={{ text: agent.machine_fingerprint }} code>{agent.machine_fingerprint}</Text>
                   ) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Подтверждено оператором">
+                  {registrationApprovedAt ? formatDateTime(registrationApprovedAt) : <Text type="secondary">Нет</Text>}
+                </Descriptions.Item>
+                <Descriptions.Item label="Кем подтверждено">
+                  {registrationApprovedBy || <Text type="secondary">-</Text>}
                 </Descriptions.Item>
                 <Descriptions.Item label="Текст ошибки" span={2}>
                   {agent.last_registration_error || <Text type="secondary">Нет</Text>}

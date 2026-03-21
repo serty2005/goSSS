@@ -50,6 +50,10 @@ func main() {
 
 	cfg, err := config.Load(AgentVersion, config.LoadOptions{ConfigPath: options.configPath})
 	if err != nil {
+		var createdErr *config.DefaultConfigCreatedError
+		if errors.As(err, &createdErr) {
+			log.Fatalf("Конфиг агента не найден. Создан шаблон %s. Заполните обязательные поля и перезапустите агент.", createdErr.Path)
+		}
 		log.Fatalf("Ошибка загрузки конфигурации агента: %v", err)
 	}
 	log.Printf(

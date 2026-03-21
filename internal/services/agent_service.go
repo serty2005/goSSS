@@ -64,8 +64,11 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 		Hostname:      req.Hostname,
 		Version:       req.AgentVersion,
 		LastHeartbeat: time.Now(),
-		Type:          "workstation",
-		Status:        models.StatusPendingOwner,
+		Type:          strings.TrimSpace(req.InitialData.AgentType),
+		Status:        models.StatusPendingRegistration,
+	}
+	if agent.Type == "" {
+		agent.Type = "workstation"
 	}
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		return nil, fmt.Errorf("не удалось создать агента в БД: %w", err)
@@ -106,6 +109,9 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		return nil, fmt.Errorf("ошибка поиска агента: %w", err)
 	}
 	if agent == nil {
+		if agentType == "sssruner" {
+			return nil, ErrAgentNotFound
+		}
 		observedAt := parseAgentObservedAt(data.CurrentTime)
 		agent = &models.Agent{
 			UUID:                    targetUUID,

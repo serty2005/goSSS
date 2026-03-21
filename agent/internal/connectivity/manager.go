@@ -30,43 +30,45 @@ const (
 type State string
 
 const (
-	StateStarting              State = "starting"
-	StateOnline                State = "online"
-	StateDegraded              State = "degraded"
-	StateNoNetwork             State = "no_network"
-	StateDNSFailed             State = "dns_failed"
-	StateServerUnreachable     State = "server_unreachable"
-	StateRegistrationRejected  State = "registration_rejected"
-	StateAuthorizationRejected State = "authorization_rejected"
-	StateRegisterRequired      State = "register_required"
-	StateTokenRefreshFailed    State = "token_refresh_failed"
-	StateServerError           State = "server_error"
-	StateRateLimited           State = "rate_limited"
-	StateConfigError           State = "config_error"
-	StateProtocolError         State = "protocol_error"
+	StateStarting                    State = "starting"
+	StateOnline                      State = "online"
+	StateDegraded                    State = "degraded"
+	StateNoNetwork                   State = "no_network"
+	StateDNSFailed                   State = "dns_failed"
+	StateServerUnreachable           State = "server_unreachable"
+	StateRegistrationRejected        State = "registration_rejected"
+	StateRegistrationPendingApproval State = "registration_pending_approval"
+	StateAuthorizationRejected       State = "authorization_rejected"
+	StateRegisterRequired            State = "register_required"
+	StateTokenRefreshFailed          State = "token_refresh_failed"
+	StateServerError                 State = "server_error"
+	StateRateLimited                 State = "rate_limited"
+	StateConfigError                 State = "config_error"
+	StateProtocolError               State = "protocol_error"
 )
 
 type ReasonKind string
 
 const (
-	ReasonNone           ReasonKind = "none"
-	ReasonHTTP401        ReasonKind = "http_401"
-	ReasonHTTP403        ReasonKind = "http_403"
-	ReasonHTTP404        ReasonKind = "http_404"
-	ReasonHTTP409        ReasonKind = "http_409"
-	ReasonHTTP429        ReasonKind = "http_429"
-	ReasonHTTP5xx        ReasonKind = "http_5xx"
-	ReasonHTTPUnexpected ReasonKind = "http_unexpected"
-	ReasonTimeout        ReasonKind = "timeout"
-	ReasonDNS            ReasonKind = "dns"
-	ReasonConnectRefused ReasonKind = "connect_refused"
-	ReasonNoNetwork      ReasonKind = "no_network"
-	ReasonTLS            ReasonKind = "tls"
-	ReasonRequestBuild   ReasonKind = "request_build"
-	ReasonRequestEncode  ReasonKind = "request_encode"
-	ReasonResponseDecode ReasonKind = "response_decode"
-	ReasonTransport      ReasonKind = "transport"
-	ReasonUnknown        ReasonKind = "unknown"
+	ReasonNone                        ReasonKind = "none"
+	ReasonRegistrationPendingApproval ReasonKind = "registration_pending_approval"
+	ReasonHTTP401                     ReasonKind = "http_401"
+	ReasonHTTP403                     ReasonKind = "http_403"
+	ReasonHTTP404                     ReasonKind = "http_404"
+	ReasonHTTP409                     ReasonKind = "http_409"
+	ReasonHTTP429                     ReasonKind = "http_429"
+	ReasonHTTP5xx                     ReasonKind = "http_5xx"
+	ReasonHTTPUnexpected              ReasonKind = "http_unexpected"
+	ReasonTimeout                     ReasonKind = "timeout"
+	ReasonDNS                         ReasonKind = "dns"
+	ReasonConnectRefused              ReasonKind = "connect_refused"
+	ReasonNoNetwork                   ReasonKind = "no_network"
+	ReasonTLS                         ReasonKind = "tls"
+	ReasonRequestBuild                ReasonKind = "request_build"
+	ReasonRequestEncode               ReasonKind = "request_encode"
+	ReasonResponseDecode              ReasonKind = "response_decode"
+	ReasonTransport                   ReasonKind = "transport"
+	ReasonUnknown                     ReasonKind = "unknown"
 )
 
 type Status struct {
@@ -130,6 +132,17 @@ type assessment struct {
 	httpStatusCode int
 	retryAfter     time.Duration
 	mode           retryMode
+}
+
+type PendingRegistrationError struct {
+	Message string
+}
+
+func (e *PendingRegistrationError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return strings.TrimSpace(e.Message)
+	}
+	return "регистрация агента ожидает подтверждения оператором"
 }
 
 func NewManager(path string, policy Policy) (*Manager, error) {
@@ -317,6 +330,17 @@ func (m *Manager) saveLocked() error {
 func (m *Manager) classifyFailure(op Operation, err error) assessment {
 	if err == nil {
 		return assessment{state: StateOnline, reason: ReasonNone, mode: retryFixed}
+	}
+
+	var pendingErr *PendingRegistrationError
+	if errors.As(err, &pendingErr) {
+		return assessment{
+			state:      StateRegistrationPendingApproval,
+			reason:     ReasonRegistrationPendingApproval,
+			detail:     pendingErr.Error(),
+			retryAfter: m.policy.BaseRetry,
+			mode:       retryFixed,
+		}
 	}
 
 	var httpErr *client.HTTPError

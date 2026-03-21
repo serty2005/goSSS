@@ -234,10 +234,38 @@ func (a *Agent) registerAndFetchTokens(ctx context.Context, reason string) error
 		return err
 	}
 	log.Printf("Bootstrap-регистрация завершена: agent_uuid=%s status=%s", req.AgentUUID, resp.Status)
-	return a.applyRegistrationResponse(*resp)
+	if err := a.applyRegistrationResponse(*resp); err != nil {
+		var pendingErr *connectivity.PendingRegistrationError
+		if errors.As(err, &pendingErr) {
+			log.Printf(
+				"Bootstrap-регистрация ожидает подтверждения оператора: agent_uuid=%s endpoint=%s message=%q",
+				req.AgentUUID,
+				a.registerEndpoint(),
+				pendingErr.Error(),
+			)
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) applyRegistrationResponse(resp protocol.AgentRegistrationResponseDTO) error {
+	status := strings.ToLower(strings.TrimSpace(resp.Status))
+	switch status {
+	case "", "ok":
+	case "pending_approval":
+		message := strings.TrimSpace(resp.Message)
+		if message == "" {
+			message = "Регистрация ожидает подтверждения оператором"
+		}
+		return &connectivity.PendingRegistrationError{Message: message}
+	default:
+		if message := strings.TrimSpace(resp.Message); message != "" {
+			return fmt.Errorf("сервер вернул неподдерживаемый статус регистрации %q: %s", resp.Status, message)
+		}
+		return fmt.Errorf("сервер вернул неподдерживаемый статус регистрации %q", resp.Status)
+	}
+
 	if err := validateIssuedTokens(resp.AccessToken, resp.RefreshToken, resp.AccessTokenExpiresAt, resp.RefreshTokenExpiresAt); err != nil {
 		return err
 	}
@@ -477,6 +505,8 @@ func (a *Agent) recordConnectivityFailure(op connectivity.Operation, endpoint st
 		hint = " hint=\"авторизация отклонена сервером; повтор будет выполнен через 24 часа\""
 	case connectivity.StateRegistrationRejected:
 		hint = " hint=\"проверь bootstrap API key и маршрут /api/agents/register\""
+	case connectivity.StateRegistrationPendingApproval:
+		hint = " hint=\"регистрация ожидает подтверждения оператором; heartbeat не будет отправляться до выдачи токенов\""
 	case connectivity.StateDNSFailed:
 		hint = " hint=\"проверь DNS и значение server_url\""
 	case connectivity.StateNoNetwork:

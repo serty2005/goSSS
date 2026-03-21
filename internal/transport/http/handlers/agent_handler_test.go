@@ -250,6 +250,39 @@ func TestRegisterAgent_УспешныйОтветВозвращаетсяБезA
 	require.False(t, hasEnvelope, "bootstrap-регистрация не должна возвращать API-конверт")
 }
 
+func TestRegisterAgent_PendingApprovalВозвращаетсяБезТокеновИБезAPIEnvelope(t *testing.T) {
+	authService := &stubAgentAuthService{
+		registerResp: &api.AgentRegistrationResponseDTO{
+			Status:    models.AgentRegistrationStatusPendingApproval,
+			Message:   "Регистрация ожидает подтверждения оператором",
+			AgentUUID: "agent-pending-approval",
+		},
+	}
+	handler := NewAgentHandler(&stubAgentService{}, authService, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/register", strings.NewReader(`{
+		"agent_uuid": "agent-pending-approval",
+		"hostname": "ws-pending",
+		"agent_version": "0.1.0"
+	}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	handler.registerAgent(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var responseBody map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &responseBody))
+	require.Equal(t, models.AgentRegistrationStatusPendingApproval, responseBody["status"])
+	require.Equal(t, "agent-pending-approval", responseBody["agent_uuid"])
+	require.Equal(t, "Регистрация ожидает подтверждения оператором", responseBody["message"])
+	_, hasAccessToken := responseBody["access_token"]
+	require.False(t, hasAccessToken, "до подтверждения токены не должны возвращаться")
+	_, hasEnvelope := responseBody["data"]
+	require.False(t, hasEnvelope, "bootstrap-регистрация не должна возвращать API-конверт")
+}
+
 func TestRefreshAgentToken_УспешныйОтветВозвращаетсяБезAPIEnvelope(t *testing.T) {
 	authService := &stubAgentAuthService{
 		refreshResp: &api.AgentTokenRefreshResponseDTO{

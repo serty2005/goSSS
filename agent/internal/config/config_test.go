@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,6 +113,47 @@ func TestLoad_ИщетКонфигРядомСИсполняемымФайлом
 	}
 }
 
+func TestLoad_СоздаетШаблонКонфигаРядомСИсполняемымФайломЕслиЕгоНет(t *testing.T) {
+	programData := filepath.Join(t.TempDir(), "ProgramData")
+	t.Setenv("ProgramData", programData)
+	t.Setenv(ConfigPathEnv, "")
+
+	executableDir := filepath.Join(t.TempDir(), "bin")
+	configPath, absErr := filepath.Abs(filepath.Join(executableDir, DefaultConfigFileName))
+	if absErr != nil {
+		t.Fatalf("не удалось получить абсолютный путь для шаблона конфига: %v", absErr)
+	}
+
+	_, err := Load("3.0.0", LoadOptions{
+		ExecutablePath: filepath.Join(executableDir, "etalon-agent.exe"),
+	})
+	if err == nil {
+		t.Fatal("Load должен был вернуть ошибку после создания шаблона конфига")
+	}
+	if !errors.Is(err, ErrDefaultConfigCreated) {
+		t.Fatalf("ожидалась ошибка ErrDefaultConfigCreated, получено: %v", err)
+	}
+
+	var createdErr *DefaultConfigCreatedError
+	if !errors.As(err, &createdErr) {
+		t.Fatalf("ожидалась ошибка *DefaultConfigCreatedError, получено %T", err)
+	}
+	if createdErr.Path != configPath {
+		t.Fatalf("созданный путь = %q, ожидается %q", createdErr.Path, configPath)
+	}
+
+	raw, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("не удалось прочитать созданный шаблон конфига: %v", readErr)
+	}
+	if string(raw) == "" {
+		t.Fatal("созданный шаблон конфига не должен быть пустым")
+	}
+	if !containsAll(string(raw), `"brand_name": "Company_Product"`, `"server_url": ""`, `"bootstrap_api_key": ""`) {
+		t.Fatalf("созданный шаблон конфига содержит неожиданные данные: %s", string(raw))
+	}
+}
+
 func TestLoad_ВозвращаетОшибкуПриПустомBootstrapAPIKey(t *testing.T) {
 	programData := filepath.Join(t.TempDir(), "ProgramData")
 	t.Setenv("ProgramData", programData)
@@ -142,4 +185,13 @@ func writeTestConfig(t *testing.T, dir string, fileName string, body string) str
 		t.Fatalf("не удалось получить абсолютный путь для %s: %v", path, err)
 	}
 	return filepath.Clean(absPath)
+}
+
+func containsAll(value string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(value, part) {
+			return false
+		}
+	}
+	return true
 }

@@ -1,6 +1,6 @@
 {
   "brand_name": "MyHoreca_Xenion",
-  "server_url": "http://localhost:8080",
+  "server_url": "http://10.25.1.125:8080",
   "bootstrap_api_key": "92a077f5-bea8-4773-a23e-9d8f1450a81c",
   "agent_type": "sssruner",
   "heartbeat_interval": "5s",

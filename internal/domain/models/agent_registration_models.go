@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	AgentRegistrationStatusSuccess        = "success"
-	AgentRegistrationStatusUnauthorized   = "unauthorized"
-	AgentRegistrationStatusInvalidRequest = "invalid_request"
-	AgentRegistrationStatusFailed         = "failed"
+	AgentRegistrationStatusSuccess         = "success"
+	AgentRegistrationStatusPendingApproval = "pending_approval"
+	AgentRegistrationStatusUnauthorized    = "unauthorized"
+	AgentRegistrationStatusInvalidRequest  = "invalid_request"
+	AgentRegistrationStatusFailed          = "failed"
 )
 
 // AgentRegistrationAttempt хранит историю bootstrap-регистрации нового агента.

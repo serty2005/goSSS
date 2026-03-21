@@ -74,7 +74,7 @@ export const getAgentStatusColor = (status?: string | null) => {
   if (['new', 'pending', 'processing', 'starting', 'unknown'].includes(normalized)) {
     return 'processing';
   }
-  if (['warning', 'degraded', 'stale', 'pending_owner', 'pendingzabbix', 'pending_zabbix'].includes(normalized)) {
+  if (['warning', 'degraded', 'stale', 'pending_registration', 'pending_owner', 'pendingzabbix', 'pending_zabbix'].includes(normalized)) {
     return 'warning';
   }
   if (['offline', 'error', 'failed', 'disconnected', 'stopped', 'registration_failed'].includes(normalized)) {
@@ -106,6 +106,14 @@ export const getRegistrationStatusMeta = (status?: string | null): RegistrationS
       label: 'Успешно',
       alertType: 'success',
       helper: 'Последняя bootstrap-регистрация завершилась успешно.',
+    };
+  }
+  if (normalized === 'pending_approval') {
+    return {
+      color: 'processing',
+      label: 'Ожидает подтверждения',
+      alertType: 'info',
+      helper: 'Агент отправил bootstrap-запрос, но токены будут выданы только после подтверждения оператором.',
     };
   }
   if (normalized === 'unauthorized') {

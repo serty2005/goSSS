@@ -1176,6 +1176,8 @@ export interface AgentDiagnosticsListItemDTO {
   last_registration_at?: string;
   last_registration_status?: string;
   last_registration_error?: string;
+  registration_approved_at?: string;
+  registration_approved_by?: string;
   machine_fingerprint?: string;
   has_latest_inventory?: boolean;
   has_adapter_statuses?: boolean;

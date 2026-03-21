@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/models"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/datatypes"
@@ -25,6 +29,7 @@ func NewAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
 func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-diagnostics", h.ListAgents)
 	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
+	r.Post("/agent-diagnostics/{uuid}/approve-registration", h.ApproveRegistration)
 }
 
 func (h *AgentDiagnosticsHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +82,9 @@ func (h *AgentDiagnosticsHandler) GetAgent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var agent models.Agent
-	if err := h.db.WithContext(r.Context()).Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+	out, err := h.buildAgentDiagnosticsDetails(r.Context(), agentUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
 			return
 		}
@@ -87,14 +92,75 @@ func (h *AgentDiagnosticsHandler) GetAgent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) ApproveRegistration(w http.ResponseWriter, r *http.Request) {
+	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	if agentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
+		return
+	}
+
+	var agent models.Agent
+	if err := h.db.WithContext(r.Context()).Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить данные агента")
+		return
+	}
+
+	if agent.RegistrationApprovedAt == nil {
+		requiresApproval := agent.Status == models.StatusPendingRegistration || agent.LastRegistrationStatus == models.AgentRegistrationStatusPendingApproval
+		if !requiresApproval {
+			response.RespondWithError(w, http.StatusConflict, "Подтверждение регистрации для этого агента не требуется")
+			return
+		}
+
+		now := time.Now().UTC()
+		agent.RegistrationApprovedAt = &now
+		if userID, ok := r.Context().Value(contextkeys.UserIDContextKey).(string); ok {
+			agent.RegistrationApprovedBy = strings.TrimSpace(userID)
+		}
+		if agent.Status == models.StatusRegistrationFailed || strings.TrimSpace(agent.Status) == "" {
+			agent.Status = models.StatusPendingRegistration
+		}
+		if agent.LastRegistrationStatus == models.AgentRegistrationStatusPendingApproval {
+			agent.LastRegistrationError = "Регистрация подтверждена оператором. Ожидается повторный запрос агента для выдачи токенов."
+		}
+		if err := h.db.WithContext(r.Context()).Save(&agent).Error; err != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось подтвердить регистрацию агента")
+			return
+		}
+	}
+
+	out, err := h.buildAgentDiagnosticsDetails(r.Context(), agentUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновленные данные агента")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Context, agentUUID string) (api.AgentDiagnosticsDetailsDTO, error) {
+	var agent models.Agent
+	if err := h.db.WithContext(ctx).Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
+		return api.AgentDiagnosticsDetailsDTO{}, err
+	}
+
 	var attempts []models.AgentRegistrationAttempt
-	if err := h.db.WithContext(r.Context()).
+	if err := h.db.WithContext(ctx).
 		Where("agent_uuid = ?", agentUUID).
 		Order("created_at DESC, id DESC").
 		Limit(20).
 		Find(&attempts).Error; err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить историю регистрации агента")
-		return
+		return api.AgentDiagnosticsDetailsDTO{}, err
 	}
 
 	out := api.AgentDiagnosticsDetailsDTO{
@@ -119,8 +185,7 @@ func (h *AgentDiagnosticsHandler) GetAgent(w http.ResponseWriter, r *http.Reques
 			CreatedAt:          attempts[i].CreatedAt,
 		})
 	}
-
-	response.RespondWithJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListItemDTO {
@@ -136,6 +201,8 @@ func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListI
 		LastRegistrationAt:     agent.LastRegistrationAt,
 		LastRegistrationStatus: agent.LastRegistrationStatus,
 		LastRegistrationError:  agent.LastRegistrationError,
+		RegistrationApprovedAt: agent.RegistrationApprovedAt,
+		RegistrationApprovedBy: agent.RegistrationApprovedBy,
 		MachineFingerprint:     agent.MachineFingerprint,
 		HasLatestInventory:     hasJSONPayload(agent.LatestInventorySnapshot),
 		HasAdapterStatuses:     hasJSONPayload(agent.LatestAdapterStatuses),

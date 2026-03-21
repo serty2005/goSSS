@@ -184,6 +184,15 @@ func TestAgentDataFlow_СохраняетPhase0ПоляВPayloadJSON(t *testing.
 	orchestrator := processing.NewOrchestrator(log, db, bus, nil, nil, nil, nil, nil, nil, nil, &noopProcessingEngine{}, obsSvc)
 	orchestrator.Start(context.Background())
 
+	require.NoError(t, agentRepo.Create(context.Background(), &models.Agent{
+		UUID:      payload.AgentUUID,
+		Type:      "sssruner",
+		Status:    models.StatusPendingOwner,
+		Hostname:  payload.Hostname,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go bus.Start(ctx, log)

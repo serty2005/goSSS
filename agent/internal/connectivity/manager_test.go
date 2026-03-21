@@ -145,3 +145,26 @@ func TestManagerRecordFailure_RequestBuildErrorUsesConfigCooldown(t *testing.T) 
 		t.Fatalf("ожидалась причина %s, получено %s", ReasonRequestBuild, update.Current.ReasonKind)
 	}
 }
+
+func TestManagerRecordFailure_PendingRegistrationUsesBaseRetry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 21, 10, 0, 0, 0, time.UTC)
+	manager := newTestManager(t, now)
+
+	update, retryAfter, err := manager.RecordFailure(OpRegister, "http://localhost:8080/api/agents/register", &PendingRegistrationError{
+		Message: "Регистрация ожидает подтверждения оператором",
+	})
+	if err != nil {
+		t.Fatalf("не удалось сохранить состояние связи: %v", err)
+	}
+	if retryAfter != 15*time.Second {
+		t.Fatalf("ожидался base retry 15s, получено %s", retryAfter)
+	}
+	if update.Current.State != StateRegistrationPendingApproval {
+		t.Fatalf("ожидалось состояние %s, получено %s", StateRegistrationPendingApproval, update.Current.State)
+	}
+	if update.Current.ReasonKind != ReasonRegistrationPendingApproval {
+		t.Fatalf("ожидалась причина %s, получено %s", ReasonRegistrationPendingApproval, update.Current.ReasonKind)
+	}
+}

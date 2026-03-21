@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,20 @@ const (
 	defaultProtocolErrorCooldown  = 30 * time.Minute
 	defaultRetryJitterFactor      = 0.2
 )
+
+var ErrDefaultConfigCreated = errors.New("создан шаблон конфигурации агента")
+
+type DefaultConfigCreatedError struct {
+	Path string
+}
+
+func (e *DefaultConfigCreatedError) Error() string {
+	return fmt.Sprintf("не найден %s рядом с исполняемым файлом; создан шаблон конфига %s", DefaultConfigFileName, e.Path)
+}
+
+func (e *DefaultConfigCreatedError) Unwrap() error {
+	return ErrDefaultConfigCreated
+}
 
 type Config struct {
 	ConfigSource           string
@@ -61,6 +76,19 @@ type LoadOptions struct {
 	LookupEnv      func(string) string
 }
 
+type configPathSource int
+
+const (
+	configPathSourceExplicit configPathSource = iota
+	configPathSourceEnv
+	configPathSourceExecutableDefault
+)
+
+type resolvedConfigPath struct {
+	Path   string
+	Source configPathSource
+}
+
 type fileConfig struct {
 	BrandName              string   `json:"brand_name"`
 	AgentProcessName       string   `json:"agent_process_name,omitempty"`
@@ -85,27 +113,33 @@ type fileConfig struct {
 }
 
 func Load(version string, options LoadOptions) (Config, error) {
-	configPath, err := resolveConfigPath(options)
+	resolvedPath, err := resolveConfigPath(options)
 	if err != nil {
 		return Config{}, err
 	}
 
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(resolvedPath.Path)
 	if err != nil {
-		return Config{}, fmt.Errorf("не удалось прочитать конфиг агента %s: %w", configPath, err)
+		if errors.Is(err, os.ErrNotExist) && resolvedPath.Source == configPathSourceExecutableDefault {
+			if createErr := createDefaultConfigTemplate(resolvedPath.Path); createErr != nil {
+				return Config{}, fmt.Errorf("не удалось создать шаблон конфига агента %s: %w", resolvedPath.Path, createErr)
+			}
+			return Config{}, &DefaultConfigCreatedError{Path: resolvedPath.Path}
+		}
+		return Config{}, fmt.Errorf("не удалось прочитать конфиг агента %s: %w", resolvedPath.Path, err)
 	}
 
 	var fileCfg fileConfig
 	if err := json.Unmarshal(raw, &fileCfg); err != nil {
-		return Config{}, fmt.Errorf("не удалось разобрать конфиг агента %s: %w", configPath, err)
+		return Config{}, fmt.Errorf("не удалось разобрать конфиг агента %s: %w", resolvedPath.Path, err)
 	}
 
-	return buildConfig(strings.TrimSpace(version), configPath, fileCfg)
+	return buildConfig(strings.TrimSpace(version), resolvedPath.Path, fileCfg)
 }
 
-func resolveConfigPath(options LoadOptions) (string, error) {
+func resolveConfigPath(options LoadOptions) (resolvedConfigPath, error) {
 	if explicitPath := strings.TrimSpace(options.ConfigPath); explicitPath != "" {
-		return normalizePath(explicitPath), nil
+		return resolvedConfigPath{Path: normalizePath(explicitPath), Source: configPathSourceExplicit}, nil
 	}
 
 	lookupEnv := options.LookupEnv
@@ -113,7 +147,7 @@ func resolveConfigPath(options LoadOptions) (string, error) {
 		lookupEnv = os.Getenv
 	}
 	if envPath := strings.TrimSpace(lookupEnv(ConfigPathEnv)); envPath != "" {
-		return normalizePath(envPath), nil
+		return resolvedConfigPath{Path: normalizePath(envPath), Source: configPathSourceEnv}, nil
 	}
 
 	executablePath := strings.TrimSpace(options.ExecutablePath)
@@ -121,11 +155,14 @@ func resolveConfigPath(options LoadOptions) (string, error) {
 		var err error
 		executablePath, err = os.Executable()
 		if err != nil {
-			return "", fmt.Errorf("не удалось определить путь к исполняемому файлу для поиска %s: %w", DefaultConfigFileName, err)
+			return resolvedConfigPath{}, fmt.Errorf("не удалось определить путь к исполняемому файлу для поиска %s: %w", DefaultConfigFileName, err)
 		}
 	}
 
-	return normalizePath(filepath.Join(filepath.Dir(executablePath), DefaultConfigFileName)), nil
+	return resolvedConfigPath{
+		Path:   normalizePath(filepath.Join(filepath.Dir(executablePath), DefaultConfigFileName)),
+		Source: configPathSourceExecutableDefault,
+	}, nil
 }
 
 func normalizePath(path string) string {
@@ -240,6 +277,49 @@ func buildConfig(version string, configPath string, fileCfg fileConfig) (Config,
 	}, nil
 }
 
+func createDefaultConfigTemplate(configPath string) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(configPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	template := fileConfig{
+		BrandName:              "Company_Product",
+		ServerURL:              "",
+		BootstrapAPIKey:        "",
+		AgentType:              defaultAgentType,
+		HeartbeatInterval:      defaultHeartbeatInterval.String(),
+		UpdateCheckInterval:    defaultUpdateCheckInterval.String(),
+		InventoryInterval:      defaultInventoryInterval.String(),
+		AccessTokenGracePeriod: defaultAccessTokenGracePeriod.String(),
+		ConnectivityBaseRetry:  defaultConnectivityBaseRetry.String(),
+		ConnectivityMaxRetry:   defaultConnectivityMaxRetry.String(),
+		RegistrationCooldown:   defaultRegistrationCooldown.String(),
+		AuthorizationCooldown:  defaultAuthorizationCooldown.String(),
+		RateLimitCooldown:      defaultRateLimitCooldown.String(),
+		ConfigErrorCooldown:    defaultConfigErrorCooldown.String(),
+		ProtocolErrorCooldown:  defaultProtocolErrorCooldown.String(),
+		RetryJitterFactor:      float64Ptr(defaultRetryJitterFactor),
+	}
+
+	raw, err := json.MarshalIndent(template, "", "  ")
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(raw, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
 func resolveDataDir(rawPath, company, agentName string) string {
 	if strings.TrimSpace(rawPath) != "" {
 		return strings.TrimSpace(rawPath)
@@ -286,6 +366,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }
 
 func splitBrand(brand string) (company, product string, err error) {

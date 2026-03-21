@@ -387,6 +387,31 @@ func TestAgentApplyRegistrationResponseRejectsEmptyTokens(t *testing.T) {
 	}
 }
 
+func TestAgentApplyRegistrationResponsePendingApprovalDoesNotPersistTokens(t *testing.T) {
+	t.Parallel()
+
+	agent := &Agent{}
+	err := agent.applyRegistrationResponse(protocol.AgentRegistrationResponseDTO{
+		Status:    "pending_approval",
+		Message:   "Регистрация ожидает подтверждения оператором",
+		AgentUUID: "agent-uuid",
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка pending approval")
+	}
+
+	var pendingErr *connectivity.PendingRegistrationError
+	if !errors.As(err, &pendingErr) {
+		t.Fatalf("ожидалась ошибка *PendingRegistrationError, получено %T", err)
+	}
+	if pendingErr.Error() != "Регистрация ожидает подтверждения оператором" {
+		t.Fatalf("получено неожиданное сообщение pending approval: %q", pendingErr.Error())
+	}
+	if agent.tokens != nil {
+		t.Fatalf("токены не должны сохраняться до подтверждения регистрации: %+v", agent.tokens)
+	}
+}
+
 func TestAgentApplyTokenRefreshResponseRejectsZeroExpiry(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +608,59 @@ func TestAgentRegisterAndFetchTokensUsesBootstrapKeyAndPersistsTokens(t *testing
 	}
 }
 
+func TestAgentRegisterAndFetchTokensPendingApprovalDoesNotPersistTokens(t *testing.T) {
+	t.Parallel()
+
+	var saveCalls int
+	agent := &Agent{
+		cfg: config.Config{
+			AgentProcessName: "XenionAgent",
+			AgentType:        "sssruner",
+			AgentVersion:     "1.2.3",
+			BootstrapAPIKey:  "bootstrap-key",
+			ServerURL:        "http://localhost:8080",
+		},
+		client: stubRuntimeClient{
+			registerFn: func(_ context.Context, bootstrapAPIKey string, req protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+				if bootstrapAPIKey != "bootstrap-key" {
+					t.Fatalf("ожидался bootstrap API key bootstrap-key, получено %q", bootstrapAPIKey)
+				}
+				return &protocol.AgentRegistrationResponseDTO{
+					Status:    "pending_approval",
+					Message:   "Регистрация ожидает подтверждения оператором",
+					AgentUUID: req.AgentUUID,
+				}, nil
+			},
+		},
+		registryStore: stubRuntimeRegistryStore{
+			collectRegistrationInfoFunc: func(string) map[string]interface{} {
+				return map[string]interface{}{"os": "windows"}
+			},
+			saveTokensFn: func(state.Tokens) error {
+				saveCalls++
+				return nil
+			},
+		},
+		identity:           &state.Identity{UUID: "agent-uuid"},
+		machineFingerprint: "fingerprint-hash",
+	}
+
+	err := agent.registerAndFetchTokens(context.Background(), "ожидание подтверждения")
+	if err == nil {
+		t.Fatal("ожидалась ошибка pending approval")
+	}
+	var pendingErr *connectivity.PendingRegistrationError
+	if !errors.As(err, &pendingErr) {
+		t.Fatalf("ожидалась ошибка *PendingRegistrationError, получено %T", err)
+	}
+	if saveCalls != 0 {
+		t.Fatalf("токены не должны сохраняться до подтверждения регистрации, получено %d сохранений", saveCalls)
+	}
+	if agent.tokens != nil {
+		t.Fatalf("в агенте не должно быть токенов до подтверждения регистрации: %+v", agent.tokens)
+	}
+}
+
 func TestAgentEnsureAuthLocked_Refresh403DoesNotFallbackToRegister(t *testing.T) {
 	t.Parallel()
 
@@ -688,5 +766,74 @@ func TestAgentCommunicateOnce_Register403SetsAuthorizationCooldown(t *testing.T)
 	}
 	if status.ReasonKind != connectivity.ReasonHTTP403 {
 		t.Fatalf("ожидалась причина %s, получено %s", connectivity.ReasonHTTP403, status.ReasonKind)
+	}
+}
+
+func TestAgentCommunicateOnce_PendingApprovalDoesNotSendHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConnectivityManager(t)
+	var sendHeartbeatCalls int
+	agent := &Agent{
+		cfg: config.Config{
+			AgentProcessName:       "XenionAgent",
+			AgentType:              "sssruner",
+			AgentVersion:           "1.2.3",
+			BootstrapAPIKey:        "bootstrap-key",
+			ServerURL:              "http://localhost:8080",
+			HeartbeatInterval:      15 * time.Second,
+			UpdateCheckInterval:    60 * time.Second,
+			AccessTokenGracePeriod: time.Minute,
+			ConnectivityBaseRetry:  15 * time.Second,
+		},
+		client: stubRuntimeClient{
+			registerFn: func(context.Context, string, protocol.RegistrationRequestDTO) (*protocol.AgentRegistrationResponseDTO, error) {
+				return &protocol.AgentRegistrationResponseDTO{
+					Status:    "pending_approval",
+					Message:   "Регистрация ожидает подтверждения оператором",
+					AgentUUID: "agent-uuid",
+				}, nil
+			},
+			sendHeartbeatFn: func(context.Context, string, protocol.AgentDataDTO, string) (*protocol.HeartbeatResponseDTO, error) {
+				sendHeartbeatCalls++
+				return &protocol.HeartbeatResponseDTO{Status: "ok"}, nil
+			},
+		},
+		registryStore: stubRuntimeRegistryStore{
+			loadTokensFn: func() (*state.Tokens, error) {
+				return nil, nil
+			},
+			collectRegistrationInfoFunc: func(string) map[string]interface{} {
+				return map[string]interface{}{"os": "windows"}
+			},
+		},
+		identity:           &state.Identity{UUID: "agent-uuid"},
+		machineFingerprint: "fingerprint-hash",
+		inventoryService:   stubRuntimeInventoryService{},
+		adapterManager:     stubRuntimeAdapterManager{},
+		connectivity:       manager,
+	}
+
+	delay, err := agent.communicateOnce(context.Background())
+	if err == nil {
+		t.Fatal("ожидалась ошибка pending approval")
+	}
+	var pendingErr *connectivity.PendingRegistrationError
+	if !errors.As(err, &pendingErr) {
+		t.Fatalf("ожидалась ошибка *PendingRegistrationError, получено %T", err)
+	}
+	if delay != 15*time.Second {
+		t.Fatalf("ожидался retry 15s, получено %s", delay)
+	}
+	if sendHeartbeatCalls != 0 {
+		t.Fatalf("heartbeat не должен отправляться до подтверждения регистрации, получено %d вызовов", sendHeartbeatCalls)
+	}
+
+	status := manager.Status()
+	if status.State != connectivity.StateRegistrationPendingApproval {
+		t.Fatalf("ожидалось состояние %s, получено %s", connectivity.StateRegistrationPendingApproval, status.State)
+	}
+	if status.ReasonKind != connectivity.ReasonRegistrationPendingApproval {
+		t.Fatalf("ожидалась причина %s, получено %s", connectivity.ReasonRegistrationPendingApproval, status.ReasonKind)
 	}
 }

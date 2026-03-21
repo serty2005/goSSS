@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	tokenTypeAccess  = "access"
-	tokenTypeRefresh = "refresh"
+	tokenTypeAccess                 = "access"
+	tokenTypeRefresh                = "refresh"
+	registrationPendingApprovalText = "Регистрация ожидает подтверждения оператором"
 )
 
 var (
@@ -35,10 +36,11 @@ var (
 type RegistrationAttemptStatus string
 
 const (
-	RegistrationAttemptStatusSuccess        RegistrationAttemptStatus = models.AgentRegistrationStatusSuccess
-	RegistrationAttemptStatusUnauthorized   RegistrationAttemptStatus = models.AgentRegistrationStatusUnauthorized
-	RegistrationAttemptStatusInvalidRequest RegistrationAttemptStatus = models.AgentRegistrationStatusInvalidRequest
-	RegistrationAttemptStatusFailed         RegistrationAttemptStatus = models.AgentRegistrationStatusFailed
+	RegistrationAttemptStatusSuccess         RegistrationAttemptStatus = models.AgentRegistrationStatusSuccess
+	RegistrationAttemptStatusPendingApproval RegistrationAttemptStatus = models.AgentRegistrationStatusPendingApproval
+	RegistrationAttemptStatusUnauthorized    RegistrationAttemptStatus = models.AgentRegistrationStatusUnauthorized
+	RegistrationAttemptStatusInvalidRequest  RegistrationAttemptStatus = models.AgentRegistrationStatusInvalidRequest
+	RegistrationAttemptStatusFailed          RegistrationAttemptStatus = models.AgentRegistrationStatusFailed
 )
 
 type RegistrationAttemptMeta struct {
@@ -102,14 +104,33 @@ func (s *service) RegisterAndIssueTokens(ctx context.Context, req *api.Registrat
 		return nil, err
 	}
 
-	agent.Type = "sssruner"
-	if strings.TrimSpace(req.Hostname) != "" {
-		agent.Hostname = strings.TrimSpace(req.Hostname)
+	agent.Type = registrationAgentType(req)
+	if host := hostnameFromRequest(req); host != "" {
+		agent.Hostname = host
 	}
-	if strings.TrimSpace(req.AgentVersion) != "" {
-		agent.Version = strings.TrimSpace(req.AgentVersion)
+	if version := versionFromRequest(req); version != "" {
+		agent.Version = version
 	}
 	agent.LastHeartbeat = time.Now()
+	if !registrationApproved(agent) {
+		agent.Status = models.StatusPendingRegistration
+		if err := s.agentRepo.Update(ctx, agent); err != nil {
+			wrappedErr := fmt.Errorf("не удалось сохранить состояние ожидания подтверждения регистрации: %w", err)
+			s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusFailed, wrappedErr.Error())
+			return nil, wrappedErr
+		}
+
+		resp := &api.AgentRegistrationResponseDTO{
+			Status:    models.AgentRegistrationStatusPendingApproval,
+			Message:   registrationPendingApprovalText,
+			AgentUUID: req.AgentUUID,
+		}
+		s.logRegistrationAttemptError(ctx, req, meta, RegistrationAttemptStatusPendingApproval, registrationPendingApprovalText)
+		return resp, nil
+	}
+	if agent.Status == models.StatusPendingRegistration || agent.Status == models.StatusRegistrationFailed {
+		agent.Status = models.StatusPendingOwner
+	}
 	if err := s.agentRepo.Update(ctx, agent); err != nil {
 		s.log.Warn("Не удалось обновить тип агента при регистрации", "uuid", agent.UUID, "error", err)
 	}
@@ -381,8 +402,17 @@ func (s *service) upsertAgentRegistrationSnapshot(
 	if len(payloadJSON) > 0 {
 		agent.RegistrationPayload = payloadJSON
 	}
-	if status == RegistrationAttemptStatusSuccess && agent.Status == models.StatusRegistrationFailed {
-		agent.Status = models.StatusPendingOwner
+	switch status {
+	case RegistrationAttemptStatusPendingApproval:
+		agent.Status = models.StatusPendingRegistration
+	case RegistrationAttemptStatusSuccess:
+		if agent.Status == models.StatusPendingRegistration || agent.Status == models.StatusRegistrationFailed {
+			agent.Status = models.StatusPendingOwner
+		}
+	case RegistrationAttemptStatusUnauthorized, RegistrationAttemptStatusInvalidRequest, RegistrationAttemptStatusFailed:
+		if !registrationApproved(agent) {
+			agent.Status = models.StatusRegistrationFailed
+		}
 	}
 
 	if existsInStorage(agent) {
@@ -506,4 +536,8 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func registrationApproved(agent *models.Agent) bool {
+	return agent != nil && agent.RegistrationApprovedAt != nil && !agent.RegistrationApprovedAt.IsZero()
 }

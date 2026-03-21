@@ -359,12 +359,13 @@ const AgentsPage: React.FC = () => {
               value={registrationFilter || 'all'}
               style={{ width: 220 }}
               onChange={(value) => updateFilters({ registration_status: value === 'all' ? undefined : value })}
-              options={[
-                { value: 'all', label: 'Все регистрации' },
-                { value: 'success', label: 'Успешные' },
-                { value: 'unauthorized', label: 'Ошибка авторизации' },
-                { value: 'invalid_request', label: 'Неверный payload' },
-                { value: 'failed', label: 'Серверная ошибка' },
+               options={[
+                 { value: 'all', label: 'Все регистрации' },
+                 { value: 'success', label: 'Успешные' },
+                 { value: 'pending_approval', label: 'Ожидают подтверждения' },
+                 { value: 'unauthorized', label: 'Ошибка авторизации' },
+                 { value: 'invalid_request', label: 'Неверный payload' },
+                 { value: 'failed', label: 'Серверная ошибка' },
                 { value: '__empty__', label: 'Без попытки регистрации' },
               ]}
             />

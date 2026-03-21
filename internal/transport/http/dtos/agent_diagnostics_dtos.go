@@ -14,6 +14,8 @@ type AgentDiagnosticsListItemDTO struct {
 	LastRegistrationAt     *time.Time `json:"last_registration_at,omitzero"`
 	LastRegistrationStatus string     `json:"last_registration_status"`
 	LastRegistrationError  string     `json:"last_registration_error"`
+	RegistrationApprovedAt *time.Time `json:"registration_approved_at,omitzero"`
+	RegistrationApprovedBy string     `json:"registration_approved_by"`
 	MachineFingerprint     string     `json:"machine_fingerprint"`
 	HasLatestInventory     bool       `json:"has_latest_inventory"`
 	HasAdapterStatuses     bool       `json:"has_adapter_statuses"`

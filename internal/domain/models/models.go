@@ -48,6 +48,10 @@ type ExternalSystemLink struct {
 // Константы статусов агента.
 // Определяют жизненный цикл агента от обнаружения до активной работы.
 const (
+	// StatusPendingRegistration — агент прислал bootstrap-регистрацию, но ещё не подтверждён оператором.
+	// До подтверждения оператором сервер не должен выдавать ему токены.
+	StatusPendingRegistration = "pending_registration"
+
 	// StatusPendingOwner — агент обнаружен, ожидает привязки к владельцу (компании).
 	// Начальный статус для новых агентов, полученных от FTP-гейтая.
 	StatusPendingOwner = "pending_owner"
@@ -149,7 +153,7 @@ type Agent struct {
 	LastRegistrationAt *time.Time
 
 	// LastRegistrationStatus — итог последней попытки регистрации.
-	// Значения: success, unauthorized, invalid_request, failed.
+	// Значения: success, pending_approval, unauthorized, invalid_request, failed.
 	LastRegistrationStatus string `gorm:"type:varchar(32);index"`
 
 	// LastRegistrationError — текст последней ошибки регистрации.
@@ -164,6 +168,13 @@ type Agent struct {
 
 	// RegistrationPayload — последнее полное тело registration request.
 	RegistrationPayload datatypes.JSON `gorm:"type:jsonb"`
+
+	// RegistrationApprovedAt — время подтверждения регистрации оператором.
+	// Пока значение пустое, сервер не должен выдавать токены bootstrap-регистрации.
+	RegistrationApprovedAt *time.Time
+
+	// RegistrationApprovedBy — идентификатор пользователя, подтвердившего регистрацию.
+	RegistrationApprovedBy string `gorm:"type:text"`
 
 	// LatestInventorySnapshot — последний inventory snapshot из heartbeat.
 	LatestInventorySnapshot datatypes.JSON `gorm:"type:jsonb"`
@@ -184,7 +195,7 @@ type Agent struct {
 	ZabbixHostname string `gorm:"type:text"`
 
 	// Status — текущий статус агента.
-	// Значения: StatusPendingOwner, StatusPendingZabbix, StatusActive, StatusRegistrationFailed.
+	// Значения: StatusPendingRegistration, StatusPendingOwner, StatusPendingZabbix, StatusActive, StatusRegistrationFailed.
 	Status string `gorm:"type:varchar(50);index"`
 
 	// CreatedAt — время создания записи (первое обнаружение агента).

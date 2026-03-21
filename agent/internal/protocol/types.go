@@ -42,10 +42,11 @@ type HeartbeatResponseDTO struct {
 
 type AgentRegistrationResponseDTO struct {
 	Status                string    `json:"status"`
+	Message               string    `json:"message,omitempty"`
 	AgentUUID             string    `json:"agent_uuid"`
-	AccessToken           string    `json:"access_token"`
+	AccessToken           string    `json:"access_token,omitempty"`
 	AccessTokenExpiresAt  time.Time `json:"access_token_expires_at"`
-	RefreshToken          string    `json:"refresh_token"`
+	RefreshToken          string    `json:"refresh_token,omitempty"`
 	RefreshTokenExpiresAt time.Time `json:"refresh_token_expires_at"`
 }
 
