@@ -45,6 +45,7 @@ services:
       - minio_data:/data
     ports:
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "9000:9000"
     networks:
       - gosss-net
 

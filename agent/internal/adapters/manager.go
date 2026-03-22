@@ -128,7 +128,7 @@ func (m *Manager) ListStatuses() ([]Status, error) {
 func (m *Manager) Compatible(item ManifestItem) bool {
 	targetOS := normalizePlatform(item.TargetOS)
 	targetArch := normalizePlatform(item.TargetArch)
-	return (targetOS == "" || targetOS == m.targetOS) && (targetArch == "" || targetArch == m.targetArch)
+	return osCompatible(m.targetOS, targetOS) && archCompatible(m.targetOS, m.targetArch, targetArch)
 }
 
 func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
@@ -387,6 +387,20 @@ func extensionFromURL(raw string) string {
 
 func normalizePlatform(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func osCompatible(runtimeOS, manifestOS string) bool {
+	return manifestOS == "" || manifestOS == runtimeOS
+}
+
+func archCompatible(runtimeOS, runtimeArch, manifestArch string) bool {
+	if manifestArch == "" || manifestArch == runtimeArch {
+		return true
+	}
+	if runtimeOS == "windows" && runtimeArch == "amd64" && manifestArch == "386" {
+		return true
+	}
+	return false
 }
 
 func sanitizeFileName(name string) string {

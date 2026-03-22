@@ -100,6 +100,76 @@ func TestManagerSyncSkipsIncompatibleManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCompatibleAllowsWindows386OnWindowsAMD64(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(t.TempDir(), &stubDownloader{})
+	manager.targetOS = "windows"
+	manager.targetArch = "amd64"
+
+	if !manager.Compatible(ManifestItem{TargetOS: "windows", TargetArch: "386"}) {
+		t.Fatal("windows/amd64 должен принимать windows/386 адаптер")
+	}
+	if !manager.Compatible(ManifestItem{TargetOS: "windows", TargetArch: "amd64"}) {
+		t.Fatal("windows/amd64 должен принимать windows/amd64 адаптер")
+	}
+	if manager.Compatible(ManifestItem{TargetOS: "linux", TargetArch: "386"}) {
+		t.Fatal("windows/amd64 не должен принимать linux-адаптер")
+	}
+}
+
+func TestManagerCompatibleRejectsWindowsAMD64OnWindows386(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(t.TempDir(), &stubDownloader{})
+	manager.targetOS = "windows"
+	manager.targetArch = "386"
+
+	if manager.Compatible(ManifestItem{TargetOS: "windows", TargetArch: "amd64"}) {
+		t.Fatal("windows/386 не должен принимать windows/amd64 адаптер")
+	}
+	if !manager.Compatible(ManifestItem{TargetOS: "windows", TargetArch: "386"}) {
+		t.Fatal("windows/386 должен принимать windows/386 адаптер")
+	}
+}
+
+func TestManagerSyncDownloadsWindows386ManifestOnWindowsAMD64(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("adapter-x86")
+	downloadURL := "https://example.invalid/adapter-x86.exe"
+	downloader := &stubDownloader{
+		payloads: map[string][]byte{downloadURL: content},
+	}
+	manager := NewManager(t.TempDir(), downloader)
+	manager.targetOS = "windows"
+	manager.targetArch = "amd64"
+
+	statuses, err := manager.Sync(t.Context(), []ManifestItem{{
+		AdapterID:   "adapter-x86",
+		Version:     "1.0.0",
+		DownloadURL: downloadURL,
+		TargetOS:    "windows",
+		TargetArch:  "386",
+		SHA256:      checksum(content),
+	}})
+	if err != nil {
+		t.Fatalf("Sync завершилась ошибкой: %v", err)
+	}
+	if len(downloader.calls) != 1 {
+		t.Fatalf("ожидался один вызов скачивания, получено %d", len(downloader.calls))
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("ожидался один статус, получено %d", len(statuses))
+	}
+	if statuses[0].Status != "ready" {
+		t.Fatalf("ожидался статус ready, получено %q", statuses[0].Status)
+	}
+	if statuses[0].TargetArch != "386" {
+		t.Fatalf("ожидалась сохраненная архитектура manifest 386, получено %q", statuses[0].TargetArch)
+	}
+}
+
 func TestManagerSyncDoesNotRedownloadSameRevision(t *testing.T) {
 	t.Parallel()
 

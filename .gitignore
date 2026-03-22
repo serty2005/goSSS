@@ -2,6 +2,7 @@
 !agent/agent-config.json
 .env
 *.log
+*.exe
 *.gz
 *.py
 storage/*
