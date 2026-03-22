@@ -52,6 +52,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&models.Agent{},
 		&models.AgentRegistrationAttempt{},
 		&models.AgentSessionToken{},
+		&models.AgentCommand{},
 		&models.AgentCOMSignatureRule{},
 		&models.PublishedAgentAdapter{},
 		&models.AgentAdapterRelease{},
