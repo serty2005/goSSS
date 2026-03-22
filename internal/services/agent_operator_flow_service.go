@@ -21,6 +21,7 @@ type AgentOperatorFlowService interface {
 	SaveAdapterSelection(ctx context.Context, agentUUID string, req api.SaveAgentAdapterSelectionRequestDTO, actor string) error
 	SaveCOMSignatureRule(ctx context.Context, req api.UpsertAgentCOMSignatureRuleRequestDTO, actor string) error
 	EnqueueAdapterRun(ctx context.Context, agentUUID string, req api.EnqueueAgentAdapterRunRequestDTO, actor string) error
+	EnqueueSagaRun(ctx context.Context, agentUUID string, req api.EnqueueAgentSagaRunRequestDTO, actor string) error
 	EnsureScheduledAdapterRuns(ctx context.Context, agent *models.Agent) error
 }
 

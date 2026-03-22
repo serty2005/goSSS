@@ -336,17 +336,26 @@ type AgentDataDTO struct {
 }
 
 type TaskExecutionResultDTO struct {
-	Status      string          `json:"status"`
-	AdapterID   string          `json:"adapter_id,omitempty"`
-	Command     string          `json:"command,omitempty"`
-	Operation   string          `json:"operation,omitempty"`
-	CompletedAt *time.Time      `json:"completed_at,omitempty"`
-	DurationMS  int64           `json:"duration_ms,omitempty"`
-	ExitCode    *int            `json:"exit_code,omitempty"`
-	Stdout      string          `json:"stdout,omitempty"`
-	Stderr      string          `json:"stderr,omitempty"`
-	Result      json.RawMessage `json:"result,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	Status         string                     `json:"status"`
+	AdapterID      string                     `json:"adapter_id,omitempty"`
+	Command        string                     `json:"command,omitempty"`
+	Operation      string                     `json:"operation,omitempty"`
+	SagaID         string                     `json:"saga_id,omitempty"`
+	SagaType       string                     `json:"saga_type,omitempty"`
+	RequestID      string                     `json:"request_id,omitempty"`
+	CorrelationID  string                     `json:"correlation_id,omitempty"`
+	CompletedAt    *time.Time                 `json:"completed_at,omitempty"`
+	DurationMS     int64                      `json:"duration_ms,omitempty"`
+	ExitCode       *int                       `json:"exit_code,omitempty"`
+	Stdout         string                     `json:"stdout,omitempty"`
+	Stderr         string                     `json:"stderr,omitempty"`
+	Result         json.RawMessage            `json:"result,omitempty"`
+	FinalResult    json.RawMessage            `json:"final_result,omitempty"`
+	Steps          []SagaStepResultDTO        `json:"steps,omitzero"`
+	ExecutionLog   []SagaExecutionLogEntryDTO `json:"execution_log,omitzero"`
+	Resumed        bool                       `json:"resumed,omitempty"`
+	IdempotencyKey string                     `json:"idempotency_key,omitempty"`
+	Error          string                     `json:"error,omitempty"`
 }
 
 type AgentTaskResultDTO struct {
