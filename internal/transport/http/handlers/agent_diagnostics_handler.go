@@ -47,6 +47,7 @@ func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
 	r.Post("/agent-diagnostics/{uuid}/approve-registration", h.ApproveRegistration)
 	r.Post("/agent-diagnostics/{uuid}/adapter-selection", h.SaveAdapterSelection)
+	r.Post("/agent-diagnostics/{uuid}/adapter-runs", h.EnqueueAdapterRun)
 	r.Post("/agent-diagnostics/{uuid}/signature-rules", h.UpsertCOMSignatureRule)
 }
 
@@ -248,6 +249,45 @@ func (h *AgentDiagnosticsHandler) SaveAdapterSelection(w http.ResponseWriter, r 
 			return
 		}
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённый список адаптеров агента")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) EnqueueAdapterRun(w http.ResponseWriter, r *http.Request) {
+	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	if agentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
+		return
+	}
+	if h.operatorFlow == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Сервис operator flow не настроен")
+		return
+	}
+
+	var dto api.EnqueueAgentAdapterRunRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	actor := strings.TrimSpace(userIDFromContext(r.Context()))
+	if err := h.operatorFlow.EnqueueAdapterRun(r.Context(), agentUUID, dto, actor); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.buildAgentDiagnosticsDetails(r.Context(), agentUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённую диагностику агента")
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, out)

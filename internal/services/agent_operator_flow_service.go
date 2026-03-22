@@ -20,6 +20,8 @@ type AgentOperatorFlowService interface {
 	BuildOperatorFlow(ctx context.Context, agent *models.Agent) (*api.AgentOperatorFlowDTO, error)
 	SaveAdapterSelection(ctx context.Context, agentUUID string, req api.SaveAgentAdapterSelectionRequestDTO, actor string) error
 	SaveCOMSignatureRule(ctx context.Context, req api.UpsertAgentCOMSignatureRuleRequestDTO, actor string) error
+	EnqueueAdapterRun(ctx context.Context, agentUUID string, req api.EnqueueAgentAdapterRunRequestDTO, actor string) error
+	EnsureScheduledAdapterRuns(ctx context.Context, agent *models.Agent) error
 }
 
 type AgentAdapterManifestResolver interface {
@@ -166,12 +168,19 @@ func (s *agentOperatorFlowService) BuildOperatorFlow(ctx context.Context, agent 
 	savedProfile := buildSavedProfileDTO(savedConfig.MachineProfile)
 	savedReasons := []string(nil)
 	savedManifests := []api.AdapterManifestDTO(nil)
+	savedRuntimeProfiles := sanitizeAdapterRuntimeProfiles(savedConfig.AdapterRuntimeProfiles)
+	adapterStatuses, adapterStatusWarning := decodeAdapterStatuses(agent.LatestAdapterStatuses)
 	if savedConfig.MachineProfile != nil {
 		savedReasons = slices.Clone(savedConfig.MachineProfile.Reasons)
 	}
 	if len(savedConfig.AdapterManifests) > 0 {
 		savedManifests = normalizeManifestList(savedConfig.AdapterManifests)
 	}
+	if adapterStatusWarning != "" {
+		warnings = append(warnings, adapterStatusWarning)
+	}
+	savedRuntimeProfiles = enrichRuntimeProfilesWithStatus(savedRuntimeProfiles, adapterStatuses, time.Now().UTC())
+	warnings = append(warnings, buildRuntimeProfileWarnings(selectedAdapterIDs, savedRuntimeProfiles, adapterStatuses, time.Now().UTC())...)
 
 	return &api.AgentOperatorFlowDTO{
 		MeaningfulHeartbeat: api.AgentHeartbeatMeaningfulStateDTO{
@@ -190,6 +199,7 @@ func (s *agentOperatorFlowService) BuildOperatorFlow(ctx context.Context, agent 
 		SavedReasons:                slices.Clip(savedReasons),
 		SavedAdapterManifests:       slices.Clip(savedManifests),
 		EffectiveAdapterManifests:   slices.Clip(effectiveManifests),
+		SavedAdapterRuntimeProfiles: slices.Clip(savedRuntimeProfiles),
 		SignatureCandidates:         slices.Clip(signatureCandidates),
 		Warnings:                    slices.Clip(uniqueNonEmptyStrings(warnings)),
 	}, nil
@@ -211,6 +221,12 @@ func (s *agentOperatorFlowService) SaveAdapterSelection(ctx context.Context, age
 	if err != nil {
 		return err
 	}
+	runtimeProfiles := sanitizeAdapterRuntimeProfiles(req.RuntimeProfiles)
+	for _, profile := range runtimeProfiles {
+		if !slices.Contains(selectedAdapterIDs, profile.AdapterID) {
+			return fmt.Errorf("runtime-профиль %s нельзя сохранить без выбора адаптера", profile.AdapterID)
+		}
+	}
 
 	config, err := decodeAgentConfigForWrite(agent.Config)
 	if err != nil {
@@ -219,6 +235,7 @@ func (s *agentOperatorFlowService) SaveAdapterSelection(ctx context.Context, age
 	config.MachineProfile = nil
 	config.SelectedAdapterIDs = selectedAdapterIDs
 	config.AdapterManifests = nil
+	config.AdapterRuntimeProfiles = runtimeProfiles
 
 	raw, err := json.Marshal(config)
 	if err != nil {

@@ -3,6 +3,7 @@ import {
   AgentDiagnosticsDetailsDTO,
   AgentDiagnosticsListItemDTO,
   ApiResponse,
+  EnqueueAgentAdapterRunPayload,
   SaveAgentAdapterSelectionPayload,
   UpsertAgentCOMSignatureRulePayload,
 } from '@/types/api';
@@ -31,6 +32,11 @@ export const agentDiagnosticsApi = {
 
   saveAdapterSelection: async (uuid: string, payload: SaveAgentAdapterSelectionPayload) => {
     const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/adapter-selection`, payload);
+    return response.data;
+  },
+
+  runAdapter: async (uuid: string, payload: EnqueueAgentAdapterRunPayload) => {
+    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/adapter-runs`, payload);
     return response.data;
   },
 

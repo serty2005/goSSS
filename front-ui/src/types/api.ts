@@ -1278,10 +1278,13 @@ export interface AgentAdapterStatusDTO {
   target_arch?: string;
   protocol_version?: string;
   status?: string;
+  run_status?: string;
   local_path?: string;
   file_size?: number;
   sha256?: string;
   last_error?: string;
+  last_exit_code?: number | null;
+  last_run_at?: string;
   installed_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -1354,6 +1357,35 @@ export interface AgentCOMSignatureCandidateDTO {
   existing_rule?: AgentCOMSignatureRuleDTO | null;
 }
 
+export interface AgentAdapterRuntimeDeviceDTO {
+  label?: string;
+  connection_type?: 'tcp' | 'com' | string;
+  transport?: string;
+  ip?: string;
+  port?: number;
+  com_port?: string;
+  baudrate?: string;
+  model?: string;
+  driver_hints?: Record<string, unknown>;
+  extra_params?: Record<string, unknown>;
+}
+
+export interface AgentAdapterRuntimeScheduleDTO {
+  enabled?: boolean;
+  interval_seconds?: number;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+}
+
+export interface AgentAdapterRuntimeProfileDTO {
+  adapter_id: string;
+  command?: string;
+  operation?: string;
+  timeout_seconds?: number;
+  devices?: AgentAdapterRuntimeDeviceDTO[];
+  schedule?: AgentAdapterRuntimeScheduleDTO;
+}
+
 export interface PublishedAgentAdapterOptionDTO {
   adapter_id: string;
   title: string;
@@ -1382,6 +1414,7 @@ export interface AgentOperatorFlowDTO {
   saved_reasons?: string[];
   saved_adapter_manifests?: AgentAdapterManifestDTO[];
   effective_adapter_manifests?: AgentAdapterManifestDTO[];
+  saved_adapter_runtime_profiles?: AgentAdapterRuntimeProfileDTO[];
   signature_candidates?: AgentCOMSignatureCandidateDTO[];
   warnings?: string[];
 }
@@ -1398,6 +1431,7 @@ export interface AgentDiagnosticsDetailsDTO {
 
 export interface SaveAgentAdapterSelectionPayload {
   selected_adapter_ids?: string[];
+  runtime_profiles?: AgentAdapterRuntimeProfileDTO[];
 }
 
 export interface UpsertAgentCOMSignatureRulePayload {
@@ -1408,6 +1442,10 @@ export interface UpsertAgentCOMSignatureRulePayload {
   profile_hint?: string;
   suggested_adapter?: string;
   notes?: string;
+}
+
+export interface EnqueueAgentAdapterRunPayload {
+  adapter_id: string;
 }
 
 export interface AgentListItemDTO {

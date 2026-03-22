@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Empty, Skeleton, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Descriptions, Empty, Skeleton, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { agentDiagnosticsApi } from '@/api/agentDiagnostics';
 import AgentOperatorFlowCard from '@/components/agents/AgentOperatorFlowCard';
@@ -22,6 +22,7 @@ import {
   AgentDiagnosticsDetailsDTO,
   AgentInventorySnapshotDTO,
   AgentRegistrationAttemptDTO,
+  EnqueueAgentAdapterRunPayload,
   SaveAgentAdapterSelectionPayload,
 } from '@/types/api';
 
@@ -185,6 +186,20 @@ const AgentDiagnosticsPage: React.FC = () => {
     },
     onSuccess: async (nextDetails) => {
       await updateDiagnosticsCache(nextDetails);
+    },
+  });
+
+  const runAdapterMutation = useMutation({
+    mutationFn: async (payload: EnqueueAgentAdapterRunPayload) => {
+      const response = await agentDiagnosticsApi.runAdapter(uuid, payload);
+      return response.data;
+    },
+    onSuccess: async (nextDetails, payload) => {
+      await updateDiagnosticsCache(nextDetails);
+      message.success(`Команда запуска ${payload.adapter_id} поставлена в очередь`);
+    },
+    onError: (mutationError) => {
+      message.error(getErrorMessage(mutationError));
     },
   });
 
@@ -406,6 +421,29 @@ const AgentDiagnosticsPage: React.FC = () => {
       },
     },
     {
+      title: 'run_status',
+      dataIndex: 'run_status',
+      key: 'run_status',
+      width: 150,
+      render: (value?: string) => {
+        const normalized = String(value || '').trim().toLowerCase();
+        const color = normalized === 'completed'
+          ? 'success'
+          : normalized === 'failed' || normalized === 'timeout'
+            ? 'error'
+            : normalized === 'running'
+              ? 'processing'
+              : normalized
+                ? 'warning'
+                : 'default';
+        return (
+          <Tag color={color} style={{ marginInlineEnd: 0 }}>
+            {value || '-'}
+          </Tag>
+        );
+      },
+    },
+    {
       title: 'target_os',
       dataIndex: 'target_os',
       key: 'target_os',
@@ -418,6 +456,20 @@ const AgentDiagnosticsPage: React.FC = () => {
       key: 'target_arch',
       width: 120,
       render: (value?: string) => value || '-',
+    },
+    {
+      title: 'last_exit_code',
+      dataIndex: 'last_exit_code',
+      key: 'last_exit_code',
+      width: 140,
+      render: (value?: number | null) => (typeof value === 'number' ? value : '-'),
+    },
+    {
+      title: 'last_run_at',
+      dataIndex: 'last_run_at',
+      key: 'last_run_at',
+      width: 180,
+      render: (value?: string) => formatDateTime(value),
     },
     {
       title: 'last_error',
@@ -564,9 +616,13 @@ const AgentDiagnosticsPage: React.FC = () => {
 
           <AgentOperatorFlowCard
             operatorFlow={diagnosticsOperatorFlow}
+            inventoryCOMPorts={inventoryComPorts}
             saveSelectionPending={saveAdapterSelectionMutation.isPending}
             saveSelectionError={saveAdapterSelectionMutation.isError ? getErrorMessage(saveAdapterSelectionMutation.error) : undefined}
+            runAdapterPending={runAdapterMutation.isPending}
+            runningAdapterID={runAdapterMutation.variables?.adapter_id || null}
             onSaveSelection={(payload) => saveAdapterSelectionMutation.mutate(payload)}
+            onRunAdapter={(payload) => runAdapterMutation.mutate(payload)}
           />
 
           <Card className="glass-panel" title="Последняя регистрация" size="small">

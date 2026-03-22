@@ -76,6 +76,35 @@ type AgentCOMSignatureCandidateDTO struct {
 	ExistingRule         *AgentCOMSignatureRuleDTO `json:"existing_rule,omitzero"`
 }
 
+type AgentAdapterRuntimeDeviceDTO struct {
+	Label          string         `json:"label"`
+	ConnectionType string         `json:"connection_type"`
+	Transport      string         `json:"transport"`
+	IP             string         `json:"ip"`
+	Port           int            `json:"port,omitzero"`
+	COMPort        string         `json:"com_port"`
+	BaudRate       string         `json:"baudrate"`
+	Model          string         `json:"model"`
+	DriverHints    map[string]any `json:"driver_hints,omitzero"`
+	ExtraParams    map[string]any `json:"extra_params,omitzero"`
+}
+
+type AgentAdapterRuntimeScheduleDTO struct {
+	Enabled         bool       `json:"enabled"`
+	IntervalSeconds int        `json:"interval_seconds,omitzero"`
+	LastRunAt       *time.Time `json:"last_run_at,omitzero"`
+	NextRunAt       *time.Time `json:"next_run_at,omitzero"`
+}
+
+type AgentAdapterRuntimeProfileDTO struct {
+	AdapterID      string                         `json:"adapter_id"`
+	Command        string                         `json:"command"`
+	Operation      string                         `json:"operation"`
+	TimeoutSeconds int                            `json:"timeout_seconds,omitzero"`
+	Devices        []AgentAdapterRuntimeDeviceDTO `json:"devices,omitzero"`
+	Schedule       AgentAdapterRuntimeScheduleDTO `json:"schedule"`
+}
+
 type PublishedAgentAdapterOptionDTO struct {
 	AdapterID      string `json:"adapter_id"`
 	Title          string `json:"title"`
@@ -104,6 +133,7 @@ type AgentOperatorFlowDTO struct {
 	SavedReasons                []string                         `json:"saved_reasons,omitzero"`
 	SavedAdapterManifests       []AdapterManifestDTO             `json:"saved_adapter_manifests,omitzero"`
 	EffectiveAdapterManifests   []AdapterManifestDTO             `json:"effective_adapter_manifests,omitzero"`
+	SavedAdapterRuntimeProfiles []AgentAdapterRuntimeProfileDTO  `json:"saved_adapter_runtime_profiles,omitzero"`
 	SignatureCandidates         []AgentCOMSignatureCandidateDTO  `json:"signature_candidates,omitzero"`
 	Warnings                    []string                         `json:"warnings,omitzero"`
 }
@@ -119,7 +149,8 @@ type AgentDiagnosticsDetailsDTO struct {
 }
 
 type SaveAgentAdapterSelectionRequestDTO struct {
-	SelectedAdapterIDs []string `json:"selected_adapter_ids,omitzero"`
+	SelectedAdapterIDs []string                        `json:"selected_adapter_ids,omitzero"`
+	RuntimeProfiles    []AgentAdapterRuntimeProfileDTO `json:"runtime_profiles,omitzero"`
 }
 
 type UpsertAgentCOMSignatureRuleRequestDTO struct {
@@ -130,6 +161,18 @@ type UpsertAgentCOMSignatureRuleRequestDTO struct {
 	ProfileHint      string `json:"profile_hint"`
 	SuggestedAdapter string `json:"suggested_adapter"`
 	Notes            string `json:"notes"`
+}
+
+type EnqueueAgentAdapterRunRequestDTO struct {
+	AdapterID string `json:"adapter_id"`
+}
+
+type AgentAdapterRunCommandPayloadDTO struct {
+	AdapterID      string         `json:"adapter_id"`
+	Command        string         `json:"command"`
+	Operation      string         `json:"operation"`
+	TimeoutSeconds int            `json:"timeout_seconds,omitzero"`
+	DeviceParams   map[string]any `json:"device_params,omitzero"`
 }
 
 type AgentAdapterCatalogRefreshResultDTO struct {

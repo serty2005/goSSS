@@ -34,6 +34,10 @@ type AgentService interface {
 	GetAgentConfig(ctx context.Context, uuid string) (*api.AgentConfigDTO, error)
 }
 
+type AgentScheduledAdapterCommandPlanner interface {
+	EnsureScheduledAdapterRuns(ctx context.Context, agent *models.Agent) error
+}
+
 type agentServiceImpl struct {
 	logger                  logger.LoggerInterface
 	agentRepo               repositories.AgentRepo
@@ -239,6 +243,12 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
 	if agentType == "sssruner" {
+		if planner, ok := s.adapterManifestResolver.(AgentScheduledAdapterCommandPlanner); ok {
+			if err := planner.EnsureScheduledAdapterRuns(ctx, agent); err != nil {
+				s.logger.Warn("Не удалось подготовить scheduled run_adapter команды", "uuid", targetUUID, "error", err)
+			}
+		}
+
 		manifests := make([]api.AdapterManifestDTO, 0)
 		response.AdapterManifests = &manifests
 

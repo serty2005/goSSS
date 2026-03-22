@@ -254,7 +254,27 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionОбновляетConfigИ�
 	handler.RegisterRoutes(router)
 
 	body := strings.NewReader(`{
-		"selected_adapter_ids": ["fiscal-atol"]
+		"selected_adapter_ids": ["fiscal-atol"],
+		"runtime_profiles": [
+			{
+				"adapter_id": "fiscal-atol",
+				"command": "run",
+				"operation": "collect",
+				"timeout_seconds": 45,
+				"devices": [
+					{
+						"connection_type": "tcp",
+						"ip": "10.25.1.22",
+						"port": 5555,
+						"model": "АТОЛ 22Ф"
+					}
+				],
+				"schedule": {
+					"enabled": true,
+					"interval_seconds": 300
+				}
+			}
+		]
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/adapter-selection", body)
 	req = req.WithContext(context.WithValue(req.Context(), contextkeys.UserIDContextKey, "user-77"))
@@ -271,6 +291,13 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionОбновляетConfigИ�
 	require.Nil(t, config.MachineProfile)
 	require.Equal(t, []string{"fiscal-atol"}, config.SelectedAdapterIDs)
 	require.Empty(t, config.AdapterManifests)
+	require.Len(t, config.AdapterRuntimeProfiles, 1)
+	require.Equal(t, "fiscal-atol", config.AdapterRuntimeProfiles[0].AdapterID)
+	require.Equal(t, "collect", config.AdapterRuntimeProfiles[0].Operation)
+	require.Len(t, config.AdapterRuntimeProfiles[0].Devices, 1)
+	require.Equal(t, "tcp", config.AdapterRuntimeProfiles[0].Devices[0].ConnectionType)
+	require.True(t, config.AdapterRuntimeProfiles[0].Schedule.Enabled)
+	require.Equal(t, 300, config.AdapterRuntimeProfiles[0].Schedule.IntervalSeconds)
 
 	agentRepo := infrarepos.NewAgentRepo(db)
 	bus := eventbus.NewInMemoryEventBus(16)
@@ -361,6 +388,60 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionВалидируетPublish
 			require.Contains(t, rec.Body.String(), tt.expectedError)
 		})
 	}
+}
+
+func TestAgentDiagnosticsHandler_EnqueueAdapterRunСоздаетКоманду(t *testing.T) {
+	db := setupAgentDiagnosticsDB(t)
+	agentUUID := "agent-run-now"
+
+	configRaw, err := json.Marshal(api.AgentConfigDTO{
+		SelectedAdapterIDs: []string{"fiscal-atol"},
+		AdapterRuntimeProfiles: []api.AgentAdapterRuntimeProfileDTO{
+			{
+				AdapterID:      "fiscal-atol",
+				Command:        "run",
+				Operation:      "collect",
+				TimeoutSeconds: 45,
+				Devices: []api.AgentAdapterRuntimeDeviceDTO{
+					{
+						ConnectionType: "tcp",
+						IP:             "10.25.1.22",
+						Port:           5555,
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&models.Agent{
+		UUID:     agentUUID,
+		Type:     "sssruner",
+		Status:   models.StatusActive,
+		Hostname: "cash-run-now",
+		Config:   datatypes.JSON(configRaw),
+	}).Error)
+
+	handler := newAgentDiagnosticsHandler(db)
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/adapter-runs", strings.NewReader(`{"adapter_id":"fiscal-atol"}`))
+	req = req.WithContext(context.WithValue(req.Context(), contextkeys.UserIDContextKey, "user-88"))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var commands []models.AgentCommand
+	require.NoError(t, db.Where("agent_uuid = ?", agentUUID).Find(&commands).Error)
+	require.Len(t, commands, 1)
+	require.Equal(t, "run_adapter", commands[0].Type)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(commands[0].Payload, &payload))
+	require.Equal(t, "fiscal-atol", payload["adapter_id"])
+	require.Equal(t, "run", payload["command"])
+	require.Equal(t, "collect", payload["operation"])
 }
 
 func newAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {

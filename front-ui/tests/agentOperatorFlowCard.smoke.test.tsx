@@ -36,6 +36,7 @@ describe('AgentOperatorFlowCard smoke', () => {
   it('показывает список адаптеров и сохраняет selected_adapter_ids', async () => {
     const user = userEvent.setup();
     const onSaveSelection = vi.fn();
+    const onRunAdapter = vi.fn();
 
     const operatorFlow: AgentOperatorFlowDTO = {
       available_adapters: [
@@ -60,8 +61,11 @@ describe('AgentOperatorFlowCard smoke', () => {
     render(
       <AgentOperatorFlowCard
         operatorFlow={operatorFlow}
+        inventoryCOMPorts={[]}
         saveSelectionPending={false}
+        runAdapterPending={false}
         onSaveSelection={onSaveSelection}
+        onRunAdapter={onRunAdapter}
       />,
     );
 
@@ -75,6 +79,77 @@ describe('AgentOperatorFlowCard smoke', () => {
     expect(onSaveSelection).toHaveBeenCalledTimes(1);
     expect(onSaveSelection).toHaveBeenCalledWith({
       selected_adapter_ids: ['fiscal-atol'],
+      runtime_profiles: [
+        {
+          adapter_id: 'fiscal-atol',
+          command: 'run',
+          operation: 'collect',
+          timeout_seconds: 45,
+          devices: [],
+          schedule: {
+            enabled: false,
+            interval_seconds: undefined,
+          },
+        },
+      ],
+    });
+    expect(onRunAdapter).not.toHaveBeenCalled();
+  });
+
+  it('дает запустить уже сохраненный профиль адаптера', async () => {
+    const user = userEvent.setup();
+    const onSaveSelection = vi.fn();
+    const onRunAdapter = vi.fn();
+
+    const operatorFlow: AgentOperatorFlowDTO = {
+      available_adapters: [
+        {
+          adapter_id: 'fiscal-atol',
+          title: 'Фискальный адаптер АТОЛ',
+          published: true,
+          selectable: true,
+          status_text: 'Готов к выдаче',
+        },
+      ],
+      selected_adapter_ids: ['fiscal-atol'],
+      saved_adapter_runtime_profiles: [
+        {
+          adapter_id: 'fiscal-atol',
+          command: 'run',
+          operation: 'collect',
+          timeout_seconds: 45,
+          devices: [
+            {
+              connection_type: 'tcp',
+              ip: '10.25.1.22',
+              port: 5555,
+            },
+          ],
+          schedule: {
+            enabled: true,
+            interval_seconds: 300,
+          },
+        },
+      ],
+      effective_adapter_manifests: [],
+    };
+
+    render(
+      <AgentOperatorFlowCard
+        operatorFlow={operatorFlow}
+        inventoryCOMPorts={[]}
+        saveSelectionPending={false}
+        runAdapterPending={false}
+        onSaveSelection={onSaveSelection}
+        onRunAdapter={onRunAdapter}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Запустить сейчас' }));
+
+    expect(onRunAdapter).toHaveBeenCalledTimes(1);
+    expect(onRunAdapter).toHaveBeenCalledWith({
+      adapter_id: 'fiscal-atol',
     });
   });
 });
