@@ -304,6 +304,7 @@ type Services struct {
 	AuthService             services.AuthService
 	AgentService            services.AgentService
 	AgentObservation        services.AgentObservationService
+	AgentOperatorFlow       services.AgentOperatorFlowService
 	TaskResolutionService   services.TaskResolutionService
 	TaskService             task.Service
 	ServerActionsService    services.ServerActionsService
@@ -349,6 +350,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentObservation:        obsService,
 		AgentService:            services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
+		AgentOperatorFlow:       services.NewAgentOperatorFlowService(app.DB),
 		TaskResolutionService:   services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
 		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),
@@ -435,7 +437,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
-	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB)
+	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB, srvs.AgentOperatorFlow)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)

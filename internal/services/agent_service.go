@@ -94,44 +94,75 @@ func (s *agentServiceImpl) RegisterAgent(ctx context.Context, req *api.Registrat
 }
 
 func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, data *api.AgentDataDTO) (*api.AgentHeartbeatResponseDTO, error) {
+	if data == nil {
+		return nil, errors.New("данные heartbeat не переданы")
+	}
+
 	targetUUID := agentUUID
 	if targetUUID == "" {
 		targetUUID = data.AgentUUID
-	}
-
-	agentType := data.AgentType
-	if agentType == "" {
-		agentType = "workstation"
 	}
 
 	agent, err := s.agentRepo.GetByUUID(ctx, targetUUID)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка поиска агента: %w", err)
 	}
+
+	agentType := strings.TrimSpace(data.AgentType)
+	if agentType == "" && agent != nil {
+		agentType = strings.TrimSpace(agent.Type)
+	}
+	if agentType == "" {
+		agentType = "workstation"
+	}
+
+	receivedAt := time.Now().UTC()
+	observedAt := parseAgentObservedAt(data.CurrentTime)
+
+	effectiveData := *data
+	if agent != nil && effectiveData.Inventory == nil {
+		if latestInventory, warning := decodeInventorySnapshot(agent.LatestInventorySnapshot); warning == "" && latestInventory != nil {
+			effectiveData.Inventory = latestInventory
+		}
+	}
+	if agent != nil && effectiveData.AdapterStatuses == nil {
+		if latestStatuses, warning := decodeAdapterStatuses(agent.LatestAdapterStatuses); warning == "" && latestStatuses != nil {
+			effectiveData.AdapterStatuses = latestStatuses
+		}
+	}
+
+	fingerprint, err := buildHeartbeatFingerprint(&effectiveData)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось вычислить fingerprint heartbeat: %w", err)
+	}
+
+	meaningfulChange := agent == nil || strings.TrimSpace(agent.LastMeaningfulHeartbeatFingerprint) == "" || agent.LastMeaningfulHeartbeatFingerprint != fingerprint.Fingerprint
 	if agent == nil {
 		if agentType == "sssruner" {
 			return nil, ErrAgentNotFound
 		}
-		observedAt := parseAgentObservedAt(data.CurrentTime)
 		agent = &models.Agent{
-			UUID:                    targetUUID,
-			Type:                    agentType,
-			Status:                  models.StatusActive,
-			LastHeartbeat:           time.Now(),
-			LastObservedAt:          &observedAt,
-			Hostname:                data.Hostname,
-			Version:                 data.AgentVersion,
-			LatestInventorySnapshot: marshalAgentJSON(data.Inventory),
-			LatestAdapterStatuses:   marshalAgentJSON(data.AdapterStatuses),
-			CreatedAt:               time.Now(),
-			UpdatedAt:               time.Now(),
+			UUID:                               targetUUID,
+			Type:                               agentType,
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      receivedAt,
+			LastObservedAt:                     &observedAt,
+			Hostname:                           data.Hostname,
+			Version:                            data.AgentVersion,
+			LatestInventorySnapshot:            marshalAgentJSON(data.Inventory),
+			LatestAdapterStatuses:              marshalAgentJSON(data.AdapterStatuses),
+			LastMeaningfulHeartbeatAt:          &receivedAt,
+			LastMeaningfulObservedAt:           &observedAt,
+			LastMeaningfulHeartbeatFingerprint: fingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       fingerprint.StateJSON,
+			CreatedAt:                          receivedAt,
+			UpdatedAt:                          receivedAt,
 		}
 		if err := s.agentRepo.Create(ctx, agent); err != nil {
 			return nil, fmt.Errorf("не удалось создать агента при авто-регистрации: %w", err)
 		}
 	} else {
-		agent.LastHeartbeat = time.Now()
-		observedAt := parseAgentObservedAt(data.CurrentTime)
+		agent.LastHeartbeat = receivedAt
 		if agent.LastObservedAt == nil || observedAt.After(*agent.LastObservedAt) {
 			agent.LastObservedAt = &observedAt
 		}
@@ -150,8 +181,14 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		if data.AdapterStatuses != nil {
 			agent.LatestAdapterStatuses = marshalAgentJSON(data.AdapterStatuses)
 		}
+		if meaningfulChange {
+			agent.LastMeaningfulHeartbeatAt = &receivedAt
+			agent.LastMeaningfulObservedAt = &observedAt
+			agent.LastMeaningfulHeartbeatFingerprint = fingerprint.Fingerprint
+			agent.LastMeaningfulHeartbeatState = fingerprint.StateJSON
+		}
 		if err := s.agentRepo.Update(ctx, agent); err != nil {
-			s.logger.Error("Не удалось обновить heartbeat агента", "uuid", targetUUID, "error", err)
+			return nil, fmt.Errorf("не удалось обновить heartbeat агента: %w", err)
 		}
 	}
 
@@ -160,14 +197,27 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		traceID = uuid.New().String()
 	}
 
-	s.bus.Publish(eventbus.Event{
-		Type: events.AgentObservationRequested,
-		Payload: events.AgentObservationPayload{
-			TraceID: traceID,
-			Source:  targetUUID,
-			Data:    *data,
-		},
-	})
+	if meaningfulChange {
+		s.logger.Info("Heartbeat содержит значимое изменение",
+			"uuid", targetUUID,
+			"heartbeat_result", "meaningful_change",
+			"fingerprint", fingerprint.Fingerprint,
+		)
+		s.bus.Publish(eventbus.Event{
+			Type: events.AgentObservationRequested,
+			Payload: events.AgentObservationPayload{
+				TraceID: traceID,
+				Source:  targetUUID,
+				Data:    *data,
+			},
+		})
+	} else {
+		s.logger.Info("Heartbeat обработан без значимых изменений",
+			"uuid", targetUUID,
+			"heartbeat_result", "noop",
+			"fingerprint", fingerprint.Fingerprint,
+		)
+	}
 
 	response := &api.AgentHeartbeatResponseDTO{Status: "ok", Tasks: make([]api.AgentTaskDTO, 0)}
 	if agentType == "sssruner" {

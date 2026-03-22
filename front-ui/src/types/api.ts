@@ -1287,6 +1287,18 @@ export interface AgentAdapterStatusDTO {
   [key: string]: unknown;
 }
 
+export interface AgentAdapterManifestDTO {
+  adapter_id?: string;
+  adapter_type?: string;
+  version?: string;
+  target_os?: string;
+  target_arch?: string;
+  protocol_version?: string;
+  download_url?: string;
+  sha256?: string;
+  file_name?: string;
+}
+
 export interface AgentRegistrationAttemptDTO {
   id: number;
   agent_uuid?: string;
@@ -1299,6 +1311,62 @@ export interface AgentRegistrationAttemptDTO {
   created_at?: string;
 }
 
+export interface AgentHeartbeatMeaningfulStateDTO {
+  fingerprint?: string;
+  last_meaningful_heartbeat_at?: string;
+  last_meaningful_observed_at?: string;
+  last_meaningful_state?: unknown;
+}
+
+export interface AgentMachineProfileDTO {
+  key?: string;
+  title?: string;
+  summary?: string;
+  source?: string;
+  confirmed_at?: string;
+  confirmed_by?: string;
+}
+
+export interface AgentCOMSignatureRuleDTO {
+  id: number;
+  signature_key?: string;
+  device_type?: string;
+  label?: string;
+  confidence?: string;
+  profile_hint?: string;
+  suggested_adapter?: string;
+  source?: string;
+  notes?: string;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface AgentCOMSignatureCandidateDTO {
+  port_name?: string;
+  friendly_name?: string;
+  signature_key?: string;
+  vendor_id?: string;
+  product_id?: string;
+  classification_label?: string;
+  classification_source?: string;
+  device_type?: string;
+  suggested_adapter?: string;
+  existing_rule?: AgentCOMSignatureRuleDTO | null;
+}
+
+export interface AgentOperatorFlowDTO {
+  meaningful_heartbeat?: AgentHeartbeatMeaningfulStateDTO | null;
+  recommended_profile?: AgentMachineProfileDTO | null;
+  recommended_reasons?: string[];
+  recommended_adapter_manifests?: AgentAdapterManifestDTO[];
+  saved_profile?: AgentMachineProfileDTO | null;
+  saved_reasons?: string[];
+  saved_adapter_manifests?: AgentAdapterManifestDTO[];
+  effective_adapter_manifests?: AgentAdapterManifestDTO[];
+  signature_candidates?: AgentCOMSignatureCandidateDTO[];
+  warnings?: string[];
+}
+
 export interface AgentDiagnosticsDetailsDTO {
   agent: AgentDiagnosticsListItemDTO;
   registration_payload?: unknown;
@@ -1306,6 +1374,23 @@ export interface AgentDiagnosticsDetailsDTO {
   latest_inventory?: AgentInventorySnapshotDTO | null;
   latest_adapter_statuses?: AgentAdapterStatusDTO[] | null;
   recent_registrations: AgentRegistrationAttemptDTO[];
+  operator_flow?: AgentOperatorFlowDTO | null;
+}
+
+export interface SaveAgentMachineProfilePayload {
+  profile: AgentMachineProfileDTO;
+  reasons?: string[];
+  adapter_manifests?: AgentAdapterManifestDTO[];
+}
+
+export interface UpsertAgentCOMSignatureRulePayload {
+  signature_key: string;
+  device_type?: string;
+  label?: string;
+  confidence?: string;
+  profile_hint?: string;
+  suggested_adapter?: string;
+  notes?: string;
 }
 
 export interface AgentListItemDTO {

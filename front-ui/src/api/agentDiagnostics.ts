@@ -1,5 +1,11 @@
 import apiClient from './axios';
-import { AgentDiagnosticsDetailsDTO, AgentDiagnosticsListItemDTO, ApiResponse } from '@/types/api';
+import {
+  AgentDiagnosticsDetailsDTO,
+  AgentDiagnosticsListItemDTO,
+  ApiResponse,
+  SaveAgentMachineProfilePayload,
+  UpsertAgentCOMSignatureRulePayload,
+} from '@/types/api';
 
 export const agentDiagnosticsApi = {
   list: async (params?: {
@@ -20,6 +26,16 @@ export const agentDiagnosticsApi = {
 
   approveRegistration: async (uuid: string) => {
     const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/approve-registration`);
+    return response.data;
+  },
+
+  saveMachineProfile: async (uuid: string, payload: SaveAgentMachineProfilePayload) => {
+    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/profile`, payload);
+    return response.data;
+  },
+
+  upsertCOMSignatureRule: async (uuid: string, payload: UpsertAgentCOMSignatureRulePayload) => {
+    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/signature-rules`, payload);
     return response.data;
   },
 };

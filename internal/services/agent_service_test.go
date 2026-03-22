@@ -102,6 +102,12 @@ func (b *fakeEventBus) lastEvent() (eventbus.Event, bool) {
 	return b.events[len(b.events)-1], true
 }
 
+func (b *fakeEventBus) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.events)
+}
+
 func TestProcessData_ПубликуетСобытиеНаблюденияАгента(t *testing.T) {
 	repo := &fakeAgentRepo{
 		agent: &models.Agent{
@@ -282,4 +288,182 @@ func TestProcessData_СохраняетПоследнийHeartbeatSnapshotВAgen
 	require.NoError(t, json.Unmarshal(repo.agent.LatestAdapterStatuses, &latestStatuses))
 	require.Len(t, latestStatuses, 1)
 	require.Equal(t, "atol", latestStatuses[0]["adapter_id"])
+}
+
+func TestProcessData_HeartbeatNoopНеПубликуетObservation(t *testing.T) {
+	ctx := t.Context()
+	data := &api.AgentDataDTO{
+		AgentUUID:   "agent-noop",
+		AgentType:   "sssruner",
+		Hostname:    "ws-noop",
+		CurrentTime: "2026-03-21T10:00:01Z",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 21, 10, 0, 1, 0, time.UTC),
+			Hostname:    "ws-noop",
+			OS:          "windows",
+			Arch:        "amd64",
+			HostInfo: &api.InventoryHostInfoDTO{
+				CashServerURL: "http://cash-01:8080",
+			},
+			KnownComponents: []api.InventoryKnownComponentDTO{
+				{Key: "iiko-front", Detected: true},
+			},
+		},
+		AdapterStatuses: []api.AdapterStatusDTO{
+			{AdapterID: "fiscal-atol", Status: "ready", Version: "1.0.0", UpdatedAt: time.Date(2026, 3, 21, 10, 0, 1, 0, time.UTC)},
+		},
+	}
+	fingerprint, err := buildHeartbeatFingerprint(data)
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                               "agent-noop",
+			Type:                               "sssruner",
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      time.Date(2026, 3, 21, 9, 59, 0, 0, time.UTC),
+			LastMeaningfulHeartbeatFingerprint: fingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       fingerprint.StateJSON,
+			LatestInventorySnapshot:            marshalAgentJSON(data.Inventory),
+			LatestAdapterStatuses:              marshalAgentJSON(data.AdapterStatuses),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	_, err = svc.ProcessData(ctx, "agent-noop", data)
+	require.NoError(t, err)
+	require.Equal(t, 0, bus.count())
+	require.Equal(t, 1, repo.updated)
+	require.Equal(t, fingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
+func TestProcessData_ИзменениеInventoryПубликуетObservation(t *testing.T) {
+	ctx := t.Context()
+	oldData := &api.AgentDataDTO{
+		AgentUUID: "agent-inventory",
+		AgentType: "sssruner",
+		Hostname:  "ws-inventory",
+		Inventory: &api.InventorySnapshotDTO{
+			Hostname: "ws-inventory",
+			OS:       "windows",
+			Arch:     "amd64",
+			HostInfo: &api.InventoryHostInfoDTO{
+				CashServerURL: "http://cash-old:8080",
+			},
+		},
+	}
+	oldFingerprint, err := buildHeartbeatFingerprint(oldData)
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                               "agent-inventory",
+			Type:                               "sssruner",
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      time.Date(2026, 3, 21, 9, 0, 0, 0, time.UTC),
+			LastMeaningfulHeartbeatFingerprint: oldFingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       oldFingerprint.StateJSON,
+			LatestInventorySnapshot:            marshalAgentJSON(oldData.Inventory),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	newData := &api.AgentDataDTO{
+		AgentUUID:   "agent-inventory",
+		AgentType:   "sssruner",
+		Hostname:    "ws-inventory",
+		CurrentTime: "2026-03-21T10:00:00Z",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC),
+			Hostname:    "ws-inventory",
+			OS:          "windows",
+			Arch:        "amd64",
+			HostInfo: &api.InventoryHostInfoDTO{
+				CashServerURL: "http://cash-new:8080",
+			},
+		},
+	}
+
+	_, err = svc.ProcessData(ctx, "agent-inventory", newData)
+	require.NoError(t, err)
+	require.Equal(t, 1, bus.count())
+	require.NotEqual(t, oldFingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
+func TestProcessData_ИзменениеСущественногоAdapterStatusПубликуетObservation(t *testing.T) {
+	ctx := t.Context()
+	oldData := &api.AgentDataDTO{
+		AgentUUID: "agent-adapter-status",
+		AgentType: "sssruner",
+		Hostname:  "ws-adapter-status",
+		AdapterStatuses: []api.AdapterStatusDTO{
+			{AdapterID: "fiscal-atol", Status: "ready", Version: "1.0.0"},
+		},
+	}
+	oldFingerprint, err := buildHeartbeatFingerprint(oldData)
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                               "agent-adapter-status",
+			Type:                               "sssruner",
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      time.Date(2026, 3, 21, 9, 0, 0, 0, time.UTC),
+			LastMeaningfulHeartbeatFingerprint: oldFingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       oldFingerprint.StateJSON,
+			LatestAdapterStatuses:              marshalAgentJSON(oldData.AdapterStatuses),
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	newData := &api.AgentDataDTO{
+		AgentUUID:   "agent-adapter-status",
+		AgentType:   "sssruner",
+		Hostname:    "ws-adapter-status",
+		CurrentTime: "2026-03-21T10:00:00Z",
+		AdapterStatuses: []api.AdapterStatusDTO{
+			{AdapterID: "fiscal-atol", Status: "error", Version: "1.0.0", LastError: "device offline"},
+		},
+	}
+
+	_, err = svc.ProcessData(ctx, "agent-adapter-status", newData)
+	require.NoError(t, err)
+	require.Equal(t, 1, bus.count())
+	require.NotEqual(t, oldFingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
+func TestProcessData_ПервыйHeartbeatПослеРегистрацииПубликуетObservation(t *testing.T) {
+	ctx := t.Context()
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                   "agent-first-heartbeat",
+			Type:                   "sssruner",
+			Status:                 models.StatusPendingOwner,
+			LastHeartbeat:          time.Date(2026, 3, 21, 9, 0, 0, 0, time.UTC),
+			LastRegistrationStatus: models.AgentRegistrationStatusSuccess,
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	_, err := svc.ProcessData(ctx, "agent-first-heartbeat", &api.AgentDataDTO{
+		AgentUUID:   "agent-first-heartbeat",
+		AgentType:   "sssruner",
+		Hostname:    "cash-01",
+		CurrentTime: "2026-03-21T10:00:00Z",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC),
+			Hostname:    "cash-01",
+			OS:          "windows",
+			Arch:        "amd64",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, bus.count())
+	require.NotEmpty(t, repo.agent.LastMeaningfulHeartbeatFingerprint)
+	require.NotNil(t, repo.agent.LastMeaningfulHeartbeatAt)
+	require.NotNil(t, repo.agent.LastMeaningfulObservedAt)
 }

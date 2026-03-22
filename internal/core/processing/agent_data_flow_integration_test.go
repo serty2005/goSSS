@@ -63,6 +63,7 @@ func setupObsService(t *testing.T) (*gorm.DB, services.AgentObservationService) 
 		&workstation.Workstation{},
 		&fiscal.FiscalRegister{},
 		&models.Agent{},
+		&models.AgentCOMSignatureRule{},
 		&models.AgentObservation{},
 		&models.Candidate{},
 		&models.CandidateStatusHistory{},

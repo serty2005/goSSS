@@ -6,6 +6,7 @@ import (
 	"errors"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/response"
 	"net/http"
@@ -19,17 +20,23 @@ import (
 )
 
 type AgentDiagnosticsHandler struct {
-	db *gorm.DB
+	db           *gorm.DB
+	operatorFlow services.AgentOperatorFlowService
 }
 
-func NewAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
-	return &AgentDiagnosticsHandler{db: db}
+func NewAgentDiagnosticsHandler(db *gorm.DB, operatorFlow services.AgentOperatorFlowService) *AgentDiagnosticsHandler {
+	return &AgentDiagnosticsHandler{
+		db:           db,
+		operatorFlow: operatorFlow,
+	}
 }
 
 func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-diagnostics", h.ListAgents)
 	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
 	r.Post("/agent-diagnostics/{uuid}/approve-registration", h.ApproveRegistration)
+	r.Post("/agent-diagnostics/{uuid}/profile", h.SaveMachineProfile)
+	r.Post("/agent-diagnostics/{uuid}/signature-rules", h.UpsertCOMSignatureRule)
 }
 
 func (h *AgentDiagnosticsHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +192,98 @@ func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Conte
 			CreatedAt:          attempts[i].CreatedAt,
 		})
 	}
+
+	if h.operatorFlow != nil {
+		operatorFlow, err := h.operatorFlow.BuildOperatorFlow(ctx, &agent)
+		if err != nil {
+			return api.AgentDiagnosticsDetailsDTO{}, err
+		}
+		out.OperatorFlow = operatorFlow
+	}
 	return out, nil
+}
+
+func (h *AgentDiagnosticsHandler) SaveMachineProfile(w http.ResponseWriter, r *http.Request) {
+	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	if agentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
+		return
+	}
+	if h.operatorFlow == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Сервис operator flow не настроен")
+		return
+	}
+
+	var dto api.SaveAgentMachineProfileRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	actor := strings.TrimSpace(userIDFromContext(r.Context()))
+	if err := h.operatorFlow.SaveMachineProfile(r.Context(), agentUUID, dto, actor); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.buildAgentDiagnosticsDetails(r.Context(), agentUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённую диагностику агента")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) UpsertCOMSignatureRule(w http.ResponseWriter, r *http.Request) {
+	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
+	if agentUUID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
+		return
+	}
+	if h.operatorFlow == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Сервис operator flow не настроен")
+		return
+	}
+
+	var dto api.UpsertAgentCOMSignatureRuleRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
+		return
+	}
+
+	if err := h.db.WithContext(r.Context()).Where("uuid = ?", agentUUID).First(&models.Agent{}).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить данные агента")
+		return
+	}
+
+	actor := strings.TrimSpace(userIDFromContext(r.Context()))
+	if err := h.operatorFlow.SaveCOMSignatureRule(r.Context(), dto, actor); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.buildAgentDiagnosticsDetails(r.Context(), agentUUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённую диагностику агента")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, out)
 }
 
 func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListItemDTO {
@@ -226,4 +324,11 @@ func decodeJSONValue(raw datatypes.JSON) any {
 		}
 	}
 	return value
+}
+
+func userIDFromContext(ctx context.Context) string {
+	if userID, ok := ctx.Value(contextkeys.UserIDContextKey).(string); ok {
+		return strings.TrimSpace(userID)
+	}
+	return ""
 }

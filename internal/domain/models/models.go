@@ -182,6 +182,23 @@ type Agent struct {
 	// LatestAdapterStatuses — последний срез adapter_statuses из heartbeat.
 	LatestAdapterStatuses datatypes.JSON `gorm:"type:jsonb"`
 
+	// LastMeaningfulHeartbeatAt — время последнего heartbeat, признанного значимым.
+	// Обновляется только когда нормализованный fingerprint изменился
+	// или когда после регистрации пришёл первый heartbeat.
+	LastMeaningfulHeartbeatAt *time.Time
+
+	// LastMeaningfulObservedAt — observed_at последнего значимого heartbeat.
+	// Используется для диагностики и защиты от повторной публикации одинакового состояния.
+	LastMeaningfulObservedAt *time.Time
+
+	// LastMeaningfulHeartbeatFingerprint — fingerprint нормализованного состояния heartbeat.
+	// Хранится на уровне Agent, чтобы чистые heartbeat без изменений не создавали observation.
+	LastMeaningfulHeartbeatFingerprint string `gorm:"type:char(64);index"`
+
+	// LastMeaningfulHeartbeatState — нормализованное состояние последнего значимого heartbeat.
+	// Содержит только поля, влияющие на доменную обработку и рекомендации адаптеров.
+	LastMeaningfulHeartbeatState datatypes.JSON `gorm:"type:jsonb"`
+
 	// Version — версия агента (sssruner).
 	// Используется для отслеживания обновлений.
 	Version string `gorm:"type:varchar(50)"`

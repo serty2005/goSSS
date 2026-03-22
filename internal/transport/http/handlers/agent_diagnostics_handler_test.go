@@ -3,13 +3,19 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/infra/logger"
+	infrarepos "etalon-server/internal/infra/repositories"
+	"etalon-server/internal/services"
+	api "etalon-server/internal/transport/http/dtos"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/models"
+	"etalon-server/pkg/eventbus"
 
 	"github.com/glebarez/sqlite"
 	"github.com/go-chi/chi/v5"
@@ -51,7 +57,7 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 		CreatedAt:          lastRegistrationAt,
 	}).Error)
 
-	handler := NewAgentDiagnosticsHandler(db)
+	handler := newAgentDiagnosticsHandler(db)
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
@@ -79,6 +85,11 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 				Status     string `json:"status"`
 				RemoteAddr string `json:"remote_addr"`
 			} `json:"recent_registrations"`
+			OperatorFlow struct {
+				RecommendedProfile struct {
+					Key string `json:"key"`
+				} `json:"recommended_profile"`
+			} `json:"operator_flow"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -95,6 +106,7 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 	require.Equal(t, "atol", body.Data.LatestAdapterStatus[0]["adapter_id"])
 	require.Len(t, body.Data.RecentRegistrations, 1)
 	require.Equal(t, "10.0.0.10", body.Data.RecentRegistrations[0].RemoteAddr)
+	require.NotEmpty(t, body.Data.OperatorFlow.RecommendedProfile.Key)
 }
 
 func TestAgentDiagnosticsHandler_ListAgentsФильтруетПоСтатусуРегистрации(t *testing.T) {
@@ -112,7 +124,7 @@ func TestAgentDiagnosticsHandler_ListAgentsФильтруетПоСтатусу�
 		LastRegistrationStatus: models.AgentRegistrationStatusUnauthorized,
 	}).Error)
 
-	handler := NewAgentDiagnosticsHandler(db)
+	handler := newAgentDiagnosticsHandler(db)
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
@@ -136,7 +148,7 @@ func TestAgentDiagnosticsHandler_ListAgentsОтдаётФлагиНаличияS
 		LatestAdapterStatuses:   datatypes.JSON([]byte(`[]`)),
 	}).Error)
 
-	handler := NewAgentDiagnosticsHandler(db)
+	handler := newAgentDiagnosticsHandler(db)
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
@@ -174,7 +186,7 @@ func TestAgentDiagnosticsHandler_ApproveRegistrationПодтверждаетОж
 		LastRegistrationError:  "Регистрация ожидает подтверждения оператором",
 	}).Error)
 
-	handler := NewAgentDiagnosticsHandler(db)
+	handler := newAgentDiagnosticsHandler(db)
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
@@ -214,11 +226,81 @@ func TestAgentDiagnosticsHandler_ApproveRegistrationПодтверждаетОж
 	require.Equal(t, "user-42", stored.RegistrationApprovedBy)
 }
 
+func TestAgentDiagnosticsHandler_SaveMachineProfileОбновляетConfigИВлияетНаHeartbeatResponse(t *testing.T) {
+	ctx := t.Context()
+	db := setupAgentDiagnosticsDB(t)
+	agentUUID := "agent-profile-save"
+	require.NoError(t, db.Create(&models.Agent{
+		UUID:                    agentUUID,
+		Type:                    "sssruner",
+		Status:                  models.StatusActive,
+		Hostname:                "cash-save",
+		LatestInventorySnapshot: datatypes.JSON([]byte(`{"hostname":"cash-save","os":"windows","arch":"amd64","host_info":{"cash_server_url":"http://cash-01:8080"},"known_components":[{"key":"iiko-front","detected":true}]}`)),
+	}).Error)
+
+	handler := newAgentDiagnosticsHandler(db)
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := strings.NewReader(`{
+		"profile": {
+			"key": "hybrid-pos-fiscal",
+			"title": "Гибридная POS/фискальная станция",
+			"summary": "Тестовое сохранение профиля",
+			"source": "operator"
+		},
+		"reasons": ["Оператор подтвердил профиль вручную"],
+		"adapter_manifests": [
+			{
+				"adapter_id": "fiscal-atol",
+				"download_url": "https://example.test/fiscal-atol.exe",
+				"sha256": "abc123"
+			}
+		]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/profile", body)
+	req = req.WithContext(context.WithValue(req.Context(), contextkeys.UserIDContextKey, "user-77"))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var stored models.Agent
+	require.NoError(t, db.WithContext(ctx).Where("uuid = ?", agentUUID).First(&stored).Error)
+
+	var config api.AgentConfigDTO
+	require.NoError(t, json.Unmarshal(stored.Config, &config))
+	require.NotNil(t, config.MachineProfile)
+	require.Equal(t, "hybrid-pos-fiscal", config.MachineProfile.Key)
+	require.Len(t, config.AdapterManifests, 1)
+	require.Equal(t, "fiscal-atol", config.AdapterManifests[0].AdapterID)
+
+	agentRepo := infrarepos.NewAgentRepo(db)
+	bus := eventbus.NewInMemoryEventBus(16)
+	agentService := services.NewAgentService(logger.New("", "test", "error", true), agentRepo, nil, bus)
+
+	resp, err := agentService.ProcessData(ctx, agentUUID, &api.AgentDataDTO{
+		AgentUUID:   agentUUID,
+		AgentType:   "sssruner",
+		Hostname:    "cash-save",
+		CurrentTime: "2026-03-22T10:00:00Z",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.AdapterManifests)
+	require.Len(t, *resp.AdapterManifests, 1)
+	require.Equal(t, "fiscal-atol", (*resp.AdapterManifests)[0].AdapterID)
+	require.Equal(t, "https://example.test/fiscal-atol.exe", (*resp.AdapterManifests)[0].DownloadURL)
+}
+
+func newAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
+	return NewAgentDiagnosticsHandler(db, services.NewAgentOperatorFlowService(db))
+}
+
 func setupAgentDiagnosticsDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Agent{}, &models.AgentRegistrationAttempt{}))
+	require.NoError(t, db.AutoMigrate(&models.Agent{}, &models.AgentRegistrationAttempt{}, &models.AgentCOMSignatureRule{}))
 	return db
 }

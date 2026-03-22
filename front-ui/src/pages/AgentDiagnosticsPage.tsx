@@ -5,6 +5,7 @@ import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Descriptions, Empty, Skeleton, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { agentDiagnosticsApi } from '@/api/agentDiagnostics';
+import AgentOperatorFlowCard from '@/components/agents/AgentOperatorFlowCard';
 import AgentRegistrationAttemptModal from '@/components/agents/AgentRegistrationAttemptModal';
 import {
   formatDateTime,
@@ -16,11 +17,14 @@ import {
 import JsonDataViewer from '@/components/common/JsonDataViewer';
 import {
   AgentAdapterStatusDTO,
+  AgentAdapterManifestDTO,
   AgentInventoryCOMPortDTO,
   AgentInventoryHostInfoDTO,
   AgentDiagnosticsDetailsDTO,
   AgentInventorySnapshotDTO,
   AgentRegistrationAttemptDTO,
+  SaveAgentMachineProfilePayload,
+  UpsertAgentCOMSignatureRulePayload,
 } from '@/types/api';
 
 const { Title, Text } = Typography;
@@ -162,11 +166,17 @@ const AgentDiagnosticsPage: React.FC = () => {
   const inventory = useMemo(() => toInventorySnapshot(details?.latest_inventory), [details?.latest_inventory]);
   const adapterStatuses = useMemo(() => toAdapterStatuses(details?.latest_adapter_statuses), [details?.latest_adapter_statuses]);
   const systemInfo = asRecord(details?.registration_system_info);
+  const diagnosticsOperatorFlow = details?.operator_flow || null;
   const heartbeatAvailable = Boolean(inventory || adapterStatuses.length > 0);
   const registrationApprovedAt = agent?.registration_approved_at;
   const registrationApprovedBy = (agent?.registration_approved_by || '').trim();
   const registrationApprovalPending = agent?.last_registration_status === 'pending_approval' && !registrationApprovedAt;
   const registrationApprovalConfirmed = agent?.last_registration_status === 'pending_approval' && Boolean(registrationApprovedAt);
+
+  const updateDiagnosticsCache = async (nextDetails: AgentDiagnosticsDetailsDTO) => {
+    queryClient.setQueryData(['agent-diagnostics', uuid], nextDetails);
+    await queryClient.invalidateQueries({ queryKey: ['agent-diagnostics-list'] });
+  };
 
   const approveRegistrationMutation = useMutation({
     mutationFn: async () => {
@@ -174,8 +184,27 @@ const AgentDiagnosticsPage: React.FC = () => {
       return response.data;
     },
     onSuccess: async (nextDetails) => {
-      queryClient.setQueryData(['agent-diagnostics', uuid], nextDetails);
-      await queryClient.invalidateQueries({ queryKey: ['agent-diagnostics-list'] });
+      await updateDiagnosticsCache(nextDetails);
+    },
+  });
+
+  const saveMachineProfileMutation = useMutation({
+    mutationFn: async (payload: SaveAgentMachineProfilePayload) => {
+      const response = await agentDiagnosticsApi.saveMachineProfile(uuid, payload);
+      return response.data;
+    },
+    onSuccess: async (nextDetails) => {
+      await updateDiagnosticsCache(nextDetails);
+    },
+  });
+
+  const saveSignatureRuleMutation = useMutation({
+    mutationFn: async (payload: UpsertAgentCOMSignatureRulePayload) => {
+      const response = await agentDiagnosticsApi.upsertCOMSignatureRule(uuid, payload);
+      return response.data;
+    },
+    onSuccess: async (nextDetails) => {
+      await updateDiagnosticsCache(nextDetails);
     },
   });
 
@@ -252,11 +281,18 @@ const AgentDiagnosticsPage: React.FC = () => {
       });
     }
 
-    if (heartbeatAvailable && adapterStatuses.length === 0) {
+    const effectiveManifests = (diagnosticsOperatorFlow?.effective_adapter_manifests || []) as AgentAdapterManifestDTO[];
+    if (heartbeatAvailable && adapterStatuses.length === 0 && effectiveManifests.length === 0) {
       steps.push({
         type: 'warning',
         title: 'Шаг 5. Набор адаптеров ещё не назначен',
-        description: 'Ядро агента уже готово к inventory и синхронизации бинарников, но операторский контур назначения adapter_manifests пока не автоматизирован. На текущем этапе это нужно делать через серверную конфигурацию вручную.',
+        description: 'Inventory уже есть, но итоговый профиль машины ещё не сохранён. Оператору нужно подтвердить профиль и сохранить adapter_manifests.',
+      });
+    } else if (heartbeatAvailable && adapterStatuses.length === 0 && effectiveManifests.length > 0) {
+      steps.push({
+        type: 'info',
+        title: 'Шаг 5. Профиль уже сохранён, ожидается применение manifests агентом',
+        description: 'Сервер уже хранит итоговый профиль и adapter_manifests. Следующий heartbeat агента должен забрать manifests и начать отчитываться по adapter_statuses.',
       });
     } else if (adapterStatuses.length > 0) {
       steps.push({
@@ -274,6 +310,7 @@ const AgentDiagnosticsPage: React.FC = () => {
     inventoryComPorts,
     inventoryComponents,
     inventoryHostInfo?.cash_server_url,
+    diagnosticsOperatorFlow?.effective_adapter_manifests,
     registrationApprovalConfirmed,
     registrationApprovalPending,
   ]);
@@ -555,6 +592,16 @@ const AgentDiagnosticsPage: React.FC = () => {
               ))}
             </Space>
           </Card>
+
+          <AgentOperatorFlowCard
+            operatorFlow={diagnosticsOperatorFlow}
+            saveProfilePending={saveMachineProfileMutation.isPending}
+            saveProfileError={saveMachineProfileMutation.isError ? getErrorMessage(saveMachineProfileMutation.error) : undefined}
+            saveSignaturePending={saveSignatureRuleMutation.isPending}
+            saveSignatureError={saveSignatureRuleMutation.isError ? getErrorMessage(saveSignatureRuleMutation.error) : undefined}
+            onSaveProfile={(payload) => saveMachineProfileMutation.mutate(payload)}
+            onSaveSignatureRule={(payload) => saveSignatureRuleMutation.mutate(payload)}
+          />
 
           <Card className="glass-panel" title="Последняя регистрация" size="small">
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>

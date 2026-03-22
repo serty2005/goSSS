@@ -52,6 +52,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Agent{},
 		&models.AgentRegistrationAttempt{},
 		&models.AgentSessionToken{},
+		&models.AgentCOMSignatureRule{},
 		&models.AgentObservation{},
 		&models.Candidate{},
 		&models.CandidateStatusHistory{},
