@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
+
+const recentAdapterRunsLimit = 50
 
 type AgentDiagnosticsHandler struct {
 	db           *gorm.DB
@@ -182,6 +185,11 @@ func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Conte
 		return api.AgentDiagnosticsDetailsDTO{}, err
 	}
 
+	adapterRuns, err := h.listRecentAdapterRuns(ctx, agentUUID)
+	if err != nil {
+		return api.AgentDiagnosticsDetailsDTO{}, err
+	}
+
 	out := api.AgentDiagnosticsDetailsDTO{
 		Agent:                  buildAgentDiagnosticsListItem(agent),
 		RegistrationPayload:    decodeJSONValue(agent.RegistrationPayload),
@@ -189,6 +197,7 @@ func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Conte
 		LatestInventory:        decodeJSONValue(agent.LatestInventorySnapshot),
 		LatestAdapterStatuses:  decodeJSONValue(agent.LatestAdapterStatuses),
 		RecentRegistrations:    make([]api.AgentRegistrationAttemptDTO, 0, len(attempts)),
+		RecentAdapterRuns:      adapterRuns,
 	}
 
 	for i := range attempts {
@@ -211,6 +220,24 @@ func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Conte
 			return api.AgentDiagnosticsDetailsDTO{}, err
 		}
 		out.OperatorFlow = operatorFlow
+	}
+	return out, nil
+}
+
+func (h *AgentDiagnosticsHandler) listRecentAdapterRuns(ctx context.Context, agentUUID string) ([]api.AgentAdapterRunDTO, error) {
+	var commands []models.AgentCommand
+	if err := h.db.WithContext(ctx).
+		Where("agent_uuid = ?", agentUUID).
+		Where("type IN ?", []string{"run_adapter", "adapter_run"}).
+		Order("created_at DESC, id DESC").
+		Limit(recentAdapterRunsLimit).
+		Find(&commands).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]api.AgentAdapterRunDTO, 0, len(commands))
+	for i := range commands {
+		out = append(out, buildAgentAdapterRunDTO(commands[i]))
 	}
 	return out, nil
 }
@@ -385,6 +412,143 @@ func buildAgentDiagnosticsListItem(agent models.Agent) api.AgentDiagnosticsListI
 		MachineFingerprint:     agent.MachineFingerprint,
 		HasLatestInventory:     hasJSONPayload(agent.LatestInventorySnapshot),
 		HasAdapterStatuses:     hasJSONPayload(agent.LatestAdapterStatuses),
+	}
+}
+
+func buildAgentAdapterRunDTO(command models.AgentCommand) api.AgentAdapterRunDTO {
+	payloadValue := decodeJSONValue(command.Payload)
+	payloadMap := jsonObject(payloadValue)
+	resultValue := decodeJSONValue(command.ResultPayload)
+	resultMap := jsonObject(resultValue)
+
+	return api.AgentAdapterRunDTO{
+		ID:               command.ID,
+		AgentUUID:        command.AgentUUID,
+		AdapterID:        cmp.Or(jsonStringField(payloadMap, "adapter_id"), jsonStringField(resultMap, "adapter_id")),
+		Type:             command.Type,
+		Status:           command.Status,
+		Command:          cmp.Or(jsonStringField(payloadMap, "command"), jsonStringField(resultMap, "command")),
+		Operation:        cmp.Or(jsonStringField(payloadMap, "operation"), jsonStringField(resultMap, "operation")),
+		CreatedAt:        command.CreatedAt,
+		SentAt:           command.SentAt,
+		CompletedAt:      command.CompletedAt,
+		DurationMS:       deriveAdapterRunDurationMS(command, resultMap),
+		ExitCode:         jsonIntPointerField(resultMap, "exit_code"),
+		ErrorText:        buildAdapterRunErrorText(command.Status, resultMap),
+		Stdout:           jsonStringField(resultMap, "stdout"),
+		Stderr:           jsonStringField(resultMap, "stderr"),
+		StructuredResult: jsonAnyField(resultMap, "result"),
+		Payload:          payloadValue,
+		ResultPayload:    resultValue,
+	}
+}
+
+func deriveAdapterRunDurationMS(command models.AgentCommand, resultMap map[string]any) int64 {
+	if durationMS, ok := jsonInt64Value(resultMap, "duration_ms"); ok {
+		return max(durationMS, 0)
+	}
+	if command.SentAt == nil || command.CompletedAt == nil {
+		return 0
+	}
+
+	durationMS := command.CompletedAt.Sub(*command.SentAt).Milliseconds()
+	return max(durationMS, 0)
+}
+
+func buildAdapterRunErrorText(status string, resultMap map[string]any) string {
+	if errorText := cmp.Or(
+		jsonStringField(resultMap, "error"),
+		jsonStringField(resultMap, "stderr"),
+	); errorText != "" {
+		return errorText
+	}
+
+	if exitCode := jsonIntPointerField(resultMap, "exit_code"); exitCode != nil && *exitCode != 0 {
+		return "Код завершения " + strconv.Itoa(*exitCode)
+	}
+	if strings.EqualFold(strings.TrimSpace(status), "failed") {
+		return "Команда завершилась с ошибкой"
+	}
+	return ""
+}
+
+func jsonObject(value any) map[string]any {
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return payload
+}
+
+func jsonStringField(value map[string]any, key string) string {
+	if value == nil {
+		return ""
+	}
+	raw, ok := value[key]
+	if !ok {
+		return ""
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func jsonAnyField(value map[string]any, key string) any {
+	if value == nil {
+		return nil
+	}
+	return value[key]
+}
+
+func jsonIntPointerField(value map[string]any, key string) *int {
+	number, ok := jsonInt64Value(value, key)
+	if !ok {
+		return nil
+	}
+
+	parsed := int(number)
+	return &parsed
+}
+
+func jsonInt64Value(value map[string]any, key string) (int64, bool) {
+	if value == nil {
+		return 0, false
+	}
+
+	raw, ok := value[key]
+	if !ok {
+		return 0, false
+	}
+
+	switch typed := raw.(type) {
+	case float64:
+		return int64(typed), true
+	case float32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int8:
+		return int64(typed), true
+	case int16:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint:
+		return int64(typed), true
+	case uint8:
+		return int64(typed), true
+	case uint16:
+		return int64(typed), true
+	case uint32:
+		return int64(typed), true
+	case uint64:
+		return int64(typed), true
+	default:
+		return 0, false
 	}
 }
 

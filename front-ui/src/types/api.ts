@@ -1314,6 +1314,27 @@ export interface AgentRegistrationAttemptDTO {
   created_at?: string;
 }
 
+export interface AgentAdapterRunDTO {
+  id: number;
+  agent_uuid: string;
+  adapter_id?: string;
+  type?: string;
+  status?: string;
+  command?: string;
+  operation?: string;
+  created_at?: string;
+  sent_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number;
+  exit_code?: number | null;
+  error_text?: string;
+  stdout?: string;
+  stderr?: string;
+  structured_result?: unknown;
+  payload?: unknown;
+  result_payload?: unknown;
+}
+
 export interface AgentHeartbeatMeaningfulStateDTO {
   fingerprint?: string;
   last_meaningful_heartbeat_at?: string;
@@ -1427,6 +1448,7 @@ export interface AgentDiagnosticsDetailsDTO {
   latest_inventory?: AgentInventorySnapshotDTO | null;
   latest_adapter_statuses?: AgentAdapterStatusDTO[] | null;
   recent_registrations: AgentRegistrationAttemptDTO[];
+  recent_adapter_runs?: AgentAdapterRunDTO[];
   operator_flow?: AgentOperatorFlowDTO | null;
 }
 
