@@ -37,12 +37,7 @@ func TestAgentOperatorFlowService_SaveAdapterSelectionСохраняетRuntimeP
 				Devices: []api.AgentAdapterRuntimeDeviceDTO{
 					{
 						ConnectionType: "tcp",
-						IP:             "10.25.1.22",
-						Port:           5555,
-						Model:          "АТОЛ 22Ф",
-						DriverHints: map[string]any{
-							"branch": "10.9+",
-						},
+						Address:        "10.25.1.22:5555",
 					},
 				},
 				Schedule: api.AgentAdapterRuntimeScheduleDTO{
@@ -67,10 +62,58 @@ func TestAgentOperatorFlowService_SaveAdapterSelectionСохраняетRuntimeP
 	require.Equal(t, 60, config.AdapterRuntimeProfiles[0].TimeoutSeconds)
 	require.Len(t, config.AdapterRuntimeProfiles[0].Devices, 1)
 	require.Equal(t, "tcp", config.AdapterRuntimeProfiles[0].Devices[0].ConnectionType)
-	require.Equal(t, "10.25.1.22", config.AdapterRuntimeProfiles[0].Devices[0].IP)
-	require.Equal(t, 5555, config.AdapterRuntimeProfiles[0].Devices[0].Port)
+	require.Equal(t, "10.25.1.22:5555", config.AdapterRuntimeProfiles[0].Devices[0].Address)
 	require.True(t, config.AdapterRuntimeProfiles[0].Schedule.Enabled)
 	require.Equal(t, 900, config.AdapterRuntimeProfiles[0].Schedule.IntervalSeconds)
+}
+
+func TestBuildAdapterRunCommandPayload_СтроитPayloadИзМинимальногоTCPВвода(t *testing.T) {
+	profile := api.AgentAdapterRuntimeProfileDTO{
+		AdapterID: "fiscal-atol",
+		Devices: []api.AgentAdapterRuntimeDeviceDTO{
+			{
+				ConnectionType: "tcp",
+				Address:        "10.25.1.22:5555",
+			},
+		},
+	}
+
+	payload, err := buildAdapterRunCommandPayload(profile)
+	require.NoError(t, err)
+	require.Equal(t, "fiscal-atol", payload.AdapterID)
+	require.Equal(t, "run", payload.Command)
+	require.Equal(t, "collect", payload.Operation)
+
+	devices, ok := payload.DeviceParams["devices"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, devices, 1)
+	require.Equal(t, "tcp", devices[0]["connection_type"])
+	require.Equal(t, "tcp", devices[0]["transport"])
+	require.Equal(t, "10.25.1.22", devices[0]["ip"])
+	require.Equal(t, 5555, devices[0]["port"])
+}
+
+func TestBuildAdapterRunCommandPayload_СтроитPayloadИзМинимальногоCOMВвода(t *testing.T) {
+	profile := api.AgentAdapterRuntimeProfileDTO{
+		AdapterID: "fiscal-shtrih",
+		Devices: []api.AgentAdapterRuntimeDeviceDTO{
+			{
+				ConnectionType: "com",
+				Address:        "com7",
+			},
+		},
+	}
+
+	payload, err := buildAdapterRunCommandPayload(profile)
+	require.NoError(t, err)
+	require.Equal(t, "fiscal-shtrih", payload.AdapterID)
+
+	devices, ok := payload.DeviceParams["devices"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, devices, 1)
+	require.Equal(t, "com", devices[0]["connection_type"])
+	require.Equal(t, "com", devices[0]["transport"])
+	require.Equal(t, "COM7", devices[0]["com_port"])
 }
 
 func TestAgentOperatorFlowService_EnqueueAdapterRunСоздаетКомандуИзСохраненногоПрофиля(t *testing.T) {
@@ -89,12 +132,7 @@ func TestAgentOperatorFlowService_EnqueueAdapterRunСоздаетКоманду�
 				Devices: []api.AgentAdapterRuntimeDeviceDTO{
 					{
 						ConnectionType: "tcp",
-						IP:             "10.25.1.22",
-						Port:           5555,
-						Model:          "АТОЛ 22Ф",
-						ExtraParams: map[string]any{
-							"protocol": "atol",
-						},
+						Address:        "10.25.1.22:5555",
 					},
 				},
 			},
@@ -154,8 +192,7 @@ func TestAgentOperatorFlowService_EnsureScheduledAdapterRunsСоздаетКом
 				Devices: []api.AgentAdapterRuntimeDeviceDTO{
 					{
 						ConnectionType: "tcp",
-						IP:             "10.25.1.22",
-						Port:           5555,
+						Address:        "10.25.1.22:5555",
 					},
 				},
 				Schedule: api.AgentAdapterRuntimeScheduleDTO{
@@ -187,6 +224,55 @@ func TestAgentOperatorFlowService_EnsureScheduledAdapterRunsСоздаетКом
 	require.NoError(t, db.WithContext(ctx).Where("agent_uuid = ?", "agent-scheduled").Find(&commands).Error)
 	require.Len(t, commands, 1)
 	require.Equal(t, "run_adapter", commands[0].Type)
+}
+
+func TestAgentOperatorFlowService_EnsureScheduledAdapterRunsПовторяетЗапускЕслиLastRunAtНеЗаполнен(t *testing.T) {
+	ctx := t.Context()
+	db := setupAgentRuntimeFlowDB(t)
+	service := NewAgentOperatorFlowService(db)
+
+	configRaw, err := json.Marshal(api.AgentConfigDTO{
+		SelectedAdapterIDs: []string{"fiscal-atol"},
+		AdapterRuntimeProfiles: []api.AgentAdapterRuntimeProfileDTO{
+			{
+				AdapterID: "fiscal-atol",
+				Devices: []api.AgentAdapterRuntimeDeviceDTO{
+					{
+						ConnectionType: "tcp",
+						Address:        "10.25.1.22:5555",
+					},
+				},
+				Schedule: api.AgentAdapterRuntimeScheduleDTO{
+					Enabled:         true,
+					IntervalSeconds: 300,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	statusRaw, err := json.Marshal([]api.AdapterStatusDTO{{
+		AdapterID: "fiscal-atol",
+		RunStatus: "failed",
+		LastError: "локальный бинарник адаптера отсутствует",
+	}})
+	require.NoError(t, err)
+	agent := &models.Agent{
+		UUID:                  "agent-scheduled-retry",
+		Type:                  "sssruner",
+		Status:                models.StatusActive,
+		Hostname:              "cash-scheduled-retry",
+		Config:                datatypes.JSON(configRaw),
+		LatestAdapterStatuses: datatypes.JSON(statusRaw),
+	}
+	require.NoError(t, db.Create(agent).Error)
+
+	require.NoError(t, service.EnsureScheduledAdapterRuns(ctx, agent))
+
+	var commands []models.AgentCommand
+	require.NoError(t, db.WithContext(ctx).Where("agent_uuid = ?", "agent-scheduled-retry").Find(&commands).Error)
+	require.Len(t, commands, 1)
+	require.Equal(t, "run_adapter", commands[0].Type)
+	require.Equal(t, "new", commands[0].Status)
 }
 
 func TestAgentOperatorFlowService_EnsureScheduledAdapterRunsНеДублируетPendingCommand(t *testing.T) {

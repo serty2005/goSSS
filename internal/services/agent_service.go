@@ -234,7 +234,7 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 			},
 		})
 	} else {
-		s.logger.Info("Heartbeat обработан без значимых изменений",
+		s.logger.Debug("Heartbeat обработан без значимых изменений",
 			"uuid", targetUUID,
 			"heartbeat_result", "noop",
 			"fingerprint", fingerprint.Fingerprint,

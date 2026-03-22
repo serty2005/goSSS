@@ -17,6 +17,7 @@ func TestLoad_ЧитаетВнешнийJSONКонфиг(t *testing.T) {
 		"brand_name": "MyHoreca_Xenion",
 		"server_url": "http://example.test:8080/",
 		"bootstrap_api_key": "test-bootstrap-key",
+		"debug": true,
 		"heartbeat_interval": "20s",
 		"retry_jitter_factor": 0.15
 	}`)
@@ -49,6 +50,9 @@ func TestLoad_ЧитаетВнешнийJSONКонфиг(t *testing.T) {
 	}
 	if cfg.ServerURL != "http://example.test:8080" {
 		t.Fatalf("ServerURL = %q, ожидается %q", cfg.ServerURL, "http://example.test:8080")
+	}
+	if !cfg.Debug {
+		t.Fatal("Debug должен быть включен")
 	}
 	if cfg.HeartbeatInterval != 20*time.Second {
 		t.Fatalf("HeartbeatInterval = %s, ожидается %s", cfg.HeartbeatInterval, 20*time.Second)

@@ -23,18 +23,10 @@ import {
 } from '@/types/api';
 
 const { Paragraph, Text } = Typography;
-const { TextArea } = Input;
 
 type RuntimeDeviceDraft = {
-  label: string;
   connectionType: 'tcp' | 'com';
-  ip: string;
-  port: number | null;
-  comPort: string;
-  baudrate: string;
-  model: string;
-  driverHintsText: string;
-  extraParamsText: string;
+  address: string;
 };
 
 type RuntimeProfileDraft = {
@@ -89,35 +81,37 @@ const renderAdapterMeta = (adapter: PublishedAgentAdapterOptionDTO) => (
     .join(' • ')
 );
 
-const prettyJSON = (value?: Record<string, unknown>) => (
-  value && Object.keys(value).length > 0 ? JSON.stringify(value, null, 2) : ''
-);
-
 const buildEmptyDeviceDraft = (): RuntimeDeviceDraft => ({
-  label: '',
   connectionType: 'tcp',
-  ip: '',
-  port: null,
-  comPort: '',
-  baudrate: '115200',
-  model: '',
-  driverHintsText: '',
-  extraParamsText: '',
+  address: '',
 });
+
+const buildDeviceAddress = (device?: AgentAdapterRuntimeProfileDTO['devices'][number]) => {
+  const explicitAddress = String(device?.address || '').trim();
+  if (explicitAddress) {
+    return explicitAddress;
+  }
+
+  const connectionType = String(device?.connection_type || device?.transport || 'tcp').trim().toLowerCase() === 'com' ? 'com' : 'tcp';
+  if (connectionType === 'com') {
+    return String(device?.com_port || '').trim().toUpperCase();
+  }
+
+  const host = String(device?.ip || '').trim();
+  if (!host) {
+    return '';
+  }
+  return typeof device?.port === 'number' && Number.isFinite(device.port) && device.port > 0
+    ? `${host}:${device.port}`
+    : host;
+};
 
 const buildDraftFromProfile = (adapterID: string, profile?: AgentAdapterRuntimeProfileDTO): RuntimeProfileDraft => {
   const normalizedDevices = (profile?.devices || []).map((device) => {
     const connectionType: 'tcp' | 'com' = String(device.connection_type || device.transport || 'tcp').trim().toLowerCase() === 'com' ? 'com' : 'tcp';
     return {
-      label: String(device.label || '').trim(),
       connectionType,
-      ip: String(device.ip || '').trim(),
-      port: typeof device.port === 'number' && Number.isFinite(device.port) ? device.port : null,
-      comPort: String(device.com_port || '').trim(),
-      baudrate: String(device.baudrate || '').trim(),
-      model: String(device.model || '').trim(),
-      driverHintsText: prettyJSON(device.driver_hints),
-      extraParamsText: prettyJSON(device.extra_params),
+      address: buildDeviceAddress(device),
     };
   });
 
@@ -134,36 +128,8 @@ const buildDraftFromProfile = (adapterID: string, profile?: AgentAdapterRuntimeP
   };
 };
 
-const toJSONObject = (raw: string, fieldLabel: string, adapterID: string, deviceIndex: number) => {
-  const text = raw.trim();
-  if (!text) {
-    return undefined;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`${adapterID}: устройство #${deviceIndex + 1}, поле «${fieldLabel}» должно содержать валидный JSON-объект`);
-  }
-
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error(`${adapterID}: устройство #${deviceIndex + 1}, поле «${fieldLabel}» должно быть JSON-объектом`);
-  }
-
-  return parsed as Record<string, unknown>;
-};
-
 const isDeviceDraftMeaningful = (device: RuntimeDeviceDraft) => (
-  Boolean(
-    device.label.trim()
-    || device.ip.trim()
-    || device.comPort.trim()
-    || device.model.trim()
-    || device.driverHintsText.trim()
-    || device.extraParamsText.trim()
-    || device.port,
-  )
+  Boolean(device.address.trim())
 );
 
 const buildSavePayload = (
@@ -175,22 +141,10 @@ const buildSavePayload = (
     const profile = runtimeProfiles[adapterID] || buildDraftFromProfile(adapterID);
     const devices = profile.devices
       .filter(isDeviceDraftMeaningful)
-      .map((device, index) => {
-        const driverHints = toJSONObject(device.driverHintsText, 'driver_hints', adapterID, index);
-        const extraParams = toJSONObject(device.extraParamsText, 'extra_params', adapterID, index);
-
-        return {
-          connection_type: device.connectionType,
-          ip: device.ip.trim() || undefined,
-          port: device.port && device.port > 0 ? device.port : undefined,
-          com_port: device.comPort.trim() || undefined,
-          baudrate: device.baudrate.trim() || undefined,
-          model: device.model.trim() || undefined,
-          label: device.label.trim() || undefined,
-          driver_hints: driverHints,
-          extra_params: extraParams,
-        };
-      });
+      .map((device) => ({
+        connection_type: device.connectionType,
+        address: device.address.trim() || undefined,
+      }));
 
     return {
       adapter_id: adapterID,
@@ -217,24 +171,6 @@ const buildSavePayload = (
 
 const payloadSignature = (payload: SaveAgentAdapterSelectionPayload) => JSON.stringify(payload);
 
-const buildInitialPayload = (operatorFlow?: AgentOperatorFlowDTO | null): SaveAgentAdapterSelectionPayload => ({
-  selected_adapter_ids: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs),
-  runtime_profiles: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs).map((adapterID) => {
-    const saved = (operatorFlow?.saved_adapter_runtime_profiles ?? emptyRuntimeProfiles).find((profile) => profile.adapter_id === adapterID);
-    return {
-      adapter_id: adapterID,
-      command: saved?.command || 'run',
-      operation: saved?.operation || 'collect',
-      timeout_seconds: saved?.timeout_seconds || defaultTimeoutSeconds,
-      devices: saved?.devices || [],
-      schedule: {
-        enabled: Boolean(saved?.schedule?.enabled),
-        interval_seconds: saved?.schedule?.interval_seconds,
-      },
-    } satisfies AgentAdapterRuntimeProfileDTO;
-  }),
-});
-
 const buildHydrationSnapshot = (operatorFlow?: AgentOperatorFlowDTO | null): HydrationSnapshot => {
   const selectedAdapterIDs = normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs);
   const savedRuntimeProfilesByID = (operatorFlow?.saved_adapter_runtime_profiles ?? emptyRuntimeProfiles)
@@ -246,7 +182,7 @@ const buildHydrationSnapshot = (operatorFlow?: AgentOperatorFlowDTO | null): Hyd
     acc[adapterID] = buildDraftFromProfile(adapterID, savedRuntimeProfilesByID[adapterID]);
     return acc;
   }, {});
-  const initialPayload = buildInitialPayload(operatorFlow);
+  const initialPayload = buildSavePayload(selectedAdapterIDs, runtimeProfiles);
 
   return {
     initialPayload,
@@ -260,12 +196,6 @@ const buildHydrationSnapshot = (operatorFlow?: AgentOperatorFlowDTO | null): Hyd
 const connectionTypeOptions = [
   { label: 'TCP/IP', value: 'tcp' },
   { label: 'COM', value: 'com' },
-];
-
-const commandOptions = [
-  { label: 'run', value: 'run' },
-  { label: 'health', value: 'health' },
-  { label: 'describe', value: 'describe' },
 ];
 
 const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
@@ -307,19 +237,11 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
     lastHydratedSignatureRef.current = hydrationSnapshot.signature;
   }, [hydrationSnapshot]);
 
-  const comPortOptions = useMemo(
+  const comPortsHint = useMemo(
     () => inventoryCOMPorts
-      .map((port) => {
-        const value = String(port.name || '').trim();
-        if (!value) {
-          return null;
-        }
-        return {
-          label: `${value}${port.friendly_name ? ` • ${port.friendly_name}` : ''}`,
-          value,
-        };
-      })
-      .filter((item): item is { label: string; value: string } => Boolean(item)),
+      .map((port) => String(port.name || '').trim())
+      .filter(Boolean)
+      .join(', '),
     [inventoryCOMPorts],
   );
 
@@ -541,36 +463,6 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
                     )}
                   >
                     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                      <Space wrap size="middle" style={{ width: '100%' }}>
-                        <div style={{ minWidth: 180 }}>
-                          <Text type="secondary">Команда</Text>
-                          <Select
-                            style={{ width: '100%', marginTop: 6 }}
-                            value={draft.command}
-                            options={commandOptions}
-                            onChange={(value) => updateProfile(adapterID, (current) => ({ ...current, command: value }))}
-                          />
-                        </div>
-                        <div style={{ minWidth: 220 }}>
-                          <Text type="secondary">Operation / task_type</Text>
-                          <Input
-                            style={{ marginTop: 6 }}
-                            value={draft.operation}
-                            onChange={(event) => updateProfile(adapterID, (current) => ({ ...current, operation: event.target.value }))}
-                            placeholder="collect"
-                          />
-                        </div>
-                        <div style={{ minWidth: 180 }}>
-                          <Text type="secondary">Timeout, сек</Text>
-                          <InputNumber
-                            style={{ width: '100%', marginTop: 6 }}
-                            min={1}
-                            value={draft.timeoutSeconds}
-                            onChange={(value) => updateProfile(adapterID, (current) => ({ ...current, timeoutSeconds: value }))}
-                          />
-                        </div>
-                      </Space>
-
                       <Card size="small" type="inner" title="Расписание">
                         <Space wrap size="middle" style={{ width: '100%', alignItems: 'center' }}>
                           <Space direction="vertical" size={4}>
@@ -590,8 +482,8 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
                               onChange={(value) => updateProfile(adapterID, (current) => ({ ...current, scheduleIntervalSeconds: value }))}
                             />
                           </div>
-                        </Space>
-                      </Card>
+                                </Space>
+                              </Card>
 
                       <Card
                         size="small"
@@ -609,7 +501,7 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
                               key={`${adapterID}-device-${deviceIndex}`}
                               size="small"
                               type="inner"
-                              title={`Устройство #${deviceIndex + 1}`}
+                              title={`Подключение #${deviceIndex + 1}`}
                               extra={(
                                 <Button
                                   size="small"
@@ -635,120 +527,29 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
                                       }))}
                                     />
                                   </div>
-                                  <div style={{ minWidth: 220 }}>
-                                    <Text type="secondary">Метка</Text>
+                                  <div style={{ flex: 1, minWidth: 280 }}>
+                                    <Text type="secondary">Адрес</Text>
                                     <Input
                                       style={{ marginTop: 6 }}
-                                      value={device.label}
+                                      value={device.address}
                                       onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
                                         ...current,
-                                        label: event.target.value,
+                                        address: event.target.value,
                                       }))}
-                                      placeholder="Например, основной ФР"
+                                      placeholder={device.connectionType === 'tcp' ? 'Например, 10.25.1.22:5555' : 'Например, COM7'}
                                     />
-                                  </div>
-                                  <div style={{ minWidth: 220 }}>
-                                    <Text type="secondary">Модель</Text>
-                                    <Input
-                                      style={{ marginTop: 6 }}
-                                      value={device.model}
-                                      onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                        ...current,
-                                        model: event.target.value,
-                                      }))}
-                                      placeholder="АТОЛ 22Ф / Mitsu / Штрих"
-                                    />
+                                    {device.connectionType === 'tcp' ? (
+                                      <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+                                        Формат: ip[:port]
+                                      </Text>
+                                    ) : (
+                                      <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+                                        Формат: COMx
+                                        {comPortsHint ? ` • В inventory обнаружены: ${comPortsHint}` : ''}
+                                      </Text>
+                                    )}
                                   </div>
                                 </Space>
-
-                                {device.connectionType === 'tcp' ? (
-                                  <Space wrap size="middle" style={{ width: '100%' }}>
-                                    <div style={{ minWidth: 220 }}>
-                                      <Text type="secondary">IP / host</Text>
-                                      <Input
-                                        style={{ marginTop: 6 }}
-                                        value={device.ip}
-                                        onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                          ...current,
-                                          ip: event.target.value,
-                                        }))}
-                                        placeholder="10.25.1.22"
-                                      />
-                                    </div>
-                                    <div style={{ minWidth: 180 }}>
-                                      <Text type="secondary">Port</Text>
-                                      <InputNumber
-                                        style={{ width: '100%', marginTop: 6 }}
-                                        min={1}
-                                        max={65535}
-                                        value={device.port}
-                                        onChange={(value) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                          ...current,
-                                          port: value,
-                                        }))}
-                                      />
-                                    </div>
-                                  </Space>
-                                ) : (
-                                  <Space wrap size="middle" style={{ width: '100%' }}>
-                                    <div style={{ minWidth: 220 }}>
-                                      <Text type="secondary">COM-порт</Text>
-                                      <Select
-                                        allowClear
-                                        showSearch
-                                        style={{ width: '100%', marginTop: 6 }}
-                                        value={device.comPort || undefined}
-                                        options={comPortOptions}
-                                        onChange={(value) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                          ...current,
-                                          comPort: value || '',
-                                        }))}
-                                        placeholder={comPortOptions.length > 0 ? 'Выберите COM-порт из inventory' : 'Например, COM7'}
-                                        optionFilterProp="label"
-                                      />
-                                    </div>
-                                    <div style={{ minWidth: 180 }}>
-                                      <Text type="secondary">Baudrate</Text>
-                                      <Input
-                                        style={{ marginTop: 6 }}
-                                        value={device.baudrate}
-                                        onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                          ...current,
-                                          baudrate: event.target.value,
-                                        }))}
-                                        placeholder="115200"
-                                      />
-                                    </div>
-                                  </Space>
-                                )}
-
-                                <div>
-                                  <Text type="secondary">driver_hints JSON</Text>
-                                  <TextArea
-                                    style={{ marginTop: 6 }}
-                                    autoSize={{ minRows: 3, maxRows: 8 }}
-                                    value={device.driverHintsText}
-                                    onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                      ...current,
-                                      driverHintsText: event.target.value,
-                                    }))}
-                                    placeholder='{"branch":"10.9+"}'
-                                  />
-                                </div>
-
-                                <div>
-                                  <Text type="secondary">extra_params JSON</Text>
-                                  <TextArea
-                                    style={{ marginTop: 6 }}
-                                    autoSize={{ minRows: 3, maxRows: 8 }}
-                                    value={device.extraParamsText}
-                                    onChange={(event) => updateDevice(adapterID, deviceIndex, (current) => ({
-                                      ...current,
-                                      extraParamsText: event.target.value,
-                                    }))}
-                                    placeholder='{"protocol":"mitsu"}'
-                                  />
-                                </div>
                               </Space>
                             </Card>
                           ))}

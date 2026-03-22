@@ -86,6 +86,14 @@ describe('AgentOperatorFlowCard smoke', () => {
 
     expect(checkbox.checked).toBe(true);
     expect(screen.queryByText('Сначала выберите хотя бы один адаптер')).toBeNull();
+    expect(screen.queryByText('Команда')).toBeNull();
+    expect(screen.queryByText('Operation / task_type')).toBeNull();
+    expect(screen.queryByText('Timeout, сек')).toBeNull();
+    expect(screen.queryByText('Метка')).toBeNull();
+    expect(screen.queryByText('Модель')).toBeNull();
+    expect(screen.queryByText('Baudrate')).toBeNull();
+    expect(screen.queryByText('driver_hints JSON')).toBeNull();
+    expect(screen.queryByText('extra_params JSON')).toBeNull();
 
     const saveButton = screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }) as HTMLButtonElement;
     const runButton = screen.getByRole('button', { name: 'Запустить сейчас' }) as HTMLButtonElement;
@@ -167,6 +175,65 @@ describe('AgentOperatorFlowCard smoke', () => {
 
     expect(consoleErrors).not.toContain('Maximum update depth exceeded');
   }, 15000);
+
+  it('сохраняет упрощенный payload подключения с полем address', async () => {
+    const user = userEvent.setup();
+    const onSaveSelection = vi.fn();
+    const onRunAdapter = vi.fn();
+
+    render(
+      <React.StrictMode>
+        <AgentOperatorFlowCard
+          operatorFlow={{
+            available_adapters: [
+              {
+                adapter_id: 'fiscal-atol',
+                title: 'Фискальный адаптер АТОЛ',
+                published: true,
+                selectable: true,
+                status_text: 'Готов к выдаче',
+              },
+            ],
+            selected_adapter_ids: [],
+            effective_adapter_manifests: [],
+          }}
+          inventoryCOMPorts={[]}
+          saveSelectionPending={false}
+          runAdapterPending={false}
+          onSaveSelection={onSaveSelection}
+          onRunAdapter={onRunAdapter}
+        />
+      </React.StrictMode>,
+    );
+
+    await user.click(screen.getByRole('checkbox', { name: 'Фискальный адаптер АТОЛ' }));
+    await user.type(screen.getByPlaceholderText('Например, 10.25.1.22:5555'), '10.25.1.22:5555');
+    await user.click(screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }));
+
+    expect(onSaveSelection).toHaveBeenCalledTimes(1);
+    expect(onSaveSelection).toHaveBeenCalledWith({
+      selected_adapter_ids: ['fiscal-atol'],
+      runtime_profiles: [
+        {
+          adapter_id: 'fiscal-atol',
+          command: 'run',
+          operation: 'collect',
+          timeout_seconds: 45,
+          devices: [
+            {
+              connection_type: 'tcp',
+              address: '10.25.1.22:5555',
+            },
+          ],
+          schedule: {
+            enabled: false,
+            interval_seconds: undefined,
+          },
+        },
+      ],
+    });
+    expect(onRunAdapter).not.toHaveBeenCalled();
+  });
 
   it('дает запустить уже сохраненный профиль адаптера', async () => {
     const user = userEvent.setup();

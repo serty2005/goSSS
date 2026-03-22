@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -45,6 +46,7 @@ type Manager struct {
 	runner         processRunner
 	targetOS       string
 	targetArch     string
+	debug          bool
 	locksMu        sync.Mutex
 	runLocks       map[string]*sync.Mutex
 }
@@ -66,6 +68,10 @@ func NewManager(rootDir string, downloader Downloader) *Manager {
 	}
 }
 
+func (m *Manager) SetDebug(enabled bool) {
+	m.debug = enabled
+}
+
 func (m *Manager) EnsureLayout() error {
 	for _, path := range []string{m.rootDir, m.binariesDir, m.descriptorsDir, m.tmpDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
@@ -79,10 +85,12 @@ func (m *Manager) Sync(ctx context.Context, manifests []ManifestItem) ([]Status,
 	if err := m.EnsureLayout(); err != nil {
 		return nil, err
 	}
+	m.debugf("Старт sync adapter_manifests: count=%d", len(manifests))
 
 	var errs []error
 	for _, item := range manifests {
 		if shouldSkipManifest(item) {
+			m.debugf("Пропуск manifest без обязательных полей: adapter_id=%s version=%s download_url=%s", strings.TrimSpace(item.AdapterID), strings.TrimSpace(item.Version), strings.TrimSpace(item.DownloadURL))
 			continue
 		}
 		if err := m.syncOne(ctx, item); err != nil {
@@ -212,9 +220,11 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	descriptor, descriptorErr := m.findCurrentDescriptor(adapterID)
 	if descriptorErr != nil {
+		m.debugf("Не удалось найти descriptor адаптера: adapter_id=%s error=%v", adapterID, descriptorErr)
 		return RunResult{}, descriptorErr
 	}
 	if descriptor == nil {
+		m.debugf("Локальный descriptor отсутствует: adapter_id=%s", adapterID)
 		return RunResult{AdapterID: adapterID, Command: command, RunStatus: "failed"}, fmt.Errorf("локальный descriptor адаптера %q не найден", adapterID)
 	}
 
@@ -223,10 +233,16 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		result := RunResult{
 			AdapterID:   descriptor.AdapterID,
 			Command:     command,
-			StartedAt:   time.Now().UTC(),
 			CompletedAt: time.Now().UTC(),
 			RunStatus:   "failed",
 		}
+		m.debugf(
+			"Запуск адаптера остановлен до старта процесса: adapter_id=%s descriptor=%s binary=%s error=%v",
+			descriptor.AdapterID,
+			m.descriptorPath(*descriptor),
+			strings.TrimSpace(descriptor.LocalPath),
+			err,
+		)
 		if updateErr := m.persistRunState(*descriptor, result, err); updateErr != nil {
 			err = errors.Join(err, fmt.Errorf("не удалось обновить descriptor запуска: %w", updateErr))
 		}
@@ -241,6 +257,14 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	defer cancel()
 
 	startedAt := time.Now().UTC()
+	m.debugf(
+		"Попытка старта процесса адаптера: adapter_id=%s command=%s timeout=%s descriptor=%s binary=%s",
+		resolved.AdapterID,
+		command,
+		timeout,
+		m.descriptorPath(resolved),
+		resolved.LocalPath,
+	)
 	if updateErr := m.markRunning(resolved, startedAt); updateErr != nil {
 		return RunResult{}, fmt.Errorf("не удалось обновить статус запуска адаптера %q: %w", resolved.AdapterID, updateErr)
 	}
@@ -265,13 +289,33 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	if runErr == nil && result.RunStatus == "" {
 		result.RunStatus = "completed"
 	}
+	m.debugf(
+		"Процесс адаптера завершен: adapter_id=%s command=%s exit_code=%v run_status=%s stdout=%q stderr=%q structured_result=%s error=%v",
+		result.AdapterID,
+		result.Command,
+		result.ExitCode,
+		result.RunStatus,
+		result.Stdout,
+		result.Stderr,
+		compactStructuredResultForDebug(result.StructuredResult),
+		runErr,
+	)
 
 	if updateErr := m.persistRunState(resolved, result, runErr); updateErr != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("не удалось обновить descriptor запуска: %w", updateErr))
 	}
+	m.debugf(
+		"Обновлен adapter status после запуска: adapter_id=%s run_status=%s last_run_at=%v last_exit_code=%v last_error=%q",
+		resolved.AdapterID,
+		result.RunStatus,
+		result.StartedAt,
+		result.ExitCode,
+		errString(runErr),
+	)
 	if runErr != nil {
 		return result, runErr
 	}
+	log.Printf("Адаптер успешно запущен: adapter_id=%s command=%s duration=%s", result.AdapterID, result.Command, result.Duration)
 	return result, nil
 }
 
@@ -289,6 +333,15 @@ func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
 		return errors.New("manifest не содержит download_url")
 	}
 	if !m.Compatible(item) {
+		m.debugf(
+			"Пропуск manifest из-за несовместимости: adapter_id=%s version=%s target_os=%s target_arch=%s runtime_os=%s runtime_arch=%s",
+			strings.TrimSpace(item.AdapterID),
+			strings.TrimSpace(item.Version),
+			strings.TrimSpace(item.TargetOS),
+			strings.TrimSpace(item.TargetArch),
+			m.targetOS,
+			m.targetArch,
+		)
 		return nil
 	}
 
@@ -297,15 +350,40 @@ func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
 		return err
 	}
 	if current != nil && sameRevision(*current, item) && fileExists(current.LocalPath) {
+		m.debugf(
+			"Manifest уже актуален локально: adapter_id=%s version=%s descriptor=%s binary=%s",
+			current.AdapterID,
+			current.Version,
+			m.descriptorPath(*current),
+			current.LocalPath,
+		)
 		return nil
 	}
 
+	targetPath := filepath.Join(m.binariesDir, m.resolveBinaryName(item, strings.Repeat("0", 12)))
+	m.debugf(
+		"Скачиваю адаптер: adapter_id=%s version=%s url=%s target=%s",
+		strings.TrimSpace(item.AdapterID),
+		strings.TrimSpace(item.Version),
+		strings.TrimSpace(item.DownloadURL),
+		targetPath,
+	)
 	content, err := m.downloader.DownloadFile(ctx, item.DownloadURL)
 	if err != nil {
 		return fmt.Errorf("не удалось скачать адаптер: %w", err)
 	}
 
 	actualSHA := checksum(content)
+	fileName := m.resolveBinaryName(item, actualSHA)
+	targetPath = filepath.Join(m.binariesDir, fileName)
+	m.debugf(
+		"Скачивание завершено: adapter_id=%s version=%s bytes=%d sha256=%s target=%s",
+		strings.TrimSpace(item.AdapterID),
+		strings.TrimSpace(item.Version),
+		len(content),
+		actualSHA,
+		targetPath,
+	)
 	if expected := strings.TrimSpace(item.SHA256); expected != "" && !strings.EqualFold(actualSHA, expected) {
 		if writeErr := m.writeErrorDescriptor(current, item, fmt.Sprintf("sha256 не совпадает: expected=%s actual=%s", expected, actualSHA)); writeErr != nil {
 			return errors.Join(fmt.Errorf("sha256 не совпадает: expected=%s actual=%s", expected, actualSHA), fmt.Errorf("не удалось сохранить descriptor ошибки: %w", writeErr))
@@ -314,8 +392,6 @@ func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
 	}
 
 	now := time.Now().UTC()
-	fileName := m.resolveBinaryName(item, actualSHA)
-	targetPath := filepath.Join(m.binariesDir, fileName)
 	if err := writeFileAtomically(targetPath, content, 0o755); err != nil {
 		return fmt.Errorf("не удалось сохранить бинарник адаптера: %w", err)
 	}
@@ -349,6 +425,7 @@ func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
 	if err := writeJSONAtomically(descriptorPath, descriptor); err != nil {
 		return fmt.Errorf("не удалось сохранить descriptor адаптера: %w", err)
 	}
+	log.Printf("Адаптер синхронизирован: adapter_id=%s version=%s path=%s", descriptor.AdapterID, descriptor.Version, descriptor.LocalPath)
 
 	if current != nil {
 		m.cleanupOldDescriptor(*current, descriptor)
@@ -632,7 +709,9 @@ func (m *Manager) markRunning(descriptor Descriptor, startedAt time.Time) error 
 func (m *Manager) persistRunState(descriptor Descriptor, result RunResult, runErr error) error {
 	updated := descriptor
 	updated.RunStatus = strings.TrimSpace(result.RunStatus)
-	updated.LastRunAt = cloneTimePointer(&result.StartedAt)
+	if !result.StartedAt.IsZero() {
+		updated.LastRunAt = cloneTimePointer(&result.StartedAt)
+	}
 	updated.LastExitCode = cloneIntPointer(result.ExitCode)
 	updated.UpdatedAt = nonZeroTime(result.CompletedAt, time.Now().UTC())
 	if runErr != nil {
@@ -712,4 +791,39 @@ func nonZeroTime(value time.Time, fallback time.Time) time.Time {
 		return fallback.UTC()
 	}
 	return value.UTC()
+}
+
+func (m *Manager) descriptorPath(descriptor Descriptor) string {
+	return filepath.Join(m.descriptorsDir, descriptorFileName(descriptor.AdapterID, descriptor.Version))
+}
+
+func (m *Manager) debugf(format string, args ...any) {
+	if !m.debug {
+		return
+	}
+	log.Printf("[DEBUG] "+format, args...)
+}
+
+func compactStructuredResultForDebug(raw []byte) string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "{}"
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return string(normalized)
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
 }

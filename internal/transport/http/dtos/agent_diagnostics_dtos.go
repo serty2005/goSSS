@@ -80,6 +80,7 @@ type AgentAdapterRuntimeDeviceDTO struct {
 	Label          string         `json:"label"`
 	ConnectionType string         `json:"connection_type"`
 	Transport      string         `json:"transport"`
+	Address        string         `json:"address"`
 	IP             string         `json:"ip"`
 	Port           int            `json:"port,omitzero"`
 	COMPort        string         `json:"com_port"`

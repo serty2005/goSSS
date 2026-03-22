@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -273,7 +276,7 @@ func TestAgentHeartbeatSyncRunsOnlyWhenServerReturnedManifests(t *testing.T) {
 			inventoryService: stubRuntimeInventoryService{},
 			adapterManager: stubRuntimeAdapterManager{
 				syncFn: func(_ context.Context, manifests []adapters.ManifestItem) ([]adapters.Status, error) {
-					*syncCounter++
+					*syncCounter += 1
 					return nil, nil
 				},
 			},
@@ -303,6 +306,91 @@ func TestAgentHeartbeatSyncRunsOnlyWhenServerReturnedManifests(t *testing.T) {
 	}
 	if syncWithManifests != 1 {
 		t.Fatalf("при наличии manifest ожидался один вызов Sync, получено %d", syncWithManifests)
+	}
+}
+
+func TestAgentHeartbeatSyncsManifestBeforeRunTaskInSameResponse(t *testing.T) {
+	t.Parallel()
+
+	callOrder := make([]string, 0, 2)
+	manifestSynced := false
+	agent := &Agent{
+		cfg: config.Config{
+			AgentVersion:           "test-version",
+			AgentType:              "sssruner",
+			AccessTokenGracePeriod: time.Minute,
+		},
+		client: stubRuntimeClient{
+			sendHeartbeatFn: func(context.Context, string, protocol.AgentDataDTO, string) (*protocol.HeartbeatResponseDTO, error) {
+				return &protocol.HeartbeatResponseDTO{
+					Status: "ok",
+					AdapterManifests: []adapters.ManifestItem{{
+						AdapterID:   "fiscal-atol",
+						Version:     "1.0.0",
+						DownloadURL: "https://example.invalid/fiscal-atol.exe",
+					}},
+					Tasks: []protocol.AgentTaskDTO{{
+						ID:   42,
+						Type: "run_adapter",
+						Payload: []byte(`{
+							"adapter_id":"fiscal-atol",
+							"operation":"collect",
+							"timeout_seconds":5,
+							"device_params":{"connection_type":"tcp","ip":"10.0.0.10","port":5555}
+						}`),
+					}},
+				}, nil
+			},
+		},
+		workflows: make(map[string]workflow),
+		identity:  &state.Identity{UUID: "agent-uuid"},
+		tokens: &state.Tokens{
+			AccessToken:          "access-token",
+			AccessTokenExpiresAt: time.Now().Add(time.Hour),
+		},
+		inventoryService: stubRuntimeInventoryService{},
+		adapterManager: stubRuntimeAdapterManager{
+			syncFn: func(_ context.Context, manifests []adapters.ManifestItem) ([]adapters.Status, error) {
+				callOrder = append(callOrder, "sync")
+				if len(manifests) != 1 || manifests[0].AdapterID != "fiscal-atol" {
+					t.Fatalf("получены неожиданные manifests: %+v", manifests)
+				}
+				manifestSynced = true
+				return []adapters.Status{{
+					AdapterID: "fiscal-atol",
+					Status:    "ready",
+				}}, nil
+			},
+			runFn: func(_ context.Context, req adapters.RunRequest) (adapters.RunResult, error) {
+				callOrder = append(callOrder, "run")
+				if !manifestSynced {
+					t.Fatal("run_adapter не должен стартовать до завершения sync manifests")
+				}
+				return adapters.RunResult{
+					AdapterID:        req.AdapterID,
+					Command:          req.Command,
+					CompletedAt:      time.Now().UTC(),
+					StructuredResult: []byte(`{"status":"success"}`),
+					RunStatus:        "completed",
+				}, nil
+			},
+		},
+	}
+	adapterWorkflow := workflows.NewAdapterRunWorkflow(agent.adapterManager)
+	agent.registerWorkflow(adapterWorkflow)
+	agent.registerWorkflowAlias("adapter_run", adapterWorkflow)
+
+	if err := agent.heartbeatLocked(t.Context()); err != nil {
+		t.Fatalf("heartbeat завершился ошибкой: %v", err)
+	}
+	if !reflect.DeepEqual(callOrder, []string{"sync", "run"}) {
+		t.Fatalf("ожидался порядок [sync run], получено %v", callOrder)
+	}
+	if len(agent.pendingTaskResults) != 1 {
+		t.Fatalf("ожидался один task_result после выполнения run_adapter, получено %d", len(agent.pendingTaskResults))
+	}
+	if agent.pendingTaskResults[0].Status != "completed" {
+		t.Fatalf("ожидался completed task_result, получено %q", agent.pendingTaskResults[0].Status)
 	}
 }
 
@@ -506,6 +594,58 @@ func TestAgentHeartbeatAdapterTaskErrorQueuesTaskResultAndDoesNotBreakLoop(t *te
 	}
 	if heartbeatCalls != 2 {
 		t.Fatalf("ожидалось два heartbeat вызова, получено %d", heartbeatCalls)
+	}
+}
+
+func TestAgentHeartbeatDetailedLogsOnlyInDebugMode(t *testing.T) {
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetFlags(0)
+	defer log.SetOutput(originalWriter)
+	defer log.SetFlags(originalFlags)
+
+	runHeartbeat := func(debug bool) string {
+		var buffer bytes.Buffer
+		log.SetOutput(&buffer)
+
+		agent := &Agent{
+			cfg: config.Config{
+				AgentVersion:           "test-version",
+				AgentType:              "sssruner",
+				Debug:                  debug,
+				AccessTokenGracePeriod: time.Minute,
+			},
+			client: stubRuntimeClient{
+				sendHeartbeatFn: func(context.Context, string, protocol.AgentDataDTO, string) (*protocol.HeartbeatResponseDTO, error) {
+					return &protocol.HeartbeatResponseDTO{Status: "ok"}, nil
+				},
+			},
+			identity: &state.Identity{UUID: "agent-uuid"},
+			tokens: &state.Tokens{
+				AccessToken:          "access-token",
+				AccessTokenExpiresAt: time.Now().Add(time.Hour),
+			},
+			inventoryService: stubRuntimeInventoryService{},
+			adapterManager:   stubRuntimeAdapterManager{},
+		}
+
+		if err := agent.heartbeatLocked(context.Background()); err != nil {
+			t.Fatalf("heartbeat завершился ошибкой: %v", err)
+		}
+		return buffer.String()
+	}
+
+	logsWithoutDebug := runHeartbeat(false)
+	if strings.Contains(logsWithoutDebug, "Подготовлен heartbeat request") || strings.Contains(logsWithoutDebug, "Heartbeat response:") {
+		t.Fatalf("в обычном режиме подробный heartbeat-лог не должен писаться: %s", logsWithoutDebug)
+	}
+
+	logsWithDebug := runHeartbeat(true)
+	if !strings.Contains(logsWithDebug, "[DEBUG] Подготовлен heartbeat request") {
+		t.Fatalf("в debug-режиме не найден лог request summary: %s", logsWithDebug)
+	}
+	if !strings.Contains(logsWithDebug, "[DEBUG] Heartbeat response: status=ok tasks=0 manifests=0") {
+		t.Fatalf("в debug-режиме не найден лог response summary: %s", logsWithDebug)
 	}
 }
 

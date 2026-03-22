@@ -56,6 +56,7 @@ type Config struct {
 	ServerURL              string
 	BootstrapAPIKey        string
 	AgentType              string
+	Debug                  bool
 	HeartbeatInterval      time.Duration
 	UpdateCheckInterval    time.Duration
 	InventoryInterval      time.Duration
@@ -98,6 +99,7 @@ type fileConfig struct {
 	ServerURL              string   `json:"server_url"`
 	BootstrapAPIKey        string   `json:"bootstrap_api_key"`
 	AgentType              string   `json:"agent_type,omitempty"`
+	Debug                  bool     `json:"debug,omitempty"`
 	HeartbeatInterval      string   `json:"heartbeat_interval,omitempty"`
 	UpdateCheckInterval    string   `json:"update_check_interval,omitempty"`
 	InventoryInterval      string   `json:"inventory_interval,omitempty"`
@@ -262,6 +264,7 @@ func buildConfig(version string, configPath string, fileCfg fileConfig) (Config,
 		ServerURL:              serverURL,
 		BootstrapAPIKey:        bootstrapAPIKey,
 		AgentType:              firstNonEmpty(strings.TrimSpace(fileCfg.AgentType), defaultAgentType),
+		Debug:                  fileCfg.Debug,
 		HeartbeatInterval:      heartbeatInterval,
 		UpdateCheckInterval:    updateCheckInterval,
 		InventoryInterval:      inventoryInterval,
@@ -296,6 +299,7 @@ func createDefaultConfigTemplate(configPath string) error {
 		ServerURL:              "",
 		BootstrapAPIKey:        "",
 		AgentType:              defaultAgentType,
+		Debug:                  false,
 		HeartbeatInterval:      defaultHeartbeatInterval.String(),
 		UpdateCheckInterval:    defaultUpdateCheckInterval.String(),
 		InventoryInterval:      defaultInventoryInterval.String(),

@@ -1361,6 +1361,7 @@ export interface AgentAdapterRuntimeDeviceDTO {
   label?: string;
   connection_type?: 'tcp' | 'com' | string;
   transport?: string;
+  address?: string;
   ip?: string;
   port?: number;
   com_port?: string;

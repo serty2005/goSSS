@@ -46,19 +46,47 @@ adapter-binary <command> [flags]
 
 Полный runtime flow для активного агента выглядит так:
 
-1. сервер отдает агенту heartbeat-задачу типа `run_adapter` или `adapter_run`;
-2. задача содержит `adapter_id`, `command`, `operation`, `timeout` и `device_params`;
-3. агент находит актуальный descriptor адаптера в `descriptors/` и локальный бинарник в `bin/`;
-4. агент проверяет совместимость `target_os/target_arch`;
-5. на Windows агент `amd64` имеет право запускать адаптер `386`, чтобы работать с 32-битными драйверами оборудования;
-6. агент обновляет `adapter_statuses` полями `run_status`, `last_run_at`, `last_exit_code`, `last_error`;
-7. агент запускает бинарник как отдельный процесс, передает JSON в stdin и собирает `stdout`, `stderr`, `exit_code`, `duration`;
-8. если процесс завис, агент завершает его по timeout/context;
-9. после выполнения агент складывает `task_result` в очередь и отправляет его серверу следующим heartbeat.
+1. heartbeat-ответ сервера может одновременно содержать и `adapter_manifests`, и задачи `run_adapter` / `adapter_run`;
+2. агент всегда сначала синхронизирует `adapter_manifests` локально и только после этого исполняет задачи;
+3. задача запуска содержит `adapter_id`, `command`, `operation`, `timeout` и `device_params`;
+4. агент находит актуальный descriptor адаптера в `descriptors/` и локальный бинарник в `bin/`;
+5. агент проверяет совместимость `target_os/target_arch`;
+6. на Windows агент `amd64` имеет право запускать адаптер `386`, чтобы работать с 32-битными драйверами оборудования;
+7. если локальный descriptor или бинарник отсутствует, агент возвращает явную ошибку preflight и не считает такой запуск реально стартовавшим;
+8. `last_run_at` обновляется только для фактически стартовавшего процесса адаптера, поэтому preflight-fail не сдвигает расписание;
+9. агент запускает бинарник как отдельный процесс, передает JSON в stdin и собирает `stdout`, `stderr`, `exit_code`, `duration`;
+10. если процесс завис, агент завершает его по timeout/context;
+11. после выполнения агент складывает `task_result` в очередь и отправляет его серверу следующим heartbeat.
 
 ## Task Payload От Сервера К Агенту
 
-Рекомендуемый payload команды запуска адаптера:
+Операторский UI сохраняет минимальный runtime profile и не показывает низкоуровневые поля подключения. На стороне сервера используется следующий минимальный ввод:
+
+```json
+{
+  "adapter_id": "fiscal-atol",
+  "command": "run",
+  "operation": "collect",
+  "timeout_seconds": 45,
+  "devices": [
+    {
+      "connection_type": "tcp",
+      "address": "10.25.1.22:5555"
+    }
+  ],
+  "schedule": {
+    "enabled": true,
+    "interval_seconds": 300
+  }
+}
+```
+
+Правила нормализации адреса на сервере:
+
+- `tcp`: `ip[:port]`
+- `com`: `COMx`
+
+После нормализации сервер отправляет агенту payload команды запуска такого вида:
 
 ```json
 {
@@ -69,18 +97,14 @@ adapter-binary <command> [flags]
   "protocol_version": "1",
   "request_id": "run-123",
   "device_params": {
-    "connection_type": "tcp",
-    "ip": "10.25.1.22",
-    "port": 5555,
-    "com_port": "",
-    "baudrate": "",
-    "model": "АТОЛ 22Ф",
-    "driver_hints": {
-      "branch": "10.9+"
-    },
-    "extra_params": {
-      "operator": "agent-runtime"
-    }
+    "devices": [
+      {
+        "connection_type": "tcp",
+        "transport": "tcp",
+        "ip": "10.25.1.22",
+        "port": 5555
+      }
+    ]
   }
 }
 ```
@@ -93,14 +117,12 @@ adapter-binary <command> [flags]
 
 ### Поля предметного payload для fiscal-* адаптеров
 
-- `connection_type`
-- `ip`
-- `port`
-- `com_port`
-- `baudrate`
-- `model`
-- `driver_hints`
-- `extra_params`
+- `device_params.devices[].connection_type`
+- `device_params.devices[].transport`
+- `device_params.devices[].ip`
+- `device_params.devices[].port`
+- `device_params.devices[].com_port`
+- при необходимости сервер может дополнительно передать `label`, `baudrate`, `model`, `driver_hints`, `extra_params`
 
 ## Команда describe
 
@@ -206,9 +228,14 @@ adapter-binary <command> [flags]
   "task_type": "collect",
   "timeout_seconds": 45,
   "payload": {
-    "connection_type": "tcp",
-    "ip": "10.25.1.22",
-    "port": 5555
+    "devices": [
+      {
+        "connection_type": "tcp",
+        "transport": "tcp",
+        "ip": "10.25.1.22",
+        "port": 5555
+      }
+    ]
   }
 }
 ```
@@ -344,6 +371,29 @@ Heartbeat агента публикует по каждому локальном
 - логировать факт запуска и результат команды;
 - публиковать серверу статус локально установленного адаптера;
 - не внедрять предметную логику адаптера внутрь себя.
+
+## Debug Mode
+
+Расширенное debug-логирование включается только через `agent-config.json`:
+
+```json
+{
+  "debug": true
+}
+```
+
+В debug-режиме агент дополнительно пишет:
+
+- summary heartbeat request/response;
+- полный список полученных `adapter_manifests`;
+- решения sync: что уже актуально, что скачивается, куда скачивается и почему пропускается;
+- все полученные `run_adapter` задачи и их исходный payload;
+- нормализованный stdin payload, который передается адаптеру;
+- локальные пути к descriptor и binary;
+- попытку старта процесса, `stdout`, `stderr`, `exit_code`, structured result/error;
+- обновление `adapter_status` после запуска.
+
+В обычном режиме эти подробные записи в лог не попадают.
 
 ## Версионирование контракта
 

@@ -499,6 +499,9 @@ func TestManagerRunMissingBinaryReturnsControlledError(t *testing.T) {
 	if !strings.Contains(statuses[0].LastError, "локальный бинарник адаптера") {
 		t.Fatalf("ожидался last_error про бинарник, получено %q", statuses[0].LastError)
 	}
+	if statuses[0].LastRunAt != nil {
+		t.Fatalf("при preflight-ошибке last_run_at не должен обновляться, получено %+v", statuses[0].LastRunAt)
+	}
 }
 
 func TestManagerRunAllowsWindows386OnWindowsAMD64(t *testing.T) {

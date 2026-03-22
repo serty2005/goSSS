@@ -8,7 +8,9 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,14 +84,18 @@ func sanitizeAdapterRuntimeDevices(devices []api.AgentAdapterRuntimeDeviceDTO) [
 
 func sanitizeAdapterRuntimeDevice(device api.AgentAdapterRuntimeDeviceDTO) api.AgentAdapterRuntimeDeviceDTO {
 	device.Label = strings.TrimSpace(device.Label)
-	device.ConnectionType = normalizeLower(firstNonEmptyString(device.ConnectionType, device.Transport))
+	device.ConnectionType = normalizeLower(firstNonEmptyString(device.ConnectionType, device.Transport, inferRuntimeDeviceConnectionType(device)))
 	device.Transport = device.ConnectionType
+	device.Address = strings.TrimSpace(device.Address)
 	device.IP = strings.TrimSpace(device.IP)
 	device.COMPort = strings.TrimSpace(device.COMPort)
 	device.BaudRate = strings.TrimSpace(device.BaudRate)
 	device.Model = strings.TrimSpace(device.Model)
 	if device.Port < 0 {
 		device.Port = 0
+	}
+	if device.Address == "" {
+		device.Address = runtimeDeviceAddressFromFields(device)
 	}
 	device.DriverHints = cloneJSONMap(device.DriverHints)
 	device.ExtraParams = cloneJSONMap(device.ExtraParams)
@@ -114,6 +120,7 @@ func sanitizeAdapterRuntimeSchedule(schedule api.AgentAdapterRuntimeScheduleDTO)
 func isEmptyAdapterRuntimeDevice(device api.AgentAdapterRuntimeDeviceDTO) bool {
 	return strings.TrimSpace(device.Label) == "" &&
 		normalizeLower(device.ConnectionType) == "" &&
+		strings.TrimSpace(device.Address) == "" &&
 		strings.TrimSpace(device.IP) == "" &&
 		strings.TrimSpace(device.COMPort) == "" &&
 		strings.TrimSpace(device.BaudRate) == "" &&
@@ -263,22 +270,9 @@ func validateRuntimeProfileForExecution(profile api.AgentAdapterRuntimeProfileDT
 }
 
 func validateRuntimeDeviceForExecution(device api.AgentAdapterRuntimeDeviceDTO, index int) error {
-	device = sanitizeAdapterRuntimeDevice(device)
 	deviceIndex := index + 1
-	switch device.ConnectionType {
-	case "tcp":
-		if device.IP == "" {
-			return fmt.Errorf("устройство #%d: для tcp-подключения обязателен ip", deviceIndex)
-		}
-		if device.Port < 0 {
-			return fmt.Errorf("устройство #%d: port не может быть отрицательным", deviceIndex)
-		}
-	case "com":
-		if device.COMPort == "" {
-			return fmt.Errorf("устройство #%d: для com-подключения обязателен com_port", deviceIndex)
-		}
-	default:
-		return fmt.Errorf("устройство #%d: connection_type должен быть tcp или com", deviceIndex)
+	if _, err := normalizeRuntimeDeviceForExecution(device); err != nil {
+		return fmt.Errorf("устройство #%d: %w", deviceIndex, err)
 	}
 	return nil
 }
@@ -298,34 +292,39 @@ func buildAdapterRunCommandPayload(profile api.AgentAdapterRuntimeProfileDTO) (a
 
 	if profile.Command == "run" {
 		devices := make([]map[string]any, 0, len(profile.Devices))
-		for _, device := range profile.Devices {
+		for index, device := range profile.Devices {
+			normalizedDevice, err := normalizeRuntimeDeviceForExecution(device)
+			if err != nil {
+				return api.AgentAdapterRunCommandPayloadDTO{}, fmt.Errorf("устройство #%d: %w", index+1, err)
+			}
+
 			item := map[string]any{
-				"transport":       device.ConnectionType,
-				"connection_type": device.ConnectionType,
+				"transport":       normalizedDevice.ConnectionType,
+				"connection_type": normalizedDevice.ConnectionType,
 			}
-			if device.Label != "" {
-				item["label"] = device.Label
+			if normalizedDevice.Label != "" {
+				item["label"] = normalizedDevice.Label
 			}
-			if device.IP != "" {
-				item["ip"] = device.IP
+			if normalizedDevice.IP != "" {
+				item["ip"] = normalizedDevice.IP
 			}
-			if device.Port > 0 {
-				item["port"] = device.Port
+			if normalizedDevice.Port > 0 {
+				item["port"] = normalizedDevice.Port
 			}
-			if device.COMPort != "" {
-				item["com_port"] = device.COMPort
+			if normalizedDevice.COMPort != "" {
+				item["com_port"] = normalizedDevice.COMPort
 			}
-			if device.BaudRate != "" {
-				item["baudrate"] = device.BaudRate
+			if normalizedDevice.BaudRate != "" {
+				item["baudrate"] = normalizedDevice.BaudRate
 			}
-			if device.Model != "" {
-				item["model"] = device.Model
+			if normalizedDevice.Model != "" {
+				item["model"] = normalizedDevice.Model
 			}
-			if len(device.DriverHints) > 0 {
-				item["driver_hints"] = cloneJSONMap(device.DriverHints)
+			if len(normalizedDevice.DriverHints) > 0 {
+				item["driver_hints"] = cloneJSONMap(normalizedDevice.DriverHints)
 			}
-			if len(device.ExtraParams) > 0 {
-				item["extra_params"] = cloneJSONMap(device.ExtraParams)
+			if len(normalizedDevice.ExtraParams) > 0 {
+				item["extra_params"] = cloneJSONMap(normalizedDevice.ExtraParams)
 			}
 			devices = append(devices, item)
 		}
@@ -333,6 +332,184 @@ func buildAdapterRunCommandPayload(profile api.AgentAdapterRuntimeProfileDTO) (a
 	}
 
 	return payload, nil
+}
+
+func normalizeRuntimeDeviceForExecution(device api.AgentAdapterRuntimeDeviceDTO) (api.AgentAdapterRuntimeDeviceDTO, error) {
+	device = sanitizeAdapterRuntimeDevice(device)
+	switch device.ConnectionType {
+	case "tcp":
+		address := strings.TrimSpace(firstNonEmptyString(device.Address, runtimeDeviceAddressFromFields(device)))
+		if address == "" {
+			return api.AgentAdapterRuntimeDeviceDTO{}, errors.New("для tcp-подключения обязателен address в формате ip[:port]")
+		}
+
+		host, port, hasPort, err := parseTCPRuntimeAddress(address)
+		if err != nil {
+			return api.AgentAdapterRuntimeDeviceDTO{}, fmt.Errorf("не удалось разобрать tcp address %q: %w", address, err)
+		}
+
+		device.Address = formatTCPRuntimeAddress(host, port, hasPort)
+		device.IP = host
+		if hasPort {
+			device.Port = port
+		} else {
+			device.Port = 0
+		}
+		device.COMPort = ""
+		return device, nil
+	case "com":
+		address := strings.TrimSpace(firstNonEmptyString(device.Address, device.COMPort))
+		if address == "" {
+			return api.AgentAdapterRuntimeDeviceDTO{}, errors.New("для com-подключения обязателен address в формате COMx")
+		}
+
+		comPort, err := normalizeCOMRuntimeAddress(address)
+		if err != nil {
+			return api.AgentAdapterRuntimeDeviceDTO{}, err
+		}
+
+		device.Address = comPort
+		device.COMPort = comPort
+		device.IP = ""
+		device.Port = 0
+		return device, nil
+	default:
+		return api.AgentAdapterRuntimeDeviceDTO{}, errors.New("connection_type должен быть tcp или com")
+	}
+}
+
+func runtimeDeviceAddressFromFields(device api.AgentAdapterRuntimeDeviceDTO) string {
+	switch normalizeLower(device.ConnectionType) {
+	case "tcp":
+		host := strings.TrimSpace(device.IP)
+		if host == "" {
+			return ""
+		}
+		return formatTCPRuntimeAddress(host, device.Port, device.Port > 0)
+	case "com":
+		if strings.TrimSpace(device.COMPort) == "" {
+			return ""
+		}
+
+		comPort, err := normalizeCOMRuntimeAddress(device.COMPort)
+		if err != nil {
+			return strings.TrimSpace(device.COMPort)
+		}
+		return comPort
+	default:
+		return ""
+	}
+}
+
+func inferRuntimeDeviceConnectionType(device api.AgentAdapterRuntimeDeviceDTO) string {
+	switch {
+	case strings.TrimSpace(device.COMPort) != "":
+		return "com"
+	case strings.TrimSpace(device.IP) != "" || device.Port > 0:
+		return "tcp"
+	case strings.HasPrefix(strings.ToUpper(strings.TrimSpace(device.Address)), "COM"):
+		return "com"
+	case strings.TrimSpace(device.Address) != "":
+		return "tcp"
+	default:
+		return ""
+	}
+}
+
+func parseTCPRuntimeAddress(raw string) (host string, port int, hasPort bool, err error) {
+	address := strings.TrimSpace(raw)
+	if address == "" {
+		return "", 0, false, errors.New("tcp address пустой")
+	}
+
+	if strings.HasPrefix(address, "[") {
+		if strings.HasSuffix(address, "]") {
+			host = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(address, "["), "]"))
+			if host == "" {
+				return "", 0, false, errors.New("в tcp address отсутствует хост")
+			}
+			return host, 0, false, nil
+		}
+
+		hostPart, portPart, splitErr := net.SplitHostPort(address)
+		if splitErr != nil {
+			return "", 0, false, splitErr
+		}
+
+		parsedPort, parseErr := parseTCPRuntimePort(portPart)
+		if parseErr != nil {
+			return "", 0, false, parseErr
+		}
+
+		host = strings.TrimSpace(hostPart)
+		if host == "" {
+			return "", 0, false, errors.New("в tcp address отсутствует хост")
+		}
+		return host, parsedPort, true, nil
+	}
+
+	switch strings.Count(address, ":") {
+	case 0:
+		return address, 0, false, nil
+	case 1:
+		hostPart, portPart, _ := strings.Cut(address, ":")
+		host = strings.TrimSpace(hostPart)
+		if host == "" {
+			return "", 0, false, errors.New("в tcp address отсутствует хост")
+		}
+
+		parsedPort, parseErr := parseTCPRuntimePort(portPart)
+		if parseErr != nil {
+			return "", 0, false, parseErr
+		}
+		return host, parsedPort, true, nil
+	default:
+		return address, 0, false, nil
+	}
+}
+
+func parseTCPRuntimePort(raw string) (int, error) {
+	portText := strings.TrimSpace(raw)
+	if portText == "" {
+		return 0, errors.New("в tcp address отсутствует port")
+	}
+
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return 0, fmt.Errorf("port %q не является числом", portText)
+	}
+	if port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("port %d вне диапазона 1..65535", port)
+	}
+	return port, nil
+}
+
+func formatTCPRuntimeAddress(host string, port int, hasPort bool) string {
+	if !hasPort || port <= 0 {
+		return strings.TrimSpace(host)
+	}
+	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(port))
+}
+
+func normalizeCOMRuntimeAddress(raw string) (string, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	if value == "" {
+		return "", errors.New("для com-подключения обязателен address в формате COMx")
+	}
+	if !strings.HasPrefix(value, "COM") {
+		return "", fmt.Errorf("для com-подключения ожидается address в формате COMx, получено %q", raw)
+	}
+
+	portNumber := strings.TrimSpace(strings.TrimPrefix(value, "COM"))
+	if portNumber == "" {
+		return "", fmt.Errorf("для com-подключения ожидается address в формате COMx, получено %q", raw)
+	}
+
+	number, err := strconv.Atoi(portNumber)
+	if err != nil || number <= 0 {
+		return "", fmt.Errorf("для com-подключения ожидается address в формате COMx, получено %q", raw)
+	}
+	return fmt.Sprintf("COM%d", number), nil
 }
 
 func (s *agentOperatorFlowService) EnqueueAdapterRun(ctx context.Context, agentUUID string, req api.EnqueueAgentAdapterRunRequestDTO, actor string) error {

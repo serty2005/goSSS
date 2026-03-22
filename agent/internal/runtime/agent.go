@@ -104,8 +104,11 @@ func NewAgent(cfg config.Config, cli *client.ServiceDeskClient) (*Agent, error) 
 		adapterManager:   adapters.NewManager(cfg.AdapterDir, cli),
 		connectivity:     connectivityManager,
 	}
+	if manager, ok := a.adapterManager.(*adapters.Manager); ok {
+		manager.SetDebug(cfg.Debug)
+	}
 	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(cfg.AgentVersion, updater.NewService(cfg.DataDir, cli)))
-	adapterRunWorkflow := workflows.NewAdapterRunWorkflow(a.adapterManager)
+	adapterRunWorkflow := workflows.NewAdapterRunWorkflow(a.adapterManager, a.debugf)
 	a.registerWorkflow(adapterRunWorkflow)
 	a.registerWorkflowAlias("adapter_run", adapterRunWorkflow)
 	return a, nil
@@ -311,10 +314,11 @@ func (a *Agent) buildRegistrationRequest(now time.Time) protocol.RegistrationReq
 
 func (a *Agent) logRuntimeConfiguration() {
 	log.Printf(
-		"Локальная конфигурация агента: source=%s server_url=%s agent_type=%s registry_path=HKLM\\%s data_dir=%s adapter_dir=%s heartbeat_interval=%s inventory_interval=%s update_check_interval=%s connectivity_state_file=%s connectivity_base_retry=%s connectivity_max_retry=%s authorization_cooldown=%s",
+		"Локальная конфигурация агента: source=%s server_url=%s agent_type=%s debug=%t registry_path=HKLM\\%s data_dir=%s adapter_dir=%s heartbeat_interval=%s inventory_interval=%s update_check_interval=%s connectivity_state_file=%s connectivity_base_retry=%s connectivity_max_retry=%s authorization_cooldown=%s",
 		a.cfg.ConfigSource,
 		a.cfg.ServerURL,
 		a.cfg.AgentType,
+		a.cfg.Debug,
 		a.cfg.RegistryPath,
 		a.cfg.DataDir,
 		a.cfg.AdapterDir,
@@ -432,6 +436,13 @@ func (a *Agent) communicateLocked(ctx context.Context) (time.Duration, error) {
 		}
 		return a.recordConnectivityFailure(connectivity.OpHeartbeat, a.dataEndpoint(), err), err
 	}
+	a.debugf(
+		"Подготовлен heartbeat request: agent_uuid=%s task_results=%d adapter_statuses=%d inventory_present=%t",
+		a.identity.UUID,
+		len(payload.TaskResults),
+		len(payload.AdapterStatuses),
+		payload.Inventory != nil,
+	)
 
 	resp, err := a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 	if err != nil {
@@ -482,23 +493,14 @@ func (a *Agent) communicateLocked(ctx context.Context) (time.Duration, error) {
 		)
 	}
 
-	log.Printf(
-		"Heartbeat отправлен: status=%s tasks=%d manifests=%d next_attempt_in=%s",
+	a.debugf(
+		"Heartbeat response: status=%s tasks=%d manifests=%d next_attempt_in=%s",
 		resp.Status,
 		len(resp.Tasks),
 		len(resp.AdapterManifests),
 		a.regularConnectivityInterval(),
 	)
-	for _, task := range resp.Tasks {
-		if err := a.executeTask(ctx, task); err != nil {
-			log.Printf("Задача id=%d type=%s завершилась с ошибкой: %v", task.ID, task.Type, err)
-		}
-	}
-	if len(resp.AdapterManifests) > 0 {
-		if _, err := a.adapterManager.Sync(ctx, resp.AdapterManifests); err != nil {
-			log.Printf("Синхронизация адаптеров завершилась с ошибкой: %v", err)
-		}
-	}
+	a.processHeartbeatResponse(ctx, resp)
 	return a.regularConnectivityInterval(), nil
 }
 
@@ -654,6 +656,13 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.debugf(
+		"Подготовлен heartbeat request: agent_uuid=%s task_results=%d adapter_statuses=%d inventory_present=%t",
+		a.identity.UUID,
+		len(payload.TaskResults),
+		len(payload.AdapterStatuses),
+		payload.Inventory != nil,
+	)
 
 	resp, err := a.client.SendHeartbeat(ctx, a.identity.UUID, payload, a.tokens.AccessToken)
 	if err != nil {
@@ -676,17 +685,8 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 	}
 	a.acknowledgeTaskResults(len(payload.TaskResults))
 
-	log.Printf("Heartbeat отправлен: status=%s tasks=%d manifests=%d", resp.Status, len(resp.Tasks), len(resp.AdapterManifests))
-	for _, task := range resp.Tasks {
-		if err := a.executeTask(ctx, task); err != nil {
-			log.Printf("Задача id=%d type=%s завершилась с ошибкой: %v", task.ID, task.Type, err)
-		}
-	}
-	if len(resp.AdapterManifests) > 0 {
-		if _, err := a.adapterManager.Sync(ctx, resp.AdapterManifests); err != nil {
-			log.Printf("Синхронизация адаптеров завершилась с ошибкой: %v", err)
-		}
-	}
+	a.debugf("Heartbeat response: status=%s tasks=%d manifests=%d", resp.Status, len(resp.Tasks), len(resp.AdapterManifests))
+	a.processHeartbeatResponse(ctx, resp)
 	return nil
 }
 
@@ -731,6 +731,25 @@ func (a *Agent) attachInventoryData(payload *protocol.AgentDataDTO) {
 	payload.RustdeskID = strings.TrimSpace(snapshot.HostInfo.RustdeskID)
 }
 
+func (a *Agent) processHeartbeatResponse(ctx context.Context, resp *protocol.HeartbeatResponseDTO) {
+	if resp == nil {
+		return
+	}
+
+	if len(resp.AdapterManifests) > 0 {
+		a.debugf("Получены adapter_manifests: %s", marshalLogJSON(resp.AdapterManifests))
+		if _, err := a.adapterManager.Sync(ctx, resp.AdapterManifests); err != nil {
+			log.Printf("Синхронизация адаптеров завершилась с ошибкой: %v", err)
+		}
+	}
+
+	for _, task := range resp.Tasks {
+		if err := a.executeTask(ctx, task); err != nil {
+			log.Printf("Задача id=%d type=%s завершилась с ошибкой: %v", task.ID, task.Type, err)
+		}
+	}
+}
+
 func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) error {
 	now := time.Now().UTC()
 	wf, ok := a.workflows[task.Type]
@@ -747,7 +766,7 @@ func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) err
 		})
 		return nil
 	}
-	log.Printf("Выполнение задачи id=%d type=%s", task.ID, task.Type)
+	a.debugf("Получена задача агента: id=%d type=%s created_at=%s payload=%s", task.ID, task.Type, task.CreatedAt.Format(time.RFC3339), compactRawJSONForLog(task.Payload))
 	result, err := wf.Run(ctx, task.Payload)
 	if strings.TrimSpace(result.Status) == "" {
 		if err != nil {
@@ -769,6 +788,13 @@ func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) err
 		TaskExecutionResult: result,
 	})
 	return err
+}
+
+func (a *Agent) debugf(format string, args ...any) {
+	if !a.cfg.Debug {
+		return
+	}
+	log.Printf("[DEBUG] "+format, args...)
 }
 
 func (a *Agent) registerWorkflow(w workflow) {
@@ -823,4 +849,16 @@ func cloneTaskResults(results []protocol.AgentTaskResultDTO) []protocol.AgentTas
 		cloned = append(cloned, copyItem)
 	}
 	return cloned
+}
+
+func compactRawJSONForLog(raw []byte) string {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return "{}"
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return marshalLogJSON(value)
 }

@@ -94,10 +94,53 @@ type fakeEventBus struct {
 	events []eventbus.Event
 }
 
+type fakeServiceLogger struct {
+	mu         sync.Mutex
+	debugCalls []string
+	infoCalls  []string
+	warnCalls  []string
+	errorCalls []string
+	fatalCalls []string
+}
+
 type fakeAdapterManifestResolver struct {
 	manifests []api.AdapterManifestDTO
 	err       error
 	calls     int
+}
+
+func (l *fakeServiceLogger) Debug(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugCalls = append(l.debugCalls, msg)
+}
+
+func (l *fakeServiceLogger) Info(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infoCalls = append(l.infoCalls, msg)
+}
+
+func (l *fakeServiceLogger) Warn(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warnCalls = append(l.warnCalls, msg)
+}
+
+func (l *fakeServiceLogger) Error(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errorCalls = append(l.errorCalls, msg)
+}
+
+func (l *fakeServiceLogger) Fatal(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fatalCalls = append(l.fatalCalls, msg)
+}
+
+func (l *fakeServiceLogger) With(_ ...any) logger.LoggerInterface {
+	return l
 }
 
 func (b *fakeEventBus) Publish(event eventbus.Event) {
@@ -480,6 +523,45 @@ func TestProcessData_HeartbeatNoopНеПубликуетObservation(t *testing.T
 	require.Equal(t, 0, bus.count())
 	require.Equal(t, 1, repo.updated)
 	require.Equal(t, fingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
+func TestProcessData_HeartbeatNoopЛогируетсяВDebugАНеВInfo(t *testing.T) {
+	ctx := t.Context()
+	data := &api.AgentDataDTO{
+		AgentUUID:   "agent-noop-log",
+		AgentType:   "sssruner",
+		Hostname:    "ws-noop-log",
+		CurrentTime: "2026-03-21T10:00:01Z",
+		Inventory: &api.InventorySnapshotDTO{
+			CollectedAt: time.Date(2026, 3, 21, 10, 0, 1, 0, time.UTC),
+			Hostname:    "ws-noop-log",
+			OS:          "windows",
+			Arch:        "amd64",
+		},
+	}
+	fingerprint, err := buildHeartbeatFingerprint(data)
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                               "agent-noop-log",
+			Type:                               "sssruner",
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      time.Date(2026, 3, 21, 9, 59, 0, 0, time.UTC),
+			LastMeaningfulHeartbeatFingerprint: fingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       fingerprint.StateJSON,
+			LatestInventorySnapshot:            marshalAgentJSON(data.Inventory),
+		},
+	}
+	bus := &fakeEventBus{}
+	loggerStub := &fakeServiceLogger{}
+	svc := NewAgentService(loggerStub, repo, nil, bus)
+
+	_, err = svc.ProcessData(ctx, "agent-noop-log", data)
+	require.NoError(t, err)
+	require.Len(t, loggerStub.debugCalls, 1)
+	require.Equal(t, "Heartbeat обработан без значимых изменений", loggerStub.debugCalls[0])
+	require.Empty(t, loggerStub.infoCalls)
 }
 
 func intPointer(value int) *int {
