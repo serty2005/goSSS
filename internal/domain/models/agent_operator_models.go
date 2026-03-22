@@ -25,3 +25,27 @@ type AgentCOMSignatureRule struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// PublishedAgentAdapter хранит опубликованный server-side manifest адаптера.
+// Оператор выбирает только adapter_id, а полный manifest агент получает из этой модели.
+type PublishedAgentAdapter struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+
+	AdapterID string `gorm:"type:varchar(128);uniqueIndex;not null" json:"adapter_id"`
+	Title     string `gorm:"type:text;not null" json:"title"`
+
+	Description string `gorm:"type:text" json:"description"`
+	Published   bool   `gorm:"not null;default:false;index" json:"published"`
+
+	Version         string `gorm:"type:varchar(64)" json:"version"`
+	AdapterType     string `gorm:"type:varchar(128)" json:"adapter_type"`
+	TargetOS        string `gorm:"type:varchar(32)" json:"target_os"`
+	TargetArch      string `gorm:"type:varchar(32)" json:"target_arch"`
+	ProtocolVersion string `gorm:"type:varchar(32)" json:"protocol_version"`
+	DownloadURL     string `gorm:"type:text" json:"download_url"`
+	SHA256          string `gorm:"type:varchar(128)" json:"sha256"`
+	FileName        string `gorm:"type:text" json:"file_name"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

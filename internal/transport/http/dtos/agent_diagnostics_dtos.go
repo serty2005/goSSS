@@ -76,8 +76,25 @@ type AgentCOMSignatureCandidateDTO struct {
 	ExistingRule         *AgentCOMSignatureRuleDTO `json:"existing_rule,omitzero"`
 }
 
+type PublishedAgentAdapterOptionDTO struct {
+	AdapterID      string `json:"adapter_id"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	Published      bool   `json:"published"`
+	Selectable     bool   `json:"selectable"`
+	StatusText     string `json:"status_text"`
+	DisabledReason string `json:"disabled_reason,omitzero"`
+	Version        string `json:"version"`
+	AdapterType    string `json:"adapter_type"`
+	TargetOS       string `json:"target_os"`
+	TargetArch     string `json:"target_arch"`
+}
+
 type AgentOperatorFlowDTO struct {
 	MeaningfulHeartbeat         AgentHeartbeatMeaningfulStateDTO `json:"meaningful_heartbeat"`
+	AvailableAdapters           []PublishedAgentAdapterOptionDTO `json:"available_adapters,omitzero"`
+	SelectedAdapterIDs          []string                         `json:"selected_adapter_ids,omitzero"`
+	RecommendedAdapterIDs       []string                         `json:"recommended_adapter_ids,omitzero"`
 	RecommendedProfile          AgentMachineProfileDTO           `json:"recommended_profile"`
 	RecommendedReasons          []string                         `json:"recommended_reasons,omitzero"`
 	RecommendedAdapterManifests []AdapterManifestDTO             `json:"recommended_adapter_manifests,omitzero"`
@@ -99,10 +116,8 @@ type AgentDiagnosticsDetailsDTO struct {
 	OperatorFlow           *AgentOperatorFlowDTO         `json:"operator_flow,omitzero"`
 }
 
-type SaveAgentMachineProfileRequestDTO struct {
-	Profile          AgentMachineProfileDTO `json:"profile"`
-	Reasons          []string               `json:"reasons,omitzero"`
-	AdapterManifests []AdapterManifestDTO   `json:"adapter_manifests,omitzero"`
+type SaveAgentAdapterSelectionRequestDTO struct {
+	SelectedAdapterIDs []string `json:"selected_adapter_ids,omitzero"`
 }
 
 type UpsertAgentCOMSignatureRuleRequestDTO struct {

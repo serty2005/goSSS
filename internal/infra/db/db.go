@@ -53,6 +53,7 @@ func Migrate(db *gorm.DB) error {
 		&models.AgentRegistrationAttempt{},
 		&models.AgentSessionToken{},
 		&models.AgentCOMSignatureRule{},
+		&models.PublishedAgentAdapter{},
 		&models.AgentObservation{},
 		&models.Candidate{},
 		&models.CandidateStatusHistory{},
@@ -85,6 +86,9 @@ func Migrate(db *gorm.DB) error {
 		return err
 	}
 	if err := migrateLegacyAttachments(db); err != nil {
+		return err
+	}
+	if err := EnsureDefaultPublishedAgentAdapters(db); err != nil {
 		return err
 	}
 

@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +74,12 @@ type fakeEventBus struct {
 	events []eventbus.Event
 }
 
+type fakeAdapterManifestResolver struct {
+	manifests []api.AdapterManifestDTO
+	err       error
+	calls     int
+}
+
 func (b *fakeEventBus) Publish(event eventbus.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -106,6 +113,14 @@ func (b *fakeEventBus) count() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.events)
+}
+
+func (r *fakeAdapterManifestResolver) ResolveAgentAdapterManifests(_ context.Context, _ *models.Agent) ([]api.AdapterManifestDTO, error) {
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	return slices.Clone(r.manifests), nil
 }
 
 func TestProcessData_ПубликуетСобытиеНаблюденияАгента(t *testing.T) {
@@ -173,6 +188,52 @@ func TestProcessData_SSSRunerВозвращаетAdapterManifestsИзКонфи�
 	require.NotNil(t, resp.AdapterManifests)
 	require.Len(t, *resp.AdapterManifests, 1)
 	require.Equal(t, "atol", (*resp.AdapterManifests)[0].AdapterID)
+}
+
+func TestProcessData_SSSRunerВозвращаетAdapterManifestsИзPublishedCatalogПриSelectedAdapterIDs(t *testing.T) {
+	manifestConfig, err := json.Marshal(api.AgentConfigDTO{
+		SelectedAdapterIDs: []string{"fiscal-atol"},
+	})
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-selected-adapters",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+			Config:        datatypes.JSON(manifestConfig),
+		},
+	}
+	resolver := &fakeAdapterManifestResolver{
+		manifests: []api.AdapterManifestDTO{
+			{
+				AdapterID:       "fiscal-atol",
+				AdapterType:     "fiscal-atol",
+				Version:         "0.1.0-demo",
+				TargetOS:        "windows",
+				TargetArch:      "amd64",
+				ProtocolVersion: "1",
+				DownloadURL:     "https://example.test/adapters/fiscal-atol-0.1.0-demo.exe",
+				SHA256:          "abc123",
+				FileName:        "fiscal-atol-0.1.0-demo.exe",
+			},
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus, resolver)
+
+	resp, err := svc.ProcessData(context.Background(), "agent-selected-adapters", &api.AgentDataDTO{
+		AgentUUID: "agent-selected-adapters",
+		AgentType: "sssruner",
+		Hostname:  "ws-selected",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, resolver.calls)
+	require.NotNil(t, resp.AdapterManifests)
+	require.Len(t, *resp.AdapterManifests, 1)
+	require.Equal(t, "fiscal-atol", (*resp.AdapterManifests)[0].AdapterID)
+	require.Equal(t, "https://example.test/adapters/fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].DownloadURL)
 }
 
 func TestProcessData_SSSRunerВозвращаетПустыеAdapterManifestsПриПустомКонфиге(t *testing.T) {

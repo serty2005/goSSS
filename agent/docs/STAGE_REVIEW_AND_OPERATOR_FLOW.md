@@ -1,346 +1,190 @@
-# Ревизия текущего этапа и операторский флоу
+# Stage Review и operator flow
 
-## Назначение
+## Кратко
 
-Документ фиксирует фактическое состояние `goSSSagent` после закрытия двух обязательных контуров:
+Текущий операторский сценарий для `sssruner` упрощён до модели:
 
-- meaningful heartbeat вместо шумного потока observation-событий на каждом heartbeat;
-- полный server-side и UI-контур назначения `adapter_manifests` оператором.
+1. Оператор открывает карточку агента.
+2. Видит блок `Доступные адаптеры`.
+3. Отмечает нужные published adapters галками.
+4. Нажимает `Сохранить`.
+5. На следующем heartbeat сервер отдаёт агенту уже готовый `adapter_manifests`.
 
-Цель документа:
+Оператор больше не редактирует вручную:
 
-- зафиксировать, что именно уже работает end-to-end;
-- описать текущую архитектуру heartbeat/observation;
-- закрепить операторский сценарий назначения профиля машины и адаптеров;
-- честно обозначить, что еще остается до следующего этапа с отдельным `saga-runner`.
+- `download_url`;
+- `sha256`;
+- `version`;
+- `file_name`;
+- raw `adapter_manifests` JSON;
+- профиль машины как обязательный шаг;
+- правила `signature_key` как обязательный шаг.
 
-## Фактический статус этапа
+## Meaningful heartbeat
 
-### Phase 0. Core-agent и внешние адаптеры
+Логика meaningful heartbeat и noop heartbeat остаётся прежней.
 
-Статус: закрыта по inventory-first контуру.
+Сервер по-прежнему:
 
-Что уже есть:
+- всегда обновляет liveness и последние snapshot-данные;
+- публикует observation только при meaningful change;
+- различает `heartbeat_result=noop` и `heartbeat_result=meaningful_change`;
+- не ломает существующий heartbeat-контракт агента.
 
-- bootstrap-регистрация, выдача и refresh токенов;
-- heartbeat с `inventory` и `adapter_statuses`;
-- adapter manager со скачиванием, проверкой `sha256` и локальными descriptor;
-- UI для списка агентов, диагностики heartbeat и подтверждения bootstrap-регистрации;
-- отдельные бинарники `fiscal-atol`, `fiscal-mitsu`, `fiscal-shtrih` с командами `describe`, `health`, `run`;
-- server-side хранение итогового профиля машины и `adapter_manifests`;
-- выдача актуальных `adapter_manifests` прямо в heartbeat-ответе;
-- операторский UI для подтверждения или корректировки профиля машины.
+Это важно: новый операторский flow не меняет доменную семантику heartbeat, а только упрощает назначение адаптеров поверх уже существующего контура.
 
-Что еще не закрыто:
+## Published adapter catalog
 
-- `core-agent` пока не запускает адаптеры как subprocess;
-- нет автоматического удаления/замены локальных адаптеров по жизненному циклу процесса;
-- нет отдельного `POS`-адаптера как опубликованного server-side шаблона.
+Для выдачи адаптеров введён отдельный server-side слой `published adapters`.
 
-### Phase 1. Конфиг и управление состоянием
+Он хранится в модели `PublishedAgentAdapter` и содержит как минимум:
 
-Статус: закрыта по серверной механике профиля машины.
+- `adapter_id`;
+- `title`;
+- `description`;
+- `published`;
+- `version`;
+- `adapter_type`;
+- `target_os`;
+- `target_arch`;
+- `protocol_version`;
+- `download_url`;
+- `sha256`;
+- `file_name`.
 
-Что уже есть:
+Смысл этого слоя:
 
-- конфиг `core-agent`;
-- локальное хранение identity и токенов;
-- persisted state для connectivity;
-- локальный каталог адаптеров с descriptor;
-- server-side редактор профиля агента через diagnostics API;
-- сохранение `machine_profile` и `adapter_manifests` в `agent.Config`;
-- сохранение meaningful heartbeat fingerprint и последнего meaningful state в модели агента.
+- оператор выбирает только `adapter_id`;
+- полный manifest живёт только на сервере;
+- heartbeat-ответ агенту собирается из server-side каталога;
+- UI больше не просит оператора заполнять manifest-поля руками.
 
-Что еще не закрыто:
+### Demo seed catalog
 
-- нет отдельного SQLite-хранилища под snapshots/outbox/fiscal_links;
-- нет server-side справочника опубликованных бинарников с полным жизненным циклом релизов.
-
-### Phase 2. HostInfo и кассовое ПО
-
-Статус: хороший рабочий вертикальный срез.
-
-Что уже есть:
-
-- поиск `AppData`;
-- чтение `serverUrl` из `iiko/syrve cashserver`;
-- `TeamViewerID`, `LiteManagerID`, `RustDeskID`, `AnyDeskID`;
-- `inventory.known_components` как источник признаков `iiko/syrve`;
-- server-side рекомендации профиля машины по `host_info`, `known_components`, remote IDs и `cash_server_url`.
-
-Что еще не закрыто:
-
-- нет отдельного `POS`-адаптера для `iiko/syrve`;
-- нет сбора логов, конфигов и диагностики кассового ПО как отдельного домена.
-
-### Fiscal adapters
-
-Статус: готовы к предметным полевым smoke-тестам как отдельные бинарники.
-
-Что уже есть:
-
-- `fiscal-atol`: `health/run`, работа через `fptr10.dll`, выбор ветки драйвера;
-- `fiscal-mitsu`: `health/run`, COM/TCP, Mitsu-протокол;
-- `fiscal-shtrih`: `health/run`, COM-драйвер `AddIn.DrvFR`;
-- server-side рекомендации `adapter_manifests` по inventory и правилам `signature_key`.
-
-Что еще не закрыто:
-
-- автоматический запуск из `core-agent`;
-- унифицированная оркестрация `health/run` на стороне `core-agent`;
-- fallback-обогащение host metadata внутри предметных адаптеров.
-
-### Saga/task execution
-
-Статус: не готово как отдельная подсистема.
-
-Что уже есть:
-
-- базовый `saga.Runner`;
-- один рабочий workflow `self_update`.
-
-Что еще не закрыто:
-
-- нет отдельного `saga-runner` адаптера;
-- нет безопасного task-контракта для локальных действий;
-- нет operator flow для согласования и запуска task-адаптеров.
-
-## Meaningful heartbeat и observation flow
-
-### Что было проблемой
-
-Раньше сервер на каждом heartbeat публиковал `agent.observation.requested`.
-Из-за этого:
-
-- лента наблюдений засорялась однотипными heartbeat-событиями;
-- журналы и feed не показывали реальную предметную динамику;
-- `payload_hash`, рассчитанный от полного JSON, реагировал на летучие поля вроде `current_time` и `v_time`.
-
-### Что сделано
-
-Сервер теперь разделяет:
-
-- heartbeat как канал обновления liveness и последних snapshot-данных;
-- observation как событие только для meaningful change.
-
-На каждом heartbeat сервер всегда обновляет:
-
-- `last_heartbeat`;
-- `last_observed_at`;
-- `latest_inventory_snapshot`;
-- `latest_adapter_statuses`.
-
-Дополнительно для агента сохраняются:
-
-- `last_meaningful_heartbeat_at`;
-- `last_meaningful_observed_at`;
-- `last_meaningful_heartbeat_fingerprint`;
-- `last_meaningful_heartbeat_state`.
-
-### Как определяется meaningful change
-
-Сервер строит нормализованный fingerprint по состоянию, которое действительно влияет на доменную обработку и рекомендации адаптеров.
-
-В fingerprint входят:
-
-- host info;
-- `known_components`;
-- remote IDs;
-- `url_rms`, `crm_id`, другие существенные server-side идентификаторы;
-- фискальные данные;
-- `signature_key` и `classification` для COM-устройств;
-- существенные `adapter_statuses`.
-
-Из fingerprint исключаются летучие поля heartbeat, например:
-
-- `current_time`;
-- `v_time`;
-- `collected_at`;
-- `updated_at`;
-- прочий heartbeat-only шум, который не меняет доменный смысл состояния.
-
-### Поведение после изменений
-
-- первый heartbeat после регистрации всегда считается meaningful;
-- heartbeat без meaningful change не создает observation-сущность;
-- heartbeat без meaningful change не публикует `agent.observation.requested`;
-- heartbeat без meaningful change не засоряет feed и логирование как доменное событие;
-- heartbeat с meaningful change публикует observation и попадает в обычный доменный контур;
-- в логах явно различаются `heartbeat_result=noop` и `heartbeat_result=meaningful_change`.
-
-Это означает, что UI продолжает видеть свежие `latest_inventory_snapshot` и `latest_adapter_statuses`, но observation-лента теперь показывает только реально значимые изменения.
-
-## Профиль машины и рекомендации адаптеров
-
-### Что теперь есть на сервере
-
-На сервере реализована модель operator flow поверх inventory:
-
-- рекомендованный профиль машины;
-- причины рекомендации;
-- рекомендованные `adapter_manifests`;
-- подтвержденный профиль и подтвержденный набор manifests;
-- эффективный набор manifests, который реально попадет в heartbeat-ответ;
-- список кандидатов для правил `COM signature_key`.
-
-Источники рекомендаций:
-
-- `inventory.host_info`;
-- `inventory.known_components`;
-- `cash_server_url`;
-- признаки `iiko/syrve`;
-- `COM signature_key/classification`;
-- server-side правила по сигнатурам;
-- уже известные server-side признаки типов устройств.
-
-### Профили машины
-
-Сервер поддерживает как минимум следующие профили:
-
-- `unknown`;
-- `service-workstation`;
-- `pos-workstation`;
-- `fiscal-workstation`;
-- `hybrid-pos-fiscal`.
-
-### Adapter manifests
-
-Серверный каталог рекомендаций уже умеет предлагать минимум:
+Для локальной разработки и тестов сервер поднимает demo-каталог:
 
 - `fiscal-atol`;
 - `fiscal-mitsu`;
 - `fiscal-shtrih`.
 
-Если машина выглядит как `POS`, но отдельный `POS`-адаптер еще не опубликован в серверном каталоге, UI показывает предупреждение. Это осознанное состояние: механика профиля и сохранения конфигурации уже есть, но отдельный бинарник POS-адаптера будет закрываться следующим этапом.
+Для этих записей используются `example.test` URL и тестовые `sha256`.
+Это осознанный demo-режим: в репозитории нет боевых `.exe`, поэтому перед реальной эксплуатацией эти значения должны быть заменены на настоящие опубликованные бинарники.
 
-## COM-порты и правила `signature_key`
+## Что хранится у агента в config
 
-### Что уже было
+В `agent.config` основной сценарий теперь хранит только выбор оператора:
 
-`inventory.com_ports` уже содержит:
+- `selected_adapter_ids`.
 
-- `friendly_name`, `description`, `manufacturer`, `class`, `service`, `location`;
-- `hardware_ids[]`, `compatible_ids[]`;
-- `vendor_id`, `product_id`;
-- нормализованную сигнатуру `signature_key`;
-- `classification`, если сигнатура уже известна.
+Это отделено от published catalog:
 
-### Что добавлено на сервере
+- конфиг агента хранит только компактный выбор;
+- published catalog хранит полные manifest-поля;
+- при heartbeat сервер резолвит `selected_adapter_ids` в полный `adapter_manifests`.
 
-Теперь сервер хранит правила по `signature_key`.
-Оператор может прямо из diagnostics UI:
+Legacy-поле `adapter_manifests` остаётся только как fallback для уже сохранённых старых конфигураций.
+После следующего сохранения через новый UI сервер нормализует конфиг на `selected_adapter_ids`.
 
-- выбрать observed `signature_key`;
-- указать `device_type`;
-- указать `profile_hint`;
-- указать `suggested_adapter`;
-- сохранить правило для следующих машин.
+## Новый operator flow
 
-После сохранения правила сервер начинает использовать его при расчете рекомендаций профиля и manifests.
+### Happy-path
 
-### Практический результат
+1. Агент проходит bootstrap и начинает слать heartbeat.
+2. Оператор открывает карточку агента.
+3. Сервер отдаёт:
+   - список `available_adapters`;
+   - текущий `selected_adapter_ids`;
+   - read-only подсказки, если сервер что-то рекомендует по inventory.
+4. Оператор отмечает галки напротив нужных адаптеров.
+5. UI отправляет простой payload:
 
-Цепочка теперь выглядит так:
+```json
+{
+  "selected_adapter_ids": ["fiscal-atol", "fiscal-shtrih"]
+}
+```
 
-1. Агент присылает `signature_key` и device metadata.
-2. UI показывает observed-кандидаты и текущее server-side правило, если оно уже есть.
-3. Оператор подтверждает правило.
-4. Сервер сохраняет `signature_key -> device_type/profile_hint/adapter`.
-5. Следующие машины с той же сигнатурой получают более точную рекомендацию автоматически.
+6. Сервер валидирует выбор.
+7. Сервер сохраняет `selected_adapter_ids` в конфиг агента.
+8. Следующий heartbeat возвращает агенту:
 
-## Единый операторский флоу
+```json
+{
+  "status": "ok",
+  "adapter_manifests": [
+    {
+      "adapter_id": "fiscal-atol",
+      "adapter_type": "fiscal-atol",
+      "version": "0.1.0-demo",
+      "target_os": "windows",
+      "target_arch": "amd64",
+      "protocol_version": "1",
+      "download_url": "https://example.test/adapters/fiscal-atol-0.1.0-demo.exe",
+      "sha256": "...",
+      "file_name": "fiscal-atol-0.1.0-demo.exe"
+    }
+  ]
+}
+```
 
-### Фактический рабочий сценарий
+### Что видит оператор в UI
 
-1. Оператор открывает раздел `Агенты` и видит новый `sssruner`.
-2. Если статус регистрации `pending_approval`, оператор подтверждает bootstrap в карточке диагностики.
-3. После первого heartbeat UI показывает `inventory`, `adapter_statuses` и блок operator flow.
-4. Сервер рассчитывает meaningful heartbeat state и рекомендацию профиля машины.
-5. UI показывает:
-   - рекомендованный профиль;
-   - причины рекомендации;
-   - рекомендуемые `adapter_manifests`;
-   - предупреждения по отсутствующим server-side шаблонам;
-   - observed `signature_key` для COM-устройств.
-6. Оператор:
-   - подтверждает профиль как есть;
-   - либо корректирует профиль;
-   - при необходимости вручную правит итоговый набор manifests;
-   - при необходимости сохраняет правило по `signature_key`.
-7. Сервер сохраняет итоговую конфигурацию в `agent.Config`.
-8. Следующий heartbeat отдает агенту актуальные `adapter_manifests`.
-9. Следующий heartbeat после применения manifests показывает `adapter_statuses` уже по назначенным адаптерам.
-10. В observation/feed попадают только meaningful change, а не каждый heartbeat.
+В карточке агента показывается:
 
-### Что видит оператор в diagnostics UI
+- чекбокс;
+- имя адаптера;
+- краткое описание;
+- статус публикации;
+- служебные теги вроде версии и целевой платформы.
 
-В карточке diagnostics оператор теперь видит:
+Если адаптер нельзя выбрать, UI показывает причину:
 
-- состояние последнего meaningful heartbeat;
-- рекомендованный профиль машины;
-- причины рекомендации;
-- рекомендуемые manifests;
-- сохраненный профиль и сохраненные manifests;
-- effective manifests, которые реально уйдут агенту;
-- кандидаты `COM signature_key`;
-- форму сохранения server-side правила по сигнатуре.
+- адаптер не опубликован;
+- manifest неполон.
 
-## Готовность к первому боевому тесту
+## Валидация
 
-### Что уже можно тестировать вживую
+Сервер не даёт сохранить выбор, если:
 
-- bootstrap-регистрацию и approval;
-- первый meaningful heartbeat после регистрации;
-- noop heartbeat без создания observation;
-- inventory и `host_info`;
-- remote IDs;
-- enriched COM inventory;
-- сохранение server-side профиля машины;
-- выдачу `adapter_manifests` в heartbeat-ответе;
-- появление `adapter_statuses` после назначения адаптеров;
-- сохранение правил по `signature_key`.
+- `adapter_id` отсутствует в published catalog;
+- запись не опубликована;
+- у записи неполный manifest.
 
-### Что еще нельзя считать production-ready
+Под неполным manifest в текущем этапе понимается отсутствие обязательных полей, необходимых для выдачи агенту:
 
-- subprocess lifecycle адаптеров внутри `core-agent`;
-- отдельный POS-адаптер для `iiko/syrve`;
-- автоматическое снятие лишних адаптеров по фактическому жизненному циклу локального процесса;
-- task execution через отдельный `saga-runner`.
+- `adapter_id`;
+- `version`;
+- `adapter_type`;
+- `target_os`;
+- `target_arch`;
+- `protocol_version`;
+- `download_url`;
+- `sha256`;
+- `file_name`.
 
-### Итоговый вердикт
+## Рекомендации, machine profile и signature rules
 
-К первому боевому тесту готов именно законченный inventory-first/operator-driven контур:
+Серверные рекомендации по inventory не удалены полностью, но переведены во вторичный режим.
 
-- регистрация;
-- meaningful heartbeat;
-- server-side рекомендация профиля;
-- ручное подтверждение оператором;
-- сохранение manifests;
-- возврат manifests агенту;
-- контроль последующих `adapter_statuses`.
+Что это значит:
 
-Не готово к следующему этапу автоматизации:
+- recommendation logic можно использовать как read-only hint;
+- `machine profile` больше не является обязательным действием оператора;
+- `signature_key` rules больше не входят в happy-path назначения адаптеров;
+- оператор может выполнить базовую задачу назначения адаптеров, вообще не заходя в эти сущности.
 
-- полный runtime lifecycle адаптеров внутри `core-agent`;
-- отдельный `POS`-адаптер;
-- отдельный `saga-runner`.
+Если в будущем понадобится углублённая классификация COM-устройств, её можно развивать отдельно, не возвращая raw manifest editor в основной сценарий.
 
-## Минимальный backlog перед `saga-runner`
+## Итог
 
-Приоритет `P0`:
+Новый flow делает ровно одно действие основным:
 
-- subprocess lifecycle для адаптеров в `core-agent`;
-- published-каталог серверных бинарников и шаблонов доставки;
-- отдельный `POS`-адаптер для `iiko/syrve`;
-- автоматическое снятие неактуальных адаптеров при смене профиля машины.
+- сохранить набор `selected_adapter_ids`.
 
-Приоритет `P1`:
+Всё остальное теперь либо внутренний механизм сервера, либо вторичный диагностический hint.
 
-- расширение правил `signature_key` на банковские терминалы, сканеры, весы;
-- health/run orchestration для предметных адаптеров;
-- richer-профили машин с типизированными server-side шаблонами.
+Это снижает операторскую сложность и сохраняет правильный контракт с агентом:
 
-Приоритет `P2`:
-
-- отдельный `saga-runner` адаптер;
-- task-контракт и операторское согласование локальных действий.
+- UI простой;
+- сервер хранит published catalog отдельно;
+- агент по heartbeat продолжает получать полноценный `adapter_manifests`.

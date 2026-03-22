@@ -16,9 +16,14 @@ import (
 )
 
 type AgentOperatorFlowService interface {
+	ResolveAgentAdapterManifests(ctx context.Context, agent *models.Agent) ([]api.AdapterManifestDTO, error)
 	BuildOperatorFlow(ctx context.Context, agent *models.Agent) (*api.AgentOperatorFlowDTO, error)
-	SaveMachineProfile(ctx context.Context, agentUUID string, req api.SaveAgentMachineProfileRequestDTO, actor string) error
+	SaveAdapterSelection(ctx context.Context, agentUUID string, req api.SaveAgentAdapterSelectionRequestDTO, actor string) error
 	SaveCOMSignatureRule(ctx context.Context, req api.UpsertAgentCOMSignatureRuleRequestDTO, actor string) error
+}
+
+type AgentAdapterManifestResolver interface {
+	ResolveAgentAdapterManifests(ctx context.Context, agent *models.Agent) ([]api.AdapterManifestDTO, error)
 }
 
 type agentOperatorFlowService struct {
@@ -105,6 +110,18 @@ func (s *agentOperatorFlowService) BuildOperatorFlow(ctx context.Context, agent 
 
 	inventory, inventoryWarning := decodeInventorySnapshot(agent.LatestInventorySnapshot)
 	savedConfig, configWarning := decodeAgentConfig(agent.Config)
+	availableAdapters, err := s.listPublishedAdapterOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	selectedAdapterIDs, legacySelection := selectedAdapterIDsFromConfig(savedConfig)
+	effectiveManifests, selectionWarnings, err := s.resolveSelectedAdapterManifests(ctx, selectedAdapterIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(effectiveManifests) == 0 && len(savedConfig.SelectedAdapterIDs) == 0 && len(savedConfig.AdapterManifests) > 0 {
+		effectiveManifests = normalizeManifestList(savedConfig.AdapterManifests)
+	}
 
 	signatureRules, err := s.loadSignatureRules(ctx, inventory)
 	if err != nil {
@@ -120,14 +137,21 @@ func (s *agentOperatorFlowService) BuildOperatorFlow(ctx context.Context, agent 
 	}
 
 	recommendedProfile, recommendedReasons, recommendedManifests, signatureCandidates, warnings := buildMachineRecommendation(agent, inventory, meaningfulSnapshot, signatureRules)
+	recommendedAdapterIDs := manifestAdapterIDs(recommendedManifests)
 	if inventoryWarning != "" {
 		warnings = append(warnings, inventoryWarning)
 	}
 	if configWarning != "" {
 		warnings = append(warnings, configWarning)
 	}
-	if len(recommendedManifests) > 0 {
-		warnings = append(warnings, "Рекомендованные manifest-шаблоны не содержат download_url. Перед сохранением оператор должен заполнить адреса доставки бинарников.")
+	if len(selectionWarnings) > 0 {
+		warnings = append(warnings, selectionWarnings...)
+	}
+	if legacySelection {
+		warnings = append(warnings, "У агента ещё сохранён legacy-набор adapter_manifests. Следующее сохранение переведёт конфигурацию на selected_adapter_ids.")
+	}
+	if len(availableAdapters) == 0 {
+		warnings = append(warnings, "Каталог опубликованных адаптеров пока пуст.")
 	}
 
 	meaningfulState, _ := decodeJSONAny(agent.LastMeaningfulHeartbeatState)
@@ -148,31 +172,35 @@ func (s *agentOperatorFlowService) BuildOperatorFlow(ctx context.Context, agent 
 			LastMeaningfulObservedAt:  agent.LastMeaningfulObservedAt,
 			LastMeaningfulState:       meaningfulState,
 		},
+		AvailableAdapters:           slices.Clip(availableAdapters),
+		SelectedAdapterIDs:          slices.Clip(selectedAdapterIDs),
+		RecommendedAdapterIDs:       slices.Clip(recommendedAdapterIDs),
 		RecommendedProfile:          recommendedProfile,
 		RecommendedReasons:          slices.Clip(recommendedReasons),
 		RecommendedAdapterManifests: slices.Clip(recommendedManifests),
 		SavedProfile:                savedProfile,
 		SavedReasons:                slices.Clip(savedReasons),
 		SavedAdapterManifests:       slices.Clip(savedManifests),
-		EffectiveAdapterManifests:   slices.Clip(savedManifests),
+		EffectiveAdapterManifests:   slices.Clip(effectiveManifests),
 		SignatureCandidates:         slices.Clip(signatureCandidates),
 		Warnings:                    slices.Clip(uniqueNonEmptyStrings(warnings)),
 	}, nil
 }
 
-func (s *agentOperatorFlowService) SaveMachineProfile(ctx context.Context, agentUUID string, req api.SaveAgentMachineProfileRequestDTO, actor string) error {
+func (s *agentOperatorFlowService) SaveAdapterSelection(ctx context.Context, agentUUID string, req api.SaveAgentAdapterSelectionRequestDTO, actor string) error {
 	agentUUID = strings.TrimSpace(agentUUID)
 	if agentUUID == "" {
 		return errors.New("uuid агента обязателен")
 	}
-
-	profile := sanitizeMachineProfile(req.Profile)
-	if profile.Key == "" {
-		return errors.New("ключ профиля машины обязателен")
-	}
+	_ = actor
 
 	var agent models.Agent
 	if err := s.db.WithContext(ctx).Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
+		return err
+	}
+
+	selectedAdapterIDs, err := s.validateSelectedAdapterIDs(ctx, req.SelectedAdapterIDs)
+	if err != nil {
 		return err
 	}
 
@@ -180,18 +208,9 @@ func (s *agentOperatorFlowService) SaveMachineProfile(ctx context.Context, agent
 	if err != nil {
 		return err
 	}
-
-	now := time.Now().UTC()
-	config.MachineProfile = &api.AgentMachineProfileConfigDTO{
-		Key:         profile.Key,
-		Title:       profile.Title,
-		Summary:     profile.Summary,
-		Source:      defaultStr(profile.Source, "operator"),
-		ConfirmedAt: &now,
-		ConfirmedBy: strings.TrimSpace(actor),
-		Reasons:     uniqueNonEmptyStrings(req.Reasons),
-	}
-	config.AdapterManifests = normalizeManifestList(req.AdapterManifests)
+	config.MachineProfile = nil
+	config.SelectedAdapterIDs = selectedAdapterIDs
+	config.AdapterManifests = nil
 
 	raw, err := json.Marshal(config)
 	if err != nil {

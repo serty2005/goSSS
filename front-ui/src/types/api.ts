@@ -1354,8 +1354,25 @@ export interface AgentCOMSignatureCandidateDTO {
   existing_rule?: AgentCOMSignatureRuleDTO | null;
 }
 
+export interface PublishedAgentAdapterOptionDTO {
+  adapter_id: string;
+  title: string;
+  description?: string;
+  published: boolean;
+  selectable: boolean;
+  status_text: string;
+  disabled_reason?: string;
+  version?: string;
+  adapter_type?: string;
+  target_os?: string;
+  target_arch?: string;
+}
+
 export interface AgentOperatorFlowDTO {
   meaningful_heartbeat?: AgentHeartbeatMeaningfulStateDTO | null;
+  available_adapters?: PublishedAgentAdapterOptionDTO[];
+  selected_adapter_ids?: string[];
+  recommended_adapter_ids?: string[];
   recommended_profile?: AgentMachineProfileDTO | null;
   recommended_reasons?: string[];
   recommended_adapter_manifests?: AgentAdapterManifestDTO[];
@@ -1377,10 +1394,8 @@ export interface AgentDiagnosticsDetailsDTO {
   operator_flow?: AgentOperatorFlowDTO | null;
 }
 
-export interface SaveAgentMachineProfilePayload {
-  profile: AgentMachineProfileDTO;
-  reasons?: string[];
-  adapter_manifests?: AgentAdapterManifestDTO[];
+export interface SaveAgentAdapterSelectionPayload {
+  selected_adapter_ids?: string[];
 }
 
 export interface UpsertAgentCOMSignatureRulePayload {

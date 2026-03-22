@@ -345,12 +345,13 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ownerResolver,
 		hubDetector,
 	)
+	agentOperatorFlow := services.NewAgentOperatorFlowService(app.DB)
 
 	return Services{
 		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentObservation:        obsService,
-		AgentService:            services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus),
-		AgentOperatorFlow:       services.NewAgentOperatorFlowService(app.DB),
+		AgentService:            services.NewAgentService(app.Logger.With("component", "agent_service"), repos.AgentRepo, repos.CompanyRepo, app.EventBus, agentOperatorFlow),
+		AgentOperatorFlow:       agentOperatorFlow,
 		TaskResolutionService:   services.NewTaskResolutionService(app.Logger.With("component", "task_resolution"), transactor, app.EventBus, repos.TaskRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
 		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),

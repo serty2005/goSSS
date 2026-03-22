@@ -35,18 +35,31 @@ type AgentService interface {
 }
 
 type agentServiceImpl struct {
-	logger      logger.LoggerInterface
-	agentRepo   repositories.AgentRepo
-	companyRepo company.Repository
-	bus         eventbus.EventBus
+	logger                  logger.LoggerInterface
+	agentRepo               repositories.AgentRepo
+	companyRepo             company.Repository
+	bus                     eventbus.EventBus
+	adapterManifestResolver AgentAdapterManifestResolver
 }
 
-func NewAgentService(logger logger.LoggerInterface, agentRepo repositories.AgentRepo, companyRepo company.Repository, bus eventbus.EventBus) AgentService {
+func NewAgentService(
+	logger logger.LoggerInterface,
+	agentRepo repositories.AgentRepo,
+	companyRepo company.Repository,
+	bus eventbus.EventBus,
+	adapterManifestResolvers ...AgentAdapterManifestResolver,
+) AgentService {
+	var adapterManifestResolver AgentAdapterManifestResolver
+	if len(adapterManifestResolvers) > 0 {
+		adapterManifestResolver = adapterManifestResolvers[0]
+	}
+
 	return &agentServiceImpl{
-		logger:      logger,
-		agentRepo:   agentRepo,
-		companyRepo: companyRepo,
-		bus:         bus,
+		logger:                  logger,
+		agentRepo:               agentRepo,
+		companyRepo:             companyRepo,
+		bus:                     bus,
+		adapterManifestResolver: adapterManifestResolver,
 	}
 }
 
@@ -224,9 +237,9 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 		manifests := make([]api.AdapterManifestDTO, 0)
 		response.AdapterManifests = &manifests
 
-		manifests, err := adapterManifestsFromConfig(agent)
+		manifests, err := s.resolveAdapterManifests(ctx, agent)
 		if err != nil {
-			s.logger.Warn("Не удалось прочитать adapter_manifests из конфигурации агента", "uuid", targetUUID, "error", err)
+			s.logger.Warn("Не удалось собрать adapter_manifests для агента", "uuid", targetUUID, "error", err)
 		} else {
 			response.AdapterManifests = &manifests
 		}
@@ -243,6 +256,13 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 	}
 
 	return response, nil
+}
+
+func (s *agentServiceImpl) resolveAdapterManifests(ctx context.Context, agent *models.Agent) ([]api.AdapterManifestDTO, error) {
+	if s.adapterManifestResolver != nil {
+		return s.adapterManifestResolver.ResolveAgentAdapterManifests(ctx, agent)
+	}
+	return adapterManifestsFromConfig(agent)
 }
 
 func adapterManifestsFromConfig(agent *models.Agent) ([]api.AdapterManifestDTO, error) {

@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	dbpkg "etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/logger"
 	infrarepos "etalon-server/internal/infra/repositories"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,9 +88,12 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 				RemoteAddr string `json:"remote_addr"`
 			} `json:"recent_registrations"`
 			OperatorFlow struct {
-				RecommendedProfile struct {
-					Key string `json:"key"`
-				} `json:"recommended_profile"`
+				AvailableAdapters []struct {
+					AdapterID  string `json:"adapter_id"`
+					Published  bool   `json:"published"`
+					Selectable bool   `json:"selectable"`
+				} `json:"available_adapters"`
+				SelectedAdapterIDs []string `json:"selected_adapter_ids"`
 			} `json:"operator_flow"`
 		} `json:"data"`
 	}
@@ -106,7 +111,13 @@ func TestAgentDiagnosticsHandler_ВозвращаетДеталиРегистр�
 	require.Equal(t, "atol", body.Data.LatestAdapterStatus[0]["adapter_id"])
 	require.Len(t, body.Data.RecentRegistrations, 1)
 	require.Equal(t, "10.0.0.10", body.Data.RecentRegistrations[0].RemoteAddr)
-	require.NotEmpty(t, body.Data.OperatorFlow.RecommendedProfile.Key)
+	require.Len(t, body.Data.OperatorFlow.AvailableAdapters, 3)
+	availableAdapterIDs := make([]string, 0, len(body.Data.OperatorFlow.AvailableAdapters))
+	for _, item := range body.Data.OperatorFlow.AvailableAdapters {
+		availableAdapterIDs = append(availableAdapterIDs, item.AdapterID)
+	}
+	require.Contains(t, availableAdapterIDs, "fiscal-atol")
+	require.Empty(t, body.Data.OperatorFlow.SelectedAdapterIDs)
 }
 
 func TestAgentDiagnosticsHandler_ListAgentsФильтруетПоСтатусуРегистрации(t *testing.T) {
@@ -226,7 +237,7 @@ func TestAgentDiagnosticsHandler_ApproveRegistrationПодтверждаетОж
 	require.Equal(t, "user-42", stored.RegistrationApprovedBy)
 }
 
-func TestAgentDiagnosticsHandler_SaveMachineProfileОбновляетConfigИВлияетНаHeartbeatResponse(t *testing.T) {
+func TestAgentDiagnosticsHandler_SaveAdapterSelectionОбновляетConfigИВлияетНаHeartbeatResponse(t *testing.T) {
 	ctx := t.Context()
 	db := setupAgentDiagnosticsDB(t)
 	agentUUID := "agent-profile-save"
@@ -243,22 +254,9 @@ func TestAgentDiagnosticsHandler_SaveMachineProfileОбновляетConfigИВ�
 	handler.RegisterRoutes(router)
 
 	body := strings.NewReader(`{
-		"profile": {
-			"key": "hybrid-pos-fiscal",
-			"title": "Гибридная POS/фискальная станция",
-			"summary": "Тестовое сохранение профиля",
-			"source": "operator"
-		},
-		"reasons": ["Оператор подтвердил профиль вручную"],
-		"adapter_manifests": [
-			{
-				"adapter_id": "fiscal-atol",
-				"download_url": "https://example.test/fiscal-atol.exe",
-				"sha256": "abc123"
-			}
-		]
+		"selected_adapter_ids": ["fiscal-atol"]
 	}`)
-	req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/profile", body)
+	req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/adapter-selection", body)
 	req = req.WithContext(context.WithValue(req.Context(), contextkeys.UserIDContextKey, "user-77"))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -270,14 +268,14 @@ func TestAgentDiagnosticsHandler_SaveMachineProfileОбновляетConfigИВ�
 
 	var config api.AgentConfigDTO
 	require.NoError(t, json.Unmarshal(stored.Config, &config))
-	require.NotNil(t, config.MachineProfile)
-	require.Equal(t, "hybrid-pos-fiscal", config.MachineProfile.Key)
-	require.Len(t, config.AdapterManifests, 1)
-	require.Equal(t, "fiscal-atol", config.AdapterManifests[0].AdapterID)
+	require.Nil(t, config.MachineProfile)
+	require.Equal(t, []string{"fiscal-atol"}, config.SelectedAdapterIDs)
+	require.Empty(t, config.AdapterManifests)
 
 	agentRepo := infrarepos.NewAgentRepo(db)
 	bus := eventbus.NewInMemoryEventBus(16)
-	agentService := services.NewAgentService(logger.New("", "test", "error", true), agentRepo, nil, bus)
+	operatorFlow := services.NewAgentOperatorFlowService(db)
+	agentService := services.NewAgentService(logger.New("", "test", "error", true), agentRepo, nil, bus, operatorFlow)
 
 	resp, err := agentService.ProcessData(ctx, agentUUID, &api.AgentDataDTO{
 		AgentUUID:   agentUUID,
@@ -289,7 +287,79 @@ func TestAgentDiagnosticsHandler_SaveMachineProfileОбновляетConfigИВ�
 	require.NotNil(t, resp.AdapterManifests)
 	require.Len(t, *resp.AdapterManifests, 1)
 	require.Equal(t, "fiscal-atol", (*resp.AdapterManifests)[0].AdapterID)
-	require.Equal(t, "https://example.test/fiscal-atol.exe", (*resp.AdapterManifests)[0].DownloadURL)
+	require.Equal(t, "https://example.test/adapters/fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].DownloadURL)
+	require.Equal(t, "0.1.0-demo", (*resp.AdapterManifests)[0].Version)
+	require.Equal(t, "fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].FileName)
+}
+
+func TestAgentDiagnosticsHandler_SaveAdapterSelectionВалидируетPublishedCatalog(t *testing.T) {
+	tests := []struct {
+		name          string
+		adapter       models.PublishedAgentAdapter
+		expectedError string
+	}{
+		{
+			name: "неопубликованный адаптер",
+			adapter: models.PublishedAgentAdapter{
+				AdapterID:       "draft-adapter",
+				Title:           "Черновой адаптер",
+				Description:     "Не должен выбираться",
+				Published:       false,
+				Version:         "0.1.0",
+				AdapterType:     "draft-adapter",
+				TargetOS:        "windows",
+				TargetArch:      "amd64",
+				ProtocolVersion: "1",
+				DownloadURL:     "https://example.test/adapters/draft.exe",
+				SHA256:          "abc",
+				FileName:        "draft.exe",
+			},
+			expectedError: "не опубликован",
+		},
+		{
+			name: "неполный manifest",
+			adapter: models.PublishedAgentAdapter{
+				AdapterID:       "broken-adapter",
+				Title:           "Сломанный адаптер",
+				Description:     "Не должен выбираться",
+				Published:       true,
+				Version:         "0.1.0",
+				AdapterType:     "broken-adapter",
+				TargetOS:        "windows",
+				TargetArch:      "amd64",
+				ProtocolVersion: "1",
+				SHA256:          "abc",
+				FileName:        "broken.exe",
+			},
+			expectedError: "manifest неполон",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupAgentDiagnosticsDB(t)
+			agentUUID := "agent-invalid-selection"
+			require.NoError(t, db.Create(&models.Agent{
+				UUID:     agentUUID,
+				Type:     "sssruner",
+				Status:   models.StatusActive,
+				Hostname: "cash-invalid",
+			}).Error)
+			require.NoError(t, db.Create(&tt.adapter).Error)
+
+			handler := newAgentDiagnosticsHandler(db)
+			router := chi.NewRouter()
+			handler.RegisterRoutes(router)
+
+			body := strings.NewReader(`{"selected_adapter_ids":["` + tt.adapter.AdapterID + `"]}`)
+			req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/adapter-selection", body)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Contains(t, rec.Body.String(), tt.expectedError)
+		})
+	}
 }
 
 func newAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
@@ -299,8 +369,16 @@ func newAgentDiagnosticsHandler(db *gorm.DB) *AgentDiagnosticsHandler {
 func setupAgentDiagnosticsDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Agent{}, &models.AgentRegistrationAttempt{}, &models.AgentCOMSignatureRule{}))
+	require.NoError(t, db.AutoMigrate(
+		&models.Agent{},
+		&models.AgentRegistrationAttempt{},
+		&models.AgentCOMSignatureRule{},
+		&models.PublishedAgentAdapter{},
+		&models.AgentCommand{},
+	))
+	require.NoError(t, dbpkg.EnsureDefaultPublishedAgentAdapters(db))
 	return db
 }

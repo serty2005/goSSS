@@ -35,7 +35,7 @@ func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-diagnostics", h.ListAgents)
 	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
 	r.Post("/agent-diagnostics/{uuid}/approve-registration", h.ApproveRegistration)
-	r.Post("/agent-diagnostics/{uuid}/profile", h.SaveMachineProfile)
+	r.Post("/agent-diagnostics/{uuid}/adapter-selection", h.SaveAdapterSelection)
 	r.Post("/agent-diagnostics/{uuid}/signature-rules", h.UpsertCOMSignatureRule)
 }
 
@@ -203,7 +203,7 @@ func (h *AgentDiagnosticsHandler) buildAgentDiagnosticsDetails(ctx context.Conte
 	return out, nil
 }
 
-func (h *AgentDiagnosticsHandler) SaveMachineProfile(w http.ResponseWriter, r *http.Request) {
+func (h *AgentDiagnosticsHandler) SaveAdapterSelection(w http.ResponseWriter, r *http.Request) {
 	agentUUID := strings.TrimSpace(chi.URLParam(r, "uuid"))
 	if agentUUID == "" {
 		response.RespondWithError(w, http.StatusBadRequest, "UUID агента обязателен")
@@ -214,14 +214,14 @@ func (h *AgentDiagnosticsHandler) SaveMachineProfile(w http.ResponseWriter, r *h
 		return
 	}
 
-	var dto api.SaveAgentMachineProfileRequestDTO
+	var dto api.SaveAgentAdapterSelectionRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, "Неверный формат тела запроса")
 		return
 	}
 
 	actor := strings.TrimSpace(userIDFromContext(r.Context()))
-	if err := h.operatorFlow.SaveMachineProfile(r.Context(), agentUUID, dto, actor); err != nil {
+	if err := h.operatorFlow.SaveAdapterSelection(r.Context(), agentUUID, dto, actor); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
 			return
@@ -236,7 +236,7 @@ func (h *AgentDiagnosticsHandler) SaveMachineProfile(w http.ResponseWriter, r *h
 			response.RespondWithError(w, http.StatusNotFound, "Агент не найден")
 			return
 		}
-		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённую диагностику агента")
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить обновлённый список адаптеров агента")
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, out)

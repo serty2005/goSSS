@@ -545,13 +545,14 @@ type RegistrationRequestDTO struct {
 
 // AgentConfigDTO - структура конфигурации, отправляемая агенту.
 type AgentConfigDTO struct {
-	EtalonServerURL  string                        `json:"etalon_server_url"`
-	Mode             string                        `json:"mode"`
-	Intervals        IntervalsDTO                  `json:"intervals"`
-	Zabbix           ZabbixConfigDTO               `json:"zabbix"`
-	Workstation      WorkstationCfgDTO             `json:"workstation,omitempty"`
-	MachineProfile   *AgentMachineProfileConfigDTO `json:"machine_profile,omitzero"`
-	AdapterManifests []AdapterManifestDTO          `json:"adapter_manifests,omitempty"`
+	EtalonServerURL    string                        `json:"etalon_server_url"`
+	Mode               string                        `json:"mode"`
+	Intervals          IntervalsDTO                  `json:"intervals"`
+	Zabbix             ZabbixConfigDTO               `json:"zabbix"`
+	Workstation        WorkstationCfgDTO             `json:"workstation,omitempty"`
+	MachineProfile     *AgentMachineProfileConfigDTO `json:"machine_profile,omitzero"`
+	SelectedAdapterIDs []string                      `json:"selected_adapter_ids,omitempty"`
+	AdapterManifests   []AdapterManifestDTO          `json:"adapter_manifests,omitempty"`
 }
 
 type AgentMachineProfileConfigDTO struct {

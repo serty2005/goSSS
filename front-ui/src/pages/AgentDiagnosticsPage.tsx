@@ -17,14 +17,12 @@ import {
 import JsonDataViewer from '@/components/common/JsonDataViewer';
 import {
   AgentAdapterStatusDTO,
-  AgentAdapterManifestDTO,
   AgentInventoryCOMPortDTO,
   AgentInventoryHostInfoDTO,
   AgentDiagnosticsDetailsDTO,
   AgentInventorySnapshotDTO,
   AgentRegistrationAttemptDTO,
-  SaveAgentMachineProfilePayload,
-  UpsertAgentCOMSignatureRulePayload,
+  SaveAgentAdapterSelectionPayload,
 } from '@/types/api';
 
 const { Title, Text } = Typography;
@@ -114,14 +112,6 @@ type OperatorFlowStep = {
   description: string;
 };
 
-const hasDetectedComponent = (components: AgentInventorySnapshotDTO['known_components'], keys: string[]) => {
-  const expected = new Set(keys.map((value) => value.trim().toLowerCase()).filter(Boolean));
-  return (components || []).some((item) => {
-    const key = String(item?.key || '').trim().toLowerCase();
-    return Boolean(item?.detected) && expected.has(key);
-  });
-};
-
 const classificationTagColor = (confidence?: string | null) => {
   const normalized = String(confidence || '').trim().toLowerCase();
   if (normalized === 'high') {
@@ -188,19 +178,9 @@ const AgentDiagnosticsPage: React.FC = () => {
     },
   });
 
-  const saveMachineProfileMutation = useMutation({
-    mutationFn: async (payload: SaveAgentMachineProfilePayload) => {
-      const response = await agentDiagnosticsApi.saveMachineProfile(uuid, payload);
-      return response.data;
-    },
-    onSuccess: async (nextDetails) => {
-      await updateDiagnosticsCache(nextDetails);
-    },
-  });
-
-  const saveSignatureRuleMutation = useMutation({
-    mutationFn: async (payload: UpsertAgentCOMSignatureRulePayload) => {
-      const response = await agentDiagnosticsApi.upsertCOMSignatureRule(uuid, payload);
+  const saveAdapterSelectionMutation = useMutation({
+    mutationFn: async (payload: SaveAgentAdapterSelectionPayload) => {
+      const response = await agentDiagnosticsApi.saveAdapterSelection(uuid, payload);
       return response.data;
     },
     onSuccess: async (nextDetails) => {
@@ -250,55 +230,44 @@ const AgentDiagnosticsPage: React.FC = () => {
       });
     }
 
-    if (inventoryComPorts.length > 0) {
-      const classifiedPorts = inventoryComPorts.filter((item) => item.classification?.device_type).length;
-      if (classifiedPorts > 0) {
-        steps.push({
-          type: 'success',
-          title: 'Шаг 3. Сигнатуры COM-оборудования уже частично распознаны',
-          description: `Распознано ${classifiedPorts} из ${inventoryComPorts.length} COM-портов. Можно использовать signature_key для автоматической выдачи нужного адаптера при следующих подключениях.`,
-        });
-      } else {
-        steps.push({
-          type: 'info',
-          title: 'Шаг 3. Зафиксировать сигнатуры COM-устройств',
-          description: 'Словарь сигнатур уже поддерживается агентом, но правила ещё не заполнены. Используйте поля signature_key, hardware_ids и friendly_name для накопления реальных VEN/DEV или VID/PID с клиентских машин.',
-        });
-      }
-    }
+    const availableAdapters = diagnosticsOperatorFlow?.available_adapters || [];
+    const selectedAdapterIDs = diagnosticsOperatorFlow?.selected_adapter_ids || [];
+    const recommendedAdapterIDs = diagnosticsOperatorFlow?.recommended_adapter_ids || [];
+    const effectiveManifests = diagnosticsOperatorFlow?.effective_adapter_manifests || [];
 
-    const cashSoftwareDetected = Boolean(inventoryHostInfo?.cash_server_url) || hasDetectedComponent(inventoryComponents, [
-      'iiko-front',
-      'iiko-cashserver',
-      'syrve-front',
-      'syrve-cashserver',
-    ]);
-    if (cashSoftwareDetected) {
+    if (heartbeatAvailable && availableAdapters.length === 0) {
       steps.push({
-        type: 'info',
-        title: 'Шаг 4. Машина подходит под отдельный POS-адаптер',
-        description: 'По host_info и known_components видно признаки iiko/syrve. Логику сбора логов, конфигов и служебных метаданных этого ПО лучше держать в отдельном адаптере и подключать только на таких кассовых станциях.',
+        type: 'warning',
+        title: 'Шаг 3. Каталог published adapters ещё не подготовлен',
+        description: 'Пока сервер не видит ни одного опубликованного адаптера, оператору нечего назначать этой машине.',
       });
     }
 
-    const effectiveManifests = (diagnosticsOperatorFlow?.effective_adapter_manifests || []) as AgentAdapterManifestDTO[];
-    if (heartbeatAvailable && adapterStatuses.length === 0 && effectiveManifests.length === 0) {
+    if (heartbeatAvailable && recommendedAdapterIDs.length > 0 && selectedAdapterIDs.length === 0) {
+      steps.push({
+        type: 'info',
+        title: 'Шаг 3. Сервер уже подготовил подсказку по адаптерам',
+        description: `По текущему heartbeat сервер рекомендует: ${recommendedAdapterIDs.join(', ')}. Это только подсказка, оператору достаточно отметить нужные published adapters галками.`,
+      });
+    }
+
+    if (heartbeatAvailable && selectedAdapterIDs.length === 0) {
       steps.push({
         type: 'warning',
-        title: 'Шаг 5. Набор адаптеров ещё не назначен',
-        description: 'Inventory уже есть, но итоговый профиль машины ещё не сохранён. Оператору нужно подтвердить профиль и сохранить adapter_manifests.',
+        title: 'Шаг 4. Набор адаптеров ещё не выбран',
+        description: 'Откройте блок "Доступные адаптеры", отметьте нужные published adapters и сохраните выбор.',
       });
     } else if (heartbeatAvailable && adapterStatuses.length === 0 && effectiveManifests.length > 0) {
       steps.push({
         type: 'info',
-        title: 'Шаг 5. Профиль уже сохранён, ожидается применение manifests агентом',
-        description: 'Сервер уже хранит итоговый профиль и adapter_manifests. Следующий heartbeat агента должен забрать manifests и начать отчитываться по adapter_statuses.',
+        title: 'Шаг 4. Выбор сохранён, ожидается следующий heartbeat',
+        description: 'Сервер уже собрал полный adapter_manifests из published catalog. Следующий heartbeat агента должен забрать manifests и начать отчитываться по adapter_statuses.',
       });
     } else if (adapterStatuses.length > 0) {
       steps.push({
         type: 'success',
-        title: 'Шаг 5. Агент уже отчитывается по локальным адаптерам',
-        description: 'После этого можно переходить к полевому тесту предметных адаптеров и только потом к отдельному saga-runner для задач.',
+        title: 'Шаг 4. Агент уже отчитывается по локальным адаптерам',
+        description: 'Назначение адаптеров прошло полный цикл: выбор сохранён, manifests выданы, агент уже показывает adapter_statuses.',
       });
     }
 
@@ -307,10 +276,10 @@ const AgentDiagnosticsPage: React.FC = () => {
     adapterStatuses.length,
     agent?.last_registration_status,
     heartbeatAvailable,
-    inventoryComPorts,
-    inventoryComponents,
-    inventoryHostInfo?.cash_server_url,
+    diagnosticsOperatorFlow?.available_adapters,
     diagnosticsOperatorFlow?.effective_adapter_manifests,
+    diagnosticsOperatorFlow?.recommended_adapter_ids,
+    diagnosticsOperatorFlow?.selected_adapter_ids,
     registrationApprovalConfirmed,
     registrationApprovalPending,
   ]);
@@ -595,12 +564,9 @@ const AgentDiagnosticsPage: React.FC = () => {
 
           <AgentOperatorFlowCard
             operatorFlow={diagnosticsOperatorFlow}
-            saveProfilePending={saveMachineProfileMutation.isPending}
-            saveProfileError={saveMachineProfileMutation.isError ? getErrorMessage(saveMachineProfileMutation.error) : undefined}
-            saveSignaturePending={saveSignatureRuleMutation.isPending}
-            saveSignatureError={saveSignatureRuleMutation.isError ? getErrorMessage(saveSignatureRuleMutation.error) : undefined}
-            onSaveProfile={(payload) => saveMachineProfileMutation.mutate(payload)}
-            onSaveSignatureRule={(payload) => saveSignatureRuleMutation.mutate(payload)}
+            saveSelectionPending={saveAdapterSelectionMutation.isPending}
+            saveSelectionError={saveAdapterSelectionMutation.isError ? getErrorMessage(saveAdapterSelectionMutation.error) : undefined}
+            onSaveSelection={(payload) => saveAdapterSelectionMutation.mutate(payload)}
           />
 
           <Card className="glass-panel" title="Последняя регистрация" size="small">

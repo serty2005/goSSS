@@ -3,7 +3,7 @@ import {
   AgentDiagnosticsDetailsDTO,
   AgentDiagnosticsListItemDTO,
   ApiResponse,
-  SaveAgentMachineProfilePayload,
+  SaveAgentAdapterSelectionPayload,
   UpsertAgentCOMSignatureRulePayload,
 } from '@/types/api';
 
@@ -29,8 +29,8 @@ export const agentDiagnosticsApi = {
     return response.data;
   },
 
-  saveMachineProfile: async (uuid: string, payload: SaveAgentMachineProfilePayload) => {
-    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/profile`, payload);
+  saveAdapterSelection: async (uuid: string, payload: SaveAgentAdapterSelectionPayload) => {
+    const response = await apiClient.post<ApiResponse<AgentDiagnosticsDetailsDTO>>(`/agent-diagnostics/${uuid}/adapter-selection`, payload);
     return response.data;
   },
 
