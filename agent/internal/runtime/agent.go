@@ -107,7 +107,22 @@ func NewAgent(cfg config.Config, cli *client.ServiceDeskClient) (*Agent, error) 
 	if manager, ok := a.adapterManager.(*adapters.Manager); ok {
 		manager.SetDebug(cfg.Debug)
 	}
-	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(cfg.AgentVersion, updater.NewService(cfg.DataDir, cli)))
+
+	sagaWorkflow, err := workflows.NewSagaRunWorkflow(workflows.SagaRunWorkflowOptions{
+		CurrentVersion: cfg.AgentVersion,
+		SelfUpdater:    updater.NewService(cfg.DataDir, cli),
+		AdapterRunner:  a.adapterManager,
+		DataDir:        cfg.DataDir,
+		Debug:          cfg.Debug,
+		Infof:          log.Printf,
+		Debugf:         a.debugf,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("не удалось инициализировать saga workflow: %w", err)
+	}
+	a.registerWorkflow(sagaWorkflow)
+	a.registerWorkflowAlias("run_saga", sagaWorkflow)
+	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(sagaWorkflow))
 	adapterRunWorkflow := workflows.NewAdapterRunWorkflow(a.adapterManager, a.debugf)
 	a.registerWorkflow(adapterRunWorkflow)
 	a.registerWorkflowAlias("adapter_run", adapterRunWorkflow)

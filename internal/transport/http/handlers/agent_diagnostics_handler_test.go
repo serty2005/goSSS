@@ -185,6 +185,119 @@ func TestAgentDiagnosticsHandler_ListAgentsОтдаётФлагиНаличияS
 	require.True(t, body.Data[0].HasAdapterStatuses)
 }
 
+func TestAgentDiagnosticsHandler_ВозвращаетИсториюЗапусковАдаптеров(t *testing.T) {
+	db := setupAgentDiagnosticsDB(t)
+	agentUUID := "agent-run-history"
+	baseTime := time.Date(2026, 3, 22, 9, 0, 0, 0, time.UTC)
+
+	require.NoError(t, db.Create(&models.Agent{
+		UUID:     agentUUID,
+		Type:     "sssruner",
+		Status:   models.StatusActive,
+		Hostname: "cash-run-history",
+	}).Error)
+
+	for idx := range 5 {
+		createdAt := baseTime.Add(time.Duration(idx) * time.Minute)
+		require.NoError(t, db.Create(&models.AgentCommand{
+			AgentUUID: agentUUID,
+			Type:      "inventory",
+			Status:    "completed",
+			Payload:   datatypes.JSON([]byte(`{"mode":"inventory"}`)),
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		}).Error)
+	}
+
+	adapterIDs := []string{"fiscal-atol", "fiscal-mitsu", "fiscal-shtrih", "iiko-syrve-rms"}
+	for idx := range 55 {
+		createdAt := baseTime.Add(time.Duration(idx+5) * time.Minute)
+		sentAt := createdAt.Add(10 * time.Second)
+		completedAt := createdAt.Add(45 * time.Second)
+		adapterID := adapterIDs[idx%len(adapterIDs)]
+		commandType := "run_adapter"
+		status := "completed"
+		resultPayload := `{"status":"completed","adapter_id":"` + adapterID + `","command":"run","operation":"collect","duration_ms":3500,"exit_code":0,"stdout":"{\"status\":\"ok\"}","stderr":"","result":{"status":"ok","adapter_id":"` + adapterID + `"}}`
+
+		if idx == 54 {
+			commandType = "adapter_run"
+			status = "failed"
+			resultPayload = `{"status":"failed","adapter_id":"` + adapterID + `","command":"run","operation":"collect","duration_ms":1900,"exit_code":2,"stdout":"{\"status\":\"error\"}","stderr":"порт занят","result":{"status":"error","reason":"port_busy"},"error":"Не удалось открыть порт"}`
+		}
+
+		require.NoError(t, db.Create(&models.AgentCommand{
+			AgentUUID:     agentUUID,
+			Type:          commandType,
+			Status:        status,
+			Payload:       datatypes.JSON([]byte(`{"adapter_id":"` + adapterID + `","command":"run","operation":"collect"}`)),
+			ResultPayload: datatypes.JSON([]byte(resultPayload)),
+			CreatedAt:     createdAt,
+			SentAt:        &sentAt,
+			CompletedAt:   &completedAt,
+			UpdatedAt:     completedAt,
+		}).Error)
+	}
+
+	handler := newAgentDiagnosticsHandler(db)
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/agent-diagnostics/"+agentUUID, nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body struct {
+		Status string `json:"status"`
+		Data   struct {
+			RecentAdapterRuns []struct {
+				ID               uint           `json:"id"`
+				AgentUUID        string         `json:"agent_uuid"`
+				AdapterID        string         `json:"adapter_id"`
+				Type             string         `json:"type"`
+				Status           string         `json:"status"`
+				Command          string         `json:"command"`
+				Operation        string         `json:"operation"`
+				DurationMS       int64          `json:"duration_ms"`
+				ExitCode         *int           `json:"exit_code"`
+				ErrorText        string         `json:"error_text"`
+				StructuredResult map[string]any `json:"structured_result"`
+				Payload          map[string]any `json:"payload"`
+				ResultPayload    map[string]any `json:"result_payload"`
+				SentAt           *time.Time     `json:"sent_at"`
+				CompletedAt      *time.Time     `json:"completed_at"`
+				CreatedAt        time.Time      `json:"created_at"`
+			} `json:"recent_adapter_runs"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "success", body.Status)
+	require.Len(t, body.Data.RecentAdapterRuns, recentAdapterRunsLimit)
+
+	firstRun := body.Data.RecentAdapterRuns[0]
+	lastRun := body.Data.RecentAdapterRuns[len(body.Data.RecentAdapterRuns)-1]
+
+	require.Equal(t, agentUUID, firstRun.AgentUUID)
+	require.Equal(t, "adapter_run", firstRun.Type)
+	require.Equal(t, "failed", firstRun.Status)
+	require.Equal(t, "run", firstRun.Command)
+	require.Equal(t, "collect", firstRun.Operation)
+	require.Equal(t, adapterIDs[54%len(adapterIDs)], firstRun.AdapterID)
+	require.Equal(t, int64(1900), firstRun.DurationMS)
+	require.NotNil(t, firstRun.ExitCode)
+	require.Equal(t, 2, *firstRun.ExitCode)
+	require.Equal(t, "Не удалось открыть порт", firstRun.ErrorText)
+	require.Equal(t, "run", firstRun.Payload["command"])
+	require.Equal(t, "failed", firstRun.ResultPayload["status"])
+	require.Equal(t, "error", firstRun.StructuredResult["status"])
+	require.NotNil(t, firstRun.SentAt)
+	require.NotNil(t, firstRun.CompletedAt)
+	require.True(t, firstRun.CreatedAt.After(lastRun.CreatedAt))
+	require.Equal(t, baseTime.Add(59*time.Minute), firstRun.CreatedAt.UTC())
+	require.Equal(t, baseTime.Add(10*time.Minute), lastRun.CreatedAt.UTC())
+}
+
 func TestAgentDiagnosticsHandler_ApproveRegistrationПодтверждаетОжидающегоАгента(t *testing.T) {
 	db := setupAgentDiagnosticsDB(t)
 	agentUUID := "agent-approval"

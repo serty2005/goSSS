@@ -86,7 +86,7 @@ const buildEmptyDeviceDraft = (): RuntimeDeviceDraft => ({
   address: '',
 });
 
-const buildDeviceAddress = (device?: AgentAdapterRuntimeProfileDTO['devices'][number]) => {
+const buildDeviceAddress = (device?: NonNullable<AgentAdapterRuntimeProfileDTO['devices']>[number]) => {
   const explicitAddress = String(device?.address || '').trim();
   if (explicitAddress) {
     return explicitAddress;

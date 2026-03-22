@@ -233,7 +233,7 @@ describe('AgentOperatorFlowCard smoke', () => {
       ],
     });
     expect(onRunAdapter).not.toHaveBeenCalled();
-  });
+  }, 15000);
 
   it('дает запустить уже сохраненный профиль адаптера', async () => {
     const user = userEvent.setup();

@@ -33,6 +33,27 @@ type AgentRegistrationAttemptDTO struct {
 	CreatedAt          time.Time `json:"created_at"`
 }
 
+type AgentAdapterRunDTO struct {
+	ID               uint       `json:"id"`
+	AgentUUID        string     `json:"agent_uuid"`
+	AdapterID        string     `json:"adapter_id"`
+	Type             string     `json:"type"`
+	Status           string     `json:"status"`
+	Command          string     `json:"command"`
+	Operation        string     `json:"operation"`
+	CreatedAt        time.Time  `json:"created_at"`
+	SentAt           *time.Time `json:"sent_at,omitzero"`
+	CompletedAt      *time.Time `json:"completed_at,omitzero"`
+	DurationMS       int64      `json:"duration_ms,omitzero"`
+	ExitCode         *int       `json:"exit_code,omitzero"`
+	ErrorText        string     `json:"error_text"`
+	Stdout           string     `json:"stdout"`
+	Stderr           string     `json:"stderr"`
+	StructuredResult any        `json:"structured_result,omitzero"`
+	Payload          any        `json:"payload,omitzero"`
+	ResultPayload    any        `json:"result_payload,omitzero"`
+}
+
 type AgentHeartbeatMeaningfulStateDTO struct {
 	Fingerprint               string     `json:"fingerprint"`
 	LastMeaningfulHeartbeatAt *time.Time `json:"last_meaningful_heartbeat_at,omitzero"`
@@ -146,6 +167,7 @@ type AgentDiagnosticsDetailsDTO struct {
 	LatestInventory        any                           `json:"latest_inventory,omitzero"`
 	LatestAdapterStatuses  any                           `json:"latest_adapter_statuses,omitzero"`
 	RecentRegistrations    []AgentRegistrationAttemptDTO `json:"recent_registrations,omitzero"`
+	RecentAdapterRuns      []AgentAdapterRunDTO          `json:"recent_adapter_runs"`
 	OperatorFlow           *AgentOperatorFlowDTO         `json:"operator_flow,omitzero"`
 }
 

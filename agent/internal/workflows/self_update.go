@@ -2,36 +2,22 @@ package workflows
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/saga"
-	"etalon-agent/internal/updater"
 )
 
-type SelfUpdater interface {
-	Download(ctx context.Context, url, fileName string) (string, error)
-}
-
 type SelfUpdateWorkflow struct {
-	sagaRunner     *saga.Runner
-	updater        SelfUpdater
-	currentVersion string
+	sagaWorkflow *SagaRunWorkflow
 }
 
-func NewSelfUpdateWorkflow(currentVersion string, u SelfUpdater) *SelfUpdateWorkflow {
-	return &SelfUpdateWorkflow{
-		sagaRunner:     saga.NewRunner(),
-		updater:        u,
-		currentVersion: currentVersion,
-	}
+func NewSelfUpdateWorkflow(sagaWorkflow *SagaRunWorkflow) *SelfUpdateWorkflow {
+	return &SelfUpdateWorkflow{sagaWorkflow: sagaWorkflow}
 }
 
 func (w *SelfUpdateWorkflow) Type() string {
@@ -39,89 +25,58 @@ func (w *SelfUpdateWorkflow) Type() string {
 }
 
 func (w *SelfUpdateWorkflow) Run(ctx context.Context, payload []byte) (protocol.TaskExecutionResult, error) {
-	startedAt := time.Now().UTC()
-
-	var req protocol.SelfUpdateTaskPayload
-	if err := json.Unmarshal(payload, &req); err != nil {
+	if w.sagaWorkflow == nil {
+		err := fmt.Errorf("workflow saga_run не настроен")
 		return protocol.TaskExecutionResult{
-			Status:      "failed",
-			CompletedAt: timePointer(time.Now().UTC()),
-			Error:       fmt.Sprintf("невалидный payload self_update: %v", err),
-		}, fmt.Errorf("невалидный payload self_update: %w", err)
-	}
-	if strings.TrimSpace(req.DownloadURL) == "" {
-		err := errors.New("в payload self_update отсутствует download_url")
-		return protocol.TaskExecutionResult{
-			Status:      "failed",
-			CompletedAt: timePointer(time.Now().UTC()),
-			Error:       err.Error(),
+			Status: "failed",
+			Error:  err.Error(),
 		}, err
 	}
-	if strings.TrimSpace(req.Version) != "" && strings.TrimSpace(req.Version) == strings.TrimSpace(w.currentVersion) {
-		log.Printf("Self-update пропущен: версия %s уже запущена", req.Version)
-		completedAt := time.Now().UTC()
+
+	var legacy protocol.SelfUpdateTaskPayload
+	if err := json.Unmarshal(payload, &legacy); err != nil {
+		parseErr := fmt.Errorf("невалидный payload self_update: %w", err)
 		return protocol.TaskExecutionResult{
-			Status:      "completed",
-			CompletedAt: &completedAt,
-			DurationMS:  completedAt.Sub(startedAt).Milliseconds(),
-			Result:      json.RawMessage(`{"skipped":true}`),
-		}, nil
+			Status: "failed",
+			Error:  parseErr.Error(),
+		}, parseErr
 	}
 
-	fileName := strings.TrimSpace(req.FileName)
-	if fileName == "" {
-		fileName = "agent-update.bin"
-		if req.Version != "" {
-			fileName = "agent-update-" + req.Version + ".bin"
-		}
-	}
-
-	var downloadedPath string
-	steps := []saga.Step{
-		{
-			Name: "download",
-			Do: func(ctx context.Context) error {
-				path, err := w.updater.Download(ctx, req.DownloadURL, filepath.Base(fileName))
-				if err != nil {
-					return err
-				}
-				downloadedPath = path
-				return nil
-			},
-			Compensate: func(context.Context) {
-				if downloadedPath != "" {
-					_ = os.Remove(downloadedPath)
-				}
-			},
-		},
-		{
-			Name: "verify_sha256",
-			Do: func(context.Context) error {
-				return updater.VerifySHA256(downloadedPath, req.SHA256)
-			},
-		},
-		{
-			Name: "apply_and_restart",
-			Do: func(context.Context) error {
-				return updater.ApplyAndRestart(downloadedPath, req.Args)
-			},
-		},
-	}
-
-	err := w.sagaRunner.Run(ctx, "self_update", steps)
-	completedAt := time.Now().UTC()
-	result := protocol.TaskExecutionResult{
-		Status:      "completed",
-		CompletedAt: &completedAt,
-		DurationMS:  completedAt.Sub(startedAt).Milliseconds(),
-	}
+	inputRaw, err := json.Marshal(protocol.AgentSelfUpdateSagaInput{
+		TargetVersion: strings.TrimSpace(legacy.Version),
+		DownloadURL:   strings.TrimSpace(legacy.DownloadURL),
+		SHA256:        strings.TrimSpace(legacy.SHA256),
+		FileName:      strings.TrimSpace(legacy.FileName),
+		RestartPolicy: "immediate",
+		Args:          append([]string(nil), legacy.Args...),
+	})
 	if err != nil {
-		result.Status = "failed"
-		result.Error = err.Error()
+		marshalErr := fmt.Errorf("не удалось подготовить saga input для self_update: %w", err)
+		return protocol.TaskExecutionResult{
+			Status: "failed",
+			Error:  marshalErr.Error(),
+		}, marshalErr
 	}
-	return result, err
+
+	sagaTask := protocol.SagaRunTaskPayload{
+		SagaID:    legacySelfUpdateSagaID(legacy),
+		SagaType:  saga.AgentSelfUpdateSagaType,
+		RequestID: strings.TrimSpace(legacy.Version),
+		Input:     inputRaw,
+		IdempotencyHint: protocol.SagaIdempotencyHint{
+			Key: legacySelfUpdateSagaID(legacy),
+		},
+	}
+	return w.sagaWorkflow.RunTask(ctx, sagaTask)
 }
 
-func timePointer(value time.Time) *time.Time {
-	return &value
+func legacySelfUpdateSagaID(payload protocol.SelfUpdateTaskPayload) string {
+	parts := []string{
+		strings.TrimSpace(payload.Version),
+		strings.TrimSpace(payload.DownloadURL),
+		strings.TrimSpace(payload.SHA256),
+		strings.TrimSpace(payload.FileName),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return "legacy-self-update-" + hex.EncodeToString(sum[:8])
 }

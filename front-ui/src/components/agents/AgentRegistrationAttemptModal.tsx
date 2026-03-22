@@ -39,7 +39,7 @@ const AgentRegistrationAttemptModal: React.FC<Props> = ({ attempt, open, onClose
                 {statusMeta.label}
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="Remote addr">
+            <Descriptions.Item label="Адрес источника">
               {attempt.remote_addr || '-'}
             </Descriptions.Item>
             <Descriptions.Item label="Fingerprint">
@@ -60,7 +60,7 @@ const AgentRegistrationAttemptModal: React.FC<Props> = ({ attempt, open, onClose
           />
 
           <JsonDataViewer
-            title="Payload"
+            title="Payload регистрации"
             value={attempt.payload}
             emptyDescription="Payload для этой попытки регистрации не сохранён"
           />

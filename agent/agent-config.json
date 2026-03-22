@@ -14,5 +14,6 @@
   "rate_limit_cooldown": "5m",
   "config_error_cooldown": "1h",
   "protocol_error_cooldown": "30m",
-  "retry_jitter_factor": 0.2
+  "retry_jitter_factor": 0.2,
+  "debug": true
 }

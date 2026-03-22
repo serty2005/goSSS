@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
+	"etalon-agent/internal/adapterexec"
 	"etalon-agent/internal/adapters"
 	"etalon-agent/internal/protocol"
-
-	"github.com/google/uuid"
 )
 
 type adapterRunner interface {
@@ -69,19 +67,7 @@ func (w *AdapterRunWorkflow) Run(ctx context.Context, payload []byte) (protocol.
 		command = "run"
 	}
 
-	timeout, err := resolveAdapterRunTimeout(req)
-	if err != nil {
-		return protocol.TaskExecutionResult{
-			Status:      "failed",
-			AdapterID:   adapterID,
-			Command:     command,
-			Operation:   strings.TrimSpace(req.Operation),
-			CompletedAt: timePointer(time.Now().UTC()),
-			Error:       err.Error(),
-		}, err
-	}
-
-	commandInput, err := buildAdapterCommandInput(req, command, timeout)
+	prepared, err := adapterexec.PrepareRunRequest(req)
 	if err != nil {
 		return protocol.TaskExecutionResult{
 			Status:      "failed",
@@ -93,13 +79,13 @@ func (w *AdapterRunWorkflow) Run(ctx context.Context, payload []byte) (protocol.
 		}, err
 	}
 	w.debugf("Payload run_adapter от сервера: adapter_id=%s command=%s operation=%s payload=%s", adapterID, command, strings.TrimSpace(req.Operation), compactJSONForDebug(payload))
-	w.debugf("Нормализованный payload для адаптера: adapter_id=%s command=%s timeout=%s stdin=%s", adapterID, command, timeout, compactJSONForDebug(commandInput))
+	w.debugf("Нормализованный payload для адаптера: adapter_id=%s command=%s timeout=%s stdin=%s", prepared.AdapterID, prepared.Command, prepared.Timeout, compactJSONForDebug(prepared.Input))
 
 	runResult, runErr := w.runner.Run(ctx, adapters.RunRequest{
-		AdapterID: adapterID,
-		Command:   command,
-		Timeout:   timeout,
-		Input:     commandInput,
+		AdapterID: prepared.AdapterID,
+		Command:   prepared.Command,
+		Timeout:   prepared.Timeout,
+		Input:     prepared.Input,
 	})
 
 	execution := protocol.TaskExecutionResult{
@@ -132,81 +118,6 @@ func (w *AdapterRunWorkflow) Run(ctx context.Context, payload []byte) (protocol.
 	return execution, runErr
 }
 
-func buildAdapterCommandInput(req protocol.AdapterRunTaskPayload, command string, timeout time.Duration) (json.RawMessage, error) {
-	protocolVersion := strings.TrimSpace(req.ProtocolVersion)
-	if protocolVersion == "" {
-		protocolVersion = "1"
-	}
-
-	requestID := strings.TrimSpace(req.RequestID)
-	if requestID == "" {
-		requestID = uuid.NewString()
-	}
-
-	envelope := protocol.AdapterCommandInputDTO{
-		ProtocolVersion: protocolVersion,
-		RequestID:       requestID,
-		TimeoutSeconds:  int(timeout / time.Second),
-	}
-	if envelope.TimeoutSeconds <= 0 {
-		envelope.TimeoutSeconds = 1
-	}
-
-	switch strings.ToLower(strings.TrimSpace(command)) {
-	case "run":
-		operation := strings.TrimSpace(req.Operation)
-		if operation == "" {
-			return nil, fmt.Errorf("для команды run обязательно поле operation")
-		}
-		envelope.TaskType = operation
-		envelope.Payload = resolveAdapterPayload(req)
-	case "describe":
-	case "health":
-	default:
-		envelope.TaskType = strings.TrimSpace(req.Operation)
-		envelope.Payload = resolveAdapterPayload(req)
-	}
-
-	raw, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("не удалось сериализовать payload адаптера: %w", err)
-	}
-	return raw, nil
-}
-
-func resolveAdapterPayload(req protocol.AdapterRunTaskPayload) json.RawMessage {
-	for _, candidate := range []json.RawMessage{req.DeviceParams, req.Payload} {
-		if len(strings.TrimSpace(string(candidate))) > 0 {
-			return cloneRawMessage(candidate)
-		}
-	}
-	return json.RawMessage(`{}`)
-}
-
-func resolveAdapterRunTimeout(req protocol.AdapterRunTaskPayload) (time.Duration, error) {
-	if req.TimeoutSeconds > 0 {
-		return time.Duration(req.TimeoutSeconds) * time.Second, nil
-	}
-
-	raw := strings.TrimSpace(req.Timeout)
-	if raw == "" {
-		return 30 * time.Second, nil
-	}
-
-	if duration, err := time.ParseDuration(raw); err == nil {
-		if duration <= 0 {
-			return 0, fmt.Errorf("timeout должен быть больше нуля")
-		}
-		return duration, nil
-	}
-
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds <= 0 {
-		return 0, fmt.Errorf("не удалось разобрать timeout %q", raw)
-	}
-	return time.Duration(seconds) * time.Second, nil
-}
-
 func normalizeTaskStatus(runStatus string, runErr error) string {
 	status := strings.TrimSpace(runStatus)
 	if status != "" {
@@ -231,6 +142,10 @@ func cloneIntPointer(value *int) *int {
 	}
 	copyValue := *value
 	return &copyValue
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }
 
 func nonZeroTime(value time.Time, fallback time.Time) time.Time {
