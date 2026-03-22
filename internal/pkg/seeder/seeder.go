@@ -11,6 +11,7 @@ import (
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/workstation"
+	"etalon-server/internal/infra/config"
 	infraDB "etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
@@ -59,7 +60,7 @@ func (s *Seeder) SeedDatabase(sdClient external.ExternalSystemClient) error {
 	}
 
 	s.logger.Info("Создание схемы базы данных через общую миграцию...")
-	if err := infraDB.Migrate(s.db); err != nil {
+	if err := infraDB.Migrate(&config.Config{}, s.db); err != nil {
 		s.logger.Error("Не удалось выполнить миграцию схемы БД", "error", err)
 		return err
 	}

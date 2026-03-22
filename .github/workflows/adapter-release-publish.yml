@@ -1,0 +1,202 @@
+name: adapter-release-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: publish - новый релиз, promote - переключение существующего релиза
+        required: true
+        type: choice
+        default: publish
+        options:
+          - publish
+          - promote
+      binary_path:
+        description: Путь к уже собранному бинарнику относительно корня репозитория. Используется только для publish.
+        required: false
+        type: string
+      adapter_id:
+        description: Стабильный adapter_id
+        required: true
+        type: string
+      version:
+        description: Версия релиза
+        required: true
+        type: string
+      title:
+        description: Человекочитаемое название адаптера. Обязательно для publish.
+        required: false
+        type: string
+      description:
+        description: Описание релиза
+        required: false
+        type: string
+      adapter_type:
+        description: Тип адаптера. Можно оставить пустым, тогда CLI возьмёт adapter_id.
+        required: false
+        type: string
+      target_os:
+        description: Целевая ОС
+        required: true
+        type: string
+      target_arch:
+        description: Целевая архитектура
+        required: true
+        type: string
+      protocol_version:
+        description: Версия протокола адаптера для publish
+        required: false
+        default: "1"
+        type: string
+      channels:
+        description: Список каналов через запятую, например stable,latest
+        required: true
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish-or-promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODE: ${{ inputs.mode }}
+      BINARY_PATH: ${{ inputs.binary_path }}
+      ADAPTER_ID: ${{ inputs.adapter_id }}
+      VERSION: ${{ inputs.version }}
+      TITLE: ${{ inputs.title }}
+      DESCRIPTION: ${{ inputs.description }}
+      ADAPTER_TYPE: ${{ inputs.adapter_type }}
+      TARGET_OS: ${{ inputs.target_os }}
+      TARGET_ARCH: ${{ inputs.target_arch }}
+      PROTOCOL_VERSION: ${{ inputs.protocol_version }}
+      CHANNELS: ${{ inputs.channels }}
+      AGENT_ADAPTER_S3_ENABLED: "true"
+      AGENT_ADAPTER_S3_ENDPOINT: ${{ secrets.AGENT_ADAPTER_S3_ENDPOINT }}
+      AGENT_ADAPTER_S3_REGION: ${{ secrets.AGENT_ADAPTER_S3_REGION }}
+      AGENT_ADAPTER_S3_BUCKET: ${{ secrets.AGENT_ADAPTER_S3_BUCKET }}
+      AGENT_ADAPTER_S3_ACCESS_KEY: ${{ secrets.AGENT_ADAPTER_S3_ACCESS_KEY }}
+      AGENT_ADAPTER_S3_SECRET_KEY: ${{ secrets.AGENT_ADAPTER_S3_SECRET_KEY }}
+      AGENT_ADAPTER_PUBLIC_BASE_URL: ${{ secrets.AGENT_ADAPTER_PUBLIC_BASE_URL }}
+      AGENT_ADAPTER_CATALOG_KEY: ${{ secrets.AGENT_ADAPTER_CATALOG_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Проверить S3 env
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_vars=(
+            AGENT_ADAPTER_S3_ENDPOINT
+            AGENT_ADAPTER_S3_BUCKET
+            AGENT_ADAPTER_S3_ACCESS_KEY
+            AGENT_ADAPTER_S3_SECRET_KEY
+            AGENT_ADAPTER_PUBLIC_BASE_URL
+          )
+          for name in "${required_vars[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              echo "Отсутствует обязательная переменная ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Подсказка по сборке бинарника
+        if: ${{ inputs.mode == 'publish' }}
+        shell: bash
+        run: |
+          echo "Перед publish при необходимости добавьте в workflow проект-специфичный шаг сборки адаптера."
+          echo "Этот шаблон ожидает, что бинарник уже лежит по пути ${BINARY_PATH}."
+
+      - name: Проверить publish inputs
+        if: ${{ inputs.mode == 'publish' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BINARY_PATH}" ]; then
+            echo "Для publish обязателен input binary_path" >&2
+            exit 1
+          fi
+          if [ ! -f "${BINARY_PATH}" ]; then
+            echo "Файл ${BINARY_PATH} не найден" >&2
+            exit 1
+          fi
+          if [ -z "${TITLE}" ]; then
+            echo "Для publish обязателен input title" >&2
+            exit 1
+          fi
+
+      - name: Publish release
+        if: ${{ inputs.mode == 'publish' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          normalize_channels() {
+            printf '%s' "${CHANNELS}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+          }
+
+          promote_args=()
+          while IFS= read -r channel; do
+            promote_args+=(--promote "${channel}")
+          done < <(normalize_channels)
+
+          if [ "${#promote_args[@]}" -eq 0 ]; then
+            echo "Нужен хотя бы один канал для publish" >&2
+            exit 1
+          fi
+
+          cmd=(
+            go run ./cmd/adapter-publisher publish
+            --file "${BINARY_PATH}"
+            --adapter-id "${ADAPTER_ID}"
+            --version "${VERSION}"
+            --title "${TITLE}"
+            --target-os "${TARGET_OS}"
+            --target-arch "${TARGET_ARCH}"
+            --protocol-version "${PROTOCOL_VERSION}"
+          )
+
+          if [ -n "${DESCRIPTION}" ]; then
+            cmd+=(--description "${DESCRIPTION}")
+          fi
+          if [ -n "${ADAPTER_TYPE}" ]; then
+            cmd+=(--adapter-type "${ADAPTER_TYPE}")
+          fi
+
+          cmd+=("${promote_args[@]}")
+          "${cmd[@]}"
+
+      - name: Promote release
+        if: ${{ inputs.mode == 'promote' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          normalize_channels() {
+            printf '%s' "${CHANNELS}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+          }
+
+          channel_args=()
+          while IFS= read -r channel; do
+            channel_args+=(--channel "${channel}")
+          done < <(normalize_channels)
+
+          if [ "${#channel_args[@]}" -eq 0 ]; then
+            echo "Нужен хотя бы один канал для promote" >&2
+            exit 1
+          fi
+
+          go run ./cmd/adapter-publisher promote \
+            --adapter-id "${ADAPTER_ID}" \
+            --version "${VERSION}" \
+            --target-os "${TARGET_OS}" \
+            --target-arch "${TARGET_ARCH}" \
+            "${channel_args[@]}"

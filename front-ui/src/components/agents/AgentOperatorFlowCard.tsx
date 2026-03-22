@@ -118,7 +118,11 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
                       <Tag color={adapter.selectable ? 'success' : adapter.published ? 'warning' : 'default'}>
                         {adapter.status_text}
                       </Tag>
-                      {adapter.version ? <Tag>{adapter.version}</Tag> : null}
+                      {adapter.stable_version ? <Tag>stable {adapter.stable_version}</Tag> : null}
+                      {adapter.latest_version && adapter.latest_version !== adapter.stable_version ? (
+                        <Tag>latest {adapter.latest_version}</Tag>
+                      ) : null}
+                      {!adapter.stable_version && adapter.version ? <Tag>{adapter.version}</Tag> : null}
                     </Space>
                   )}
                 >

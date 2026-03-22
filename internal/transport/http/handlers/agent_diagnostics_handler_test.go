@@ -287,7 +287,7 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionОбновляетConfigИ�
 	require.NotNil(t, resp.AdapterManifests)
 	require.Len(t, *resp.AdapterManifests, 1)
 	require.Equal(t, "fiscal-atol", (*resp.AdapterManifests)[0].AdapterID)
-	require.Equal(t, "https://example.test/adapters/fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].DownloadURL)
+	require.Equal(t, "https://example.test/agents/adapters/fiscal-atol/releases/0.1.0-demo/windows/amd64/fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].DownloadURL)
 	require.Equal(t, "0.1.0-demo", (*resp.AdapterManifests)[0].Version)
 	require.Equal(t, "fiscal-atol-0.1.0-demo.exe", (*resp.AdapterManifests)[0].FileName)
 }
@@ -295,12 +295,12 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionОбновляетConfigИ�
 func TestAgentDiagnosticsHandler_SaveAdapterSelectionВалидируетPublishedCatalog(t *testing.T) {
 	tests := []struct {
 		name          string
-		adapter       models.PublishedAgentAdapter
+		release       models.AgentAdapterRelease
 		expectedError string
 	}{
 		{
 			name: "неопубликованный адаптер",
-			adapter: models.PublishedAgentAdapter{
+			release: models.AgentAdapterRelease{
 				AdapterID:       "draft-adapter",
 				Title:           "Черновой адаптер",
 				Description:     "Не должен выбираться",
@@ -310,15 +310,16 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionВалидируетPublish
 				TargetOS:        "windows",
 				TargetArch:      "amd64",
 				ProtocolVersion: "1",
-				DownloadURL:     "https://example.test/adapters/draft.exe",
+				DownloadURL:     "https://example.test/agents/adapters/draft-adapter/releases/0.1.0/windows/amd64/draft.exe",
 				SHA256:          "abc",
+				SourceKey:       "adapters/draft-adapter/releases/0.1.0/windows/amd64/draft.exe",
 				FileName:        "draft.exe",
 			},
 			expectedError: "не опубликован",
 		},
 		{
 			name: "неполный manifest",
-			adapter: models.PublishedAgentAdapter{
+			release: models.AgentAdapterRelease{
 				AdapterID:       "broken-adapter",
 				Title:           "Сломанный адаптер",
 				Description:     "Не должен выбираться",
@@ -338,20 +339,20 @@ func TestAgentDiagnosticsHandler_SaveAdapterSelectionВалидируетPublish
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := setupAgentDiagnosticsDB(t)
-			agentUUID := "agent-invalid-selection"
+			agentUUID := "agent-invalid-selection-" + strings.ReplaceAll(tt.release.AdapterID, "_", "-")
 			require.NoError(t, db.Create(&models.Agent{
 				UUID:     agentUUID,
 				Type:     "sssruner",
 				Status:   models.StatusActive,
 				Hostname: "cash-invalid",
 			}).Error)
-			require.NoError(t, db.Create(&tt.adapter).Error)
+			seedAdapterReleaseChannels(t, db, tt.release)
 
 			handler := newAgentDiagnosticsHandler(db)
 			router := chi.NewRouter()
 			handler.RegisterRoutes(router)
 
-			body := strings.NewReader(`{"selected_adapter_ids":["` + tt.adapter.AdapterID + `"]}`)
+			body := strings.NewReader(`{"selected_adapter_ids":["` + tt.release.AdapterID + `"]}`)
 			req := httptest.NewRequest(http.MethodPost, "/agent-diagnostics/"+agentUUID+"/adapter-selection", body)
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
@@ -377,8 +378,23 @@ func setupAgentDiagnosticsDB(t *testing.T) *gorm.DB {
 		&models.AgentRegistrationAttempt{},
 		&models.AgentCOMSignatureRule{},
 		&models.PublishedAgentAdapter{},
+		&models.AgentAdapterRelease{},
+		&models.AgentAdapterChannel{},
 		&models.AgentCommand{},
 	))
 	require.NoError(t, dbpkg.EnsureDefaultPublishedAgentAdapters(db))
 	return db
+}
+
+func seedAdapterReleaseChannels(t *testing.T, db *gorm.DB, release models.AgentAdapterRelease) {
+	t.Helper()
+
+	require.NoError(t, db.Create(&release).Error)
+	for _, channelName := range []string{"stable", "latest"} {
+		require.NoError(t, db.Create(&models.AgentAdapterChannel{
+			AdapterID: release.AdapterID,
+			Channel:   channelName,
+			ReleaseID: release.ID,
+		}).Error)
+	}
 }

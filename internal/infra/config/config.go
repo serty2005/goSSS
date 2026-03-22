@@ -32,6 +32,17 @@ type Config struct {
 	AdminPassword    string
 	AdminFullName    string
 
+	AgentAdapterS3Enabled         bool
+	AgentAdapterS3Endpoint        string
+	AgentAdapterS3Region          string
+	AgentAdapterS3Bucket          string
+	AgentAdapterS3AccessKey       string
+	AgentAdapterS3SecretKey       string
+	AgentAdapterPublicBaseURL     string
+	AgentAdapterCatalogKey        string
+	AgentAdapterSyncInterval      time.Duration
+	AgentAdapterDefaultChannel    string
+
 	ServiceDeskBaseURL string
 	ServiceDeskKey     string
 	RateLimit          int
@@ -143,6 +154,16 @@ func New() *Config {
 		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
 		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
 		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
+		AgentAdapterS3Enabled:      getEnvAsBool("AGENT_ADAPTER_S3_ENABLED", false),
+		AgentAdapterS3Endpoint:     strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_ENDPOINT", "")),
+		AgentAdapterS3Region:       strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_REGION", "us-east-1")),
+		AgentAdapterS3Bucket:       strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_BUCKET", "agents")),
+		AgentAdapterS3AccessKey:    strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_ACCESS_KEY", "")),
+		AgentAdapterS3SecretKey:    getEnv("AGENT_ADAPTER_S3_SECRET_KEY", ""),
+		AgentAdapterPublicBaseURL:  strings.TrimRight(strings.TrimSpace(getEnv("AGENT_ADAPTER_PUBLIC_BASE_URL", "")), "/"),
+		AgentAdapterCatalogKey:     strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_KEY", "catalog/index.json")),
+		AgentAdapterSyncInterval:   time.Duration(max(1, getEnvAsInt("AGENT_ADAPTER_SYNC_INTERVAL_MIN", 5))) * time.Minute,
+		AgentAdapterDefaultChannel: strings.ToLower(strings.TrimSpace(getEnv("AGENT_ADAPTER_DEFAULT_CHANNEL", "stable"))),
 
 		ServiceDeskBaseURL: getEnv("BASE_URL", "https://servicedesk.example.com"),
 		ServiceDeskKey:     getEnv("SDKEY", ""),

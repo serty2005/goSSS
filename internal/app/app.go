@@ -16,6 +16,7 @@ import (
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
+	"etalon-server/internal/infra/adapterstore"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/external"
@@ -103,6 +104,8 @@ type Application struct {
 	ReportHandler           *handlers.ReportHandler
 	EntityDeletionHandler   *handlers.EntityDeletionHandler
 	MaterialHandler         *handlers.MaterialHandler
+
+	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
 }
 
 // New создает и инициализирует новый экземпляр Application.
@@ -127,11 +130,15 @@ func New() (*Application, error) {
 
 	// Запуск слоев
 	repos := setupRepositories(app.DB)
-	clients := setupExternalClients(app.Config, app.Logger, app.DB, repos.LinkRepo)
+	clients, err := setupExternalClients(app.Config, app.Logger, app.DB, repos.LinkRepo)
+	if err != nil {
+		return nil, err
+	}
 
 	app.Seeder = seeder.NewSeeder(app.Logger, app.DB, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.ContractRepo)
 
 	services := setupServices(app, repos, clients)
+	app.AgentAdapterCatalogSync = services.AgentAdapterCatalogSync
 	setupBackgroundServices(app, repos, clients, services)
 	setupHandlers(app, repos, services)
 	setupIntegrationModules(app, services)
@@ -221,7 +228,7 @@ func setupDatabase(cfg *config.Config, log logger.LoggerInterface) (*gorm.DB, er
 	log.Info("Подключение к базе данных установлено")
 
 	log.Info("Запуск миграций базы данных...")
-	if err := db.Migrate(database); err != nil {
+	if err := db.Migrate(cfg, database); err != nil {
 		log.Fatal("Не удалось выполнить миграцию схемы БД", "error", err)
 	}
 	log.Info("Миграции базы данных успешно завершены.")
@@ -279,9 +286,10 @@ type ExternalClients struct {
 	BitrixClient    *bitrixplugin.Client
 	ContractMailbox contractSvc.ContractMailboxClient
 	RedisClient     *redis.Client
+	AgentAdapterStore services.AgentAdapterObjectStore
 }
 
-func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) ExternalClients {
+func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) (ExternalClients, error) {
 	var redisClient *redis.Client
 	if strings.TrimSpace(cfg.RedisAddr) != "" {
 		redisClient = redis.NewClient(&redis.Options{
@@ -290,14 +298,19 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 			DB:       cfg.RedisDB,
 		})
 	}
-	return ExternalClients{
-		SDClient:        naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
-		FTPClient:       services.NewFTPClient(cfg, log.With("component", "ftp_client")),
-		IikoClient:      iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
-		BitrixClient:    bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
-		ContractMailbox: contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
-		RedisClient:     redisClient,
+	agentAdapterStore, err := adapterstore.NewS3ObjectStore(context.Background(), cfg)
+	if err != nil {
+		return ExternalClients{}, err
 	}
+	return ExternalClients{
+		SDClient:          naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
+		FTPClient:         services.NewFTPClient(cfg, log.With("component", "ftp_client")),
+		IikoClient:        iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+		BitrixClient:      bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
+		ContractMailbox:   contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
+		RedisClient:       redisClient,
+		AgentAdapterStore: agentAdapterStore,
+	}, nil
 }
 
 type Services struct {
@@ -319,6 +332,7 @@ type Services struct {
 	BitrixIncomingService   services.BitrixIncomingService
 	NetworkCandidateService services.NetworkCandidateService
 	EntityDeletionService   services.EntityDeletionService
+	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
 }
 
 func setupServices(app *Application, repos Repositories, clients ExternalClients) Services {
@@ -345,7 +359,14 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ownerResolver,
 		hubDetector,
 	)
-	agentOperatorFlow := services.NewAgentOperatorFlowService(app.DB)
+	agentOperatorFlow := services.NewAgentOperatorFlowService(app.DB, app.Config.AgentAdapterDefaultChannel)
+
+	agentAdapterCatalogSync := services.NewAgentAdapterCatalogSyncService(
+		app.DB,
+		app.Logger.With("component", "agent_adapter_catalog_sync"),
+		clients.AgentAdapterStore,
+		app.Config,
+	)
 
 	return Services{
 		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
@@ -366,6 +387,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 		EntityDeletionService:   services.NewEntityDeletionService(app.Logger.With("component", "entity_deletion_service"), app.DB, transactor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.ContractRepo, repos.OwnerHistoryRepo),
+		AgentAdapterCatalogSync: agentAdapterCatalogSync,
 	}
 }
 
@@ -438,7 +460,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
 	app.AgentObservationFeed = handlers.NewAgentObservationFeedHandler(app.DB)
-	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB, srvs.AgentOperatorFlow)
+	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB, srvs.AgentOperatorFlow, srvs.AgentAdapterCatalogSync)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
@@ -691,6 +713,10 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	if a.DeferredTicketWorker != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.DeferredTicketWorker.Start(ctx) }()
+	}
+	if a.AgentAdapterCatalogSync != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.AgentAdapterCatalogSync.Start(ctx) }()
 	}
 	if a.BitrixModule != nil {
 		a.BitrixModule.start(ctx, wg)

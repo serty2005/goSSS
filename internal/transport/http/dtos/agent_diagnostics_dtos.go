@@ -85,6 +85,8 @@ type PublishedAgentAdapterOptionDTO struct {
 	StatusText     string `json:"status_text"`
 	DisabledReason string `json:"disabled_reason,omitzero"`
 	Version        string `json:"version"`
+	StableVersion  string `json:"stable_version,omitzero"`
+	LatestVersion  string `json:"latest_version,omitzero"`
 	AdapterType    string `json:"adapter_type"`
 	TargetOS       string `json:"target_os"`
 	TargetArch     string `json:"target_arch"`
@@ -128,4 +130,13 @@ type UpsertAgentCOMSignatureRuleRequestDTO struct {
 	ProfileHint      string `json:"profile_hint"`
 	SuggestedAdapter string `json:"suggested_adapter"`
 	Notes            string `json:"notes"`
+}
+
+type AgentAdapterCatalogRefreshResultDTO struct {
+	AdaptersCount    int       `json:"adapters_count"`
+	ReleasesUpserted int       `json:"releases_upserted"`
+	ChannelsUpserted int       `json:"channels_upserted"`
+	ReleasesDeleted  int       `json:"releases_deleted"`
+	ChannelsDeleted  int       `json:"channels_deleted"`
+	RefreshedAt      time.Time `json:"refreshed_at"`
 }

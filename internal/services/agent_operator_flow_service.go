@@ -27,11 +27,19 @@ type AgentAdapterManifestResolver interface {
 }
 
 type agentOperatorFlowService struct {
-	db *gorm.DB
+	db             *gorm.DB
+	defaultChannel string
 }
 
-func NewAgentOperatorFlowService(db *gorm.DB) AgentOperatorFlowService {
-	return &agentOperatorFlowService{db: db}
+func NewAgentOperatorFlowService(db *gorm.DB, defaultChannels ...string) AgentOperatorFlowService {
+	defaultChannel := agentAdapterChannelStable
+	if len(defaultChannels) > 0 {
+		defaultChannel = normalizeAgentAdapterChannel(defaultChannels[0])
+	}
+	return &agentOperatorFlowService{
+		db:             db,
+		defaultChannel: defaultChannel,
+	}
 }
 
 type profileDefinition struct {

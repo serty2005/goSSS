@@ -1363,6 +1363,8 @@ export interface PublishedAgentAdapterOptionDTO {
   status_text: string;
   disabled_reason?: string;
   version?: string;
+  stable_version?: string;
+  latest_version?: string;
   adapter_type?: string;
   target_os?: string;
   target_arch?: string;

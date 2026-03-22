@@ -22,17 +22,28 @@ import (
 type AgentDiagnosticsHandler struct {
 	db           *gorm.DB
 	operatorFlow services.AgentOperatorFlowService
+	catalogSync  services.AgentAdapterCatalogSyncService
 }
 
-func NewAgentDiagnosticsHandler(db *gorm.DB, operatorFlow services.AgentOperatorFlowService) *AgentDiagnosticsHandler {
+func NewAgentDiagnosticsHandler(
+	db *gorm.DB,
+	operatorFlow services.AgentOperatorFlowService,
+	catalogSyncServices ...services.AgentAdapterCatalogSyncService,
+) *AgentDiagnosticsHandler {
+	var catalogSync services.AgentAdapterCatalogSyncService
+	if len(catalogSyncServices) > 0 {
+		catalogSync = catalogSyncServices[0]
+	}
 	return &AgentDiagnosticsHandler{
 		db:           db,
 		operatorFlow: operatorFlow,
+		catalogSync:  catalogSync,
 	}
 }
 
 func (h *AgentDiagnosticsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-diagnostics", h.ListAgents)
+	r.Post("/agent-diagnostics/adapters/refresh", h.RefreshAdapterCatalog)
 	r.Get("/agent-diagnostics/{uuid}", h.GetAgent)
 	r.Post("/agent-diagnostics/{uuid}/approve-registration", h.ApproveRegistration)
 	r.Post("/agent-diagnostics/{uuid}/adapter-selection", h.SaveAdapterSelection)
@@ -240,6 +251,36 @@ func (h *AgentDiagnosticsHandler) SaveAdapterSelection(w http.ResponseWriter, r 
 		return
 	}
 	response.RespondWithJSON(w, http.StatusOK, out)
+}
+
+func (h *AgentDiagnosticsHandler) RefreshAdapterCatalog(w http.ResponseWriter, r *http.Request) {
+	if h.catalogSync == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "Сервис синхронизации каталога адаптеров не настроен")
+		return
+	}
+
+	result, err := h.catalogSync.Refresh(r.Context())
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrAgentAdapterCatalogDisabled):
+			response.RespondWithError(w, http.StatusConflict, err.Error())
+			return
+		case errors.Is(err, services.ErrAgentAdapterObjectNotFound):
+			response.RespondWithError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		response.RespondWithError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, api.AgentAdapterCatalogRefreshResultDTO{
+		AdaptersCount:    result.AdaptersCount,
+		ReleasesUpserted: result.ReleasesUpserted,
+		ChannelsUpserted: result.ChannelsUpserted,
+		ReleasesDeleted:  result.ReleasesDeleted,
+		ChannelsDeleted:  result.ChannelsDeleted,
+		RefreshedAt:      result.RefreshedAt,
+	})
 }
 
 func (h *AgentDiagnosticsHandler) UpsertCOMSignatureRule(w http.ResponseWriter, r *http.Request) {

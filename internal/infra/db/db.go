@@ -32,7 +32,7 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 }
 
 // Migrate выполняет автомиграцию схемы базы данных.
-func Migrate(db *gorm.DB) error {
+func Migrate(cfg *config.Config, db *gorm.DB) error {
 	if err := cleanupOrphanUserIntegrations(db); err != nil {
 		return err
 	}
@@ -54,6 +54,8 @@ func Migrate(db *gorm.DB) error {
 		&models.AgentSessionToken{},
 		&models.AgentCOMSignatureRule{},
 		&models.PublishedAgentAdapter{},
+		&models.AgentAdapterRelease{},
+		&models.AgentAdapterChannel{},
 		&models.AgentObservation{},
 		&models.Candidate{},
 		&models.CandidateStatusHistory{},
@@ -88,7 +90,10 @@ func Migrate(db *gorm.DB) error {
 	if err := migrateLegacyAttachments(db); err != nil {
 		return err
 	}
-	if err := EnsureDefaultPublishedAgentAdapters(db); err != nil {
+	if err := MigrateLegacyPublishedAgentAdapters(db); err != nil {
+		return err
+	}
+	if err := EnsureDefaultAgentAdapterCatalog(cfg, db); err != nil {
 		return err
 	}
 
