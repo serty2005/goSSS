@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -60,6 +60,20 @@ type AgentOperatorFlowCardProps = {
 
 const defaultTimeoutSeconds = 45;
 const defaultScheduleIntervalSeconds = 300;
+const emptyAdapterIDs: string[] = [];
+const emptyWarnings: string[] = [];
+const emptyAdapters: PublishedAgentAdapterOptionDTO[] = [];
+const emptyRuntimeProfiles: AgentAdapterRuntimeProfileDTO[] = [];
+const emptyCOMPorts: AgentInventoryCOMPortDTO[] = [];
+const emptyEffectiveManifests: NonNullable<AgentOperatorFlowDTO['effective_adapter_manifests']> = [];
+
+type HydrationSnapshot = {
+  initialPayload: SaveAgentAdapterSelectionPayload;
+  selectedAdapterIDs: string[];
+  runtimeProfiles: Record<string, RuntimeProfileDraft>;
+  savedRuntimeProfilesByID: Record<string, AgentAdapterRuntimeProfileDTO>;
+  signature: string;
+};
 
 const normalizeAdapterIDs = (values?: string[] | null) => (
   Array.from(new Set((values || []).map((value) => value.trim()).filter(Boolean))).sort()
@@ -145,7 +159,6 @@ const isDeviceDraftMeaningful = (device: RuntimeDeviceDraft) => (
     device.label.trim()
     || device.ip.trim()
     || device.comPort.trim()
-    || device.baudrate.trim()
     || device.model.trim()
     || device.driverHintsText.trim()
     || device.extraParamsText.trim()
@@ -205,9 +218,9 @@ const buildSavePayload = (
 const payloadSignature = (payload: SaveAgentAdapterSelectionPayload) => JSON.stringify(payload);
 
 const buildInitialPayload = (operatorFlow?: AgentOperatorFlowDTO | null): SaveAgentAdapterSelectionPayload => ({
-  selected_adapter_ids: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids),
-  runtime_profiles: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids).map((adapterID) => {
-    const saved = (operatorFlow?.saved_adapter_runtime_profiles || []).find((profile) => profile.adapter_id === adapterID);
+  selected_adapter_ids: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs),
+  runtime_profiles: normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs).map((adapterID) => {
+    const saved = (operatorFlow?.saved_adapter_runtime_profiles ?? emptyRuntimeProfiles).find((profile) => profile.adapter_id === adapterID);
     return {
       adapter_id: adapterID,
       command: saved?.command || 'run',
@@ -222,6 +235,28 @@ const buildInitialPayload = (operatorFlow?: AgentOperatorFlowDTO | null): SaveAg
   }),
 });
 
+const buildHydrationSnapshot = (operatorFlow?: AgentOperatorFlowDTO | null): HydrationSnapshot => {
+  const selectedAdapterIDs = normalizeAdapterIDs(operatorFlow?.selected_adapter_ids ?? emptyAdapterIDs);
+  const savedRuntimeProfilesByID = (operatorFlow?.saved_adapter_runtime_profiles ?? emptyRuntimeProfiles)
+    .reduce<Record<string, AgentAdapterRuntimeProfileDTO>>((acc, profile) => {
+      acc[profile.adapter_id] = profile;
+      return acc;
+    }, {});
+  const runtimeProfiles = selectedAdapterIDs.reduce<Record<string, RuntimeProfileDraft>>((acc, adapterID) => {
+    acc[adapterID] = buildDraftFromProfile(adapterID, savedRuntimeProfilesByID[adapterID]);
+    return acc;
+  }, {});
+  const initialPayload = buildInitialPayload(operatorFlow);
+
+  return {
+    initialPayload,
+    selectedAdapterIDs,
+    runtimeProfiles,
+    savedRuntimeProfilesByID,
+    signature: payloadSignature(initialPayload),
+  };
+};
+
 const connectionTypeOptions = [
   { label: 'TCP/IP', value: 'tcp' },
   { label: 'COM', value: 'com' },
@@ -235,7 +270,7 @@ const commandOptions = [
 
 const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
   operatorFlow,
-  inventoryCOMPorts = [],
+  inventoryCOMPorts = emptyCOMPorts,
   saveSelectionPending,
   saveSelectionError,
   runAdapterPending,
@@ -243,28 +278,34 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
   onSaveSelection,
   onRunAdapter,
 }) => {
-  const availableAdapters = operatorFlow?.available_adapters || [];
-  const warnings = operatorFlow?.warnings || [];
-  const recommendedAdapterIDs = operatorFlow?.recommended_adapter_ids || [];
-  const effectiveManifests = operatorFlow?.effective_adapter_manifests || [];
-  const savedRuntimeProfiles = operatorFlow?.saved_adapter_runtime_profiles || [];
+  const availableAdapters = operatorFlow?.available_adapters ?? emptyAdapters;
+  const warnings = operatorFlow?.warnings ?? emptyWarnings;
+  const recommendedAdapterIDs = operatorFlow?.recommended_adapter_ids ?? emptyAdapterIDs;
+  const effectiveManifests = operatorFlow?.effective_adapter_manifests ?? emptyEffectiveManifests;
+  const nextHydrationSnapshot = useMemo(() => buildHydrationSnapshot(operatorFlow), [operatorFlow]);
+  const stableHydrationSnapshotRef = useRef(nextHydrationSnapshot);
 
-  const [selectedAdapterIDs, setSelectedAdapterIDs] = useState<string[]>([]);
-  const [runtimeProfiles, setRuntimeProfiles] = useState<Record<string, RuntimeProfileDraft>>({});
+  if (stableHydrationSnapshotRef.current.signature !== nextHydrationSnapshot.signature) {
+    stableHydrationSnapshotRef.current = nextHydrationSnapshot;
+  }
+
+  const hydrationSnapshot = stableHydrationSnapshotRef.current;
+
+  const [selectedAdapterIDs, setSelectedAdapterIDs] = useState<string[]>(() => hydrationSnapshot.selectedAdapterIDs);
+  const [runtimeProfiles, setRuntimeProfiles] = useState<Record<string, RuntimeProfileDraft>>(() => hydrationSnapshot.runtimeProfiles);
   const [localValidationError, setLocalValidationError] = useState<string>();
+  const lastHydratedSignatureRef = useRef(hydrationSnapshot.signature);
 
   useEffect(() => {
-    const nextSelectedIDs = normalizeAdapterIDs(operatorFlow?.selected_adapter_ids);
-    const nextProfiles = nextSelectedIDs.reduce<Record<string, RuntimeProfileDraft>>((acc, adapterID) => {
-      const savedProfile = savedRuntimeProfiles.find((item) => item.adapter_id === adapterID);
-      acc[adapterID] = buildDraftFromProfile(adapterID, savedProfile);
-      return acc;
-    }, {});
+    if (hydrationSnapshot.signature === lastHydratedSignatureRef.current) {
+      return;
+    }
 
-    setSelectedAdapterIDs(nextSelectedIDs);
-    setRuntimeProfiles(nextProfiles);
+    setSelectedAdapterIDs(hydrationSnapshot.selectedAdapterIDs);
+    setRuntimeProfiles(hydrationSnapshot.runtimeProfiles);
     setLocalValidationError(undefined);
-  }, [operatorFlow, savedRuntimeProfiles]);
+    lastHydratedSignatureRef.current = hydrationSnapshot.signature;
+  }, [hydrationSnapshot]);
 
   const comPortOptions = useMemo(
     () => inventoryCOMPorts
@@ -291,8 +332,8 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
   );
 
   const initialSignature = useMemo(
-    () => payloadSignature(buildInitialPayload(operatorFlow)),
-    [operatorFlow],
+    () => hydrationSnapshot.signature,
+    [hydrationSnapshot],
   );
 
   const currentSignature = useMemo(() => {
@@ -317,7 +358,7 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
       if (checked) {
         return {
           ...current,
-          [adapterID]: current[adapterID] || buildDraftFromProfile(adapterID, savedRuntimeProfiles.find((item) => item.adapter_id === adapterID)),
+          [adapterID]: current[adapterID] || buildDraftFromProfile(adapterID, hydrationSnapshot.savedRuntimeProfilesByID[adapterID]),
         };
       }
       const next = { ...current };
@@ -329,7 +370,7 @@ const AgentOperatorFlowCard: React.FC<AgentOperatorFlowCardProps> = ({
   const updateProfile = (adapterID: string, updater: (current: RuntimeProfileDraft) => RuntimeProfileDraft) => {
     setRuntimeProfiles((current) => ({
       ...current,
-      [adapterID]: updater(current[adapterID] || buildDraftFromProfile(adapterID)),
+      [adapterID]: updater(current[adapterID] || buildDraftFromProfile(adapterID, hydrationSnapshot.savedRuntimeProfilesByID[adapterID])),
     }));
   };
 

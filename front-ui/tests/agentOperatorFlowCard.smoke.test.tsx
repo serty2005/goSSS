@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import AgentOperatorFlowCard from '@/components/agents/AgentOperatorFlowCard';
@@ -32,11 +32,17 @@ beforeAll(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  cleanup();
+});
+
 describe('AgentOperatorFlowCard smoke', () => {
-  it('показывает список адаптеров и сохраняет selected_adapter_ids', async () => {
+  it('сохраняет локальный выбор без saved_adapter_runtime_profiles и повторно гидратируется после ответа сервера', async () => {
     const user = userEvent.setup();
     const onSaveSelection = vi.fn();
     const onRunAdapter = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const operatorFlow: AgentOperatorFlowDTO = {
       available_adapters: [
@@ -58,23 +64,52 @@ describe('AgentOperatorFlowCard smoke', () => {
       effective_adapter_manifests: [],
     };
 
-    render(
-      <AgentOperatorFlowCard
-        operatorFlow={operatorFlow}
-        inventoryCOMPorts={[]}
-        saveSelectionPending={false}
-        runAdapterPending={false}
-        onSaveSelection={onSaveSelection}
-        onRunAdapter={onRunAdapter}
-      />,
+    const { rerender } = render(
+      <React.StrictMode>
+        <AgentOperatorFlowCard
+          operatorFlow={operatorFlow}
+          inventoryCOMPorts={[]}
+          saveSelectionPending={false}
+          runAdapterPending={false}
+          onSaveSelection={onSaveSelection}
+          onRunAdapter={onRunAdapter}
+        />
+      </React.StrictMode>,
     );
 
     expect(screen.getByText('Фискальный адаптер АТОЛ')).toBeTruthy();
     expect(screen.getByText('stable 1.2.3')).toBeTruthy();
     expect(screen.getByText('latest 1.3.0')).toBeTruthy();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Фискальный адаптер АТОЛ' }));
-    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    const checkbox = screen.getByRole('checkbox', { name: 'Фискальный адаптер АТОЛ' }) as HTMLInputElement;
+    await user.click(checkbox);
+
+    expect(checkbox.checked).toBe(true);
+    expect(screen.queryByText('Сначала выберите хотя бы один адаптер')).toBeNull();
+
+    const saveButton = screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }) as HTMLButtonElement;
+    const runButton = screen.getByRole('button', { name: 'Запустить сейчас' }) as HTMLButtonElement;
+
+    expect(saveButton.disabled).toBe(false);
+    expect(runButton.disabled).toBe(true);
+
+    rerender(
+      <React.StrictMode>
+        <AgentOperatorFlowCard
+          operatorFlow={{ ...operatorFlow }}
+          inventoryCOMPorts={[]}
+          saveSelectionPending={false}
+          runAdapterPending={false}
+          onSaveSelection={onSaveSelection}
+          onRunAdapter={onRunAdapter}
+        />
+      </React.StrictMode>,
+    );
+
+    expect((screen.getByRole('checkbox', { name: 'Фискальный адаптер АТОЛ' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }) as HTMLButtonElement).disabled).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }));
 
     expect(onSaveSelection).toHaveBeenCalledTimes(1);
     expect(onSaveSelection).toHaveBeenCalledWith({
@@ -94,7 +129,44 @@ describe('AgentOperatorFlowCard smoke', () => {
       ],
     });
     expect(onRunAdapter).not.toHaveBeenCalled();
-  });
+
+    rerender(
+      <React.StrictMode>
+        <AgentOperatorFlowCard
+          operatorFlow={{
+            ...operatorFlow,
+            selected_adapter_ids: ['fiscal-atol'],
+            saved_adapter_runtime_profiles: [
+              {
+                adapter_id: 'fiscal-atol',
+                command: 'run',
+                operation: 'collect',
+                timeout_seconds: 45,
+                devices: [],
+                schedule: {
+                  enabled: false,
+                },
+              },
+            ],
+          }}
+          inventoryCOMPorts={[]}
+          saveSelectionPending={false}
+          runAdapterPending={false}
+          onSaveSelection={onSaveSelection}
+          onRunAdapter={onRunAdapter}
+        />
+      </React.StrictMode>,
+    );
+
+    expect((screen.getByRole('button', { name: 'Сохранить конфигурацию адаптеров' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Запустить сейчас' }) as HTMLButtonElement).disabled).toBe(false);
+
+    const consoleErrors = consoleErrorSpy.mock.calls
+      .flatMap((call) => call.map((value) => (value instanceof Error ? value.message : String(value))))
+      .join('\n');
+
+    expect(consoleErrors).not.toContain('Maximum update depth exceeded');
+  }, 15000);
 
   it('дает запустить уже сохраненный профиль адаптера', async () => {
     const user = userEvent.setup();
@@ -135,17 +207,23 @@ describe('AgentOperatorFlowCard smoke', () => {
     };
 
     render(
-      <AgentOperatorFlowCard
-        operatorFlow={operatorFlow}
-        inventoryCOMPorts={[]}
-        saveSelectionPending={false}
-        runAdapterPending={false}
-        onSaveSelection={onSaveSelection}
-        onRunAdapter={onRunAdapter}
-      />,
+      <React.StrictMode>
+        <AgentOperatorFlowCard
+          operatorFlow={operatorFlow}
+          inventoryCOMPorts={[]}
+          saveSelectionPending={false}
+          runAdapterPending={false}
+          onSaveSelection={onSaveSelection}
+          onRunAdapter={onRunAdapter}
+        />
+      </React.StrictMode>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Запустить сейчас' }));
+    const runButton = screen.getAllByRole('button', { name: 'Запустить сейчас' })
+      .find((button) => !(button as HTMLButtonElement).disabled);
+
+    expect(runButton).toBeTruthy();
+    await user.click(runButton as HTMLButtonElement);
 
     expect(onRunAdapter).toHaveBeenCalledTimes(1);
     expect(onRunAdapter).toHaveBeenCalledWith({
