@@ -204,6 +204,11 @@ func (s *agentServiceImpl) ProcessData(ctx context.Context, agentUUID string, da
 			return nil, fmt.Errorf("не удалось обновить heartbeat агента: %w", err)
 		}
 	}
+	if len(data.TaskResults) > 0 {
+		if err := s.agentRepo.CompleteCommands(ctx, targetUUID, buildCommandResults(data.TaskResults)); err != nil {
+			return nil, fmt.Errorf("не удалось сохранить результаты команд агента: %w", err)
+		}
+	}
 
 	traceID := contextkeys.GetTraceID(ctx)
 	if traceID == "" {
@@ -290,6 +295,44 @@ func marshalAgentJSON(value any) datatypes.JSON {
 		return nil
 	}
 	return datatypes.JSON(raw)
+}
+
+func buildCommandResults(taskResults []api.AgentTaskResultDTO) []repositories.AgentCommandResult {
+	if len(taskResults) == 0 {
+		return nil
+	}
+
+	results := make([]repositories.AgentCommandResult, 0, len(taskResults))
+	for _, item := range taskResults {
+		if item.ID == 0 {
+			continue
+		}
+
+		completedAt := time.Now().UTC()
+		if item.CompletedAt != nil {
+			completedAt = item.CompletedAt.UTC()
+		}
+
+		raw, err := json.Marshal(item.TaskExecutionResultDTO)
+		if err != nil {
+			raw = []byte(fmt.Sprintf(`{"status":"failed","error":"не удалось сериализовать результат команды: %s"}`, err))
+		}
+
+		results = append(results, repositories.AgentCommandResult{
+			ID:            item.ID,
+			Status:        normalizeAgentTaskResultStatus(item.Status),
+			CompletedAt:   completedAt,
+			ResultPayload: raw,
+		})
+	}
+	return results
+}
+
+func normalizeAgentTaskResultStatus(status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), "completed") {
+		return "completed"
+	}
+	return "failed"
 }
 
 func parseAgentObservedAt(value string) time.Time {

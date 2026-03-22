@@ -20,7 +20,7 @@
 ## Формат запуска
 
 `core-agent` запускает адаптер как отдельный процесс.
-На `Phase 0` фактический запуск ещё не реализован, но формат фиксируется заранее.
+На текущем этапе runtime запуска уже реализован: агент резолвит локальный бинарник через `descriptors/*.json` и каталог `bin/`, стартует процесс адаптера, ожидает JSON-ответ и отправляет структурированный результат обратно на сервер через следующий heartbeat.
 
 ### Базовая схема
 
@@ -41,6 +41,66 @@ adapter-binary <command> [flags]
 - stderr используется для диагностических сообщений;
 - адаптер не должен требовать интерактивного ввода;
 - адаптер не должен изменять бинарники `core-agent`.
+
+## Runtime Lifecycle
+
+Полный runtime flow для активного агента выглядит так:
+
+1. сервер отдает агенту heartbeat-задачу типа `run_adapter` или `adapter_run`;
+2. задача содержит `adapter_id`, `command`, `operation`, `timeout` и `device_params`;
+3. агент находит актуальный descriptor адаптера в `descriptors/` и локальный бинарник в `bin/`;
+4. агент проверяет совместимость `target_os/target_arch`;
+5. на Windows агент `amd64` имеет право запускать адаптер `386`, чтобы работать с 32-битными драйверами оборудования;
+6. агент обновляет `adapter_statuses` полями `run_status`, `last_run_at`, `last_exit_code`, `last_error`;
+7. агент запускает бинарник как отдельный процесс, передает JSON в stdin и собирает `stdout`, `stderr`, `exit_code`, `duration`;
+8. если процесс завис, агент завершает его по timeout/context;
+9. после выполнения агент складывает `task_result` в очередь и отправляет его серверу следующим heartbeat.
+
+## Task Payload От Сервера К Агенту
+
+Рекомендуемый payload команды запуска адаптера:
+
+```json
+{
+  "adapter_id": "fiscal-atol",
+  "command": "run",
+  "operation": "collect",
+  "timeout": "45s",
+  "protocol_version": "1",
+  "request_id": "run-123",
+  "device_params": {
+    "connection_type": "tcp",
+    "ip": "10.25.1.22",
+    "port": 5555,
+    "com_port": "",
+    "baudrate": "",
+    "model": "АТОЛ 22Ф",
+    "driver_hints": {
+      "branch": "10.9+"
+    },
+    "extra_params": {
+      "operator": "agent-runtime"
+    }
+  }
+}
+```
+
+### Обязательные поля task payload
+
+- `adapter_id`
+- `command`
+- `timeout` или `timeout_seconds`
+
+### Поля предметного payload для fiscal-* адаптеров
+
+- `connection_type`
+- `ip`
+- `port`
+- `com_port`
+- `baudrate`
+- `model`
+- `driver_hints`
+- `extra_params`
 
 ## Команда describe
 
@@ -134,6 +194,67 @@ adapter-binary <command> [flags]
 - `success`
 - `partial`
 - `failed`
+
+## Формат JSON, Который Агент Передает Адаптеру
+
+Для `command = run` агент передает в stdin JSON следующего вида:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "run-123",
+  "task_type": "collect",
+  "timeout_seconds": 45,
+  "payload": {
+    "connection_type": "tcp",
+    "ip": "10.25.1.22",
+    "port": 5555
+  }
+}
+```
+
+Для `describe` и `health` агент использует тот же envelope, но без `task_type/payload`, если они не нужны конкретной команде.
+
+## Формат Task Result, Который Агент Возвращает Серверу
+
+После выполнения команды агент отправляет в heartbeat:
+
+```json
+{
+  "id": 42,
+  "type": "run_adapter",
+  "status": "completed",
+  "adapter_id": "fiscal-atol",
+  "command": "run",
+  "operation": "collect",
+  "completed_at": "2026-03-22T10:00:05Z",
+  "duration_ms": 3200,
+  "exit_code": 0,
+  "stdout": "{\"status\":\"success\"}",
+  "stderr": "driver hint",
+  "result": {
+    "status": "success",
+    "devices": []
+  }
+}
+```
+
+### Статусы выполнения в task result
+
+- `completed`
+- `failed`
+- `timeout`
+- `canceled`
+
+## Поля Runtime-Статуса В Adapter Statuses
+
+Heartbeat агента публикует по каждому локальному адаптеру:
+
+- `status` — статус локальной поставки бинарника (`ready`, `missing_binary`, `error`);
+- `run_status` — статус последнего запуска (`running`, `completed`, `failed`, `timeout`, `canceled`);
+- `last_run_at`
+- `last_exit_code`
+- `last_error`
 
 ## Контракт для fiscal-* адаптеров
 

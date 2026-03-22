@@ -17,6 +17,7 @@ import (
 	"etalon-agent/internal/inventory"
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/state"
+	"etalon-agent/internal/workflows"
 )
 
 type stubRuntimeClient struct {
@@ -106,6 +107,7 @@ type stubRuntimeAdapterManager struct {
 	statuses []adapters.Status
 	listErr  error
 	syncFn   func(context.Context, []adapters.ManifestItem) ([]adapters.Status, error)
+	runFn    func(context.Context, adapters.RunRequest) (adapters.RunResult, error)
 }
 
 func (m stubRuntimeAdapterManager) EnsureLayout() error {
@@ -124,6 +126,13 @@ func (m stubRuntimeAdapterManager) Sync(ctx context.Context, manifests []adapter
 		return nil, nil
 	}
 	return m.syncFn(ctx, manifests)
+}
+
+func (m stubRuntimeAdapterManager) Run(ctx context.Context, req adapters.RunRequest) (adapters.RunResult, error) {
+	if m.runFn == nil {
+		return adapters.RunResult{}, errors.New("run не настроен")
+	}
+	return m.runFn(ctx, req)
 }
 
 func newTestConnectivityManager(t *testing.T) *connectivity.Manager {
@@ -387,6 +396,116 @@ func TestAgentHeartbeatRetriesAfter401(t *testing.T) {
 	}
 	if agent.tokens.RefreshToken != "new-refresh-token" {
 		t.Fatalf("в агенте не обновился refresh token: %+v", agent.tokens)
+	}
+}
+
+func TestAgentHeartbeatAdapterTaskErrorQueuesTaskResultAndDoesNotBreakLoop(t *testing.T) {
+	t.Parallel()
+
+	var heartbeatCalls int
+	agent := &Agent{
+		cfg: config.Config{
+			AgentVersion:           "test-version",
+			AgentType:              "sssruner",
+			AccessTokenGracePeriod: time.Minute,
+		},
+		client: stubRuntimeClient{
+			sendHeartbeatFn: func(_ context.Context, agentUUID string, data protocol.AgentDataDTO, accessToken string) (*protocol.HeartbeatResponseDTO, error) {
+				heartbeatCalls++
+				if agentUUID != "agent-uuid" {
+					t.Fatalf("ожидался agentUUID agent-uuid, получено %q", agentUUID)
+				}
+				if accessToken != "access-token" {
+					t.Fatalf("ожидался access token access-token, получено %q", accessToken)
+				}
+
+				switch heartbeatCalls {
+				case 1:
+					if len(data.TaskResults) != 0 {
+						t.Fatalf("первый heartbeat не должен содержать task_results, получено %d", len(data.TaskResults))
+					}
+					return &protocol.HeartbeatResponseDTO{
+						Status: "ok",
+						Tasks: []protocol.AgentTaskDTO{{
+							ID:   42,
+							Type: "run_adapter",
+							Payload: []byte(`{
+								"adapter_id":"fiscal-atol",
+								"operation":"collect",
+								"timeout_seconds":5,
+								"device_params":{"connection_type":"tcp","ip":"10.0.0.10","port":5555}
+							}`),
+						}},
+					}, nil
+				case 2:
+					if len(data.TaskResults) != 1 {
+						t.Fatalf("второй heartbeat должен содержать один task_result, получено %d", len(data.TaskResults))
+					}
+					result := data.TaskResults[0]
+					if result.ID != 42 {
+						t.Fatalf("ожидался task id 42, получено %d", result.ID)
+					}
+					if result.Type != "run_adapter" {
+						t.Fatalf("ожидался task type run_adapter, получено %q", result.Type)
+					}
+					if result.Status != "failed" {
+						t.Fatalf("ожидался статус failed, получено %q", result.Status)
+					}
+					if result.AdapterID != "fiscal-atol" {
+						t.Fatalf("ожидался adapter_id fiscal-atol, получено %q", result.AdapterID)
+					}
+					if result.Error == "" {
+						t.Fatal("ожидалась текстовая ошибка запуска адаптера")
+					}
+					return &protocol.HeartbeatResponseDTO{Status: "ok"}, nil
+				default:
+					return &protocol.HeartbeatResponseDTO{Status: "ok"}, nil
+				}
+			},
+		},
+		workflows: make(map[string]workflow),
+		identity:  &state.Identity{UUID: "agent-uuid"},
+		tokens: &state.Tokens{
+			AccessToken:          "access-token",
+			AccessTokenExpiresAt: time.Now().Add(time.Hour),
+		},
+		inventoryService: stubRuntimeInventoryService{},
+		adapterManager: stubRuntimeAdapterManager{
+			runFn: func(_ context.Context, req adapters.RunRequest) (adapters.RunResult, error) {
+				if req.AdapterID != "fiscal-atol" {
+					t.Fatalf("ожидался adapter_id fiscal-atol, получено %q", req.AdapterID)
+				}
+				if req.Command != "run" {
+					t.Fatalf("ожидалась команда run, получено %q", req.Command)
+				}
+				return adapters.RunResult{
+					AdapterID:   req.AdapterID,
+					Command:     req.Command,
+					CompletedAt: time.Now().UTC(),
+					RunStatus:   "failed",
+				}, errors.New("локальный бинарник адаптера fiscal-atol не найден")
+			},
+		},
+	}
+	adapterWorkflow := workflows.NewAdapterRunWorkflow(agent.adapterManager)
+	agent.registerWorkflow(adapterWorkflow)
+	agent.registerWorkflowAlias("adapter_run", adapterWorkflow)
+
+	if err := agent.heartbeatLocked(t.Context()); err != nil {
+		t.Fatalf("heartbeat с ошибкой запуска адаптера не должен завершаться ошибкой: %v", err)
+	}
+	if len(agent.pendingTaskResults) != 1 {
+		t.Fatalf("после первого heartbeat ожидался один накопленный task_result, получено %d", len(agent.pendingTaskResults))
+	}
+
+	if err := agent.heartbeatLocked(t.Context()); err != nil {
+		t.Fatalf("heartbeat с отправкой task_result завершился ошибкой: %v", err)
+	}
+	if len(agent.pendingTaskResults) != 0 {
+		t.Fatalf("после успешной отправки task_result очередь должна очиститься, осталось %d", len(agent.pendingTaskResults))
+	}
+	if heartbeatCalls != 2 {
+		t.Fatalf("ожидалось два heartbeat вызова, получено %d", heartbeatCalls)
 	}
 }
 

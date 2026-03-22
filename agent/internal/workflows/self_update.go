@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"etalon-agent/internal/protocol"
 	"etalon-agent/internal/saga"
@@ -37,17 +38,34 @@ func (w *SelfUpdateWorkflow) Type() string {
 	return "self_update"
 }
 
-func (w *SelfUpdateWorkflow) Run(ctx context.Context, payload []byte) error {
+func (w *SelfUpdateWorkflow) Run(ctx context.Context, payload []byte) (protocol.TaskExecutionResult, error) {
+	startedAt := time.Now().UTC()
+
 	var req protocol.SelfUpdateTaskPayload
 	if err := json.Unmarshal(payload, &req); err != nil {
-		return fmt.Errorf("невалидный payload self_update: %w", err)
+		return protocol.TaskExecutionResult{
+			Status:      "failed",
+			CompletedAt: timePointer(time.Now().UTC()),
+			Error:       fmt.Sprintf("невалидный payload self_update: %v", err),
+		}, fmt.Errorf("невалидный payload self_update: %w", err)
 	}
 	if strings.TrimSpace(req.DownloadURL) == "" {
-		return errors.New("в payload self_update отсутствует download_url")
+		err := errors.New("в payload self_update отсутствует download_url")
+		return protocol.TaskExecutionResult{
+			Status:      "failed",
+			CompletedAt: timePointer(time.Now().UTC()),
+			Error:       err.Error(),
+		}, err
 	}
 	if strings.TrimSpace(req.Version) != "" && strings.TrimSpace(req.Version) == strings.TrimSpace(w.currentVersion) {
 		log.Printf("Self-update пропущен: версия %s уже запущена", req.Version)
-		return nil
+		completedAt := time.Now().UTC()
+		return protocol.TaskExecutionResult{
+			Status:      "completed",
+			CompletedAt: &completedAt,
+			DurationMS:  completedAt.Sub(startedAt).Milliseconds(),
+			Result:      json.RawMessage(`{"skipped":true}`),
+		}, nil
 	}
 
 	fileName := strings.TrimSpace(req.FileName)
@@ -90,5 +108,20 @@ func (w *SelfUpdateWorkflow) Run(ctx context.Context, payload []byte) error {
 		},
 	}
 
-	return w.sagaRunner.Run(ctx, "self_update", steps)
+	err := w.sagaRunner.Run(ctx, "self_update", steps)
+	completedAt := time.Now().UTC()
+	result := protocol.TaskExecutionResult{
+		Status:      "completed",
+		CompletedAt: &completedAt,
+		DurationMS:  completedAt.Sub(startedAt).Milliseconds(),
+	}
+	if err != nil {
+		result.Status = "failed"
+		result.Error = err.Error()
+	}
+	return result, err
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }

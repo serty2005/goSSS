@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -10,15 +11,29 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Downloader interface {
 	DownloadFile(context.Context, string) ([]byte, error)
+}
+
+type processRunner interface {
+	Run(context.Context, string, []string, []byte) (processResult, error)
+}
+
+type processResult struct {
+	StartedAt   time.Time
+	CompletedAt time.Time
+	Stdout      []byte
+	Stderr      []byte
+	ExitCode    *int
 }
 
 type Manager struct {
@@ -27,9 +42,14 @@ type Manager struct {
 	descriptorsDir string
 	tmpDir         string
 	downloader     Downloader
+	runner         processRunner
 	targetOS       string
 	targetArch     string
+	locksMu        sync.Mutex
+	runLocks       map[string]*sync.Mutex
 }
+
+const defaultRunTimeout = 30 * time.Second
 
 func NewManager(rootDir string, downloader Downloader) *Manager {
 	rootDir = filepath.Clean(strings.TrimSpace(rootDir))
@@ -39,8 +59,10 @@ func NewManager(rootDir string, downloader Downloader) *Manager {
 		descriptorsDir: filepath.Join(rootDir, "descriptors"),
 		tmpDir:         filepath.Join(rootDir, "tmp"),
 		downloader:     downloader,
+		runner:         execProcessRunner{},
 		targetOS:       runtime.GOOS,
 		targetArch:     runtime.GOARCH,
+		runLocks:       make(map[string]*sync.Mutex),
 	}
 }
 
@@ -105,7 +127,9 @@ func (m *Manager) ListStatuses() ([]Status, error) {
 				}
 			} else {
 				status.Status = "missing_binary"
-				status.LastError = "локальный бинарник не найден"
+				if strings.TrimSpace(status.LastError) == "" {
+					status.LastError = "локальный бинарник не найден"
+				}
 			}
 		}
 
@@ -129,6 +153,126 @@ func (m *Manager) Compatible(item ManifestItem) bool {
 	targetOS := normalizePlatform(item.TargetOS)
 	targetArch := normalizePlatform(item.TargetArch)
 	return osCompatible(m.targetOS, targetOS) && archCompatible(m.targetOS, m.targetArch, targetArch)
+}
+
+func (m *Manager) ResolveBinary(adapterID string) (Descriptor, error) {
+	if err := m.EnsureLayout(); err != nil {
+		return Descriptor{}, err
+	}
+
+	normalizedID := strings.TrimSpace(adapterID)
+	if normalizedID == "" {
+		return Descriptor{}, errors.New("не задан adapter_id")
+	}
+
+	descriptor, err := m.findCurrentDescriptor(normalizedID)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	if descriptor == nil {
+		return Descriptor{}, fmt.Errorf("локальный descriptor адаптера %q не найден", normalizedID)
+	}
+	if !m.Compatible(descriptor.ManifestItem) {
+		return Descriptor{}, fmt.Errorf(
+			"адаптер %q несовместим с агентом: target_os=%s target_arch=%s runtime_os=%s runtime_arch=%s",
+			descriptor.AdapterID,
+			descriptor.TargetOS,
+			descriptor.TargetArch,
+			m.targetOS,
+			m.targetArch,
+		)
+	}
+	if strings.TrimSpace(descriptor.LocalPath) == "" {
+		return Descriptor{}, fmt.Errorf("в descriptor адаптера %q отсутствует local_path", descriptor.AdapterID)
+	}
+	if !fileExists(descriptor.LocalPath) {
+		return Descriptor{}, fmt.Errorf("локальный бинарник адаптера %q не найден: %s", descriptor.AdapterID, descriptor.LocalPath)
+	}
+	return *descriptor, nil
+}
+
+func (m *Manager) Run(ctx context.Context, req RunRequest) (RunResult, error) {
+	if err := m.EnsureLayout(); err != nil {
+		return RunResult{}, err
+	}
+
+	adapterID := strings.TrimSpace(req.AdapterID)
+	if adapterID == "" {
+		return RunResult{}, errors.New("не задан adapter_id для запуска адаптера")
+	}
+
+	command := strings.TrimSpace(req.Command)
+	if command == "" {
+		command = "run"
+	}
+
+	lock := m.runLock(adapterID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	descriptor, descriptorErr := m.findCurrentDescriptor(adapterID)
+	if descriptorErr != nil {
+		return RunResult{}, descriptorErr
+	}
+	if descriptor == nil {
+		return RunResult{AdapterID: adapterID, Command: command, RunStatus: "failed"}, fmt.Errorf("локальный descriptor адаптера %q не найден", adapterID)
+	}
+
+	resolved, err := m.ResolveBinary(adapterID)
+	if err != nil {
+		result := RunResult{
+			AdapterID:   descriptor.AdapterID,
+			Command:     command,
+			StartedAt:   time.Now().UTC(),
+			CompletedAt: time.Now().UTC(),
+			RunStatus:   "failed",
+		}
+		if updateErr := m.persistRunState(*descriptor, result, err); updateErr != nil {
+			err = errors.Join(err, fmt.Errorf("не удалось обновить descriptor запуска: %w", updateErr))
+		}
+		return result, err
+	}
+
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = defaultRunTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	startedAt := time.Now().UTC()
+	if updateErr := m.markRunning(resolved, startedAt); updateErr != nil {
+		return RunResult{}, fmt.Errorf("не удалось обновить статус запуска адаптера %q: %w", resolved.AdapterID, updateErr)
+	}
+
+	process, runErr := m.runner.Run(runCtx, resolved.LocalPath, []string{command}, req.Input)
+	result := RunResult{
+		AdapterID:   resolved.AdapterID,
+		Command:     command,
+		StartedAt:   nonZeroTime(process.StartedAt, startedAt),
+		CompletedAt: nonZeroTime(process.CompletedAt, time.Now().UTC()),
+		ExitCode:    cloneIntPointer(process.ExitCode),
+		Stdout:      string(process.Stdout),
+		Stderr:      string(process.Stderr),
+	}
+	result.Duration = result.CompletedAt.Sub(result.StartedAt)
+	if structured := bytes.TrimSpace(process.Stdout); len(structured) > 0 && json.Valid(structured) {
+		result.StructuredResult = bytes.Clone(structured)
+	}
+
+	runErr = classifyRunError(runCtx, timeout, runErr, result)
+	result.RunStatus = classifyRunStatus(runCtx, runErr)
+	if runErr == nil && result.RunStatus == "" {
+		result.RunStatus = "completed"
+	}
+
+	if updateErr := m.persistRunState(resolved, result, runErr); updateErr != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("не удалось обновить descriptor запуска: %w", updateErr))
+	}
+	if runErr != nil {
+		return result, runErr
+	}
+	return result, nil
 }
 
 func (m *Manager) syncOne(ctx context.Context, item ManifestItem) error {
@@ -289,10 +433,13 @@ func descriptorToStatus(descriptor Descriptor) Status {
 		TargetArch:      descriptor.TargetArch,
 		ProtocolVersion: descriptor.ProtocolVersion,
 		Status:          descriptor.Status,
+		RunStatus:       descriptor.RunStatus,
 		LocalPath:       descriptor.LocalPath,
 		FileSize:        descriptor.FileSize,
 		SHA256:          descriptor.SHA256,
 		LastError:       descriptor.LastError,
+		LastExitCode:    cloneIntPointer(descriptor.LastExitCode),
+		LastRunAt:       cloneTimePointer(descriptor.LastRunAt),
 		InstalledAt:     descriptor.InstalledAt,
 		UpdatedAt:       descriptor.UpdatedAt,
 	}
@@ -431,4 +578,138 @@ func descriptorFileName(adapterID, version string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+type execProcessRunner struct{}
+
+func (execProcessRunner) Run(ctx context.Context, path string, args []string, stdin []byte) (processResult, error) {
+	command := exec.CommandContext(ctx, path, args...)
+	command.Stdin = bytes.NewReader(stdin)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	startedAt := time.Now().UTC()
+	err := command.Run()
+	completedAt := time.Now().UTC()
+
+	result := processResult{
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		Stdout:      bytes.Clone(stdout.Bytes()),
+		Stderr:      bytes.Clone(stderr.Bytes()),
+	}
+	if command.ProcessState != nil {
+		exitCode := command.ProcessState.ExitCode()
+		result.ExitCode = &exitCode
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return result, nil
+		}
+		return result, err
+	}
+	if result.ExitCode == nil {
+		exitCode := 0
+		result.ExitCode = &exitCode
+	}
+	return result, nil
+}
+
+func (m *Manager) markRunning(descriptor Descriptor, startedAt time.Time) error {
+	updated := descriptor
+	updated.RunStatus = "running"
+	updated.LastRunAt = cloneTimePointer(&startedAt)
+	updated.LastExitCode = nil
+	updated.LastError = ""
+	updated.UpdatedAt = startedAt
+	return m.writeDescriptor(updated)
+}
+
+func (m *Manager) persistRunState(descriptor Descriptor, result RunResult, runErr error) error {
+	updated := descriptor
+	updated.RunStatus = strings.TrimSpace(result.RunStatus)
+	updated.LastRunAt = cloneTimePointer(&result.StartedAt)
+	updated.LastExitCode = cloneIntPointer(result.ExitCode)
+	updated.UpdatedAt = nonZeroTime(result.CompletedAt, time.Now().UTC())
+	if runErr != nil {
+		updated.LastError = strings.TrimSpace(runErr.Error())
+	} else {
+		updated.LastError = ""
+	}
+	return m.writeDescriptor(updated)
+}
+
+func (m *Manager) writeDescriptor(descriptor Descriptor) error {
+	descriptorPath := filepath.Join(m.descriptorsDir, descriptorFileName(descriptor.AdapterID, descriptor.Version))
+	return writeJSONAtomically(descriptorPath, descriptor)
+}
+
+func (m *Manager) runLock(adapterID string) *sync.Mutex {
+	normalizedID := strings.TrimSpace(adapterID)
+	m.locksMu.Lock()
+	defer m.locksMu.Unlock()
+
+	lock, ok := m.runLocks[normalizedID]
+	if !ok {
+		lock = &sync.Mutex{}
+		m.runLocks[normalizedID] = lock
+	}
+	return lock
+}
+
+func classifyRunError(ctx context.Context, timeout time.Duration, runErr error, result RunResult) error {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("выполнение адаптера превысило таймаут %s", timeout)
+	case errors.Is(ctx.Err(), context.Canceled):
+		return fmt.Errorf("выполнение адаптера отменено через context: %w", ctx.Err())
+	case runErr != nil:
+		return fmt.Errorf("не удалось запустить процесс адаптера: %w", runErr)
+	case result.ExitCode != nil && *result.ExitCode != 0:
+		return fmt.Errorf("адаптер завершился с кодом %d", *result.ExitCode)
+	case len(result.StructuredResult) == 0:
+		return errors.New("адаптер не вернул валидный JSON-результат в stdout")
+	default:
+		return nil
+	}
+}
+
+func classifyRunStatus(ctx context.Context, runErr error) string {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(ctx.Err(), context.Canceled):
+		return "canceled"
+	case runErr != nil:
+		return "failed"
+	default:
+		return "completed"
+	}
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copyValue := value.UTC()
+	return &copyValue
+}
+
+func nonZeroTime(value time.Time, fallback time.Time) time.Time {
+	if value.IsZero() {
+		return fallback.UTC()
+	}
+	return value.UTC()
 }

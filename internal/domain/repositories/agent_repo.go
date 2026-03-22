@@ -6,6 +6,7 @@ package repositories
 import (
 	"context"
 	"etalon-server/internal/domain/models"
+	"time"
 )
 
 // AgentRepo определяет интерфейс для работы с хранилищем агентов.
@@ -84,4 +85,15 @@ type AgentRepo interface {
 	// Возвращает:
 	//   - error: ошибка БД
 	MarkCommandsAsSent(ctx context.Context, commandIDs []uint) error
+
+	// CompleteCommands сохраняет результаты выполнения команд, присланные агентом.
+	// Команды переводятся в статусы "completed" или "failed" и получают ResultPayload.
+	CompleteCommands(ctx context.Context, agentUUID string, results []AgentCommandResult) error
+}
+
+type AgentCommandResult struct {
+	ID            uint
+	Status        string
+	CompletedAt   time.Time
+	ResultPayload []byte
 }

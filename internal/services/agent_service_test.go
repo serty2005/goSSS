@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/infra/logger"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
@@ -18,11 +19,12 @@ import (
 )
 
 type fakeAgentRepo struct {
-	mu       sync.Mutex
-	agent    *models.Agent
-	created  int
-	updated  int
-	commands []models.AgentCommand
+	mu               sync.Mutex
+	agent            *models.Agent
+	created          int
+	updated          int
+	commands         []models.AgentCommand
+	completedResults []repositories.AgentCommandResult
 }
 
 func (r *fakeAgentRepo) GetByUUID(_ context.Context, _ string) (*models.Agent, error) {
@@ -66,6 +68,24 @@ func (r *fakeAgentRepo) GetPendingCommands(_ context.Context, _ string) ([]model
 }
 
 func (r *fakeAgentRepo) MarkCommandsAsSent(_ context.Context, _ []uint) error {
+	return nil
+}
+
+func (r *fakeAgentRepo) CompleteCommands(_ context.Context, _ string, results []repositories.AgentCommandResult) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.completedResults = append(r.completedResults, results...)
+	for index, command := range r.commands {
+		for _, result := range results {
+			if command.ID != result.ID {
+				continue
+			}
+			r.commands[index].Status = result.Status
+			completedAt := result.CompletedAt
+			r.commands[index].CompletedAt = &completedAt
+			r.commands[index].ResultPayload = datatypes.JSON(append([]byte(nil), result.ResultPayload...))
+		}
+	}
 	return nil
 }
 
@@ -351,6 +371,69 @@ func TestProcessData_СохраняетПоследнийHeartbeatSnapshotВAgen
 	require.Equal(t, "atol", latestStatuses[0]["adapter_id"])
 }
 
+func TestProcessData_СохраняетTaskResultsИЗавершаетКомандуАгента(t *testing.T) {
+	ctx := t.Context()
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:          "agent-task-result",
+			Type:          "sssruner",
+			Status:        models.StatusActive,
+			LastHeartbeat: time.Now().Add(-time.Hour),
+		},
+		commands: []models.AgentCommand{{
+			ID:        77,
+			AgentUUID: "agent-task-result",
+			Type:      "run_adapter",
+			Status:    "sent",
+			CreatedAt: time.Now().Add(-time.Minute),
+		}},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	completedAt := time.Date(2026, 3, 22, 10, 0, 5, 0, time.UTC)
+	resp, err := svc.ProcessData(ctx, "agent-task-result", &api.AgentDataDTO{
+		AgentUUID:   "agent-task-result",
+		AgentType:   "sssruner",
+		Hostname:    "cash-task-result",
+		CurrentTime: "2026-03-22T10:00:05Z",
+		TaskResults: []api.AgentTaskResultDTO{{
+			ID:   77,
+			Type: "run_adapter",
+			TaskExecutionResultDTO: api.TaskExecutionResultDTO{
+				Status:      "completed",
+				AdapterID:   "fiscal-atol",
+				Command:     "run",
+				Operation:   "collect",
+				CompletedAt: &completedAt,
+				DurationMS:  3200,
+				ExitCode:    intPointer(0),
+				Stdout:      `{"status":"success"}`,
+				Stderr:      "driver hint",
+				Result:      json.RawMessage(`{"status":"success","devices":[{"serial":"SN-1"}]}`),
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Status)
+	require.Len(t, repo.completedResults, 1)
+	require.Equal(t, uint(77), repo.completedResults[0].ID)
+	require.Equal(t, "completed", repo.completedResults[0].Status)
+	require.Equal(t, completedAt, repo.completedResults[0].CompletedAt.UTC())
+
+	require.Len(t, repo.commands, 1)
+	require.Equal(t, "completed", repo.commands[0].Status)
+	require.NotNil(t, repo.commands[0].CompletedAt)
+	require.Equal(t, completedAt, repo.commands[0].CompletedAt.UTC())
+
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal(repo.commands[0].ResultPayload, &stored))
+	require.Equal(t, "completed", stored["status"])
+	require.Equal(t, "fiscal-atol", stored["adapter_id"])
+	require.Equal(t, "collect", stored["operation"])
+	require.Equal(t, "driver hint", stored["stderr"])
+}
+
 func TestProcessData_HeartbeatNoopНеПубликуетObservation(t *testing.T) {
 	ctx := t.Context()
 	data := &api.AgentDataDTO{
@@ -397,6 +480,10 @@ func TestProcessData_HeartbeatNoopНеПубликуетObservation(t *testing.T
 	require.Equal(t, 0, bus.count())
 	require.Equal(t, 1, repo.updated)
 	require.Equal(t, fingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func TestProcessData_ИзменениеInventoryПубликуетObservation(t *testing.T) {

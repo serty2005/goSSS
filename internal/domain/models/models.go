@@ -314,6 +314,16 @@ type AgentCommand struct {
 
 	// SentAt — время отправки команды агенту (статус "sent").
 	SentAt *time.Time
+
+	// CompletedAt — время получения результата выполнения от агента.
+	CompletedAt *time.Time `gorm:"index"`
+
+	// ResultPayload — последний структурированный результат выполнения команды.
+	// Хранит stdout/stderr, exit_code, duration_ms и доменный JSON-ответ адаптера.
+	ResultPayload datatypes.JSON `gorm:"type:jsonb"`
+
+	// UpdatedAt — время последнего обновления статуса команды.
+	UpdatedAt time.Time
 }
 
 // ReconciliationTask представляет задачу согласования данных для ручной обработки оператором.

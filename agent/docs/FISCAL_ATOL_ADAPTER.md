@@ -56,6 +56,12 @@ go build -o .\tmp\fiscal-atol-adapter-386.exe .\cmd\fiscal-atol-adapter
 
 Для production это означает, что поставка адаптера должна учитывать разрядность драйвера Атол на клиентской машине.
 
+Важно для runtime агента:
+
+- `core-agent` на `windows/amd64` может запускать этот `windows/386` адаптер;
+- это разрешено специально для сценариев, где на машине установлен только 32-битный `fptr10.dll`;
+- сам агент не пытается интерпретировать Atol-логику, а только передает JSON и получает результат.
+
 ## Команда describe
 
 Пример запуска:
@@ -204,6 +210,53 @@ go build -o .\tmp\fiscal-atol-adapter-386.exe .\cmd\fiscal-atol-adapter
 
 ```powershell
 '{"protocol_version":"1","request_id":"run-1","task_type":"collect","payload":{"devices":[{"transport":"tcp","ip":"10.25.1.22","port":5555}]}}' | .\tmp\fiscal-atol-adapter-386.exe run
+```
+
+## Запуск Через Agent Runtime
+
+Серверная задача для агента должна выглядеть так:
+
+```json
+{
+  "adapter_id": "fiscal-atol",
+  "command": "run",
+  "operation": "collect",
+  "timeout": "45s",
+  "device_params": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "10.25.1.22",
+        "port": 5555,
+        "connection_type": "tcp",
+        "model": "АТОЛ 22Ф",
+        "driver_hints": {
+          "branch": "10.9+"
+        }
+      }
+    ]
+  }
+}
+```
+
+Агент превратит эту задачу во входной JSON адаптера:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "runtime-generated-or-server-request-id",
+  "task_type": "collect",
+  "timeout_seconds": 45,
+  "payload": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "10.25.1.22",
+        "port": 5555
+      }
+    ]
+  }
+}
 ```
 
 ## Результат smoke-теста

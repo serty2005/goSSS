@@ -28,7 +28,7 @@ import (
 
 type workflow interface {
 	Type() string
-	Run(ctx context.Context, payload []byte) error
+	Run(ctx context.Context, payload []byte) (protocol.TaskExecutionResult, error)
 }
 
 type serviceDeskClient interface {
@@ -54,6 +54,7 @@ type adapterManager interface {
 	EnsureLayout() error
 	ListStatuses() ([]adapters.Status, error)
 	Sync(context.Context, []adapters.ManifestItem) ([]adapters.Status, error)
+	Run(context.Context, adapters.RunRequest) (adapters.RunResult, error)
 }
 
 type Agent struct {
@@ -68,6 +69,7 @@ type Agent struct {
 	adapterManager     adapterManager
 	connectivity       *connectivity.Manager
 	machineFingerprint string
+	pendingTaskResults []protocol.AgentTaskResultDTO
 	mu                 sync.Mutex
 }
 
@@ -103,6 +105,9 @@ func NewAgent(cfg config.Config, cli *client.ServiceDeskClient) (*Agent, error) 
 		connectivity:     connectivityManager,
 	}
 	a.registerWorkflow(workflows.NewSelfUpdateWorkflow(cfg.AgentVersion, updater.NewService(cfg.DataDir, cli)))
+	adapterRunWorkflow := workflows.NewAdapterRunWorkflow(a.adapterManager)
+	a.registerWorkflow(adapterRunWorkflow)
+	a.registerWorkflowAlias("adapter_run", adapterRunWorkflow)
 	return a, nil
 }
 
@@ -461,6 +466,7 @@ func (a *Agent) communicateLocked(ctx context.Context) (time.Duration, error) {
 		}
 		return a.recordConnectivityFailure(connectivity.OpHeartbeat, a.dataEndpoint(), err), err
 	}
+	a.acknowledgeTaskResults(len(payload.TaskResults))
 
 	update, saveErr := a.connectivity.RecordSuccess(connectivity.OpHeartbeat, a.dataEndpoint())
 	if saveErr != nil {
@@ -668,6 +674,7 @@ func (a *Agent) heartbeatLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.acknowledgeTaskResults(len(payload.TaskResults))
 
 	log.Printf("Heartbeat отправлен: status=%s tasks=%d manifests=%d", resp.Status, len(resp.Tasks), len(resp.AdapterManifests))
 	for _, task := range resp.Tasks {
@@ -696,6 +703,7 @@ func (a *Agent) buildHeartbeatPayload() (protocol.AgentDataDTO, error) {
 		AgentUUID:       a.identity.UUID,
 		AgentType:       a.cfg.AgentType,
 		AdapterStatuses: adapterStatuses,
+		TaskResults:     cloneTaskResults(a.pendingTaskResults),
 	}
 	a.attachInventoryData(&payload)
 	return payload, nil
@@ -724,17 +732,51 @@ func (a *Agent) attachInventoryData(payload *protocol.AgentDataDTO) {
 }
 
 func (a *Agent) executeTask(ctx context.Context, task protocol.AgentTaskDTO) error {
+	now := time.Now().UTC()
 	wf, ok := a.workflows[task.Type]
 	if !ok {
 		log.Printf("Неподдерживаемая задача от сервера: id=%d type=%s", task.ID, task.Type)
+		a.enqueueTaskResult(protocol.AgentTaskResultDTO{
+			ID:   task.ID,
+			Type: task.Type,
+			TaskExecutionResult: protocol.TaskExecutionResult{
+				Status:      "failed",
+				CompletedAt: &now,
+				Error:       fmt.Sprintf("неподдерживаемая задача агента: %s", task.Type),
+			},
+		})
 		return nil
 	}
 	log.Printf("Выполнение задачи id=%d type=%s", task.ID, task.Type)
-	return wf.Run(ctx, task.Payload)
+	result, err := wf.Run(ctx, task.Payload)
+	if strings.TrimSpace(result.Status) == "" {
+		if err != nil {
+			result.Status = "failed"
+		} else {
+			result.Status = "completed"
+		}
+	}
+	if result.CompletedAt == nil {
+		completedAt := time.Now().UTC()
+		result.CompletedAt = &completedAt
+	}
+	if err != nil && strings.TrimSpace(result.Error) == "" {
+		result.Error = strings.TrimSpace(err.Error())
+	}
+	a.enqueueTaskResult(protocol.AgentTaskResultDTO{
+		ID:                  task.ID,
+		Type:                task.Type,
+		TaskExecutionResult: result,
+	})
+	return err
 }
 
 func (a *Agent) registerWorkflow(w workflow) {
 	a.workflows[w.Type()] = w
+}
+
+func (a *Agent) registerWorkflowAlias(name string, w workflow) {
+	a.workflows[strings.TrimSpace(name)] = w
 }
 
 func (a *Agent) hostname() string {
@@ -743,4 +785,42 @@ func (a *Agent) hostname() string {
 		return "unknown-host"
 	}
 	return host
+}
+
+func (a *Agent) enqueueTaskResult(result protocol.AgentTaskResultDTO) {
+	a.pendingTaskResults = append(a.pendingTaskResults, result)
+}
+
+func (a *Agent) acknowledgeTaskResults(count int) {
+	if count <= 0 || len(a.pendingTaskResults) == 0 {
+		return
+	}
+	if count >= len(a.pendingTaskResults) {
+		a.pendingTaskResults = nil
+		return
+	}
+	a.pendingTaskResults = append([]protocol.AgentTaskResultDTO(nil), a.pendingTaskResults[count:]...)
+}
+
+func cloneTaskResults(results []protocol.AgentTaskResultDTO) []protocol.AgentTaskResultDTO {
+	if len(results) == 0 {
+		return nil
+	}
+	cloned := make([]protocol.AgentTaskResultDTO, 0, len(results))
+	for _, item := range results {
+		copyItem := item
+		if item.CompletedAt != nil {
+			completedAt := item.CompletedAt.UTC()
+			copyItem.CompletedAt = &completedAt
+		}
+		if item.ExitCode != nil {
+			exitCode := *item.ExitCode
+			copyItem.ExitCode = &exitCode
+		}
+		if item.Result != nil {
+			copyItem.Result = append(json.RawMessage(nil), item.Result...)
+		}
+		cloned = append(cloned, copyItem)
+	}
+	return cloned
 }

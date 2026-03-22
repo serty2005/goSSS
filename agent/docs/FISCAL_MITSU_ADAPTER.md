@@ -41,6 +41,7 @@
 - сам опрос ККТ выполняется по протоколу адаптера;
 - `health` ищет `MitsuCube.exe` в стандартных путях и пытается прочитать его версию;
 - отсутствие `MitsuCube.exe` не обязательно мешает выполнить `run`, но тогда `installed_driver` вернется как `Error`.
+- если конкретная поставка адаптера собрана как `windows/386`, то `core-agent` на `windows/amd64` имеет право ее запускать так же, как и другие x86-адаптеры.
 
 Стандартные пути поиска:
 
@@ -270,6 +271,53 @@ go build -o .\tmp\fiscal-mitsu-adapter-386.exe .\cmd\fiscal-mitsu-adapter
   }
 }
 '@ | .\tmp\fiscal-mitsu-adapter.exe run
+```
+
+## Запуск Через Agent Runtime
+
+Для запуска через активный агент сервер должен отдать задачу вида:
+
+```json
+{
+  "adapter_id": "fiscal-mitsu",
+  "command": "run",
+  "operation": "collect",
+  "timeout_seconds": 45,
+  "device_params": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "10.127.1.124",
+        "port": 8200,
+        "connection_type": "tcp",
+        "model": "Mitsu",
+        "extra_params": {
+          "protocol": "mitsu"
+        }
+      }
+    ]
+  }
+}
+```
+
+Агент не добавляет Mitsu-специфичную бизнес-логику. Он только формирует stdin-конверт:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "runtime-generated-or-server-request-id",
+  "task_type": "collect",
+  "timeout_seconds": 45,
+  "payload": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "10.127.1.124",
+        "port": 8200
+      }
+    ]
+  }
+}
 ```
 
 ## Ограничения и follow-up

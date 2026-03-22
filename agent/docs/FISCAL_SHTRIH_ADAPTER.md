@@ -51,6 +51,12 @@ go build -o .\tmp\fiscal-shtrih-adapter-386.exe .\cmd\fiscal-shtrih-adapter
 
 Если собрать `amd64`, `health` вернет `error`, а `run` не сможет подключиться к драйверу.
 
+Для agent runtime это означает:
+
+- `core-agent` на `windows/amd64` обязан разрешать запуск этого `windows/386` бинарника;
+- это штатный сценарий для 32-битного COM-драйвера `AddIn.DrvFR`;
+- сам агент отвечает только за доставку payload, таймаут и сбор результата процесса.
+
 ## Команда describe
 
 Пример запуска:
@@ -260,6 +266,53 @@ go build -o .\tmp\fiscal-shtrih-adapter-386.exe .\cmd\fiscal-shtrih-adapter
   }
 }
 '@ | .\tmp\fiscal-shtrih-adapter-386.exe run
+```
+
+## Запуск Через Agent Runtime
+
+Рекомендуемая задача от сервера:
+
+```json
+{
+  "adapter_id": "fiscal-shtrih",
+  "command": "run",
+  "operation": "collect",
+  "timeout": "45s",
+  "device_params": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "192.168.0.90",
+        "port": 5555,
+        "connection_type": "tcp",
+        "model": "Штрих",
+        "driver_hints": {
+          "com_bridge": "AddIn.DrvFR"
+        }
+      }
+    ]
+  }
+}
+```
+
+Агент превратит задачу в stdin-конверт адаптера:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "runtime-generated-or-server-request-id",
+  "task_type": "collect",
+  "timeout_seconds": 45,
+  "payload": {
+    "devices": [
+      {
+        "transport": "tcp",
+        "ip": "192.168.0.90",
+        "port": 5555
+      }
+    ]
+  }
+}
 ```
 
 ## Ограничения и follow-up

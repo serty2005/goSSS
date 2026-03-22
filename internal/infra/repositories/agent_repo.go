@@ -4,6 +4,7 @@ import (
 	"context"
 	"etalon-server/internal/domain/models"
 	domainRepos "etalon-server/internal/domain/repositories"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -61,4 +62,43 @@ func (r *agentRepo) MarkCommandsAsSent(ctx context.Context, commandIDs []uint) e
 			"status":  "sent",
 			"sent_at": now,
 		}).Error
+}
+
+func (r *agentRepo) CompleteCommands(ctx context.Context, agentUUID string, results []domainRepos.AgentCommandResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		for _, item := range results {
+			if item.ID == 0 {
+				continue
+			}
+
+			completedAt := item.CompletedAt.UTC()
+			if completedAt.IsZero() {
+				completedAt = now
+			}
+
+			if err := tx.Model(&models.AgentCommand{}).
+				Where("id = ? AND agent_uuid = ? AND status IN ?", item.ID, agentUUID, []string{"new", "sent"}).
+				Updates(map[string]interface{}{
+					"status":         normalizeCommandResultStatus(item.Status),
+					"completed_at":   completedAt,
+					"result_payload": item.ResultPayload,
+					"updated_at":     now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func normalizeCommandResultStatus(status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), "completed") {
+		return "completed"
+	}
+	return "failed"
 }

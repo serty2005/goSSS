@@ -260,19 +260,22 @@ type InventoryComponentEvidenceDTO struct {
 }
 
 type AdapterStatusDTO struct {
-	AdapterID       string    `json:"adapter_id"`
-	AdapterType     string    `json:"adapter_type,omitempty"`
-	Version         string    `json:"version,omitempty"`
-	TargetOS        string    `json:"target_os,omitempty"`
-	TargetArch      string    `json:"target_arch,omitempty"`
-	ProtocolVersion string    `json:"protocol_version,omitempty"`
-	Status          string    `json:"status,omitempty"`
-	LocalPath       string    `json:"local_path,omitempty"`
-	FileSize        int64     `json:"file_size,omitempty"`
-	SHA256          string    `json:"sha256,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-	InstalledAt     time.Time `json:"installed_at,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+	AdapterID       string     `json:"adapter_id"`
+	AdapterType     string     `json:"adapter_type,omitempty"`
+	Version         string     `json:"version,omitempty"`
+	TargetOS        string     `json:"target_os,omitempty"`
+	TargetArch      string     `json:"target_arch,omitempty"`
+	ProtocolVersion string     `json:"protocol_version,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	RunStatus       string     `json:"run_status,omitempty"`
+	LocalPath       string     `json:"local_path,omitempty"`
+	FileSize        int64      `json:"file_size,omitempty"`
+	SHA256          string     `json:"sha256,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	LastExitCode    *int       `json:"last_exit_code,omitempty"`
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	InstalledAt     time.Time  `json:"installed_at,omitempty"`
+	UpdatedAt       time.Time  `json:"updated_at,omitempty"`
 }
 
 type AdapterManifestDTO struct {
@@ -327,8 +330,29 @@ type AgentDataDTO struct {
 
 	Inventory       *InventorySnapshotDTO `json:"inventory,omitempty"`
 	AdapterStatuses []AdapterStatusDTO    `json:"adapter_statuses,omitempty"`
+	TaskResults     []AgentTaskResultDTO  `json:"task_results,omitempty"`
 
 	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+type TaskExecutionResultDTO struct {
+	Status      string          `json:"status"`
+	AdapterID   string          `json:"adapter_id,omitempty"`
+	Command     string          `json:"command,omitempty"`
+	Operation   string          `json:"operation,omitempty"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	DurationMS  int64           `json:"duration_ms,omitempty"`
+	ExitCode    *int            `json:"exit_code,omitempty"`
+	Stdout      string          `json:"stdout,omitempty"`
+	Stderr      string          `json:"stderr,omitempty"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	Error       string          `json:"error,omitempty"`
+}
+
+type AgentTaskResultDTO struct {
+	ID   uint   `json:"id"`
+	Type string `json:"type,omitempty"`
+	TaskExecutionResultDTO
 }
 
 // AgentTaskDTO описывает задачу, которую агент должен выполнить (для sssruner).
@@ -528,6 +552,7 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "attribute_marked_str")
 	delete(raw, "inventory")
 	delete(raw, "adapter_statuses")
+	delete(raw, "task_results")
 
 	a.AdditionalProperties = raw
 	return nil
