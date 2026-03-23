@@ -10,6 +10,7 @@ import (
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
+	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/task"
@@ -24,6 +25,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	bitrixplugin "etalon-server/internal/infra/plugins/bitrix"
 	"etalon-server/internal/infra/plugins/naumen"
+	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
 	infraRepos "etalon-server/internal/infra/repositories"
 	"etalon-server/internal/pkg/seeder"
 	"etalon-server/internal/services"
@@ -77,6 +79,7 @@ type Application struct {
 	TicketGateway         gateways.TicketGateway
 	ContractGateway       gateways.ContractGateway
 	BitrixModule          *bitrixModule
+	PyrusModule           *pyrusModule
 
 	// Handlers
 	CompanyHandler          *handlers.CompanyHandler
@@ -96,6 +99,7 @@ type Application struct {
 	FiscalHandler           *handlers.FiscalHandler
 	BitrixHandler           *handlers.BitrixHandler
 	BitrixWebhookHandler    *handlers.BitrixWebhookHandler
+	PyrusWebhookHandler     *handlers.PyrusWebhookHandler
 	CandidateHandler        *handlers.CandidateHandler
 	NetworkCandidateHandler *handlers.NetworkCandidateHandler
 	OwnerHistoryHandler     *handlers.OwnerHistoryHandler
@@ -103,6 +107,7 @@ type Application struct {
 	AgentDiagnosticsHandler *handlers.AgentDiagnosticsHandler
 	ReportHandler           *handlers.ReportHandler
 	EntityDeletionHandler   *handlers.EntityDeletionHandler
+	IntegrationSyncHandler  *handlers.IntegrationSyncHandler
 	MaterialHandler         *handlers.MaterialHandler
 
 	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
@@ -256,6 +261,7 @@ type Repositories struct {
 	UserRepo             user.Repository
 	LinkRepo             repositories.LinkRepo
 	BitrixRepo           bitrix.Repository
+	PyrusRepo            pyrus.Repository
 	NetworkCandidateRepo repositories.NetworkCandidateRepo
 	OwnerHistoryRepo     repositories.OwnerHistoryRepo
 }
@@ -274,18 +280,20 @@ func setupRepositories(db *gorm.DB) Repositories {
 		UserRepo:             infraRepos.NewUserRepo(db),
 		LinkRepo:             infraRepos.NewLinkRepo(db),
 		BitrixRepo:           infraRepos.NewBitrixRepo(db),
+		PyrusRepo:            infraRepos.NewPyrusRepo(db),
 		NetworkCandidateRepo: infraRepos.NewNetworkCandidateRepo(db),
 		OwnerHistoryRepo:     infraRepos.NewOwnerHistoryRepo(db),
 	}
 }
 
 type ExternalClients struct {
-	SDClient        external.ExternalSystemClient
-	FTPClient       services.FTPClient
-	IikoClient      iiko.IikoClient
-	BitrixClient    *bitrixplugin.Client
-	ContractMailbox contractSvc.ContractMailboxClient
-	RedisClient     *redis.Client
+	SDClient          external.ExternalSystemClient
+	FTPClient         services.FTPClient
+	IikoClient        iiko.IikoClient
+	BitrixClient      *bitrixplugin.Client
+	PyrusClient       *pyrusplugin.Client
+	ContractMailbox   contractSvc.ContractMailboxClient
+	RedisClient       *redis.Client
 	AgentAdapterStore services.AgentAdapterObjectStore
 }
 
@@ -307,6 +315,7 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 		FTPClient:         services.NewFTPClient(cfg, log.With("component", "ftp_client")),
 		IikoClient:        iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
 		BitrixClient:      bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
+		PyrusClient:       pyrusplugin.NewClient(cfg, log.With("component", "pyrus_client")),
 		ContractMailbox:   contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
 		RedisClient:       redisClient,
 		AgentAdapterStore: agentAdapterStore,
@@ -330,6 +339,9 @@ type Services struct {
 	FiscalService           fiscal.Service
 	BitrixSyncService       services.BitrixSyncService
 	BitrixIncomingService   services.BitrixIncomingService
+	PyrusSyncService        services.PyrusSyncService
+	PyrusIncomingService    services.PyrusIncomingService
+	IntegrationSyncControl  services.IntegrationSyncControlService
 	NetworkCandidateService services.NetworkCandidateService
 	EntityDeletionService   services.EntityDeletionService
 	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
@@ -368,6 +380,42 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.Config,
 	)
 
+	ticketService := services.NewTicketService(
+		app.Logger.With("component", "ticket_service"),
+		repos.TicketRepo,
+		repos.UserRepo,
+		repos.CompanyRepo,
+		repos.ContractRepo,
+		clients.SDClient,
+		app.Config,
+		repos.ServerRepo,
+		repos.WorkstationRepo,
+		repos.FRRepo,
+		repos.BitrixRepo,
+		repos.PyrusRepo,
+		repos.OwnerHistoryRepo,
+	)
+	pyrusSyncService := services.NewPyrusSyncService(
+		app.Config,
+		app.Logger.With("component", "pyrus_sync_service"),
+		clients.PyrusClient,
+		clients.RedisClient,
+		repos.PyrusRepo,
+	)
+	pyrusIncomingService := services.NewPyrusIncomingService(
+		app.Config,
+		app.Logger.With("component", "pyrus_incoming_service"),
+		clients.PyrusClient,
+		clients.RedisClient,
+		repos.TicketRepo,
+		ticketService,
+		repos.UserRepo,
+		repos.ServerRepo,
+		repos.PyrusRepo,
+		app.EventBus,
+	)
+	integrationSyncControl := services.NewIntegrationSyncControlService(repos.PyrusRepo, pyrusIncomingService)
+
 	return Services{
 		AuthService:             services.NewAuthService(app.Config, repos.UserRepo, app.Logger.With("component", "auth_service")),
 		AgentObservation:        obsService,
@@ -377,7 +425,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		TaskService:             taskSvc.NewService(app.Logger.With("component", "task_service"), repos.TaskRepo),
 		ServerActionsService:    services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),
 		EntityMatcherService:    services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
-		TicketService:           services.NewTicketService(app.Logger.With("component", "ticket_service"), repos.TicketRepo, repos.UserRepo, repos.CompanyRepo, repos.ContractRepo, clients.SDClient, app.Config, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.BitrixRepo, repos.OwnerHistoryRepo),
+		TicketService:           ticketService,
 		CompanyService:          companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
 		ContractService:         contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		ServerService:           serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
@@ -385,6 +433,9 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		FiscalService:           fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo, repos.OwnerHistoryRepo),
 		BitrixSyncService:       services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.ServerRepo, repos.WorkstationRepo, repos.UserRepo, repos.BitrixRepo, repos.CompanyRepo),
 		BitrixIncomingService:   services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
+		PyrusSyncService:        pyrusSyncService,
+		PyrusIncomingService:    pyrusIncomingService,
+		IntegrationSyncControl:  integrationSyncControl,
 		NetworkCandidateService: services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 		EntityDeletionService:   services.NewEntityDeletionService(app.Logger.With("component", "entity_deletion_service"), app.DB, transactor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.ContractRepo, repos.OwnerHistoryRepo),
 		AgentAdapterCatalogSync: agentAdapterCatalogSync,
@@ -456,6 +507,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway)
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
+	app.PyrusWebhookHandler = handlers.NewPyrusWebhookHandler(srvs.PyrusIncomingService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation, srvs.CompanyService)
 	app.NetworkCandidateHandler = handlers.NewNetworkCandidateHandler(srvs.NetworkCandidateService)
 	app.OwnerHistoryHandler = handlers.NewOwnerHistoryHandler(repos.OwnerHistoryRepo)
@@ -463,6 +515,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.AgentDiagnosticsHandler = handlers.NewAgentDiagnosticsHandler(app.DB, srvs.AgentOperatorFlow, srvs.AgentAdapterCatalogSync)
 	app.ReportHandler = handlers.NewReportHandler(app.DB)
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
+	app.IntegrationSyncHandler = handlers.NewIntegrationSyncHandler(srvs.IntegrationSyncControl)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
 }
 
@@ -477,6 +530,16 @@ func setupIntegrationModules(app *Application, srvs Services) {
 		app.BitrixWebhookHandler,
 	)
 	app.BitrixModule.registerEventHandlers()
+
+	app.PyrusModule = newPyrusModule(
+		app.Config,
+		app.Logger.With("component", "pyrus_module"),
+		app.EventBus,
+		srvs.PyrusSyncService,
+		srvs.PyrusIncomingService,
+		app.PyrusWebhookHandler,
+	)
+	app.PyrusModule.registerEventHandlers()
 }
 
 func (a *Application) setupRouter() *chi.Mux {
@@ -509,6 +572,9 @@ func (a *Application) setupRouter() *chi.Mux {
 	})
 	if a.BitrixModule != nil {
 		a.BitrixModule.registerPublicRoutes(r)
+	}
+	if a.PyrusModule != nil {
+		a.PyrusModule.registerPublicRoutes(r)
 	}
 
 	r.Route("/api/agents", func(r chi.Router) {
@@ -617,6 +683,12 @@ func (a *Application) setupRouter() *chi.Mux {
 		if a.BitrixModule != nil {
 			a.BitrixModule.registerProtectedRoutes(r)
 		}
+		if a.IntegrationSyncHandler != nil {
+			r.Route("/integrations", func(r chi.Router) {
+				r.Use(middleware.RequireAnyRole(user.RoleAdmin))
+				a.IntegrationSyncHandler.RegisterRoutes(r)
+			})
+		}
 
 		r.Route("/profile", func(r chi.Router) {
 			r.Get("/assignees", a.UserHandler.ListAssignees)
@@ -720,6 +792,9 @@ func (a *Application) runBackgroundServices(ctx context.Context, wg *sync.WaitGr
 	}
 	if a.BitrixModule != nil {
 		a.BitrixModule.start(ctx, wg)
+	}
+	if a.PyrusModule != nil {
+		a.PyrusModule.start(ctx, wg)
 	}
 }
 

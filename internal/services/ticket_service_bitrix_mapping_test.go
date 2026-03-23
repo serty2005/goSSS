@@ -85,6 +85,7 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 		nil,
 		bitrixRepo,
 		nil,
+		nil,
 	)
 
 	dto := api.TicketCreateInternalDTO{
@@ -180,6 +181,7 @@ func TestChangeCompany_SavesBitrixCompanyServicePointMapping(t *testing.T) {
 		nil,
 		bitrixRepo,
 		nil,
+		nil,
 	)
 
 	if _, err := svc.ChangeCompany(context.Background(), ticket.ID, company2.ID, actor.ID); err != nil {
@@ -260,6 +262,7 @@ func TestUpdateBitrixFields_SavesBitrixCompanyServicePointMapping(t *testing.T) 
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 		nil,
 	)
 

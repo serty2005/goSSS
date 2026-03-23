@@ -261,6 +261,18 @@ func (r *serverRepo) FindByCRMidOrIP(ctx context.Context, crmid string, ip strin
 	return nil, nil
 }
 
+func (r *serverRepo) ListByCRMid(ctx context.Context, crmid string) ([]server.Server, error) {
+	normalizedCRMID := strings.TrimSpace(crmid)
+	if normalizedCRMID == "" {
+		return []server.Server{}, nil
+	}
+	var items []server.Server
+	err := r.dbOrTx(ctx, nil).WithContext(ctx).
+		Where("crm_id = ? AND status != ?", normalizedCRMID, "locked").
+		Find(&items).Error
+	return items, err
+}
+
 func (r *serverRepo) FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]server.Server, error) {
 	if len(ownerIDs) == 0 {
 		return nil, nil

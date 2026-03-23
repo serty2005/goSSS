@@ -49,6 +49,13 @@ const (
 	AssetTypeWorkstation    = "Workstation"
 )
 
+const (
+	CommentSourceUI          = "ui"
+	CommentSourceBitrix      = "bitrix"
+	CommentSourcePyrus       = "pyrus"
+	CommentSourceServiceDesk = "servicedesk"
+)
+
 // Ticket представляет собой заявку ServiceDesk.
 // Теперь это полноценная сущность системы, а не просто кэш из Naumen.
 type Ticket struct {
@@ -130,6 +137,8 @@ type TicketComment struct {
 	ServiceDeskUUID   string     `json:"service_desk_uuid" gorm:"type:text;index"`
 	Text              string     `json:"text" gorm:"type:text"`
 	AuthorName        string     `json:"author_name" gorm:"type:varchar(255)"`
+	AuthorUserID      *uint      `json:"author_user_id,omitempty" gorm:"index"`
+	Source            string     `json:"source" gorm:"type:varchar(50);not null;default:'ui';index"`
 	CreationDate      time.Time  `json:"creation_date" gorm:"index"`
 	IsInternal        bool       `json:"is_internal"`
 	IsPrivate         bool       `json:"is_private" gorm:"not null;default:false;index"`
@@ -154,6 +163,9 @@ type ConnectionCopyStat struct {
 func (c *TicketComment) BeforeCreate(tx *gorm.DB) (err error) {
 	if c.ID == "" {
 		c.ID = uuid.New().String()
+	}
+	if c.Source == "" {
+		c.Source = CommentSourceUI
 	}
 	return
 }

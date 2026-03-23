@@ -12,6 +12,7 @@ import (
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/pyrus"
 	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
@@ -51,6 +52,7 @@ type TicketService interface {
 
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
+	CreateFromPyrus(ctx context.Context, input TicketCreateFromPyrusInput) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error)
 	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
 	UpdateComment(ctx context.Context, ticketID string, commentUUID string, comment string, userID uint, roles []string) (*tickets.TicketComment, error)
@@ -83,6 +85,16 @@ type DeferredStatusActivation struct {
 	RecipientUserID uint
 }
 
+type TicketCreateFromPyrusInput struct {
+	TaskID       int64
+	CompanyID    string
+	Subject      string
+	Description  string
+	ReporterName string
+	Status       string
+	Type         string
+}
+
 type ticketServiceImpl struct {
 	logger           logger.LoggerInterface
 	ticketRepo       tickets.TicketRepository
@@ -96,6 +108,7 @@ type ticketServiceImpl struct {
 	workstationRepo  workstation.Repository
 	frRepo           fiscal.Repository
 	bitrixRepo       bitrix.Repository
+	pyrusRepo        pyrus.Repository
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo
 }
 
@@ -117,6 +130,7 @@ func NewTicketService(
 	workstationRepo workstation.Repository,
 	frRepo fiscal.Repository,
 	bitrixRepo bitrix.Repository,
+	pyrusRepo pyrus.Repository,
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo,
 ) TicketService {
 	return &ticketServiceImpl{
@@ -132,6 +146,7 @@ func NewTicketService(
 		workstationRepo:  workstationRepo,
 		frRepo:           frRepo,
 		bitrixRepo:       bitrixRepo,
+		pyrusRepo:        pyrusRepo,
 		ownerHistoryRepo: ownerHistoryRepo,
 	}
 }
@@ -246,18 +261,8 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		return nil, fmt.Errorf("компания не найдена")
 	}
 
-	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
-		commonContract, err := s.getOrCreateCommonContract(ctx)
-		if err != nil {
-			return nil, err
-		}
-		ticket.ContractID = &commonContract.ID
-	} else {
-		contractID, err := s.resolveCompanyContractID(ctx, dto.CompanyID)
-		if err != nil {
-			return nil, err
-		}
-		ticket.ContractID = contractID
+	if err := s.applyContractForTicket(ctx, ticket, ownerCompany); err != nil {
+		return nil, err
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	// Валидация полей
@@ -286,6 +291,49 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	return ticket, nil
 }
 
+func (s *ticketServiceImpl) CreateFromPyrus(ctx context.Context, input TicketCreateFromPyrusInput) (*tickets.Ticket, error) {
+	ownerCompany, err := s.companyRepo.GetByID(ctx, input.CompanyID)
+	if err != nil {
+		return nil, err
+	}
+	if ownerCompany == nil {
+		return nil, fmt.Errorf("компания не найдена")
+	}
+
+	subject := strings.TrimSpace(input.Subject)
+	if subject == "" {
+		subject = fmt.Sprintf("Обращение из Pyrus #%d", input.TaskID)
+	}
+	reporterName := strings.TrimSpace(input.ReporterName)
+	if reporterName == "" {
+		reporterName = "Pyrus"
+	}
+
+	ticket := &tickets.Ticket{
+		Subject:         subject,
+		Description:     strings.TrimSpace(input.Description),
+		Status:          normalizePyrusTicketStatus(input.Status),
+		Priority:        tickets.PriorityMedium,
+		Type:            normalizePyrusTicketType(input.Type),
+		CompanyID:       strings.TrimSpace(input.CompanyID),
+		ReporterName:    reporterName,
+		ServiceDeskUUID: fmt.Sprintf("pyrus:task:%d", input.TaskID),
+		SyncWithBitrix:  false,
+	}
+	ticket.LastUpdatedBy = "pyrus_webhook"
+
+	if err := s.applyContractForTicket(ctx, ticket, ownerCompany); err != nil {
+		return nil, err
+	}
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+
+	if err := s.ticketRepo.Create(ctx, ticket); err != nil {
+		return nil, err
+	}
+	s.recordHistory(ctx, ticket.ID, nil, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourcePyrus, "", ticket.Status, nil)
+	return ticket, nil
+}
+
 func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*contract.Contract, error) {
 	commonID := strings.TrimSpace(s.cfg.CommonContractID)
 	if commonID == "" {
@@ -311,6 +359,29 @@ func (s *ticketServiceImpl) getOrCreateCommonContract(ctx context.Context) (*con
 		return nil, err
 	}
 	return commonContract, nil
+}
+
+func (s *ticketServiceImpl) applyContractForTicket(ctx context.Context, ticket *tickets.Ticket, ownerCompany *company.Company) error {
+	if ticket == nil {
+		return nil
+	}
+	if ownerCompany == nil {
+		return fmt.Errorf("компания не найдена")
+	}
+	if ownerCompany.ActiveContract == nil || !*ownerCompany.ActiveContract {
+		commonContract, err := s.getOrCreateCommonContract(ctx)
+		if err != nil {
+			return err
+		}
+		ticket.ContractID = &commonContract.ID
+		return nil
+	}
+	contractID, err := s.resolveCompanyContractID(ctx, ticket.CompanyID)
+	if err != nil {
+		return err
+	}
+	ticket.ContractID = contractID
+	return nil
 }
 
 // ChangeStatus меняет статус тикета Рё пишет историю.
@@ -664,6 +735,8 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		ServiceDeskUUID: commentID,
 		Text:            text,
 		AuthorName:      authorName,
+		AuthorUserID:    &userID,
+		Source:          tickets.CommentSourceUI,
 		CreationDate:    time.Now(),
 		IsInternal:      false,
 		IsPrivate:       isPrivate,
@@ -704,7 +777,7 @@ func (s *ticketServiceImpl) UpdateComment(
 	if err != nil {
 		return nil, err
 	}
-	if !canEditTicketComment(actor, target, roles) {
+	if !canEditTicketComment(ticket, actor, target, roles) {
 		return nil, ErrCommentForbidden
 	}
 
@@ -765,12 +838,12 @@ func (s *ticketServiceImpl) DeleteComment(
 	if err != nil {
 		return err
 	}
-	if !canDeleteTicketComment(actor, target, roles) {
+	if !canDeleteTicketComment(ticket, actor, target, roles) {
 		return ErrCommentForbidden
 	}
 
 	var deleted *tickets.TicketComment
-	if shouldSoftDeleteComment(target) {
+	if shouldSoftDeleteComment(target) || isPyrusTicket(ticket) {
 		deleted, err = s.ticketRepo.SoftDeleteComment(ctx, ticketID, commentUUID, time.Now())
 	} else {
 		deleted, err = s.ticketRepo.HardDeleteComment(ctx, ticketID, commentUUID)
@@ -1875,20 +1948,29 @@ func isCommentAuthor(actor *user.User, comment *tickets.TicketComment) bool {
 	if actor == nil || comment == nil {
 		return false
 	}
+	if comment.AuthorUserID != nil && *comment.AuthorUserID > 0 {
+		return actor.ID == *comment.AuthorUserID
+	}
 	return strings.EqualFold(
 		strings.TrimSpace(userDisplayNameForComment(actor)),
 		strings.TrimSpace(comment.AuthorName),
 	)
 }
 
-func canEditTicketComment(actor *user.User, comment *tickets.TicketComment, roles []string) bool {
+func canEditTicketComment(ticket *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, roles []string) bool {
+	if isPyrusTicket(ticket) {
+		return isCommentAuthor(actor, comment)
+	}
 	if isAdminUser(actor) || hasUserRole(roles, user.RoleAdmin) {
 		return true
 	}
 	return isCommentAuthor(actor, comment)
 }
 
-func canDeleteTicketComment(actor *user.User, comment *tickets.TicketComment, roles []string) bool {
+func canDeleteTicketComment(ticket *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, roles []string) bool {
+	if isPyrusTicket(ticket) {
+		return isCommentAuthor(actor, comment)
+	}
 	if isAdminUser(actor) || hasUserRole(roles, user.RoleAdmin) {
 		return true
 	}
@@ -1911,4 +1993,29 @@ func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, compan
 		return nil, nil
 	}
 	return &contractID, nil
+}
+
+func normalizePyrusTicketStatus(rawStatus string) string {
+	switch strings.TrimSpace(strings.ToLower(rawStatus)) {
+	case tickets.StatusResolved, tickets.StatusClosed:
+		return tickets.StatusResolved
+	case tickets.StatusInProgress, tickets.StatusPending, tickets.StatusDeferred:
+		return strings.TrimSpace(strings.ToLower(rawStatus))
+	default:
+		return tickets.StatusNew
+	}
+}
+
+func normalizePyrusTicketType(rawType string) string {
+	if strings.TrimSpace(rawType) == "" {
+		return tickets.TypeIncident
+	}
+	return strings.TrimSpace(rawType)
+}
+
+func isPyrusTicket(ticket *tickets.Ticket) bool {
+	if ticket == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(ticket.ServiceDeskUUID), "pyrus:task:")
 }

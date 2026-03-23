@@ -17,6 +17,7 @@ const (
 const (
 	HistorySourceUI          = "ui"
 	HistorySourceBitrix      = "bitrix"
+	HistorySourcePyrus       = "pyrus"
 	HistorySourceServiceDesk = "servicedesk"
 	HistorySourceSystem      = "system"
 )

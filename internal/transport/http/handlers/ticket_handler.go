@@ -114,6 +114,7 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishBitrixTicketSyncForTicket(ticket, "ticket_status_changed")
+	h.publishPyrusStatusSyncForTicket(ticket, "ticket_status_changed")
 	h.publishTicketUpdated(
 		ticket.ID,
 		"ticket_status_changed",
@@ -149,6 +150,7 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishBitrixCommentSyncForTicket(r.Context(), id, *comment, userID)
+	h.publishPyrusCommentSyncForTicket(r.Context(), id, *comment, userID)
 	h.publishTicketUpdated(
 		id,
 		"ticket_comment_added",
@@ -201,6 +203,7 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 
 	if updatedComment != nil && !updatedComment.IsPrivate {
 		h.publishBitrixCommentSyncForTicket(r.Context(), ticketID, *updatedComment, userID)
+		h.publishPyrusCommentSyncForTicket(r.Context(), ticketID, *updatedComment, userID)
 	}
 	h.publishTicketUpdated(
 		ticketID,
@@ -413,6 +416,7 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishBitrixTicketSyncForTicket(ticket, "ticket_assignee_updated")
+	h.publishPyrusAssigneeSyncForTicket(ticket, "ticket_assignee_updated")
 	h.publishTicketUpdated(ticket.ID, "ticket_assignee_updated", "ui", "Изменён исполнитель тикета", userID, nil)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
@@ -569,6 +573,64 @@ func (h *TicketHandler) publishBitrixCommentSyncForTicket(ctx context.Context, t
 	h.publishBitrixCommentSync(ticketID, comment, etalonUserID)
 }
 
+func (h *TicketHandler) publishPyrusCommentSync(ticketID string, taskID int64, comment tickets.TicketComment, etalonUserID uint) {
+	if h.eventBus == nil || strings.TrimSpace(ticketID) == "" || taskID <= 0 || strings.TrimSpace(comment.ID) == "" {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.PyrusCommentSyncRequested,
+		Payload: events.PyrusSyncEntityPayload{
+			TicketID:     ticketID,
+			TaskID:       taskID,
+			Comment:      &comment,
+			EtalonUserID: &etalonUserID,
+		},
+	})
+}
+
+func (h *TicketHandler) publishPyrusCommentSyncForTicket(ctx context.Context, ticketID string, comment tickets.TicketComment, etalonUserID uint) {
+	if comment.IsPrivate {
+		return
+	}
+	taskID, ok := h.resolvePyrusTaskIDForTicket(ctx, ticketID)
+	if !ok {
+		return
+	}
+	h.publishPyrusCommentSync(ticketID, taskID, comment, etalonUserID)
+}
+
+func (h *TicketHandler) publishPyrusStatusSyncForTicket(ticket *tickets.Ticket, reason string) {
+	taskID, ok := pyrusTaskIDFromTicket(ticket)
+	if !ok || h.eventBus == nil {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.PyrusTicketStatusSyncRequested,
+		Payload: events.PyrusSyncEntityPayload{
+			TicketID: ticket.ID,
+			TaskID:   taskID,
+			Reason:   strings.TrimSpace(reason),
+			Status:   ticket.Status,
+		},
+	})
+}
+
+func (h *TicketHandler) publishPyrusAssigneeSyncForTicket(ticket *tickets.Ticket, reason string) {
+	taskID, ok := pyrusTaskIDFromTicket(ticket)
+	if !ok || h.eventBus == nil {
+		return
+	}
+	h.eventBus.Publish(eventbus.Event{
+		Type: events.PyrusTicketAssigneeSyncRequested,
+		Payload: events.PyrusSyncEntityPayload{
+			TicketID:   ticket.ID,
+			TaskID:     taskID,
+			Reason:     strings.TrimSpace(reason),
+			AssigneeID: ticket.AssigneeID,
+		},
+	})
+}
+
 func (h *TicketHandler) isBitrixSyncEnabledForTicket(ctx context.Context, ticketID string) bool {
 	if h.service == nil || strings.TrimSpace(ticketID) == "" {
 		return false
@@ -581,6 +643,37 @@ func (h *TicketHandler) isBitrixSyncEnabledForTicket(ctx context.Context, ticket
 		return false
 	}
 	return details.Metadata.BitrixServicePointID != nil && *details.Metadata.BitrixServicePointID > 0
+}
+
+func (h *TicketHandler) resolvePyrusTaskIDForTicket(ctx context.Context, ticketID string) (int64, bool) {
+	if h.service == nil || strings.TrimSpace(ticketID) == "" {
+		return 0, false
+	}
+	details, err := h.service.GetDetails(ctx, ticketID)
+	if err != nil || details == nil {
+		return 0, false
+	}
+	return parsePyrusTaskID(details.Metadata.ServiceDeskUUID)
+}
+
+func pyrusTaskIDFromTicket(ticket *tickets.Ticket) (int64, bool) {
+	if ticket == nil {
+		return 0, false
+	}
+	return parsePyrusTaskID(ticket.ServiceDeskUUID)
+}
+
+func parsePyrusTaskID(serviceDeskUUID string) (int64, bool) {
+	const prefix = "pyrus:task:"
+	value := strings.TrimSpace(serviceDeskUUID)
+	if !strings.HasPrefix(value, prefix) {
+		return 0, false
+	}
+	taskID, err := strconv.ParseInt(strings.TrimPrefix(value, prefix), 10, 64)
+	if err != nil || taskID <= 0 {
+		return 0, false
+	}
+	return taskID, true
 }
 
 func (h *TicketHandler) publishTicketUpdated(

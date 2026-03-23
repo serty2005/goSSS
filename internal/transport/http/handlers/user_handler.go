@@ -949,6 +949,8 @@ func validateExternalFields(rawType, rawID *string) (*string, *string, error) {
 			return nil, nil, fmt.Errorf("для Naumen ID должен начинаться с $")
 		case user.ExternalTypeBitrix24:
 			return nil, nil, fmt.Errorf("для Bitrix24 ID должен быть числом")
+		case user.ExternalTypePyrus:
+			return nil, nil, fmt.Errorf("для Pyrus ID должен быть числом")
 		default:
 			return nil, nil, fmt.Errorf("некорректный ID внешней системы")
 		}

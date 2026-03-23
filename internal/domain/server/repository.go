@@ -22,6 +22,7 @@ type Repository interface {
 	SearchWithTotal(ctx context.Context, term string, limit, offset int, companyIDs, statuses, types []string) ([]Server, int64, error)
 
 	FindByCRMidOrIP(ctx context.Context, crmid string, ip string) (*Server, error)
+	ListByCRMid(ctx context.Context, crmid string) ([]Server, error)
 	FindByOwnerIDs(ctx context.Context, ownerIDs []string) ([]Server, error)
 	FindForPolling(ctx context.Context, limit int, interval time.Duration) ([]Server, error)
 

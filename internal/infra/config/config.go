@@ -32,16 +32,16 @@ type Config struct {
 	AdminPassword    string
 	AdminFullName    string
 
-	AgentAdapterS3Enabled         bool
-	AgentAdapterS3Endpoint        string
-	AgentAdapterS3Region          string
-	AgentAdapterS3Bucket          string
-	AgentAdapterS3AccessKey       string
-	AgentAdapterS3SecretKey       string
-	AgentAdapterPublicBaseURL     string
-	AgentAdapterCatalogKey        string
-	AgentAdapterSyncInterval      time.Duration
-	AgentAdapterDefaultChannel    string
+	AgentAdapterS3Enabled      bool
+	AgentAdapterS3Endpoint     string
+	AgentAdapterS3Region       string
+	AgentAdapterS3Bucket       string
+	AgentAdapterS3AccessKey    string
+	AgentAdapterS3SecretKey    string
+	AgentAdapterPublicBaseURL  string
+	AgentAdapterCatalogKey     string
+	AgentAdapterSyncInterval   time.Duration
+	AgentAdapterDefaultChannel string
 
 	ServiceDeskBaseURL string
 	ServiceDeskKey     string
@@ -111,6 +111,21 @@ type Config struct {
 	BitrixSuppressTTL           time.Duration
 	BitrixIntegrationUserID     int64
 
+	EnablePyrusGateway       bool
+	PyrusAPIBaseURL          string
+	PyrusLogin               string
+	PyrusSecurityKey         string
+	PyrusFormID              int64
+	PyrusWebhookEnabled      bool
+	PyrusWebhookSecret       string
+	PyrusEventsStreamName    string
+	PyrusEventsConsumerGroup string
+	PyrusIncomingParallelism int
+	PyrusIncomingRetryBase   time.Duration
+	PyrusIncomingRetryMax    time.Duration
+	PyrusIncomingMaxAttempts int
+	PyrusSuppressTTL         time.Duration
+
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
@@ -146,14 +161,14 @@ func New() *Config {
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
-		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
-		BrandName:        getEnv("BRAND_NAME", "MyHoreca_Xenion"),
-		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
-		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
-		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
-		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
-		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
+		AgentAPIKey:                getEnv("AGENT_API_KEY", ""),
+		BrandName:                  getEnv("BRAND_NAME", "MyHoreca_Xenion"),
+		SeederKey:                  getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		JWTSecret:                  getEnv("JWT_SECRET", "mhrcadmin994525"),
+		JWTExpirationMin:           getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
+		AdminUsername:              getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:              getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
+		AdminFullName:              getEnv("ADMIN_FULLNAME", "Главный"),
 		AgentAdapterS3Enabled:      getEnvAsBool("AGENT_ADAPTER_S3_ENABLED", false),
 		AgentAdapterS3Endpoint:     strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_ENDPOINT", "")),
 		AgentAdapterS3Region:       strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_REGION", "us-east-1")),
@@ -232,6 +247,21 @@ func New() *Config {
 		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
 		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
 		BitrixIntegrationUserID:     bitrixIntegrationUserID,
+
+		EnablePyrusGateway:       getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),
+		PyrusAPIBaseURL:          normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
+		PyrusLogin:               strings.TrimSpace(getEnv("PYRUS_LOGIN", "")),
+		PyrusSecurityKey:         strings.TrimSpace(getEnv("PYRUS_SECURITY_KEY", "")),
+		PyrusFormID:              int64(getEnvAsInt("PYRUS_FORM_ID", 0)),
+		PyrusWebhookEnabled:      getEnvAsBool("PYRUS_WEBHOOK_ENABLED", false),
+		PyrusWebhookSecret:       strings.TrimSpace(getEnv("PYRUS_WEBHOOK_SECRET", "")),
+		PyrusEventsStreamName:    strings.TrimSpace(getEnv("PYRUS_EVENTS_STREAM_NAME", "pyrus:events")),
+		PyrusEventsConsumerGroup: strings.TrimSpace(getEnv("PYRUS_EVENTS_CONSUMER_GROUP", "pyrus-workers")),
+		PyrusIncomingParallelism: getEnvAsInt("PYRUS_INCOMING_PARALLELISM", 4),
+		PyrusIncomingRetryBase:   time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_BASE_MS", 500)) * time.Millisecond,
+		PyrusIncomingRetryMax:    time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
+		PyrusIncomingMaxAttempts: getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
+		PyrusSuppressTTL:         time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
 
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
@@ -314,6 +344,17 @@ func getEnvAsBool(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func normalizeAPIBaseURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasSuffix(value, "/") {
+		value += "/"
+	}
+	return value
 }
 
 func detectBitrixIntegrationUserID(bitrixBaseURL string) int64 {

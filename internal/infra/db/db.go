@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
@@ -81,6 +82,12 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&bitrix.UserCache{},
 		&bitrix.CompanyServicePointMapping{},
 		&bitrix.IncomingEvent{},
+		&pyrus.TicketLink{},
+		&pyrus.CommentLink{},
+		&pyrus.FileLink{},
+		&pyrus.UserMap{},
+		&pyrus.IncomingEvent{},
+		&pyrus.OutgoingEvent{},
 	); err != nil {
 		return err
 	}

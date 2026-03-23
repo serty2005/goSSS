@@ -104,6 +104,21 @@ const (
 	// BitrixCommentSyncRequested публикуется при добавлении публичного комментария в тикет.
 	// Payload: BitrixSyncEntityPayload.
 	BitrixCommentSyncRequested = "bitrix.comment.sync.requested"
+	// PyrusTicketSyncRequested публикуется при изменениях тикета, требующих исходящей синхронизации в Pyrus.
+	// Payload: PyrusSyncEntityPayload.
+	PyrusTicketSyncRequested = "pyrus.ticket.sync.requested"
+	// PyrusCommentSyncRequested публикуется при добавлении публичного комментария в тикет Pyrus.
+	// Payload: PyrusSyncEntityPayload.
+	PyrusCommentSyncRequested = "pyrus.comment.sync.requested"
+	// PyrusTicketStatusSyncRequested публикуется при смене статуса тикета Pyrus.
+	// Payload: PyrusSyncEntityPayload.
+	PyrusTicketStatusSyncRequested = "pyrus.ticket.status.sync.requested"
+	// PyrusTicketAssigneeSyncRequested публикуется при назначении исполнителя в тикете Pyrus.
+	// Payload: PyrusSyncEntityPayload.
+	PyrusTicketAssigneeSyncRequested = "pyrus.ticket.assignee.sync.requested"
+	// PyrusTicketExtIDSyncRequested публикуется после локального создания тикета из Pyrus для обратной записи ext_id.
+	// Payload: PyrusSyncEntityPayload.
+	PyrusTicketExtIDSyncRequested = "pyrus.ticket.extid.sync.requested"
 )
 
 // BitrixSyncEntityPayload — унифицированная сущность для событий исходящей синхронизации Bitrix24.
@@ -114,6 +129,18 @@ type BitrixSyncEntityPayload struct {
 	Reason       string
 	Comment      *tickets.TicketComment
 	EtalonUserID *uint
+}
+
+// PyrusSyncEntityPayload — унифицированная сущность для исходящей синхронизации Pyrus.
+type PyrusSyncEntityPayload struct {
+	TicketID     string
+	TaskID       int64
+	Reason       string
+	Status       string
+	ExtID        string
+	Comment      *tickets.TicketComment
+	EtalonUserID *uint
+	AssigneeID   *uint
 }
 
 // TicketUpdatedPayload — полезная нагрузка события TicketUpdated.
