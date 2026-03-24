@@ -400,6 +400,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.Logger.With("component", "pyrus_sync_service"),
 		clients.PyrusClient,
 		clients.RedisClient,
+		repos.TicketRepo,
 		repos.PyrusRepo,
 	)
 	pyrusIncomingService := services.NewPyrusIncomingService(

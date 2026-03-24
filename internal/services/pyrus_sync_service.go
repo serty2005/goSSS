@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/pyrus"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
@@ -25,26 +26,29 @@ type PyrusSyncService interface {
 }
 
 type pyrusSyncService struct {
-	cfg    *config.Config
-	log    logger.LoggerInterface
-	client *pyrusplugin.Client
-	redis  *redis.Client
-	repo   pyrus.Repository
+	cfg        *config.Config
+	log        logger.LoggerInterface
+	client     pyrusAPIClient
+	redis      *redis.Client
+	ticketRepo tickets.TicketRepository
+	repo       pyrus.Repository
 }
 
 func NewPyrusSyncService(
 	cfg *config.Config,
 	log logger.LoggerInterface,
-	client *pyrusplugin.Client,
+	client pyrusAPIClient,
 	redisClient *redis.Client,
+	ticketRepo tickets.TicketRepository,
 	repo pyrus.Repository,
 ) PyrusSyncService {
 	return &pyrusSyncService{
-		cfg:    cfg,
-		log:    log,
-		client: client,
-		redis:  redisClient,
-		repo:   repo,
+		cfg:        cfg,
+		log:        log,
+		client:     client,
+		redis:      redisClient,
+		ticketRepo: ticketRepo,
+		repo:       repo,
 	}
 }
 
@@ -152,11 +156,17 @@ func (s *pyrusSyncService) handleOutgoingEvent(ctx context.Context, item *pyrus.
 	switch strings.TrimSpace(item.EventName) {
 	case events.PyrusTicketExtIDSyncRequested:
 		return s.handleExtIDSync(ctx, item, payload)
-	case events.PyrusTicketSyncRequested,
-		events.PyrusCommentSyncRequested,
-		events.PyrusTicketStatusSyncRequested,
-		events.PyrusTicketAssigneeSyncRequested:
-		return pyrus.OutgoingEventStatusIgnored, "исходящий сценарий будет завершён на phase 2", nil
+	case events.PyrusCommentSyncRequested:
+		return s.handleCommentSync(ctx, item, payload)
+	case events.PyrusTicketStatusSyncRequested:
+		return s.handleStatusSync(ctx, item, payload)
+	case events.PyrusTicketSyncRequested:
+		if strings.TrimSpace(payload.Status) == "" {
+			return pyrus.OutgoingEventStatusIgnored, "в событии ticket.sync не передан статус для синхронизации", nil
+		}
+		return s.handleStatusSync(ctx, item, payload)
+	case events.PyrusTicketAssigneeSyncRequested:
+		return pyrus.OutgoingEventStatusIgnored, "синхронизация исполнителя в Pyrus пока не реализована", nil
 	default:
 		return pyrus.OutgoingEventStatusIgnored, "неподдерживаемое исходящее событие", nil
 	}
@@ -220,6 +230,325 @@ func (s *pyrusSyncService) handleExtIDSync(
 
 	s.setSuppressTask(ctx, taskID)
 	return pyrus.OutgoingEventStatusDone, "", nil
+}
+
+func (s *pyrusSyncService) handleCommentSync(
+	ctx context.Context,
+	_ *pyrus.OutgoingEvent,
+	payload events.PyrusSyncEntityPayload,
+) (string, string, error) {
+	comment := payload.Comment
+	if comment == nil {
+		return pyrus.OutgoingEventStatusIgnored, "в событии отсутствует комментарий", nil
+	}
+	if comment.IsPrivate {
+		return pyrus.OutgoingEventStatusIgnored, "приватные комментарии не синхронизируются в Pyrus", nil
+	}
+
+	taskID, ticketID, err := s.resolveTaskAndTicketIDs(ctx, payload)
+	if err != nil {
+		return "", "", err
+	}
+	if err := s.syncSingleComment(ctx, taskID, ticketID, comment); err != nil {
+		return "", "", err
+	}
+	return pyrus.OutgoingEventStatusDone, "", nil
+}
+
+func (s *pyrusSyncService) handleStatusSync(
+	ctx context.Context,
+	item *pyrus.OutgoingEvent,
+	payload events.PyrusSyncEntityPayload,
+) (string, string, error) {
+	taskID, ticketID, err := s.resolveTaskAndTicketIDs(ctx, payload)
+	if err != nil {
+		return "", "", err
+	}
+	if ticketID == "" {
+		return pyrus.OutgoingEventStatusIgnored, "для синхронизации статуса нужен локальный ticket_id", nil
+	}
+
+	if err := s.syncPendingPublicComments(ctx, taskID, ticketID); err != nil {
+		return "", "", err
+	}
+
+	task, err := s.client.GetTask(ctx, taskID)
+	if err != nil {
+		return "", "", err
+	}
+	req, reason, err := buildPyrusStatusCommentRequest(task, payload.Status)
+	if err != nil {
+		return "", "", err
+	}
+	if reason != "" {
+		return pyrus.OutgoingEventStatusIgnored, reason, nil
+	}
+
+	updatedTask, err := s.client.AddComment(ctx, taskID, req)
+	if err != nil {
+		return "", "", err
+	}
+
+	now := time.Now()
+	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
+		TicketID:       ticketID,
+		PyrusTaskID:    taskID,
+		LastOutgoingAt: &now,
+	}); err != nil {
+		s.log.Warn("Pyrus: не удалось обновить ticket link после синхронизации статуса", "ticket_id", ticketID, "task_id", taskID, "error", err)
+	}
+	if updatedTask != nil {
+		if comment := findPyrusStatusComment(updatedTask, req.Action); comment != nil && comment.ID > 0 {
+			commentID := comment.ID
+			link := &pyrus.CommentLink{
+				EtalonCommentID: "pyrus-status-sync:" + item.ID,
+				PyrusCommentID:  &commentID,
+				PyrusTaskID:     taskID,
+				Direction:       "local_to_pyrus",
+				Fingerprint:     pyrusCommentFingerprint(comment),
+			}
+			if err := s.repo.UpsertCommentLink(ctx, link); err != nil {
+				s.log.Warn("Pyrus: не удалось сохранить link для служебного комментария смены статуса", "event_id", item.ID, "comment_id", commentID, "error", err)
+			}
+		}
+	}
+
+	s.setSuppressTask(ctx, taskID)
+	return pyrus.OutgoingEventStatusDone, "", nil
+}
+
+func (s *pyrusSyncService) resolveTaskAndTicketIDs(ctx context.Context, payload events.PyrusSyncEntityPayload) (int64, string, error) {
+	taskID := payload.TaskID
+	ticketID := strings.TrimSpace(payload.TicketID)
+
+	if taskID <= 0 && ticketID != "" {
+		link, err := s.repo.GetTicketLinkByTicketID(ctx, ticketID)
+		if err != nil {
+			return 0, "", err
+		}
+		if link != nil {
+			taskID = link.PyrusTaskID
+		}
+	}
+	if ticketID == "" && taskID > 0 {
+		link, err := s.repo.GetTicketLinkByTaskID(ctx, taskID)
+		if err != nil {
+			return 0, "", err
+		}
+		if link != nil {
+			ticketID = strings.TrimSpace(link.TicketID)
+		}
+	}
+	if taskID <= 0 {
+		return 0, ticketID, fmt.Errorf("не удалось определить task_id Pyrus для исходящей синхронизации")
+	}
+	return taskID, ticketID, nil
+}
+
+func (s *pyrusSyncService) syncPendingPublicComments(ctx context.Context, taskID int64, ticketID string) error {
+	if s.ticketRepo == nil || strings.TrimSpace(ticketID) == "" {
+		return nil
+	}
+	comments, err := s.ticketRepo.GetComments(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	for i := range comments {
+		comment := comments[i]
+		if comment.IsPrivate {
+			continue
+		}
+		link, err := s.repo.GetCommentLinkByEtalonID(ctx, comment.ID)
+		if err != nil {
+			return err
+		}
+		if link != nil {
+			continue
+		}
+		if err := s.syncSingleComment(ctx, taskID, ticketID, &comment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *pyrusSyncService) syncSingleComment(ctx context.Context, taskID int64, ticketID string, comment *tickets.TicketComment) error {
+	if comment == nil {
+		return nil
+	}
+	text := strings.TrimSpace(comment.Text)
+	if text == "" {
+		return nil
+	}
+
+	existing, err := s.repo.GetCommentLinkByEtalonID(ctx, comment.ID)
+	if err != nil {
+		return err
+	}
+
+	req := pyrusplugin.CommentRequest{
+		Text: text,
+	}
+	if existing != nil && existing.PyrusCommentID != nil && *existing.PyrusCommentID > 0 {
+		commentID := *existing.PyrusCommentID
+		req.EditCommentID = &commentID
+	} else {
+		req.Channel = &pyrusplugin.Channel{Type: "mobile_app"}
+	}
+
+	updatedTask, err := s.client.AddComment(ctx, taskID, req)
+	if err != nil {
+		return err
+	}
+
+	link := &pyrus.CommentLink{
+		EtalonCommentID: strings.TrimSpace(comment.ID),
+		PyrusTaskID:     taskID,
+		Direction:       "local_to_pyrus",
+		Fingerprint:     pyrusCommentFingerprint(&pyrusplugin.Comment{Text: text, CreateDate: comment.CreationDate}),
+	}
+	if existing != nil && existing.PyrusCommentID != nil && *existing.PyrusCommentID > 0 {
+		commentID := *existing.PyrusCommentID
+		link.PyrusCommentID = &commentID
+		link.Fingerprint = existing.Fingerprint
+	} else if outgoingComment := findOutgoingPyrusComment(updatedTask, text); outgoingComment != nil && outgoingComment.ID > 0 {
+		commentID := outgoingComment.ID
+		link.PyrusCommentID = &commentID
+		link.Fingerprint = pyrusCommentFingerprint(outgoingComment)
+	}
+	if err := s.repo.UpsertCommentLink(ctx, link); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	if strings.TrimSpace(ticketID) != "" {
+		if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
+			TicketID:       ticketID,
+			PyrusTaskID:    taskID,
+			LastOutgoingAt: &now,
+		}); err != nil {
+			s.log.Warn("Pyrus: не удалось обновить ticket link после отправки комментария", "ticket_id", ticketID, "task_id", taskID, "error", err)
+		}
+	}
+	s.setSuppressTask(ctx, taskID)
+	return nil
+}
+
+func buildPyrusStatusCommentRequest(task *pyrusplugin.Task, localStatus string) (pyrusplugin.CommentRequest, string, error) {
+	normalizedStatus := strings.TrimSpace(localStatus)
+	if normalizedStatus == "" {
+		return pyrusplugin.CommentRequest{}, "в событии не передан статус для синхронизации", nil
+	}
+
+	currentStatus := resolvePyrusTaskStatus(task)
+	if currentStatus == normalizedStatus {
+		return pyrusplugin.CommentRequest{}, "статус в Pyrus уже актуален", nil
+	}
+
+	req := pyrusplugin.CommentRequest{}
+	if normalizedStatus == tickets.StatusResolved || normalizedStatus == tickets.StatusClosed {
+		req.Action = "finished"
+		return req, "", nil
+	}
+
+	if currentStatus == tickets.StatusResolved || currentStatus == tickets.StatusClosed {
+		req.Action = "reopened"
+	}
+
+	statusField := findPyrusStatusField(task)
+	if statusField == nil {
+		if req.Action != "" {
+			return req, "", nil
+		}
+		return pyrusplugin.CommentRequest{}, "", fmt.Errorf("в задаче Pyrus не найдено поле статуса для перехода в %q", normalizedStatus)
+	}
+
+	statusToken, err := mapLocalStatusToPyrusFieldValue(normalizedStatus)
+	if err != nil {
+		return pyrusplugin.CommentRequest{}, "", err
+	}
+	currentFieldValue := fieldToString(*statusField)
+	if normalizePyrusFieldKey(currentFieldValue) == normalizePyrusFieldKey(statusToken) {
+		if req.Action != "" {
+			return req, "", nil
+		}
+		return pyrusplugin.CommentRequest{}, "статус поля Pyrus уже актуален", nil
+	}
+
+	update := pyrusplugin.FieldUpdateRequest{Value: statusToken}
+	if statusField.ID > 0 {
+		update.ID = &statusField.ID
+	} else if code := strings.TrimSpace(statusField.Code); code != "" {
+		update.Code = code
+	} else {
+		return pyrusplugin.CommentRequest{}, "", fmt.Errorf("у поля статуса Pyrus отсутствуют id и code")
+	}
+	req.FieldUpdates = []pyrusplugin.FieldUpdateRequest{update}
+	return req, "", nil
+}
+
+func mapLocalStatusToPyrusFieldValue(localStatus string) (string, error) {
+	switch strings.TrimSpace(localStatus) {
+	case tickets.StatusNew:
+		return "open", nil
+	case tickets.StatusInProgress:
+		return "in_progress", nil
+	case tickets.StatusPending:
+		return "pending", nil
+	case tickets.StatusDeferred:
+		return "deferred", nil
+	case tickets.StatusResolved, tickets.StatusClosed:
+		return "finished", nil
+	default:
+		return "", fmt.Errorf("неподдерживаемый локальный статус для Pyrus: %q", localStatus)
+	}
+}
+
+func findPyrusStatusField(task *pyrusplugin.Task) *pyrusplugin.Field {
+	if task == nil {
+		return nil
+	}
+	for i := range task.Fields {
+		field := task.Fields[i]
+		fieldType := normalizePyrusFieldKey(field.Type)
+		fieldCode := normalizePyrusFieldKey(field.Code)
+		fieldName := normalizePyrusFieldKey(field.Name)
+		if fieldType == "status" || fieldCode == "status" || fieldName == "status" {
+			return &task.Fields[i]
+		}
+	}
+	return nil
+}
+
+func findOutgoingPyrusComment(task *pyrusplugin.Task, text string) *pyrusplugin.Comment {
+	if task == nil || len(task.Comments) == 0 {
+		return nil
+	}
+	targetText := strings.TrimSpace(text)
+	for i := len(task.Comments) - 1; i >= 0; i-- {
+		comment := task.Comments[i]
+		if isPyrusExtIDSystemComment(&comment, "") {
+			continue
+		}
+		if strings.TrimSpace(comment.Text) == targetText {
+			return &comment
+		}
+	}
+	return nil
+}
+
+func findPyrusStatusComment(task *pyrusplugin.Task, action string) *pyrusplugin.Comment {
+	if task == nil || len(task.Comments) == 0 {
+		return nil
+	}
+	targetAction := normalizePyrusFieldKey(action)
+	for i := len(task.Comments) - 1; i >= 0; i-- {
+		comment := task.Comments[i]
+		if normalizePyrusFieldKey(comment.Action) == targetAction {
+			return &comment
+		}
+	}
+	return nil
 }
 
 func findPyrusExtIDComment(task *pyrusplugin.Task, extID string) *pyrusplugin.Comment {

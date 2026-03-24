@@ -42,7 +42,7 @@ type PyrusIncomingService interface {
 type pyrusIncomingService struct {
 	cfg           *config.Config
 	log           logger.LoggerInterface
-	client        *pyrusplugin.Client
+	client        pyrusAPIClient
 	redis         *redis.Client
 	ticketRepo    tickets.TicketRepository
 	ticketService TicketService
@@ -59,7 +59,7 @@ type pyrusIncomingService struct {
 func NewPyrusIncomingService(
 	cfg *config.Config,
 	log logger.LoggerInterface,
-	client *pyrusplugin.Client,
+	client pyrusAPIClient,
 	redisClient *redis.Client,
 	ticketRepo tickets.TicketRepository,
 	ticketService TicketService,

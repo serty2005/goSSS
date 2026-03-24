@@ -110,7 +110,7 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		nil,
 	)
 	pyrusClient := pyrusplugin.NewClient(cfg, log)
-	pyrusSync := NewPyrusSyncService(cfg, log, pyrusClient, nil, pyrusRepo)
+	pyrusSync := NewPyrusSyncService(cfg, log, pyrusClient, nil, ticketRepo, pyrusRepo)
 	bus.Subscribe(events.PyrusTicketExtIDSyncRequested, func(ctx context.Context, event eventbus.Event) {
 		payload, ok := event.Payload.(events.PyrusSyncEntityPayload)
 		if !ok {

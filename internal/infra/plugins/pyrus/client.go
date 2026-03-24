@@ -113,12 +113,12 @@ type FieldUpdateRequest struct {
 }
 
 type CommentRequest struct {
-	Text         string               `json:"text,omitempty"`
-	Action       string               `json:"action,omitempty"`
-	FieldUpdates []FieldUpdateRequest `json:"field_updates,omitzero"`
-	Attachments  []string             `json:"attachments,omitzero"`
-	Channel      *Channel             `json:"channel,omitzero"`
-	EditCommentID *int64              `json:"edit_comment_id,omitzero"`
+	Text          string               `json:"text,omitempty"`
+	Action        string               `json:"action,omitempty"`
+	FieldUpdates  []FieldUpdateRequest `json:"field_updates,omitzero"`
+	Attachments   []string             `json:"attachments,omitzero"`
+	Channel       *Channel             `json:"channel,omitzero"`
+	EditCommentID *int64               `json:"edit_comment_id,omitzero"`
 }
 
 type DownloadedFile struct {
@@ -128,12 +128,12 @@ type DownloadedFile struct {
 }
 
 type Client struct {
-	configured     bool
-	configBaseURL  string
-	login          string
-	securityKey    string
-	httpClient     *http.Client
-	logger         logger.LoggerInterface
+	configured    bool
+	configBaseURL string
+	login         string
+	securityKey   string
+	httpClient    *http.Client
+	logger        logger.LoggerInterface
 
 	mu          sync.Mutex
 	accessToken string
@@ -183,22 +183,26 @@ func (c *Client) GetTask(ctx context.Context, taskID int64) (*Task, error) {
 	if taskID <= 0 {
 		return nil, fmt.Errorf("некорректный task_id")
 	}
-	var task Task
-	if err := c.doJSON(ctx, http.MethodGet, "tasks/"+strconv.FormatInt(taskID, 10), nil, &task); err != nil {
+	var response struct {
+		Task Task `json:"task"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "tasks/"+strconv.FormatInt(taskID, 10), nil, &response); err != nil {
 		return nil, err
 	}
-	return &task, nil
+	return &response.Task, nil
 }
 
 func (c *Client) AddComment(ctx context.Context, taskID int64, req CommentRequest) (*Task, error) {
 	if taskID <= 0 {
 		return nil, fmt.Errorf("некорректный task_id")
 	}
-	var task Task
-	if err := c.doJSON(ctx, http.MethodPost, "tasks/"+strconv.FormatInt(taskID, 10)+"/comments", req, &task); err != nil {
+	var response struct {
+		Task Task `json:"task"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "tasks/"+strconv.FormatInt(taskID, 10)+"/comments", req, &response); err != nil {
 		return nil, err
 	}
-	return &task, nil
+	return &response.Task, nil
 }
 
 func (c *Client) UpdateTaskExtID(ctx context.Context, taskID int64, extID string) (*Task, error) {
