@@ -108,6 +108,60 @@ services:
     networks:
       - gosss-net
 
+  minio:
+    image: ${MINIO_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - gosss-net
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=gosss-prod_edge
+
+      - traefik.http.routers.minio-console.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/minio`)
+      - traefik.http.routers.minio-console.entrypoints=websecure
+      - traefik.http.routers.minio-console.tls=true
+      - traefik.http.routers.minio-console.tls.certresolver=le
+      - traefik.http.routers.minio-console.priority=185
+      - traefik.http.routers.minio-console.service=minio-console
+      - traefik.http.routers.minio-console.middlewares=minio-console-slash,minio-console-strip,admin-auth,etalon-secure-headers
+      - traefik.http.services.minio-console.loadbalancer.server.port=9001
+      - traefik.http.middlewares.minio-console-slash.redirectregex.regex=^https://([^/]+)/minio$$
+      - traefik.http.middlewares.minio-console-slash.redirectregex.replacement=https://$${1}/minio/
+      - traefik.http.middlewares.minio-console-slash.redirectregex.permanent=true
+      - traefik.http.middlewares.minio-console-strip.stripprefix.prefixes=/minio
+
+      - traefik.http.routers.minio-agents.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/agents`)
+      - traefik.http.routers.minio-agents.entrypoints=websecure
+      - traefik.http.routers.minio-agents.tls=true
+      - traefik.http.routers.minio-agents.tls.certresolver=le
+      - traefik.http.routers.minio-agents.priority=180
+      - traefik.http.routers.minio-agents.service=minio-agents
+      - traefik.http.routers.minio-agents.middlewares=etalon-secure-headers
+      - traefik.http.services.minio-agents.loadbalancer.server.port=9000
+
+  minio-init:
+    image: ${MC_IMAGE}
+    restart: "no"
+    env_file:
+      - .env
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_S3_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_S3_BUCKET}"'
+    depends_on:
+      - minio
+    networks:
+      - gosss-net
+
   server:
     image: ${BACKEND_IMAGE}
     restart: unless-stopped
@@ -118,6 +172,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - storage_tickets:/app/storage/tickets
       - ftp_cache:/app/ftp_cache
@@ -153,6 +209,7 @@ services:
 volumes:
   pg_data:
   redis_data:
+  minio_data:
   ftp_cache:
   storage_tickets:
   app_logs:

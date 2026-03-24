@@ -2,17 +2,30 @@
 
 ## 1. Что теперь поднимается в production
 
-Production compose `docker/docker-compose.prod.new.yml` поднимает:
+Для текущего production-стэка с внешним `traefik` используйте `docker/docker-compose.2403.yml`.
 
+Он поднимает:
+
+- `traefik`
+- `dozzle`
 - `db`
 - `redis`
 - `server`
 - `frontend`
 - `minio`
 - `minio-init`
-- опциональный reference `agents-proxy`
 
-`minio` не публикует S3 API наружу. Публичная раздача бинарников должна идти через доменный путь `/agents/`.
+`traefik` продолжает маршрутизировать весь трафик стэка:
+
+- `https://<domain>/` -> `frontend`
+- `https://<domain>/logs` -> `dozzle`
+- `https://<domain>/agents/...` -> `minio:9000`
+- `https://<domain>/minio/` -> `minio:9001`
+
+Маршрут `/minio` должен оставаться только под admin basic auth.
+
+Reference compose `docker/docker-compose.prod.new.yml` по-прежнему доступен как упрощённый standalone-вариант без встроенного `traefik`.
+`minio` не нужно публиковать наружу через `ports`. Публичная раздача бинарников должна идти только через доменный путь `/agents/`.
 
 ## 2. Подготовка `.env`
 
@@ -32,18 +45,24 @@ cp .env.prod.example .env
 - `POSTGRES_DB`
 - `DATABASE_URL`
 - `JWT_SECRET`
+- `AGENT_API_KEY`
 - `SEEDER_KEY`
 - `MINIO_ROOT_USER`
 - `MINIO_ROOT_PASSWORD`
+- `MINIO_BROWSER_REDIRECT_URL=https://<domain>/minio/`
+- `REDIS_ADDR=redis:6379`
 - `AGENT_ADAPTER_S3_ENABLED=true`
 - `AGENT_ADAPTER_S3_ENDPOINT=http://minio:9000`
 - `AGENT_ADAPTER_S3_BUCKET=agents`
 - `AGENT_ADAPTER_S3_ACCESS_KEY`
 - `AGENT_ADAPTER_S3_SECRET_KEY`
-- `AGENT_ADAPTER_PUBLIC_BASE_URL=https://etalon.serty.top/agents`
+- `AGENT_ADAPTER_PUBLIC_BASE_URL=https://<domain>/agents`
 - `AGENT_ADAPTER_CATALOG_KEY=catalog/index.json`
 - `AGENT_ADAPTER_SYNC_INTERVAL_MIN`
 - `AGENT_ADAPTER_DEFAULT_CHANNEL=stable`
+
+Для MinIO-контейнеров в production не используйте `latest`.
+В шаблоне по умолчанию зафиксированы CPU-совместимые теги `*-cpuv1`, потому что на старых `amd64`-хостах `minio/mc:latest` может завершаться с ошибкой `Fatal glibc error: CPU does not support x86-64-v2`.
 
 Если используете сидер, дополнительно задайте:
 
@@ -54,6 +73,7 @@ cp .env.prod.example .env
 - в production `AGENT_ADAPTER_S3_ACCESS_KEY` и `AGENT_ADAPTER_S3_SECRET_KEY` обычно совпадают с `MINIO_ROOT_USER` и `MINIO_ROOT_PASSWORD`, если не заведён отдельный MinIO-пользователь;
 - demo-seed каталога применяется только когда S3-контур отключён и таблицы релизов пустые;
 - `AGENT_ADAPTER_PUBLIC_BASE_URL` должен указывать именно на публичный `/agents/`, а не на внутренний `http://minio:9000`.
+- `MINIO_BROWSER_REDIRECT_URL` должен совпадать с внешним admin URL консоли и заканчиваться `/`, например `https://sd.myhoreca.io/minio/`.
 
 ## 3. Сборка и публикация образов
 
@@ -71,34 +91,33 @@ docker compose --env-file .env -f docker-compose.build.yml push
 
 ```bash
 cd docker
-docker compose --env-file .env -f docker-compose.prod.new.yml pull
-docker compose --env-file .env -f docker-compose.prod.new.yml up -d
-```
-
-Запуск с reference reverse-proxy для `/agents/`:
-
-```bash
-cd docker
-docker compose --env-file .env -f docker-compose.prod.new.yml --profile agents-proxy up -d
+docker compose --env-file .env -f docker-compose.2403.yml pull
+docker compose --env-file .env -f docker-compose.2403.yml up -d
 ```
 
 После старта:
 
 - `minio-init` создаёт bucket `agents`;
-- `minio-init` включает анонимное чтение объектов bucket для download-пути через proxy;
+- `minio-init` включает анонимное чтение объектов bucket для download-пути через `traefik`;
 - сервер синхронизирует `catalog/index.json` в локальную БД по расписанию;
 - heartbeat дальше работает только с БД и не зависит от live-S3 на каждый запрос.
+- `minio-init` больше не зависит от bind-mounted файла `./docs/minio-init.sh`, поэтому запуск не ломается, если production compose лежит не рядом с директорией `docs`.
 
-## 5. Reverse proxy для `https://etalon.serty.top/agents/...`
+## 5. Reverse proxy для `/agents` и `/minio`
 
-Боевой reverse-proxy обычно живёт вне этого репозитория. В репозитории добавлен reference-конфиг:
+Для production с `docker-compose.2403.yml` отдельный `agents-proxy` не нужен.
 
-- `docker/docs/nginx-agents-proxy.conf`
+Используется текущий `traefik`:
 
-Его можно:
+- маршрут `/agents` проксирует публичную раздачу бинарников и каталогов из bucket `agents`;
+- маршрут `/minio/` открывает встроенную консоль MinIO;
+- `AGENT_ADAPTER_S3_ENDPOINT` при этом остаётся внутренним `http://minio:9000`.
 
-- использовать как отдельный контейнер `agents-proxy`;
-- перенести в внешний Nginx/Traefik/Ingress, сохранив маршрут `/agents/ -> http://minio:9000/agents/...`.
+Важно:
+
+- MinIO S3 API не нужно публиковать наружу как отдельный порт;
+- path `/agents` используется только как публичный download URL для агентов;
+- publish/promote CLI и серверный sync должны работать по внутреннему endpoint `http://minio:9000`.
 
 Рекомендация по кешированию:
 
@@ -137,7 +156,7 @@ CLI делает атомарную последовательность:
 Фоновый sync работает по `AGENT_ADAPTER_SYNC_INTERVAL_MIN`, но сервер также умеет ручной refresh:
 
 ```text
-POST /agent-diagnostics/adapters/refresh
+POST /api/agent-diagnostics/adapters/refresh
 ```
 
 Практический сценарий после публикации:

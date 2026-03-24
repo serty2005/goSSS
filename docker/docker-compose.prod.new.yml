@@ -33,7 +33,7 @@ services:
       - gosss-net
 
   minio:
-    image: ${MINIO_IMAGE:-minio/minio:latest}
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
     restart: unless-stopped
     env_file:
       - .env
@@ -50,13 +50,13 @@ services:
       - gosss-net
 
   minio-init:
-    image: ${MC_IMAGE:-minio/mc:latest}
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
     restart: "no"
     env_file:
       - .env
-    entrypoint: ["/bin/sh", "/bootstrap/minio-init.sh"]
-    volumes:
-      - ./docs/minio-init.sh:/bootstrap/minio-init.sh:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_S3_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_S3_BUCKET}"'
     depends_on:
       - minio
     networks:
