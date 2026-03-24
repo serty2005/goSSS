@@ -127,18 +127,14 @@ services:
       - traefik.enable=true
       - traefik.docker.network=gosss-prod_edge
 
-      - traefik.http.routers.minio-console.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/minio`)
+      - traefik.http.routers.minio-console.rule=Host(`${MINIO_CONSOLE_DOMAIN}`)
       - traefik.http.routers.minio-console.entrypoints=websecure
       - traefik.http.routers.minio-console.tls=true
       - traefik.http.routers.minio-console.tls.certresolver=le
       - traefik.http.routers.minio-console.priority=185
       - traefik.http.routers.minio-console.service=minio-console
-      - traefik.http.routers.minio-console.middlewares=minio-console-slash,minio-console-strip,admin-auth,etalon-secure-headers
+      - traefik.http.routers.minio-console.middlewares=admin-auth,etalon-secure-headers
       - traefik.http.services.minio-console.loadbalancer.server.port=9001
-      - traefik.http.middlewares.minio-console-slash.redirectregex.regex=^https://([^/]+)/minio$$
-      - traefik.http.middlewares.minio-console-slash.redirectregex.replacement=https://$${1}/minio/
-      - traefik.http.middlewares.minio-console-slash.redirectregex.permanent=true
-      - traefik.http.middlewares.minio-console-strip.stripprefix.prefixes=/minio
 
       - traefik.http.routers.minio-agents.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/agents`)
       - traefik.http.routers.minio-agents.entrypoints=websecure

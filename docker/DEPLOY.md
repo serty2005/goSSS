@@ -20,9 +20,9 @@
 - `https://<domain>/` -> `frontend`
 - `https://<domain>/logs` -> `dozzle`
 - `https://<domain>/agents/...` -> `minio:9000`
-- `https://<domain>/minio/` -> `minio:9001`
+- `https://minio.<domain>/` -> `minio:9001`
 
-Маршрут `/minio` должен оставаться только под admin basic auth.
+Консоль MinIO в production лучше публиковать на отдельном host, а не под path-prefix.
 
 Reference compose `docker/docker-compose.prod.new.yml` по-прежнему доступен как упрощённый standalone-вариант без встроенного `traefik`.
 `minio` не нужно публиковать наружу через `ports`. Публичная раздача бинарников должна идти только через доменный путь `/agents/`.
@@ -49,7 +49,8 @@ cp .env.prod.example .env
 - `SEEDER_KEY`
 - `MINIO_ROOT_USER`
 - `MINIO_ROOT_PASSWORD`
-- `MINIO_BROWSER_REDIRECT_URL=https://<domain>/minio/`
+- `MINIO_CONSOLE_DOMAIN=minio.<domain>`
+- `MINIO_BROWSER_REDIRECT_URL=https://minio.<domain>/`
 - `REDIS_ADDR=redis:6379`
 - `AGENT_ADAPTER_S3_ENABLED=true`
 - `AGENT_ADAPTER_S3_ENDPOINT=http://minio:9000`
@@ -73,7 +74,8 @@ cp .env.prod.example .env
 - в production `AGENT_ADAPTER_S3_ACCESS_KEY` и `AGENT_ADAPTER_S3_SECRET_KEY` обычно совпадают с `MINIO_ROOT_USER` и `MINIO_ROOT_PASSWORD`, если не заведён отдельный MinIO-пользователь;
 - demo-seed каталога применяется только когда S3-контур отключён и таблицы релизов пустые;
 - `AGENT_ADAPTER_PUBLIC_BASE_URL` должен указывать именно на публичный `/agents/`, а не на внутренний `http://minio:9000`.
-- `MINIO_BROWSER_REDIRECT_URL` должен совпадать с внешним admin URL консоли и заканчиваться `/`, например `https://sd.myhoreca.io/minio/`.
+- `MINIO_CONSOLE_DOMAIN` должен резолвиться на тот же production ingress, что и основной домен;
+- `MINIO_BROWSER_REDIRECT_URL` должен совпадать с внешним admin URL консоли и заканчиваться `/`, например `https://minio.sd.myhoreca.io/`.
 
 ## 3. Сборка и публикация образов
 
@@ -103,20 +105,21 @@ docker compose --env-file .env -f docker-compose.2403.yml up -d
 - heartbeat дальше работает только с БД и не зависит от live-S3 на каждый запрос.
 - `minio-init` больше не зависит от bind-mounted файла `./docs/minio-init.sh`, поэтому запуск не ломается, если production compose лежит не рядом с директорией `docs`.
 
-## 5. Reverse proxy для `/agents` и `/minio`
+## 5. Reverse proxy для `/agents` и консоли MinIO
 
 Для production с `docker-compose.2403.yml` отдельный `agents-proxy` не нужен.
 
 Используется текущий `traefik`:
 
 - маршрут `/agents` проксирует публичную раздачу бинарников и каталогов из bucket `agents`;
-- маршрут `/minio/` открывает встроенную консоль MinIO;
+- отдельный host `minio.<domain>` открывает встроенную консоль MinIO;
 - `AGENT_ADAPTER_S3_ENDPOINT` при этом остаётся внутренним `http://minio:9000`.
 
 Важно:
 
 - MinIO S3 API не нужно публиковать наружу как отдельный порт;
 - path `/agents` используется только как публичный download URL для агентов;
+- консоль MinIO не стоит держать под path-prefix вроде `/minio`, потому что в этой схеме возможны проблемы с auth/session и внутренними запросами UI за reverse proxy;
 - publish/promote CLI и серверный sync должны работать по внутреннему endpoint `http://minio:9000`.
 
 Рекомендация по кешированию:

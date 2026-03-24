@@ -1,6 +1,7 @@
 *.json
 !agent/agent-config.json
 .env
+publisher.env
 *.log
 *.exe
 *.gz
