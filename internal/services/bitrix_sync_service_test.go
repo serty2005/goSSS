@@ -21,6 +21,57 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestBitrixSyncService_BuildDealFields_PutsDescriptionIntoCommentsAndOmitsTitle(t *testing.T) {
+	cfg := &config.Config{
+		BitrixCategoryID:    17,
+		BitrixOriginatorID:  "ETALON_SD",
+		EtalonTicketBaseURL: "https://sd.myhoreca.io",
+	}
+	svc := &bitrixSyncService{
+		cfg: cfg,
+		log: logger.New("", "test", "error", true),
+	}
+
+	pointID := int64(21953)
+	ticket := &tickets.Ticket{
+		Number:               68617,
+		Subject:              "Экран покупателя не работает",
+		Description:          "Первая строка\nВторая строка",
+		Status:               tickets.StatusNew,
+		Type:                 tickets.TypeConsultation,
+		BitrixServicePointID: &pointID,
+	}
+	ticket.ID = "c9d7917a-3c16-4966-b8f1-63e2a73efe48"
+
+	fields, err := svc.buildDealFields(context.Background(), ticket)
+	if err != nil {
+		t.Fatalf("buildDealFields завершился ошибкой: %v", err)
+	}
+
+	if _, ok := fields["TITLE"]; ok {
+		t.Fatalf("поле TITLE не должно отправляться в Bitrix24")
+	}
+
+	comments, ok := fields["COMMENTS"].(string)
+	if !ok {
+		t.Fatalf("ожидали строку в COMMENTS, получили %T", fields["COMMENTS"])
+	}
+	if !strings.Contains(comments, "[url=https://sd.myhoreca.io/tickets/c9d7917a-3c16-4966-b8f1-63e2a73efe48]Тикет в XD #68617[/url]") {
+		t.Fatalf("ожидали ссылку на тикет в COMMENTS, получили %q", comments)
+	}
+	if !strings.Contains(comments, "Первая строка\nВторая строка") {
+		t.Fatalf("ожидали описание тикета в COMMENTS, получили %q", comments)
+	}
+
+	description, ok := fields[bitrixDescriptionField].(string)
+	if !ok {
+		t.Fatalf("ожидали строку в пользовательском поле описания, получили %T", fields[bitrixDescriptionField])
+	}
+	if description != "" {
+		t.Fatalf("ожидали очистку пользовательского поля описания, получили %q", description)
+	}
+}
+
 func TestBitrixSyncService_UpsertDealAndLink_UsesExistingDealLinkWithoutCreatingDuplicate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {

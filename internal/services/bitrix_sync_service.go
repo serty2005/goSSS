@@ -561,18 +561,14 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 	connections := s.buildDealConnections(ctx, ticket)
 	fields := map[string]interface{}{
 		"CATEGORY_ID":          s.cfg.BitrixCategoryID,
-		"TITLE":                buildTicketTitle(ticket),
 		"ORIGINATOR_ID":        s.cfg.BitrixOriginatorID,
 		"ORIGIN_ID":            ticket.ID,
 		"STAGE_ID":             "C17:" + stageCode,
-		bitrixDescriptionField: s.buildDealDescription(ticket),
+		bitrixDescriptionField: "",
 		"COMMENTS":             s.buildDealComment(ticket),
 		bitrixConnectionsField: connections,
 		bitrixTypeField:        mapTicketTypeToBitrixID(ticket.Type),
 		bitrixPointField:       ticket.BitrixServicePointID,
-	}
-	if strings.TrimSpace(ticket.BitrixDealTitle) != "" {
-		fields["TITLE"] = strings.TrimSpace(ticket.BitrixDealTitle)
 	}
 
 	if ticket.AssigneeID != nil {
@@ -839,7 +835,12 @@ func (s *bitrixSyncService) buildDealComment(ticket *tickets.Ticket) string {
 	if strings.TrimSpace(url) == "" {
 		return ""
 	}
-	return fmt.Sprintf("[p]\n[url=%s]Тикет в XD #%d[/url]\n[/p]", url, ticket.Number)
+	body := fmt.Sprintf("[p]\n[url=%s]Тикет в XD #%d[/url]\n[/p]", url, ticket.Number)
+	description := strings.TrimSpace(s.buildDealDescription(ticket))
+	if description == "" {
+		return body
+	}
+	return body + "\n" + description
 }
 
 func (s *bitrixSyncService) buildTicketURL(ticketID string) string {
@@ -1549,14 +1550,6 @@ func (s *bitrixSyncService) verifyBitrixUserMatch(ctx context.Context, u *user.U
 		return true, strings.TrimSpace(strings.Join([]string{target.LastName, target.FirstName, target.SecondName}, " "))
 	}
 	return false, ""
-}
-
-func buildTicketTitle(ticket *tickets.Ticket) string {
-	subj := strings.TrimSpace(ticket.Subject)
-	if subj == "" {
-		subj = "Заявка"
-	}
-	return fmt.Sprintf("#%d %s", ticket.Number, subj)
 }
 
 func mapTicketStatusToStage(status string) string {

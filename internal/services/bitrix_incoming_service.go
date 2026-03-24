@@ -1175,10 +1175,40 @@ func extractIncomingDealDescription(deal *b24.Deal) string {
 		return ""
 	}
 	description := convertBitrixDescriptionForEtalon(toString(deal.Raw["UF_CRM_1766060620"]))
+	commentsRaw := toString(deal.Raw["COMMENTS"])
+	commentsWithoutPrefix, stripped := stripBitrixServiceCommentPrefix(commentsRaw, deal.OriginID)
+	commentsDescription := convertBitrixDescriptionForEtalon(commentsWithoutPrefix)
+	if stripped && strings.TrimSpace(commentsDescription) != "" {
+		return commentsDescription
+	}
 	if strings.TrimSpace(description) != "" {
 		return description
 	}
-	return convertBitrixDescriptionForEtalon(toString(deal.Raw["COMMENTS"]))
+	return commentsDescription
+}
+
+func stripBitrixServiceCommentPrefix(raw, ticketID string) (string, bool) {
+	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n"))
+	if text == "" {
+		return "", false
+	}
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return text, false
+	}
+
+	ticketPath := regexp.QuoteMeta("/tickets/" + ticketID)
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?is)^\s*\[p\]\s*\[url=[^\]]*` + ticketPath + `[^\]]*\](?:Тикет Etalon|Тикет в XD)[^\[]*\[/url\]\s*\[/p\]\s*`),
+		regexp.MustCompile(`(?is)^\s*\[url=[^\]]*` + ticketPath + `[^\]]*\](?:Тикет Etalon|Тикет в XD)[^\[]*\[/url\]\s*`),
+	}
+	for _, pattern := range patterns {
+		if !pattern.MatchString(text) {
+			continue
+		}
+		return strings.TrimSpace(pattern.ReplaceAllString(text, "")), true
+	}
+	return text, false
 }
 
 func (s *bitrixIncomingService) resolveMappedCompanyIDByPoint(ctx context.Context, pointID int64) (string, error) {
