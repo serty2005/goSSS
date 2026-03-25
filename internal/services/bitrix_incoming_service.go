@@ -63,7 +63,7 @@ type bitrixIncomingService struct {
 	eventBus   eventbus.EventBus
 
 	consumerName string
-	dealLocks    sync.Map
+	dealLocks    keyedMutex
 }
 
 func NewBitrixIncomingService(
@@ -451,16 +451,7 @@ func (s *bitrixIncomingService) handleDealAddOrUpdate(ctx context.Context, dealI
 }
 
 func (s *bitrixIncomingService) lockDeal(dealID int64) func() {
-	if dealID <= 0 {
-		return func() {}
-	}
-	muAny, _ := s.dealLocks.LoadOrStore(dealID, &sync.Mutex{})
-	mu, ok := muAny.(*sync.Mutex)
-	if !ok || mu == nil {
-		return func() {}
-	}
-	mu.Lock()
-	return mu.Unlock
+	return s.dealLocks.Lock(dealID)
 }
 
 func (s *bitrixIncomingService) handleDealDelete(ctx context.Context, dealID int64) (string, string, error) {

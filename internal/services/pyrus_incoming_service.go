@@ -53,7 +53,7 @@ type pyrusIncomingService struct {
 	eventBus      eventbus.EventBus
 
 	consumerName string
-	taskLocks    sync.Map
+	taskLocks    keyedMutex
 }
 
 func NewPyrusIncomingService(
@@ -996,16 +996,7 @@ func (s *pyrusIncomingService) publishTicketUpdated(ticket *tickets.Ticket, acti
 }
 
 func (s *pyrusIncomingService) lockTask(taskID int64) func() {
-	if taskID <= 0 {
-		return func() {}
-	}
-	muAny, _ := s.taskLocks.LoadOrStore(taskID, &sync.Mutex{})
-	mu, ok := muAny.(*sync.Mutex)
-	if !ok || mu == nil {
-		return func() {}
-	}
-	mu.Lock()
-	return mu.Unlock
+	return s.taskLocks.Lock(taskID)
 }
 
 func (s *pyrusIncomingService) isSuppressedTask(ctx context.Context, taskID int64) bool {
