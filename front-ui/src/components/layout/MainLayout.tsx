@@ -16,7 +16,10 @@ import {
   CloseOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import HeaderSearch from '@/components/common/HeaderSearch';
+import { formatLocaleDateTime } from '@/i18n/formatters';
+import { useAppLocale } from '@/i18n/useAppLocale';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { profileApi } from '@/api/profile';
@@ -40,40 +43,40 @@ type TicketNotificationItem = {
   occurredAt: string;
 };
 
-const colorLabels: Record<EditableColorKey, string> = {
-  primary: 'Акцент',
-  bgLayout: 'Фон страницы',
-  bgContainer: 'Фон форм',
-  borderColor: 'Границы',
+const colorLabelKeys: Record<EditableColorKey, string> = {
+  primary: 'layout.theme.colorPrimary',
+  bgLayout: 'layout.theme.colorBgLayout',
+  bgContainer: 'layout.theme.colorBgContainer',
+  borderColor: 'layout.theme.colorBorder',
 };
 
 const palettePresets: Array<{
   key: string;
-  label: string;
+  labelKey: string;
   light: Pick<ThemePalette, 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor'>;
   dark: Pick<ThemePalette, 'primary' | 'bgLayout' | 'bgContainer' | 'borderColor'>;
 }> = [
   {
     key: 'classic',
-    label: 'Классика',
+    labelKey: 'layout.theme.presetClassic',
     light: { primary: '#1677ff', bgLayout: '#f0f2f5', bgContainer: '#ffffff', borderColor: '#d9d9d9' },
     dark: { primary: '#177ddc', bgLayout: '#000000', bgContainer: '#141414', borderColor: '#303030' },
   },
   {
     key: 'mint',
-    label: 'Мята',
+    labelKey: 'layout.theme.presetMint',
     light: { primary: '#13c2c2', bgLayout: '#eefaf9', bgContainer: '#ffffff', borderColor: '#a8d8d8' },
     dark: { primary: '#36cfc9', bgLayout: '#0b1516', bgContainer: '#111f20', borderColor: '#245054' },
   },
   {
     key: 'amber',
-    label: 'Янтарь',
+    labelKey: 'layout.theme.presetAmber',
     light: { primary: '#faad14', bgLayout: '#fff8e6', bgContainer: '#fffdf7', borderColor: '#e8d3a3' },
     dark: { primary: '#d89614', bgLayout: '#1a1408', bgContainer: '#241b0c', borderColor: '#5e4a1d' },
   },
   {
     key: 'graphite',
-    label: 'Графит',
+    labelKey: 'layout.theme.presetGraphite',
     light: { primary: '#595959', bgLayout: '#f5f5f5', bgContainer: '#ffffff', borderColor: '#bfbfbf' },
     dark: { primary: '#8c8c8c', bgLayout: '#0f0f0f', bgContainer: '#1a1a1a', borderColor: '#3a3a3a' },
   },
@@ -86,14 +89,16 @@ const normalizeColor = (value: string | undefined, fallback: string) => {
 
 const MAX_TICKET_NOTIFICATIONS = 50;
 
-const renderTicketNotificationTitle = (item: TicketNotificationItem) => {
+const renderTicketNotificationTitle = (item: TicketNotificationItem, fallbackTitle: string) => {
   if (item.message.trim()) {
     return item.message.trim();
   }
-  return 'Событие по тикету';
+  return fallbackTitle;
 };
 
 const MainLayout: React.FC = () => {
+  const { t } = useTranslation(['layout', 'common']);
+  const { locale } = useAppLocale();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [headerConfig, setHeaderConfig] = useState<LayoutHeaderConfig | null>(null);
   const [headerAddon, setHeaderAddon] = useState<React.ReactNode | null>(null);
@@ -174,6 +179,16 @@ const MainLayout: React.FC = () => {
   const activePalette = themeMode === 'light' ? lightPalette : darkPalette;
   const sidebarCollapsed = !screens.lg || sidebarCollapsedPreference;
   const hasCustomHeaderControls = Boolean(headerConfig?.controls);
+  const fallbackNotificationTitle = t('layout:notifications.ticketEvent');
+  const systemSourceLabel = t('common:states.system');
+
+  const resolveSettingsErrorMessage = useCallback((fallbackKey: string, error: unknown) => {
+    const errorDetails = String((error as any)?.response?.data?.error?.error || '').trim();
+    const fallbackMessage = t(fallbackKey);
+    return errorDetails
+      ? t('common:errors.withDetails', { message: fallbackMessage, details: errorDetails })
+      : fallbackMessage;
+  }, [t]);
 
   useEffect(() => {
     setHeaderAddon(null);
@@ -265,7 +280,7 @@ const MainLayout: React.FC = () => {
     } catch (error: any) {
       setUser(prevUser);
       setTheme(themeMode);
-      message.error(error?.response?.data?.error?.error || 'Не удалось сохранить цветовые настройки');
+      message.error(resolveSettingsErrorMessage('layout:notifications.themeSaveError', error));
     }
   };
 
@@ -304,13 +319,13 @@ const MainLayout: React.FC = () => {
     items: [
       {
         key: 'profile',
-        label: 'Профиль',
+        label: t('layout:userMenu.profile'),
         icon: <UserOutlined />,
         onClick: () => navigate('/profile'),
       },
       {
         key: 'logout',
-        label: 'Выйти',
+        label: t('layout:userMenu.logout'),
         icon: <LogoutOutlined />,
         onClick: handleLogout,
       },
@@ -318,38 +333,38 @@ const MainLayout: React.FC = () => {
   };
 
   const companiesChildren = [
-    { key: '/companies', label: 'Компании' },
+    { key: '/companies', label: t('layout:menu.companies') },
   ];
 
   if (canAccessAcceptance) {
-    companiesChildren.push({ key: '/acceptance', label: 'Принятие на АО' });
-    companiesChildren.push({ key: '/network-acceptance', label: 'Принятие в сеть' });
+    companiesChildren.push({ key: '/acceptance', label: t('layout:menu.acceptance') });
+    companiesChildren.push({ key: '/network-acceptance', label: t('layout:menu.networkAcceptance') });
   }
 
   const equipmentChildren = [
-    { key: '/servers', label: 'Серверы' },
-    { key: '/workstations', label: 'Рабочие станции' },
-    { key: '/fiscals', label: 'ФР' },
-    { key: '/agents', label: 'Агенты' },
+    { key: '/servers', label: t('layout:menu.servers') },
+    { key: '/workstations', label: t('layout:menu.workstations') },
+    { key: '/fiscals', label: t('layout:menu.fiscals') },
+    { key: '/agents', label: t('layout:menu.agents') },
   ];
 
   if (canAccessAcceptance) {
-    equipmentChildren.push({ key: '/agent-observations', label: 'Наблюдения агентов' });
+    equipmentChildren.push({ key: '/agent-observations', label: t('layout:menu.agentObservations') });
   }
 
   const menuItems = [
-    { key: '/', icon: <SearchOutlined />, label: 'Поиск' },
-    { key: '/tickets', icon: <CustomerServiceOutlined />, label: 'Тикеты' },
+    { key: '/', icon: <SearchOutlined />, label: t('layout:menu.search') },
+    { key: '/tickets', icon: <CustomerServiceOutlined />, label: t('layout:menu.tickets') },
     {
       key: 'companies',
       icon: <BankOutlined />,
-      label: 'Компании',
+      label: t('layout:menu.companies'),
       children: companiesChildren,
     },
     {
       key: 'equipment',
       icon: <DesktopOutlined />,
-      label: 'Оборудование',
+      label: t('layout:menu.equipment'),
       children: equipmentChildren,
     },
   ];
@@ -358,11 +373,11 @@ const MainLayout: React.FC = () => {
     menuItems.push({
       key: 'admin',
       icon: <SettingOutlined />,
-      label: 'Администрирование',
+      label: t('layout:menu.admin'),
       children: [
-        { key: '/admin', label: 'Настройки' },
-        { key: '/tasks', label: 'Проблемы' },
-        { key: '/reports/companies-contracts', label: 'Отчеты: Компании и контракты' },
+        { key: '/admin', label: t('layout:menu.settings') },
+        { key: '/tasks', label: t('layout:menu.issues') },
+        { key: '/reports/companies-contracts', label: t('layout:menu.companyContractsReport') },
       ],
     });
   }
@@ -370,7 +385,7 @@ const MainLayout: React.FC = () => {
   const themeMenuContent = (
     <div style={{ width: 160 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <Text strong>Оформление</Text>
+        <Text strong>{t('layout:theme.title')}</Text>
       </div>
 
       <Segmented
@@ -378,8 +393,8 @@ const MainLayout: React.FC = () => {
         size="small"
         value={themeMode}
         options={[
-          { label: 'День', value: 'light' },
-          { label: 'Ночь', value: 'dark' },
+          { label: t('layout:theme.light'), value: 'light' },
+          { label: t('layout:theme.dark'), value: 'dark' },
         ]}
         onChange={(value) => {
           const nextMode = value as ThemeMode;
@@ -392,9 +407,11 @@ const MainLayout: React.FC = () => {
       <Divider style={{ margin: '8px 0' }} />
 
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {(Object.keys(colorLabels) as EditableColorKey[]).map((key) => (
+        {(Object.keys(colorLabelKeys) as EditableColorKey[]).map((key) => {
+          const colorLabel = t(colorLabelKeys[key]);
+          return (
           <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>{colorLabels[key]}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>{colorLabel}</Text>
             <div style={{ position: 'relative', width: 20, height: 20 }}>
               <input
                 ref={(node) => {
@@ -414,7 +431,7 @@ const MainLayout: React.FC = () => {
               <button
                 type="button"
                 onClick={() => colorInputRefs.current[key]?.click()}
-                title={`${colorLabels[key]}: ${activePalette[key]}`}
+                title={t('layout:theme.colorSwatchTitle', { label: colorLabel, value: activePalette[key] })}
                 style={{
                   width: 20,
                   height: 20,
@@ -427,13 +444,14 @@ const MainLayout: React.FC = () => {
               />
             </div>
           </div>
-        ))}
+          );
+        })}
       </Space>
 
       <Divider style={{ margin: '8px 0' }} />
 
       <div>
-        <Text type="secondary" style={{ fontSize: 12 }}>Пресеты</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:theme.presets')}</Text>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }}>
           {palettePresets.map((preset) => (
             <Button
@@ -462,7 +480,7 @@ const MainLayout: React.FC = () => {
                     border: '1px solid #00000022',
                   }}
                 />
-                <Text style={{ fontSize: 12 }}>{preset.label}</Text>
+                <Text style={{ fontSize: 12 }}>{t(preset.labelKey)}</Text>
               </Space>
             </Button>
           ))}
@@ -541,6 +559,7 @@ const MainLayout: React.FC = () => {
                 if (!screens.lg) return;
                 setSidebarCollapsed(!sidebarCollapsedPreference);
               }}
+              aria-label={t('layout:accessibility.toggleSidebar')}
               style={{ fontSize: '16px', width: 64, height: 64 }}
             />
           </div>
@@ -567,7 +586,11 @@ const MainLayout: React.FC = () => {
               onOpenChange={setThemeMenuOpen}
               content={themeMenuContent}
             >
-              <Button shape="circle" icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />} />
+              <Button
+                shape="circle"
+                icon={themeMode === 'light' ? <MoonOutlined /> : <SunOutlined />}
+                aria-label={t('layout:accessibility.openThemeSettings')}
+              />
             </Popover>
 
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
@@ -623,7 +646,9 @@ const MainLayout: React.FC = () => {
                   }}
                 >
                   <div className="inline-notification-card__head">
-                    <Tag color="processing" style={{ marginInlineEnd: 0 }}>{`\u0422\u0438\u043a\u0435\u0442 ${item.ticketID}`}</Tag>
+                    <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+                      {t('layout:notifications.ticketTag', { ticketID: item.ticketID })}
+                    </Tag>
                     <Button
                       type="text"
                       size="small"
@@ -632,12 +657,14 @@ const MainLayout: React.FC = () => {
                         event.stopPropagation();
                         dismissNotification(item.id);
                       }}
-                      aria-label={'\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435'}
+                      aria-label={t('layout:notifications.dismiss')}
                     />
                   </div>
-                  <Text className="inline-notification-card__text">{renderTicketNotificationTitle(item)}</Text>
+                  <Text className="inline-notification-card__text">
+                    {renderTicketNotificationTitle(item, fallbackNotificationTitle)}
+                  </Text>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {new Date(item.occurredAt).toLocaleString()} - {item.source || 'system'}
+                    {formatLocaleDateTime(item.occurredAt, locale)} - {item.source || systemSourceLabel}
                   </Text>
                 </article>
               ))}

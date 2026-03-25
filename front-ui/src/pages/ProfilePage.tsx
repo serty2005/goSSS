@@ -14,7 +14,10 @@ import {
   Switch,
   Typography,
 } from 'antd';
+import { useTranslation } from 'react-i18next';
 import { profileApi } from '@/api/profile';
+import type { AppLocaleCode } from '@/i18n/localeTypes';
+import { useAppLocale } from '@/i18n/useAppLocale';
 import { useAuthStore } from '@/store/authStore';
 
 const { Title, Text } = Typography;
@@ -23,6 +26,7 @@ type CredentialsForm = {
   username: string;
   password?: string;
   confirmPassword?: string;
+  interface_locale?: AppLocaleCode;
   cards_columns?: number;
   notifications_personal_enabled?: boolean;
   notifications_common_enabled?: boolean;
@@ -45,7 +49,9 @@ const integrationOptions = [
 ];
 
 const ProfilePage: React.FC = () => {
+  const { t } = useTranslation(['layout']);
   const { message } = AntdApp.useApp();
+  const { locale, setLocale, supportedLocales } = useAppLocale();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const isBitrixEnabled = user?.bitrix_enabled === true;
@@ -53,6 +59,15 @@ const ProfilePage: React.FC = () => {
   const availableIntegrationOptions = useMemo(
     () => (isBitrixEnabled ? integrationOptions : integrationOptions.filter((item) => item.value !== 'bitrix24')),
     [isBitrixEnabled],
+  );
+  const localeOptions = useMemo(
+    () => supportedLocales
+      .filter((item) => item.enabled)
+      .map((item) => ({
+        value: item.code,
+        label: item.nativeLabel,
+      })),
+    [supportedLocales],
   );
 
   const profileQuery = useQuery({
@@ -94,6 +109,7 @@ const ProfilePage: React.FC = () => {
         comments_new_first?: boolean;
       };
       interface?: {
+        locale?: string;
         search?: {
           cards_columns?: number;
         };
@@ -101,6 +117,7 @@ const ProfilePage: React.FC = () => {
     };
 
     return {
+      locale: String(cfg.interface?.locale || locale) as AppLocaleCode,
       cardsColumns: Number(cfg.interface?.search?.cards_columns ?? 5),
       personalEnabled: cfg.notifications?.personal_enabled !== false,
       commonEnabled: cfg.notifications?.common_enabled !== false,
@@ -111,12 +128,13 @@ const ProfilePage: React.FC = () => {
       commonDeferredDue: cfg.notifications?.common_deferred_due !== false,
       commentsNewFirst: cfg.tickets?.comments_new_first !== false,
     };
-  }, [user?.profile_config]);
+  }, [locale, user?.profile_config]);
 
   useEffect(() => {
     form.setFieldsValue({
       username: user?.username || '',
       integrations: initialIntegrations,
+      interface_locale: notificationsConfig.locale,
       cards_columns: notificationsConfig.cardsColumns,
       notifications_personal_enabled: notificationsConfig.personalEnabled,
       notifications_common_enabled: notificationsConfig.commonEnabled,
@@ -202,6 +220,8 @@ const ProfilePage: React.FC = () => {
     const nextColumns = Number.isFinite(nextColumnsRaw)
       ? Math.max(1, Math.min(5, Math.round(nextColumnsRaw)))
       : currentColumns;
+    const currentLocale = String(user.profile_config?.interface?.locale || locale) as AppLocaleCode;
+    const nextLocale = String(values.interface_locale || currentLocale) as AppLocaleCode;
 
     const currentNotifications = {
       personal_enabled: (user.profile_config as any)?.notifications?.personal_enabled !== false,
@@ -229,11 +249,13 @@ const ProfilePage: React.FC = () => {
     };
 
     const configChanged = (
-      nextColumns !== currentColumns
+      nextLocale !== currentLocale
+      || nextColumns !== currentColumns
       || JSON.stringify(currentNotifications) !== JSON.stringify(nextNotifications)
       || JSON.stringify(currentTicketsConfig) !== JSON.stringify(nextTicketsConfig)
     );
     const configFieldsTouched = form.isFieldsTouched([
+      'interface_locale',
       'cards_columns',
       'comments_new_first',
       'notifications_personal_enabled',
@@ -277,6 +299,7 @@ const ProfilePage: React.FC = () => {
           ...(updatedUser.profile_config || {}),
           interface: {
             ...((updatedUser.profile_config || {}).interface || {}),
+            locale: nextLocale,
             search: {
               ...((updatedUser.profile_config || {}).interface?.search || {}),
               cards_columns: nextColumns,
@@ -305,6 +328,9 @@ const ProfilePage: React.FC = () => {
       }
 
       setUser(updatedUser);
+      if (nextLocale !== locale) {
+        await setLocale(nextLocale);
+      }
       message.success('Профиль обновлён');
       form.setFieldValue('password', undefined);
       form.setFieldValue('confirmPassword', undefined);
@@ -421,6 +447,9 @@ const ProfilePage: React.FC = () => {
                 <Divider />
 
                 <Text strong>Интерфейс</Text>
+                <Form.Item name="interface_locale" label={t('layout:locale.label')} style={{ marginTop: 12 }}>
+                  <Select options={localeOptions} />
+                </Form.Item>
                 <Form.Item name="cards_columns" label="Колонок карточек в поиске" style={{ marginTop: 12 }}>
                   <Select
                     options={[

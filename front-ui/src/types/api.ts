@@ -594,6 +594,7 @@ export interface ThemePaletteConfigDTO {
 
 export interface UserInterfaceConfigDTO {
   theme_mode?: 'light' | 'dark';
+  locale?: 'en' | 'ru' | string;
   theme_palettes?: {
     light?: ThemePaletteConfigDTO;
     dark?: ThemePaletteConfigDTO;

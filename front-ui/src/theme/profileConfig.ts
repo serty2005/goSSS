@@ -1,4 +1,5 @@
 import type { UserProfileConfigDTO } from '@/types/api';
+import type { AppLocaleCode } from '@/i18n/localeTypes';
 import type { ThemeMode, ThemePalette } from '@/theme/themeConfig';
 import { defaultThemePalettes } from '@/theme/themeConfig';
 
@@ -50,4 +51,17 @@ export const buildProfileConfigWithPalettes = (
     },
   };
   return next;
+};
+
+export const buildProfileConfigWithLocale = (
+  current: UserProfileConfigDTO | undefined,
+  locale: AppLocaleCode,
+): UserProfileConfigDTO => {
+  return {
+    ...(current || {}),
+    interface: {
+      ...(current?.interface || {}),
+      locale,
+    },
+  };
 };

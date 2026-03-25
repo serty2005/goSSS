@@ -2,8 +2,8 @@ import React, { Suspense, lazy, useCallback, useEffect } from 'react';
 import { App as AntdApp, ConfigProvider, Spin, message } from 'antd';
 import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import ruRU from 'antd/locale/ru_RU';
 
+import { useAppLocale } from '@/i18n/useAppLocale';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { getThemeConfig, getThemeCssVariables, resolveThemePalette } from '@/theme/themeConfig';
@@ -81,6 +81,7 @@ const SupportOrAdminRoute = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App: React.FC = () => {
+  const { antdLocale } = useAppLocale();
   const themeMode = useUiStore((state) => state.themeMode);
   const profileConfig = useAuthStore((state) => state.user?.profile_config);
   const paletteByMode = paletteFromProfileConfig(profileConfig, themeMode);
@@ -110,7 +111,7 @@ const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ConfigProvider locale={ruRU} theme={getThemeConfig(themeMode, paletteByMode)}>
+      <ConfigProvider locale={antdLocale} theme={getThemeConfig(themeMode, paletteByMode)}>
         <AntdApp
           message={{
             duration: 5,

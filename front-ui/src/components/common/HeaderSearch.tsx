@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AutoComplete, Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
+import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
 import { profileApi } from '@/api/profile';
+import { getSupportedLocale } from '@/i18n/supportedLocales';
 import { useAuthStore } from '@/store/authStore';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
@@ -18,18 +20,18 @@ const { Text } = Typography;
 const LONGEST_STATUS_LABEL_WIDTH = 260;
 const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
-  { value: 'selection', label: 'Выбор' },
-  { value: 'number', label: 'Номер' },
-  { value: 'status', label: 'Статус' },
-  { value: 'company_display', label: 'Компания' },
-  { value: 'assignee_display', label: 'Исполнитель' },
-  { value: 'reporter_display', label: 'Автор' },
-  { value: 'subject', label: 'Описание' },
-  { value: 'bitrix_deal_title', label: 'Заголовок Bitrix24' },
-  { value: 'last_comment', label: 'Последний комментарий' },
-  { value: 'created_at', label: 'Создано' },
-  { value: 'last_activity', label: 'Обновлено' },
-  { value: 'sync_with_bitrix', label: 'B24' },
+  { value: 'selection', labelKey: 'layout:headerSearch.ticket.tableColumns.selection' },
+  { value: 'number', labelKey: 'layout:headerSearch.ticket.tableColumns.number' },
+  { value: 'status', labelKey: 'layout:headerSearch.ticket.tableColumns.status' },
+  { value: 'company_display', labelKey: 'layout:headerSearch.ticket.tableColumns.company_display' },
+  { value: 'assignee_display', labelKey: 'layout:headerSearch.ticket.tableColumns.assignee_display' },
+  { value: 'reporter_display', labelKey: 'layout:headerSearch.ticket.tableColumns.reporter_display' },
+  { value: 'subject', labelKey: 'layout:headerSearch.ticket.tableColumns.subject' },
+  { value: 'bitrix_deal_title', labelKey: 'layout:headerSearch.ticket.tableColumns.bitrix_deal_title' },
+  { value: 'last_comment', labelKey: 'layout:headerSearch.ticket.tableColumns.last_comment' },
+  { value: 'created_at', labelKey: 'layout:headerSearch.ticket.tableColumns.created_at' },
+  { value: 'last_activity', labelKey: 'layout:headerSearch.ticket.tableColumns.last_activity' },
+  { value: 'sync_with_bitrix', labelKey: 'layout:headerSearch.ticket.tableColumns.sync_with_bitrix' },
 ];
 const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
 const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'selection');
@@ -75,6 +77,7 @@ type TicketPreset = {
 };
 
 const HeaderSearch: React.FC = () => {
+  const { t, i18n } = useTranslation(['layout', 'common']);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
@@ -85,6 +88,29 @@ const HeaderSearch: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const isBitrixEnabled = user?.bitrix_enabled === true;
+  const localeDefinition = useMemo(() => getSupportedLocale(i18n.resolvedLanguage), [i18n.resolvedLanguage]);
+  const ticketModeOptions = useMemo(
+    () => [
+      { value: 'active', label: t('layout:headerSearch.ticket.modes.active') },
+      { value: 'archive', label: t('layout:headerSearch.ticket.modes.archive') },
+    ],
+    [t],
+  );
+  const ticketViewOptions = useMemo(
+    () => [
+      { value: 'list', label: t('layout:headerSearch.ticket.views.list') },
+      { value: 'cards', label: t('layout:headerSearch.ticket.views.cards') },
+      { value: 'table', label: t('layout:headerSearch.ticket.views.table') },
+    ],
+    [t],
+  );
+  const ticketStatusOptions = useMemo(
+    () => TICKET_STATUS_OPTIONS.map((item) => ({
+      ...item,
+      label: t(`layout:headerSearch.ticket.statusOptions.${item.value}`),
+    })),
+    [t],
+  );
 
   useEffect(() => {
     setSearchTerm(currentTerm);
@@ -208,8 +234,16 @@ const HeaderSearch: React.FC = () => {
   }, [isBitrixEnabled, ticketTableColumns]);
 
   const tableColumnOptions = useMemo(
-    () => (isBitrixEnabled ? TABLE_COLUMN_OPTIONS : TABLE_COLUMN_OPTIONS.filter((item) => item.value !== 'bitrix_deal_title' && item.value !== 'sync_with_bitrix')),
-    [isBitrixEnabled],
+    () => {
+      const localizedOptions = TABLE_COLUMN_OPTIONS.map((item) => ({
+        value: item.value,
+        label: t(item.labelKey),
+      }));
+      return isBitrixEnabled
+        ? localizedOptions
+        : localizedOptions.filter((item) => item.value !== 'bitrix_deal_title' && item.value !== 'sync_with_bitrix');
+    },
+    [isBitrixEnabled, t],
   );
   const tableColumnOrder = useMemo(
     () => tableColumnOptions.map((item) => item.value),
@@ -274,9 +308,9 @@ const HeaderSearch: React.FC = () => {
   const assigneeOptions = useMemo(
     () => (assigneesRes?.data || []).map((item) => ({
       value: String(item.id),
-      label: item.full_name || item.username || `ID ${item.id}`,
+      label: item.full_name || item.username || t('layout:headerSearch.ticket.assigneeFallback', { id: item.id }),
     })),
-    [assigneesRes],
+    [assigneesRes, t],
   );
 
   const bulkAssignMutation = useMutation({
@@ -284,11 +318,11 @@ const HeaderSearch: React.FC = () => {
       await Promise.all(payload.ids.map((id) => ticketsApi.assign(id, payload.assigneeID)));
     },
     onSuccess: () => {
-      message.success('Исполнитель назначен');
+      message.success(t('layout:headerSearch.ticket.bulkAssignSuccess'));
       clearSelectedTicketIDs();
       void queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось выполнить массовое назначение'),
+    onError: () => message.error(t('layout:headerSearch.ticket.bulkAssignError')),
   });
 
   const presets = useMemo<TicketPreset[]>(() => {
@@ -302,10 +336,13 @@ const HeaderSearch: React.FC = () => {
     () => presets.map((item) => ({ value: item.name })),
     [presets],
   );
-  const normalizedPresetName = useMemo(() => presetName.trim().toLocaleLowerCase('ru-RU'), [presetName]);
+  const normalizedPresetName = useMemo(
+    () => presetName.trim().toLocaleLowerCase(localeDefinition.intlLocale),
+    [localeDefinition.intlLocale, presetName],
+  );
   const existingPresetByName = useMemo(
-    () => presets.find((item) => item.name.trim().toLocaleLowerCase('ru-RU') === normalizedPresetName),
-    [normalizedPresetName, presets],
+    () => presets.find((item) => item.name.trim().toLocaleLowerCase(localeDefinition.intlLocale) === normalizedPresetName),
+    [localeDefinition.intlLocale, normalizedPresetName, presets],
   );
   const nextPresetID = useMemo(() => {
     const maxIndex = presets.reduce((maxValue, item) => {
@@ -501,7 +538,7 @@ const HeaderSearch: React.FC = () => {
   const saveCurrentPreset = async () => {
     const name = presetName.trim();
     if (!name) {
-      message.warning('Введите имя фильтра');
+      message.warning(t('layout:headerSearch.ticket.presetNameRequired'));
       return;
     }
     if (!user) {
@@ -543,9 +580,9 @@ const HeaderSearch: React.FC = () => {
       setUser({ ...user, profile_config: nextConfig as any });
       setPresetName('');
       updateTicketParams({ preset_id: nextPreset.id });
-      message.success(existingPresetByName ? 'Фильтр обновлён' : 'Фильтр сохранён');
+      message.success(t(existingPresetByName ? 'layout:headerSearch.ticket.presetUpdated' : 'layout:headerSearch.ticket.presetSaved'));
     } catch {
-      message.error('Не удалось сохранить фильтр');
+      message.error(t('layout:headerSearch.ticket.presetSaveError'));
     }
   };
 
@@ -575,9 +612,9 @@ const HeaderSearch: React.FC = () => {
         updateTicketParams({ preset_id: undefined });
       }
       setPresetName('');
-      message.success('Фильтр удалён');
+      message.success(t('layout:headerSearch.ticket.presetDeleted'));
     } catch {
-      message.error('Не удалось удалить фильтр');
+      message.error(t('layout:headerSearch.ticket.presetDeleteError'));
     }
   };
 
@@ -591,12 +628,12 @@ const HeaderSearch: React.FC = () => {
   }, [isSectionSearchPage, sectionTerm]);
 
   const sectionPlaceholder = (() => {
-    if (isCompaniesPage) return 'Поиск компаний: название, адрес, юр. название';
-    if (isServersPage) return 'Поиск серверов: id, ip, название';
-    if (isWorkstationsPage) return 'Поиск станций: id, название';
-    if (isFiscalsPage) return 'Поиск ФР: id, модель, РНМ';
-    if (isAgentsPage) return 'Поиск агентов: hostname, uuid, владелец';
-    return 'Поиск...';
+    if (isCompaniesPage) return t('layout:headerSearch.sectionPlaceholders.companies');
+    if (isServersPage) return t('layout:headerSearch.sectionPlaceholders.servers');
+    if (isWorkstationsPage) return t('layout:headerSearch.sectionPlaceholders.workstations');
+    if (isFiscalsPage) return t('layout:headerSearch.sectionPlaceholders.fiscals');
+    if (isAgentsPage) return t('layout:headerSearch.sectionPlaceholders.agents');
+    return t('layout:headerSearch.sectionPlaceholders.default');
   })();
 
   const onSectionSearch = (value: string) => {
@@ -669,15 +706,12 @@ const HeaderSearch: React.FC = () => {
       <Space direction="vertical" size="small" style={{ width: 420, maxWidth: 'min(420px, calc(100vw - 40px))' }}>
         {isHeaderNarrow && (
           <div className="ticket-filter-popover-mobile-only">
-            <Text type="secondary" style={{ fontSize: 12 }}>Режим списка</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.listMode')}</Text>
             <div style={{ marginTop: 6 }}>
               <Segmented
                 block
                 value={archiveMode}
-                options={[
-                  { value: 'active', label: 'В работе' },
-                  { value: 'archive', label: 'Архив' },
-                ]}
+                options={ticketModeOptions}
                 onChange={(value) => {
                   const nextMode = value as 'active' | 'archive';
                   updateTicketParams({ archive_mode: nextMode });
@@ -689,10 +723,10 @@ const HeaderSearch: React.FC = () => {
 
         {isHeaderNarrow && archiveMode !== 'archive' && (
           <div className="ticket-filter-popover-mobile-only">
-            <Text type="secondary" style={{ fontSize: 12 }}>Сохранённый фильтр</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.savedFilter')}</Text>
             <Select
               allowClear
-              placeholder="Сохранённый фильтр"
+              placeholder={t('layout:headerSearch.ticket.savedFilter')}
               value={selectedPresetID}
               options={presets.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(value) => {
@@ -711,11 +745,7 @@ const HeaderSearch: React.FC = () => {
           <Select
             value={ticketView}
             onChange={(value) => updateTicketParams({ view: value })}
-            options={[
-              { value: 'list', label: 'Список' },
-              { value: 'cards', label: 'Карточки' },
-              { value: 'table', label: 'Таблица' },
-            ]}
+            options={ticketViewOptions}
             style={{ width: VIEW_SELECT_WIDTH, flexShrink: 0 }}
           />
           {ticketView === 'table' && (
@@ -740,22 +770,22 @@ const HeaderSearch: React.FC = () => {
             <Space style={{ width: LONGEST_STATUS_LABEL_WIDTH, justifyContent: 'space-between' }} align="start">
               <Select
                 mode="multiple"
-                placeholder="Статусы"
+                placeholder={t('layout:headerSearch.ticket.statuses')}
                 value={statusValues}
                 onChange={(values) => updateTicketParams({ status: values.length ? values.join(',') : undefined })}
-                options={TICKET_STATUS_OPTIONS}
+                options={ticketStatusOptions}
                 style={{ width: 182 }}
               />
               <Checkbox
                 checked={onlyActiveStatuses}
                 onChange={(event) => updateTicketParams({ only_active_statuses: event.target.checked ? '1' : undefined })}
               >
-                Активные
+                {t('layout:headerSearch.ticket.activeOnly')}
               </Checkbox>
             </Space>
             <Select
               mode="multiple"
-              placeholder="Сотрудники"
+              placeholder={t('layout:headerSearch.ticket.assignees')}
               value={assigneeValues}
               onChange={(values) => updateTicketParams({ assignee_ids: values.length ? values.join(',') : undefined })}
               options={assigneeOptions}
@@ -767,7 +797,7 @@ const HeaderSearch: React.FC = () => {
               disabled={!ownAssigneeID}
               onChange={(event) => updateTicketParams({ assignee_ids: event.target.checked ? ownAssigneeID : undefined })}
             >
-              Мои
+              {t('layout:headerSearch.ticket.mineOnly')}
             </Checkbox>
           </>
         )}
@@ -781,13 +811,12 @@ const HeaderSearch: React.FC = () => {
           }}
           style={{ width: LONGEST_STATUS_LABEL_WIDTH }}
           allowClear
-          format="DD.MM.YYYY"
         />
 
         <Select
           showSearch
           allowClear
-          placeholder="Компания"
+          placeholder={t('layout:headerSearch.ticket.company')}
           value={ticketCompany}
           onChange={(value) => updateTicketParams({ [companyParamKey]: value || undefined })}
           filterOption={(input, option) =>
@@ -803,7 +832,7 @@ const HeaderSearch: React.FC = () => {
           <Space.Compact style={{ width: '100%' }}>
             <AutoComplete
               options={presetNameOptions}
-              placeholder="Имя фильтра"
+              placeholder={t('layout:headerSearch.ticket.presetName')}
               value={presetName}
               onChange={setPresetName}
               filterOption={(inputValue, option) =>
@@ -811,11 +840,11 @@ const HeaderSearch: React.FC = () => {
               }
             />
             <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
-              {existingPresetByName ? 'Обновить' : 'Сохранить'}
+              {t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
             </Button>
             {existingPresetByName && (
               <Button danger onClick={() => void deleteCurrentPreset()} loading={updateProfileMutation.isPending}>
-                Удалить
+                {t('common:actions.delete')}
               </Button>
             )}
           </Space.Compact>
@@ -840,7 +869,7 @@ const HeaderSearch: React.FC = () => {
                 },
           )}
         >
-          Сбросить фильтры
+          {t('layout:headerSearch.ticket.resetFilters')}
         </Button>
       </Space>
     );
@@ -849,7 +878,7 @@ const HeaderSearch: React.FC = () => {
       <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
         {selectedTicketIDs.length >= 1 && archiveMode !== 'archive' && (
           <Select
-            placeholder={`Исполнитель (${selectedTicketIDs.length})`}
+            placeholder={t('layout:headerSearch.ticket.bulkAssign', { count: selectedTicketIDs.length })}
             options={assigneeOptions}
             loading={!assigneesRes || bulkAssignMutation.isPending}
             style={{ width: isCompact ? 190 : 230 }}
@@ -864,10 +893,7 @@ const HeaderSearch: React.FC = () => {
           <Segmented
             className="ticket-header-inline-archive"
             value={archiveMode}
-            options={[
-              { value: 'active', label: 'В работе' },
-              { value: 'archive', label: 'Архив' },
-            ]}
+            options={ticketModeOptions}
             onChange={(value) => {
               const nextMode = value as 'active' | 'archive';
               updateTicketParams({ archive_mode: nextMode });
@@ -875,7 +901,7 @@ const HeaderSearch: React.FC = () => {
           />
         )}
         <Input.Search
-          placeholder="Поиск по заявкам..."
+          placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
           allowClear
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
@@ -886,7 +912,7 @@ const HeaderSearch: React.FC = () => {
           <Select
             className="ticket-header-inline-preset"
             allowClear
-            placeholder="Сохранённый фильтр"
+            placeholder={t('layout:headerSearch.ticket.savedFilter')}
             value={selectedPresetID}
             options={presets.map((item) => ({ value: item.id, label: item.name }))}
             onChange={(value) => {
@@ -900,13 +926,13 @@ const HeaderSearch: React.FC = () => {
           />
         )}
         <Popover trigger="click" placement="bottomRight" content={filterContent}>
-          <Button shape="circle" icon={<SettingOutlined />} />
+          <Button shape="circle" icon={<SettingOutlined />} aria-label={t('layout:headerSearch.ticket.openFilters')} />
         </Popover>
         <Button
           className="ticket-header-new-ticket"
           type="primary"
           icon={<PlusOutlined />}
-          aria-label="Новая заявка"
+          aria-label={t('layout:headerSearch.ticket.newTicket')}
           style={isHeaderNarrow ? { width: 40, minWidth: 40, paddingInline: 0 } : undefined}
           onClick={() => {
             if (isTicketsListPage) {
@@ -923,7 +949,7 @@ const HeaderSearch: React.FC = () => {
             navigate('/tickets');
           }}
         >
-          {!isHeaderNarrow && <span className="ticket-header-new-ticket-label">Новая заявка</span>}
+          {!isHeaderNarrow && <span className="ticket-header-new-ticket-label">{t('layout:headerSearch.ticket.newTicket')}</span>}
         </Button>
       </Space>
     );
@@ -961,14 +987,14 @@ const HeaderSearch: React.FC = () => {
           }}
           tokenSeparators={[',']}
           style={{ width: 520, maxWidth: '100%' }}
-          placeholder="Фильтры: agent:<uuid>, ws:<id>, fr:<id>"
+          placeholder={t('layout:headerSearch.agentObservations.filtersPlaceholder')}
         />
         <Space size={6}>
           <Switch checked={pausedFilter} onChange={(checked) => updateAgentObservationParams({ paused: checked ? '1' : undefined })} />
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>Пауза списка</span>
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>{t('layout:headerSearch.agentObservations.pauseList')}</span>
         </Space>
         <Button onClick={() => updateAgentObservationParams({ refresh: String(Date.now()) })}>
-          Обновить
+          {t('common:actions.refresh')}
         </Button>
         <Button
           onClick={() => {
@@ -981,7 +1007,7 @@ const HeaderSearch: React.FC = () => {
             });
           }}
         >
-          Сброс фильтров
+          {t('layout:headerSearch.agentObservations.resetFilters')}
         </Button>
       </Space>
     );
@@ -991,7 +1017,7 @@ const HeaderSearch: React.FC = () => {
   return (
     <Space size="small">
       <Input.Search
-        placeholder="Поиск по IP, Serial, Name..."
+        placeholder={t('layout:headerSearch.global.placeholder')}
         allowClear
         value={searchTerm}
         onChange={(event) => setSearchTerm(event.target.value)}
@@ -1001,7 +1027,7 @@ const HeaderSearch: React.FC = () => {
       />
       <Space size={6}>
         <Switch size="small" checked={showInactive} onChange={onToggleShowInactive} />
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>Без контракта</span>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>{t('layout:headerSearch.global.toggleWithoutContract')}</span>
       </Space>
     </Space>
   );
