@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"testing"
+	"time"
 
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/tickets"
@@ -76,7 +77,7 @@ func TestTicketRepoCreate_PersistsSyncWithBitrixFalse(t *testing.T) {
 		t.Fatalf("не удалось открыть БД: %v", err)
 	}
 
-	if err := db.AutoMigrate(&tickets.Ticket{}); err != nil {
+	if err := db.AutoMigrate(&company.Company{}, &tickets.Ticket{}); err != nil {
 		t.Fatalf("не удалось подготовить схему: %v", err)
 	}
 
@@ -101,5 +102,48 @@ func TestTicketRepoCreate_PersistsSyncWithBitrixFalse(t *testing.T) {
 	}
 	if stored.SyncWithBitrix {
 		t.Fatalf("ожидался sync_with_bitrix=false, получен true")
+	}
+}
+
+func TestTicketRepoFind_SanitizesSortBy(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:ticket_repo_find_sanitizes_sort_by?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(&company.Company{}, &tickets.Ticket{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := context.Background()
+	ticketRepo := NewTicketRepo(db)
+
+	older := &tickets.Ticket{Subject: "Старый тикет", Status: tickets.StatusNew, SyncWithBitrix: true}
+	newer := &tickets.Ticket{Subject: "Новый тикет", Status: tickets.StatusNew, SyncWithBitrix: true}
+	if err := ticketRepo.Create(ctx, older); err != nil {
+		t.Fatalf("не удалось создать старый тикет: %v", err)
+	}
+	if err := ticketRepo.Create(ctx, newer); err != nil {
+		t.Fatalf("не удалось создать новый тикет: %v", err)
+	}
+
+	if err := db.Model(&tickets.Ticket{}).Where("id = ?", older.ID).Update("created_at", older.CreatedAt.Add(-time.Hour)).Error; err != nil {
+		t.Fatalf("не удалось обновить created_at старого тикета: %v", err)
+	}
+	if err := db.Model(&tickets.Ticket{}).Where("id = ?", newer.ID).Update("created_at", newer.CreatedAt).Error; err != nil {
+		t.Fatalf("не удалось обновить created_at нового тикета: %v", err)
+	}
+
+	items, err := ticketRepo.Find(ctx, tickets.TicketFilter{
+		SortBy: "created_at desc; select 1",
+	})
+	if err != nil {
+		t.Fatalf("не ожидали ошибку при санитизированной сортировке: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("ожидали 2 тикета, получили %d", len(items))
+	}
+	if items[0].ID != newer.ID {
+		t.Fatalf("ожидали, что первым вернется более новый тикет, получили %s", items[0].ID)
 	}
 }

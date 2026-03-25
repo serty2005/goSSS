@@ -7,6 +7,7 @@ import (
 	"time"
 
 	domain "etalon-server/internal/domain"
+	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/tickets"
 
 	"github.com/google/uuid"
@@ -16,6 +17,45 @@ import (
 
 type ticketRepo struct {
 	db *gorm.DB
+}
+
+const (
+	ticketTableName               = "tickets"
+	ticketCompanyAlias            = "c"
+	ticketParentCompanyAlias      = "parent"
+	ticketHistoryAlias            = "th"
+	ticketCommentAlias            = "tc"
+	ticketUserAlias               = "u"
+	ticketUserTableName           = "users"
+	ticketCompanyJoinClause       = "LEFT JOIN companies c ON c.id = tickets.company_id"
+	ticketParentCompanyJoinClause = "LEFT JOIN companies parent ON parent.id = c.parent_id"
+	ticketQualifiedIDColumn       = "tickets.id"
+	ticketQualifiedNumberColumn   = "tickets.number"
+	ticketQualifiedSubjectColumn  = "tickets.subject"
+	ticketQualifiedDescColumn     = "tickets.description"
+	ticketQualifiedStatusColumn   = "tickets.status"
+	ticketQualifiedCompanyColumn  = "tickets.company_id"
+	ticketQualifiedCreatedAt      = "tickets.created_at"
+	ticketQualifiedUpdatedAt      = "tickets.updated_at"
+	ticketCompanyNameExpr         = "COALESCE(c.title, c.additional_name, tickets.company_id)"
+	ticketParentNameExpr          = "COALESCE(parent.title, '')"
+	ticketCompanySelectExpr       = "tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name"
+	ticketNumberTextExpr          = "CAST(tickets.number AS TEXT)"
+	serverStatusExpr              = "COALESCE(NULLIF(TRIM(servers.status), ''), 'unknown')"
+	resolvedUserNameExpr          = "COALESCE(NULLIF(TRIM(u.full_name), ''), NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), ''), u.username)"
+	ticketSortFieldCreatedAt      = "created_at"
+	ticketSortFieldUpdatedAt      = "updated_at"
+	ticketSortFieldNumber         = "number"
+	ticketSortFieldStatus         = "status"
+	ticketSortFieldLastActivity   = "last_activity"
+)
+
+var ticketSortableColumns = map[string]clause.Column{
+	ticketSortFieldCreatedAt:    {Table: ticketTableName, Name: "created_at"},
+	ticketSortFieldUpdatedAt:    {Table: ticketTableName, Name: "updated_at"},
+	ticketSortFieldLastActivity: {Table: ticketTableName, Name: "updated_at"},
+	ticketSortFieldNumber:       {Table: ticketTableName, Name: "number"},
+	ticketSortFieldStatus:       {Table: ticketTableName, Name: "status"},
 }
 
 func NewTicketRepo(db *gorm.DB) tickets.TicketRepository {
@@ -69,11 +109,11 @@ func (r *ticketRepo) RebindBitrixServicePoint(ctx context.Context, fromID, toID 
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket
 	err := r.db.WithContext(ctx).
-		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
-		Select("tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name").
+		Scopes(withTicketCompanyJoin).
+		Select(ticketCompanySelectExpr).
 		Preload("Assignee").
 		Preload("Reporter").
-		Where("tickets.id = ?", id).
+		Where(ticketQualifiedIDColumn+" = ?", id).
 		First(&ticket).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -161,14 +201,9 @@ func (r *ticketRepo) Delete(ctx context.Context, ticketID string) error {
 func (r *ticketRepo) Find(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, error) {
 	var items []tickets.Ticket
 	query := r.buildQuery(ctx, filter).
-		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
-		Select("tickets.*, COALESCE(c.title, c.additional_name, tickets.company_id) as company_name")
-
-	if filter.SortBy != "" {
-		query = query.Order(filter.SortBy)
-	} else {
-		query = query.Order("created_at desc")
-	}
+		Scopes(withTicketCompanyJoin).
+		Select(ticketCompanySelectExpr)
+	query = applyTicketSort(query, filter.SortBy)
 
 	if filter.Limit > 0 {
 		query = query.Limit(filter.Limit)
@@ -230,29 +265,24 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 		query = query.Where("updated_at <= ?", *filter.UpdatedTo)
 	}
 	if filter.CreatedFrom != nil {
-		query = query.Where("tickets.created_at >= ?", *filter.CreatedFrom)
+		query = query.Where(ticketQualifiedCreatedAt+" >= ?", *filter.CreatedFrom)
 	}
 	if filter.CreatedTo != nil {
-		query = query.Where("tickets.created_at <= ?", *filter.CreatedTo)
+		query = query.Where(ticketQualifiedCreatedAt+" <= ?", *filter.CreatedTo)
 	}
 	if filter.ResolvedFrom != nil || filter.ResolvedTo != nil {
-		resolvedFilterQuery := `EXISTS (
-			SELECT 1
-			FROM ticket_histories th
-			WHERE th.ticket_id = tickets.id
-				AND th.field = ?
-				AND th.new_value = ?`
-		args := []interface{}{tickets.HistoryFieldStatus, tickets.StatusResolved}
+		resolvedFilter := r.db.Table("ticket_histories AS "+ticketHistoryAlias).
+			Select("1").
+			Where(ticketHistoryAlias+".ticket_id = "+ticketQualifiedIDColumn).
+			Where(ticketHistoryAlias+".field = ?", tickets.HistoryFieldStatus).
+			Where(ticketHistoryAlias+".new_value = ?", tickets.StatusResolved)
 		if filter.ResolvedFrom != nil {
-			resolvedFilterQuery += " AND th.created_at >= ?"
-			args = append(args, *filter.ResolvedFrom)
+			resolvedFilter = resolvedFilter.Where(ticketHistoryAlias+".created_at >= ?", *filter.ResolvedFrom)
 		}
 		if filter.ResolvedTo != nil {
-			resolvedFilterQuery += " AND th.created_at <= ?"
-			args = append(args, *filter.ResolvedTo)
+			resolvedFilter = resolvedFilter.Where(ticketHistoryAlias+".created_at <= ?", *filter.ResolvedTo)
 		}
-		resolvedFilterQuery += ")"
-		query = query.Where(resolvedFilterQuery, args...)
+		query = query.Where("EXISTS (?)", resolvedFilter)
 	}
 	if len(filter.AssigneeIDs) > 0 {
 		query = query.Where("assignee_id IN ?", filter.AssigneeIDs)
@@ -265,14 +295,18 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	}
 	if filter.SearchQuery != "" {
 		q := "%" + filter.SearchQuery + "%"
-		clauses := []string{
-			"CAST(tickets.number AS TEXT) ILIKE ?",
-			"tickets.subject ILIKE ?",
-			"tickets.description ILIKE ?",
-			"EXISTS (SELECT 1 FROM ticket_comments tc WHERE tc.ticket_id = tickets.id AND tc.deleted_in_bitrix = false AND tc.text ILIKE ?)",
-		}
-		args := []interface{}{q, q, q, q}
-		query = query.Where("("+strings.Join(clauses, " OR ")+")", args...)
+		commentSearch := r.db.Table("ticket_comments AS "+ticketCommentAlias).
+			Select("1").
+			Where(ticketCommentAlias+".ticket_id = "+ticketQualifiedIDColumn).
+			Where(ticketCommentAlias+".deleted_in_bitrix = ?", false).
+			Where(ticketCommentAlias+".text ILIKE ?", q)
+		query = query.Where(
+			r.db.
+				Where(ticketNumberTextExpr+" ILIKE ?", q).
+				Or(ticketQualifiedSubjectColumn+" ILIKE ?", q).
+				Or(ticketQualifiedDescColumn+" ILIKE ?", q).
+				Or("EXISTS (?)", commentSearch),
+		)
 	}
 
 	return query
@@ -550,21 +584,23 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error) {
 	var rows []tickets.CompanyFilterItem
 
-	query := r.db.WithContext(ctx).Table("tickets").
-		Select(`
-			tickets.company_id as id,
-			COALESCE(c.title, c.additional_name, tickets.company_id) as name,
-			COALESCE(parent.title, '') as parent_name,
-			COUNT(*) as count
-		`).
-		Joins("LEFT JOIN companies c ON c.id = tickets.company_id").
-		Joins("LEFT JOIN companies parent ON parent.id = c.parent_id")
-
-	query = r.applyFilters(query, filter)
+	query := r.buildQuery(ctx, filter).
+		Scopes(withTicketCompanyJoin, withTicketParentCompanyJoin).
+		Select(strings.Join([]string{
+			ticketQualifiedCompanyColumn + " as id",
+			ticketCompanyNameExpr + " as name",
+			ticketParentNameExpr + " as parent_name",
+			"COUNT(*) as count",
+		}, ", "))
 
 	err := query.
-		Group("tickets.company_id, name, parent_name").
-		Order("parent_name, name").
+		Group(strings.Join([]string{
+			ticketQualifiedCompanyColumn,
+			ticketCompanyNameExpr,
+			ticketParentNameExpr,
+		}, ", ")).
+		Order(ticketParentNameExpr).
+		Order(ticketCompanyNameExpr).
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err
@@ -583,46 +619,89 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 		return nil, err
 	}
 
-	if err := r.db.WithContext(ctx).Raw(
-		`SELECT COUNT(*)
-		 FROM servers
-		 WHERE last_polled_at IS NOT NULL
-		   AND last_polled_at >= NOW() - INTERVAL '24 hours'`,
-	).Scan(&stats.PolledServers24h).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Model(&server.Server{}).
+		Where("last_polled_at IS NOT NULL").
+		Where("last_polled_at >= ?", time.Now().Add(-24*time.Hour)).
+		Count(&stats.PolledServers24h).Error; err != nil {
 		return nil, err
 	}
 
 	rows := make([]tickets.ResolvedByAssigneeStat, 0)
-	if err := r.db.WithContext(ctx).Raw(
-		`SELECT
-			u.id AS user_id,
-			COALESCE(NULLIF(TRIM(u.full_name), ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) AS user_name,
-			COUNT(*) AS count
-		FROM tickets t
-		JOIN users u ON u.id = t.assignee_id
-		WHERE t.status IN ('resolved', 'closed')
-		GROUP BY u.id, u.full_name, u.first_name, u.last_name, u.username
-		ORDER BY count DESC, user_name ASC`,
-	).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Model(&tickets.Ticket{}).
+		Table(ticketTableName+" AS t").
+		Select(strings.Join([]string{
+			ticketUserAlias + ".id AS user_id",
+			resolvedUserNameExpr + " AS user_name",
+			"COUNT(*) AS count",
+		}, ", ")).
+		Joins("JOIN "+ticketUserTableName+" AS "+ticketUserAlias+" ON "+ticketUserAlias+".id = t.assignee_id").
+		Where("t.status IN ?", []string{tickets.StatusResolved, tickets.StatusClosed}).
+		Group(strings.Join([]string{
+			ticketUserAlias + ".id",
+			ticketUserAlias + ".full_name",
+			ticketUserAlias + ".first_name",
+			ticketUserAlias + ".last_name",
+			ticketUserAlias + ".username",
+		}, ", ")).
+		Order("count DESC").
+		Order("user_name ASC").
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	stats.ResolvedByAssignee = rows
 
 	serverStatusRows := make([]tickets.ServerStatusStat, 0)
-	if err := r.db.WithContext(ctx).Raw(
-		`SELECT
-			COALESCE(NULLIF(TRIM(status), ''), 'unknown') AS status,
-			COUNT(*) AS count
-		FROM servers
-		WHERE deleted_at IS NULL
-		GROUP BY COALESCE(NULLIF(TRIM(status), ''), 'unknown')
-		ORDER BY count DESC, status ASC`,
-	).Scan(&serverStatusRows).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Model(&server.Server{}).
+		Select(serverStatusExpr + " AS status, COUNT(*) AS count").
+		Group(serverStatusExpr).
+		Order("count DESC").
+		Order("status ASC").
+		Scan(&serverStatusRows).Error; err != nil {
 		return nil, err
 	}
 	stats.ServerStatuses = serverStatusRows
 
 	return stats, nil
+}
+
+func withTicketCompanyJoin(query *gorm.DB) *gorm.DB {
+	return query.Joins(ticketCompanyJoinClause)
+}
+
+func withTicketParentCompanyJoin(query *gorm.DB) *gorm.DB {
+	return query.Joins(ticketParentCompanyJoinClause)
+}
+
+func applyTicketSort(query *gorm.DB, rawSort string) *gorm.DB {
+	sortField, desc := parseTicketSort(rawSort)
+	column, ok := ticketSortableColumns[sortField]
+	if !ok {
+		column = ticketSortableColumns[ticketSortFieldCreatedAt]
+		desc = true
+	}
+	return query.Order(clause.OrderByColumn{Column: column, Desc: desc})
+}
+
+func parseTicketSort(rawSort string) (string, bool) {
+	sortValue := strings.TrimSpace(strings.ReplaceAll(rawSort, ":", " "))
+	if sortValue == "" {
+		return ticketSortFieldCreatedAt, true
+	}
+
+	parts := strings.Fields(sortValue)
+	field := parts[0]
+	desc := true
+	if len(parts) > 1 && strings.EqualFold(parts[1], "asc") {
+		desc = false
+	}
+
+	if _, ok := ticketSortableColumns[field]; !ok {
+		return ticketSortFieldCreatedAt, true
+	}
+	return field, desc
 }
 
 func (r *ticketRepo) ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]tickets.Ticket, error) {
