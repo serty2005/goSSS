@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"path"
 	"strconv"
@@ -20,6 +22,7 @@ import (
 )
 
 const pyrusAuthURL = "https://accounts.pyrus.com/api/v4/auth"
+const pyrusClientLogPreviewLimit = 240
 
 type Person struct {
 	ID        int64  `json:"id"`
@@ -218,6 +221,34 @@ func (c *Client) UpdateTaskExtID(ctx context.Context, taskID int64, extID string
 	})
 }
 
+func (c *Client) UploadFile(ctx context.Context, fileName string, mimeType string, content []byte) (string, error) {
+	if len(content) == 0 {
+		return "", errors.New("не передано содержимое файла для загрузки в Pyrus")
+	}
+	token, apiURL, err := c.ensureAuthorized(ctx)
+	if err != nil {
+		return "", err
+	}
+	guid, status, err := c.doUploadWithToken(ctx, token, apiURL, fileName, mimeType, content)
+	if err == nil {
+		return guid, nil
+	}
+	if status != http.StatusUnauthorized {
+		return "", err
+	}
+
+	c.clearAuth()
+	token, apiURL, err = c.ensureAuthorized(ctx)
+	if err != nil {
+		return "", err
+	}
+	guid, _, err = c.doUploadWithToken(ctx, token, apiURL, fileName, mimeType, content)
+	if err != nil {
+		return "", err
+	}
+	return guid, nil
+}
+
 func (c *Client) DownloadFile(ctx context.Context, fileID int64) (*DownloadedFile, error) {
 	if fileID <= 0 {
 		return nil, fmt.Errorf("некорректный file_id")
@@ -231,6 +262,97 @@ func (c *Client) DownloadFile(ctx context.Context, fileID int64) (*DownloadedFil
 		MimeType: mimeType,
 		Content:  body,
 	}, nil
+}
+
+func (c *Client) doUploadWithToken(
+	ctx context.Context,
+	token string,
+	apiURL string,
+	fileName string,
+	mimeType string,
+	content []byte,
+) (string, int, error) {
+	safeFileName := strings.TrimSpace(fileName)
+	if safeFileName == "" {
+		safeFileName = "attachment.bin"
+	}
+	safeMimeType := strings.TrimSpace(mimeType)
+	if safeMimeType == "" {
+		safeMimeType = "application/octet-stream"
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename=%q`, safeFileName))
+	header.Set("Content-Type", safeMimeType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return "", 0, err
+	}
+	if _, err = part.Write(content); err != nil {
+		return "", 0, err
+	}
+	if err = writer.Close(); err != nil {
+		return "", 0, err
+	}
+
+	startedAt := time.Now()
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: исходящая загрузка файла",
+			"method", http.MethodPost,
+			"path", "files/upload",
+			"file_name", safeFileName,
+			"mime_type", safeMimeType,
+			"content_bytes", len(content),
+		)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, joinAPIURL(apiURL, "files/upload"), &body)
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", resp.StatusCode, err
+	}
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: ответ загрузки файла",
+			"method", http.MethodPost,
+			"path", "files/upload",
+			"file_name", safeFileName,
+			"status", resp.StatusCode,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_preview", truncateForPyrusClientLog(string(respBody), pyrusClientLogPreviewLimit),
+		)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", resp.StatusCode, formatPyrusHTTPError(resp.StatusCode, respBody)
+	}
+
+	var result struct {
+		GUID string `json:"guid"`
+	}
+	if err = json.Unmarshal(respBody, &result); err != nil {
+		return "", resp.StatusCode, err
+	}
+	result.GUID = strings.TrimSpace(result.GUID)
+	if result.GUID == "" {
+		return "", resp.StatusCode, errors.New("Pyrus не вернул guid загруженного файла")
+	}
+	return result.GUID, resp.StatusCode, nil
 }
 
 func (c *Client) doDownload(ctx context.Context, apiPath string) ([]byte, string, string, error) {
@@ -259,6 +381,10 @@ func (c *Client) doDownload(ctx context.Context, apiPath string) ([]byte, string
 }
 
 func (c *Client) doDownloadWithToken(ctx context.Context, token string, apiURL string, apiPath string) ([]byte, string, string, int, error) {
+	startedAt := time.Now()
+	if c.logger != nil {
+		c.logger.Debug("Pyrus API: исходящий download-запрос", "method", http.MethodGet, "path", apiPath)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, joinAPIURL(apiURL, apiPath), nil)
 	if err != nil {
 		return nil, "", "", 0, err
@@ -275,6 +401,16 @@ func (c *Client) doDownloadWithToken(ctx context.Context, token string, apiURL s
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, "", "", resp.StatusCode, err
+	}
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: ответ download-запроса",
+			"method", http.MethodGet,
+			"path", apiPath,
+			"status", resp.StatusCode,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_bytes", len(body),
+		)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", "", resp.StatusCode, formatPyrusHTTPError(resp.StatusCode, body)
@@ -317,12 +453,24 @@ func (c *Client) doJSONWithToken(
 	responseBody any,
 ) (int, error) {
 	var bodyReader io.Reader
+	requestPreview := ""
 	if requestBody != nil {
 		payload, err := json.Marshal(requestBody)
 		if err != nil {
 			return 0, err
 		}
 		bodyReader = bytes.NewReader(payload)
+		requestPreview = truncateForPyrusClientLog(string(payload), pyrusClientLogPreviewLimit)
+	}
+	startedAt := time.Now()
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: исходящий JSON-запрос",
+			"method", method,
+			"path", apiPath,
+			"has_body", requestBody != nil,
+			"request_preview", requestPreview,
+		)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, joinAPIURL(apiURL, apiPath), bodyReader)
@@ -344,6 +492,16 @@ func (c *Client) doJSONWithToken(
 	responseBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, err
+	}
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: ответ JSON-запроса",
+			"method", method,
+			"path", apiPath,
+			"status", resp.StatusCode,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_preview", truncateForPyrusClientLog(string(responseBytes), pyrusClientLogPreviewLimit),
+		)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, formatPyrusHTTPError(resp.StatusCode, responseBytes)
@@ -385,6 +543,16 @@ func (c *Client) ensureAuthorized(ctx context.Context) (string, string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	startedAt := time.Now()
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: запрос авторизации",
+			"url", pyrusAuthURL,
+			"login", c.login,
+			"security_key_present", strings.TrimSpace(c.securityKey) != "",
+		)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", "", err
@@ -394,6 +562,15 @@ func (c *Client) ensureAuthorized(ctx context.Context) (string, string, error) {
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", "", err
+	}
+	if c.logger != nil {
+		c.logger.Debug(
+			"Pyrus API: ответ авторизации",
+			"url", pyrusAuthURL,
+			"status", resp.StatusCode,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_preview", truncateForPyrusClientLog(string(respBody), pyrusClientLogPreviewLimit),
+		)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", formatPyrusHTTPError(resp.StatusCode, respBody)
@@ -498,4 +675,12 @@ func fileNameFromHeader(contentDisposition string) string {
 		return ""
 	}
 	return strings.TrimSpace(params["filename"])
+}
+
+func truncateForPyrusClientLog(value string, limit int) string {
+	trimmed := strings.TrimSpace(value)
+	if limit <= 0 || len(trimmed) <= limit {
+		return trimmed
+	}
+	return trimmed[:limit] + "...(truncated)"
 }

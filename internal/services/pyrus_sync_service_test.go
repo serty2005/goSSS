@@ -7,6 +7,8 @@ import (
 	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/tickets"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -17,6 +19,7 @@ type fakePyrusAPIClient struct {
 	addCommentFunc   func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error)
 	updateExtIDFunc  func(ctx context.Context, taskID int64, extID string) (*pyrusplugin.Task, error)
 	downloadFileFunc func(ctx context.Context, fileID int64) (*pyrusplugin.DownloadedFile, error)
+	uploadFileFunc   func(ctx context.Context, fileName string, mimeType string, content []byte) (string, error)
 }
 
 func (f *fakePyrusAPIClient) IsConfigured() bool {
@@ -49,6 +52,13 @@ func (f *fakePyrusAPIClient) DownloadFile(ctx context.Context, fileID int64) (*p
 		return nil, nil
 	}
 	return f.downloadFileFunc(ctx, fileID)
+}
+
+func (f *fakePyrusAPIClient) UploadFile(ctx context.Context, fileName string, mimeType string, content []byte) (string, error) {
+	if f == nil || f.uploadFileFunc == nil {
+		return "", nil
+	}
+	return f.uploadFileFunc(ctx, fileName, mimeType, content)
 }
 
 func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
@@ -120,6 +130,105 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 	}
 	if link == nil || link.PyrusCommentID == nil || *link.PyrusCommentID != 9001 {
 		t.Fatalf("ожидали сохранённый link комментария с pyrus_comment_id=9001, получили %+v", link)
+	}
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncUploadsAttachments(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-attachment-1")
+	comment := &tickets.TicketComment{
+		ID:           "local-comment-with-file",
+		TicketID:     ticketID,
+		Text:         "Ответ оператора с вложением",
+		CreationDate: time.Now(),
+		IsPrivate:    false,
+	}
+
+	storageKey := filepath.ToSlash(filepath.Join(ticketID, "outgoing", "attachment.txt"))
+	absPath := filepath.Join(env.cfg.TicketStoragePath, filepath.FromSlash(storageKey))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatalf("не удалось создать директорию для тестового вложения: %v", err)
+	}
+	if err := os.WriteFile(absPath, []byte("test attachment"), 0o644); err != nil {
+		t.Fatalf("не удалось записать тестовое вложение: %v", err)
+	}
+	asset, err := env.ticketRepo.UpsertFileAsset(ctx, &tickets.FileAsset{
+		StorageKey:   storageKey,
+		OriginalName: "attachment.txt",
+		MimeType:     "text/plain",
+		Size:         int64(len("test attachment")),
+		Checksum:     "checksum",
+	})
+	if err != nil {
+		t.Fatalf("не удалось сохранить file_asset: %v", err)
+	}
+	if asset == nil {
+		t.Fatal("ожидали сохранённый file_asset")
+	}
+	if err := env.db.WithContext(ctx).Create(&tickets.TicketFileLink{
+		TicketID:     ticketID,
+		FileID:       asset.ID,
+		RelationType: tickets.RelationTypeInlineComment,
+		CommentUUID:  &comment.ID,
+	}).Error; err != nil {
+		t.Fatalf("не удалось сохранить link комментария на файл: %v", err)
+	}
+
+	requests := make([]pyrusplugin.CommentRequest, 0, 1)
+	uploaded := make([]string, 0, 1)
+	client := &fakePyrusAPIClient{
+		configured: true,
+		uploadFileFunc: func(ctx context.Context, fileName string, mimeType string, content []byte) (string, error) {
+			uploaded = append(uploaded, fileName+"|"+mimeType+"|"+string(content))
+			return "guid-attachment-1", nil
+		},
+		addCommentFunc: func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+			requests = append(requests, req)
+			return &pyrusplugin.Task{
+				ID: taskID,
+				Comments: []pyrusplugin.Comment{
+					{ID: 9002, Text: comment.Text, CreateDate: time.Now()},
+				},
+			}, nil
+		},
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	concrete, ok := service.(*pyrusSyncService)
+	if !ok {
+		t.Fatalf("не удалось привести PyrusSyncService к concrete type")
+	}
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		TaskID:   7001,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-attachment-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err != nil {
+		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.OutgoingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+	if len(uploaded) != 1 {
+		t.Fatalf("ожидали одну загрузку файла в Pyrus, получили %d", len(uploaded))
+	}
+	if len(requests) != 1 {
+		t.Fatalf("ожидали один запрос комментария в Pyrus, получили %d", len(requests))
+	}
+	if len(requests[0].Attachments) != 1 || requests[0].Attachments[0] != "guid-attachment-1" {
+		t.Fatalf("ожидали guid загруженного файла в attachments, получили %+v", requests[0].Attachments)
 	}
 }
 

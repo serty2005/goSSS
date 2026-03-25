@@ -11,4 +11,5 @@ type pyrusAPIClient interface {
 	AddComment(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error)
 	UpdateTaskExtID(ctx context.Context, taskID int64, extID string) (*pyrusplugin.Task, error)
 	DownloadFile(ctx context.Context, fileID int64) (*pyrusplugin.DownloadedFile, error)
+	UploadFile(ctx context.Context, fileName string, mimeType string, content []byte) (string, error)
 }

@@ -12,6 +12,9 @@ import (
 	"etalon-server/internal/infra/logger"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,7 +85,22 @@ func (s *pyrusSyncService) EnqueueEvent(ctx context.Context, eventName string, p
 		item.PyrusTaskID = &taskID
 	}
 
-	return s.repo.InsertOutgoingEvent(ctx, item)
+	if err = s.repo.InsertOutgoingEvent(ctx, item); err != nil {
+		return err
+	}
+	if s.log != nil {
+		s.log.Debug(
+			"Pyrus: исходящее событие поставлено в очередь",
+			"event_id", item.ID,
+			"event_name", item.EventName,
+			"ticket_id", payload.TicketID,
+			"task_id", payload.TaskID,
+			"reason", payload.Reason,
+			"status", payload.Status,
+			"comment", localTicketCommentSummary(payload.Comment),
+		)
+	}
+	return nil
 }
 
 func (s *pyrusSyncService) Start(ctx context.Context) {
@@ -94,9 +112,18 @@ func (s *pyrusSyncService) Start(ctx context.Context) {
 		return
 	}
 	if s.client == nil || !s.client.IsConfigured() {
-		s.log.Warn("Pyrus: исходящая синхронизация отключена, клиент API не настроен")
+		s.log.Warn(
+			"Pyrus: исходящая синхронизация отключена, клиент API не настроен",
+			"login_present", strings.TrimSpace(s.cfg.PyrusLogin) != "",
+			"security_key_present", strings.TrimSpace(s.cfg.PyrusSecurityKey) != "",
+		)
 		return
 	}
+	s.log.Info(
+		"Pyrus: исходящая синхронизация запущена",
+		"form_id", s.cfg.PyrusFormID,
+		"redis_enabled", s.redis != nil,
+	)
 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
@@ -119,6 +146,9 @@ func (s *pyrusSyncService) processOutgoingBatch(ctx context.Context) {
 		s.log.Error("Pyrus: не удалось выбрать исходящие события для обработки", "error", err)
 		return
 	}
+	if len(items) > 0 {
+		s.log.Debug("Pyrus: выбрана пачка исходящих событий", "count", len(items))
+	}
 	for i := range items {
 		if !s.shouldProcessOutgoingNow(&items[i]) {
 			continue
@@ -131,19 +161,31 @@ func (s *pyrusSyncService) processOutgoingEvent(ctx context.Context, item *pyrus
 	if item == nil {
 		return
 	}
+	s.log.Debug(
+		"Pyrus: начало обработки исходящего события",
+		"event_id", item.ID,
+		"event_name", item.EventName,
+		"ticket_id", safeStringPointer(item.TicketID),
+		"task_id", safeInt64Pointer(item.PyrusTaskID),
+		"attempts", item.Attempts,
+		"status", item.Status,
+	)
 	if err := s.repo.MarkOutgoingProcessing(ctx, item.ID); err != nil {
 		s.log.Warn("Pyrus: не удалось отметить исходящее событие как processing", "event_id", item.ID, "error", err)
 	}
 
 	status, reason, err := s.handleOutgoingEvent(ctx, item)
 	if err != nil {
+		s.log.Error("Pyrus: ошибка обработки исходящего события", "event_id", item.ID, "event_name", item.EventName, "error", err)
 		_ = s.repo.MarkOutgoingFailed(ctx, item.ID, err.Error())
 		return
 	}
 	if status == pyrus.OutgoingEventStatusIgnored {
+		s.log.Info("Pyrus: исходящее событие проигнорировано", "event_id", item.ID, "event_name", item.EventName, "reason", reason)
 		_ = s.repo.MarkOutgoingIgnored(ctx, item.ID, reason)
 		return
 	}
+	s.log.Debug("Pyrus: исходящее событие обработано", "event_id", item.ID, "event_name", item.EventName, "result_status", status)
 	_ = s.repo.MarkOutgoingDone(ctx, item.ID)
 }
 
@@ -152,6 +194,17 @@ func (s *pyrusSyncService) handleOutgoingEvent(ctx context.Context, item *pyrus.
 	if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
 		return "", "", err
 	}
+	s.log.Debug(
+		"Pyrus: разобрано исходящее событие",
+		"event_id", item.ID,
+		"event_name", item.EventName,
+		"ticket_id", payload.TicketID,
+		"task_id", payload.TaskID,
+		"reason", payload.Reason,
+		"status", payload.Status,
+		"ext_id", payload.ExtID,
+		"comment", localTicketCommentSummary(payload.Comment),
+	)
 
 	switch strings.TrimSpace(item.EventName) {
 	case events.PyrusTicketExtIDSyncRequested:
@@ -196,6 +249,7 @@ func (s *pyrusSyncService) handleExtIDSync(
 	if taskID <= 0 || extID == "" {
 		return "", "", fmt.Errorf("для обновления ext_id не хватает task_id или ext_id")
 	}
+	s.log.Debug("Pyrus: отправка ext_id в задачу", "event_id", item.ID, "task_id", taskID, "ticket_id", ticketID, "ext_id", extID)
 
 	task, err := s.client.UpdateTaskExtID(ctx, taskID, extID)
 	if err != nil {
@@ -229,6 +283,7 @@ func (s *pyrusSyncService) handleExtIDSync(
 	}
 
 	s.setSuppressTask(ctx, taskID)
+	s.log.Debug("Pyrus: ext_id синхронизирован", "event_id", item.ID, "task_id", taskID, "ticket_id", ticketID, "ext_id", extID)
 	return pyrus.OutgoingEventStatusDone, "", nil
 }
 
@@ -249,6 +304,7 @@ func (s *pyrusSyncService) handleCommentSync(
 	if err != nil {
 		return "", "", err
 	}
+	s.log.Debug("Pyrus: синхронизация комментария", "task_id", taskID, "ticket_id", ticketID, "comment", localTicketCommentSummary(comment))
 	if err := s.syncSingleComment(ctx, taskID, ticketID, comment); err != nil {
 		return "", "", err
 	}
@@ -288,6 +344,7 @@ func (s *pyrusSyncService) handleStatusSync(
 	if err != nil {
 		return "", "", err
 	}
+	s.log.Debug("Pyrus: статус отправлен в задачу", "event_id", item.ID, "task_id", taskID, "ticket_id", ticketID, "request", truncateForPyrusLog(fmt.Sprintf("%+v", req), pyrusLogTextPreviewLimit))
 
 	now := time.Now()
 	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
@@ -365,6 +422,7 @@ func (s *pyrusSyncService) syncPendingPublicComments(ctx context.Context, taskID
 		if link != nil {
 			continue
 		}
+		s.log.Debug("Pyrus: найден несинхронизированный публичный комментарий перед сменой статуса", "task_id", taskID, "ticket_id", ticketID, "comment", localTicketCommentSummary(&comment))
 		if err := s.syncSingleComment(ctx, taskID, ticketID, &comment); err != nil {
 			return err
 		}
@@ -389,12 +447,28 @@ func (s *pyrusSyncService) syncSingleComment(ctx context.Context, taskID int64, 
 	req := pyrusplugin.CommentRequest{
 		Text: text,
 	}
+	attachmentGUIDs, err := s.uploadCommentAttachments(ctx, ticketID, comment)
+	if err != nil {
+		return err
+	}
+	if len(attachmentGUIDs) > 0 {
+		req.Attachments = attachmentGUIDs
+	}
 	if existing != nil && existing.PyrusCommentID != nil && *existing.PyrusCommentID > 0 {
 		commentID := *existing.PyrusCommentID
 		req.EditCommentID = &commentID
 	} else {
 		req.Channel = &pyrusplugin.Channel{Type: "mobile_app"}
 	}
+	s.log.Debug(
+		"Pyrus: отправка комментария оператора",
+		"task_id", taskID,
+		"ticket_id", ticketID,
+		"comment", localTicketCommentSummary(comment),
+		"edit_comment_id", safeInt64Pointer(req.EditCommentID),
+		"attachment_guids", req.Attachments,
+		"channel_type", safePyrusChannelType(req.Channel),
+	)
 
 	updatedTask, err := s.client.AddComment(ctx, taskID, req)
 	if err != nil {
@@ -431,7 +505,86 @@ func (s *pyrusSyncService) syncSingleComment(ctx context.Context, taskID int64, 
 		}
 	}
 	s.setSuppressTask(ctx, taskID)
+	s.log.Debug("Pyrus: комментарий оператора синхронизирован", "task_id", taskID, "ticket_id", ticketID, "comment_id", comment.ID, "pyrus_comment_id", safeInt64Pointer(link.PyrusCommentID))
 	return nil
+}
+
+func (s *pyrusSyncService) uploadCommentAttachments(ctx context.Context, ticketID string, comment *tickets.TicketComment) ([]string, error) {
+	if s == nil || s.ticketRepo == nil || s.client == nil || comment == nil {
+		return nil, nil
+	}
+	commentID := strings.TrimSpace(comment.ID)
+	if strings.TrimSpace(ticketID) == "" || commentID == "" {
+		return nil, nil
+	}
+
+	links, err := s.ticketRepo.GetTicketFileLinksByRelation(ctx, ticketID, []string{tickets.RelationTypeInlineComment})
+	if err != nil {
+		return nil, err
+	}
+	if len(links) == 0 {
+		return nil, nil
+	}
+
+	commentKeys := map[string]struct{}{commentID: {}}
+	if value := strings.TrimSpace(comment.ServiceDeskUUID); value != "" {
+		commentKeys[value] = struct{}{}
+	}
+	guids := make([]string, 0, len(links))
+	for i := range links {
+		link := links[i]
+		if link.CommentUUID == nil {
+			continue
+		}
+		commentUUID := strings.TrimSpace(*link.CommentUUID)
+		if _, ok := commentKeys[commentUUID]; !ok {
+			continue
+		}
+		asset, err := s.ticketRepo.GetFileAssetByID(ctx, link.FileID)
+		if err != nil {
+			return nil, err
+		}
+		if asset == nil {
+			return nil, fmt.Errorf("не найден file_asset=%s для комментария %s", link.FileID, commentID)
+		}
+		content, err := s.readTicketFileAsset(asset)
+		if err != nil {
+			return nil, err
+		}
+		mimeType := strings.TrimSpace(asset.MimeType)
+		if mimeType == "" {
+			mimeType = http.DetectContentType(content)
+		}
+		s.log.Debug("Pyrus: загрузка вложения комментария в Pyrus", "ticket_id", ticketID, "comment_id", commentID, "file_id", asset.ID, "file_name", asset.OriginalName, "size", len(content))
+		guid, err := s.client.UploadFile(ctx, asset.OriginalName, mimeType, content)
+		if err != nil {
+			return nil, err
+		}
+		guids = append(guids, guid)
+	}
+	if len(guids) == 0 {
+		return nil, nil
+	}
+	return guids, nil
+}
+
+func (s *pyrusSyncService) readTicketFileAsset(asset *tickets.FileAsset) ([]byte, error) {
+	if s == nil || s.cfg == nil {
+		return nil, fmt.Errorf("Pyrus sync service не настроен")
+	}
+	if asset == nil {
+		return nil, fmt.Errorf("не передан file_asset для загрузки в Pyrus")
+	}
+	basePath := strings.TrimSpace(s.cfg.TicketStoragePath)
+	if basePath == "" {
+		return nil, fmt.Errorf("не задан TICKET_STORAGE_PATH")
+	}
+	absPath := filepath.Join(basePath, filepath.FromSlash(asset.StorageKey))
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать файл %s для отправки в Pyrus: %w", absPath, err)
+	}
+	return content, nil
 }
 
 func buildPyrusStatusCommentRequest(task *pyrusplugin.Task, localStatus string) (pyrusplugin.CommentRequest, string, error) {

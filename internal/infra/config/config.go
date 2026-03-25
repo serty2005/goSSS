@@ -252,7 +252,7 @@ func New() *Config {
 		PyrusAPIBaseURL:          normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
 		PyrusLogin:               strings.TrimSpace(getEnv("PYRUS_LOGIN", "")),
 		PyrusSecurityKey:         strings.TrimSpace(getEnv("PYRUS_SECURITY_KEY", "")),
-		PyrusFormID:              int64(getEnvAsInt("PYRUS_FORM_ID", 0)),
+		PyrusFormID:              int64(getEnvAsInt("PYRUS_FORM_ID", 2315062)),
 		PyrusWebhookEnabled:      getEnvAsBool("PYRUS_WEBHOOK_ENABLED", false),
 		PyrusWebhookSecret:       strings.TrimSpace(getEnv("PYRUS_WEBHOOK_SECRET", "")),
 		PyrusEventsStreamName:    strings.TrimSpace(getEnv("PYRUS_EVENTS_STREAM_NAME", "pyrus:events")),

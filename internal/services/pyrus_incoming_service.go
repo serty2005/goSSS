@@ -86,20 +86,34 @@ func NewPyrusIncomingService(
 }
 
 func (s *pyrusIncomingService) HandleWebhook(ctx context.Context, rawBody []byte, signature string) error {
-	if s == nil || s.cfg == nil || !s.cfg.EnablePyrusGateway || !s.cfg.PyrusWebhookEnabled {
+	if s == nil || s.cfg == nil || s.repo == nil || !s.cfg.EnablePyrusGateway || !s.cfg.PyrusWebhookEnabled {
 		return ErrPyrusWebhookBadRequest
 	}
 	if !isPyrusSignatureValid(pyrusWebhookSecret(s.cfg), rawBody, signature) {
+		if s.log != nil {
+			s.log.Warn("Pyrus: webhook отклонён по подписи", "signature_present", strings.TrimSpace(signature) != "", "payload_bytes", len(rawBody))
+		}
 		return ErrPyrusWebhookUnauthorized
 	}
 	payload, err := pyrusplugin.ParseWebhookPayload(rawBody)
 	if err != nil {
+		if s.log != nil {
+			s.log.Warn("Pyrus: не удалось разобрать webhook payload", "error", err, "payload_preview", truncateForPyrusLog(string(rawBody), pyrusLogPayloadPreviewLimit))
+		}
 		return ErrPyrusWebhookBadRequest
 	}
 	taskID := resolvePyrusTaskID(payload)
 	if taskID <= 0 {
+		s.log.Warn("Pyrus: webhook не содержит task_id", "payload", pyrusWebhookPayloadSummary(payload))
 		return ErrPyrusWebhookBadRequest
 	}
+	s.log.Debug(
+		"Pyrus: webhook принят в обработку",
+		"signature_present", strings.TrimSpace(signature) != "",
+		"payload_bytes", len(rawBody),
+		"payload_preview", truncateForPyrusLog(string(rawBody), pyrusLogPayloadPreviewLimit),
+		"payload", pyrusWebhookPayloadSummary(payload),
+	)
 
 	payloadHash := sha256.Sum256(rawBody)
 	hashText := hex.EncodeToString(payloadHash[:])
@@ -115,15 +129,19 @@ func (s *pyrusIncomingService) HandleWebhook(ctx context.Context, rawBody []byte
 
 	created, err := s.repo.InsertIncomingEventIfNotExists(ctx, event)
 	if err != nil {
+		s.log.Error("Pyrus: не удалось сохранить входящее событие", "event_id", event.ID, "task_id", taskID, "error", err)
 		return err
 	}
 	if !created {
+		s.log.Debug("Pyrus: входящее событие отброшено как дубликат", "task_id", taskID, "payload_hash", hashText)
 		return nil
 	}
+	s.log.Debug("Pyrus: входящее событие сохранено", "event_id", event.ID, "event_name", event.EventName, "task_id", taskID, "payload_hash", hashText)
 	if err := s.enqueueEvent(ctx, event.ID); err != nil {
 		s.log.Warn("Pyrus: не удалось поставить входящее событие в очередь Redis, обработка пойдёт через Postgres", "event_id", event.ID, "error", err)
 		return nil
 	}
+	s.log.Debug("Pyrus: входящее событие отправлено в Redis Streams", "event_id", event.ID, "stream", s.cfg.PyrusEventsStreamName)
 	if err := s.repo.MarkIncomingQueued(ctx, event.ID); err != nil {
 		s.log.Warn("Pyrus: не удалось отметить событие как queued", "event_id", event.ID, "error", err)
 	}
@@ -160,9 +178,21 @@ func (s *pyrusIncomingService) Start(ctx context.Context) {
 		return
 	}
 	if s.client == nil || !s.client.IsConfigured() {
-		s.log.Warn("Pyrus webhook worker отключен: клиент Pyrus API не настроен")
+		s.log.Warn(
+			"Pyrus webhook worker отключен: клиент Pyrus API не настроен",
+			"login_present", strings.TrimSpace(s.cfg.PyrusLogin) != "",
+			"security_key_present", strings.TrimSpace(s.cfg.PyrusSecurityKey) != "",
+		)
 		return
 	}
+	s.log.Info(
+		"Pyrus webhook worker запущен",
+		"form_id", s.cfg.PyrusFormID,
+		"redis_enabled", s.redis != nil,
+		"stream", s.cfg.PyrusEventsStreamName,
+		"consumer_group", s.cfg.PyrusEventsConsumerGroup,
+		"consumer_name", s.consumerName,
+	)
 	if s.redis != nil {
 		if err := s.ensureConsumerGroup(ctx); err != nil {
 			s.log.Error("Pyrus: не удалось подготовить consumer group", "error", err)
@@ -207,6 +237,7 @@ func (s *pyrusIncomingService) enqueueEvent(ctx context.Context, eventID string)
 	if s.redis == nil {
 		return errors.New("redis не настроен")
 	}
+	s.log.Debug("Pyrus: enqueue входящего события", "event_id", strings.TrimSpace(eventID), "stream", s.cfg.PyrusEventsStreamName)
 	return s.redis.XAdd(ctx, &redis.XAddArgs{
 		Stream: s.cfg.PyrusEventsStreamName,
 		Values: map[string]any{
@@ -232,6 +263,9 @@ func (s *pyrusIncomingService) dispatchLoop(ctx context.Context) {
 		if err != nil {
 			s.log.Error("Pyrus: не удалось получить входящие события для enqueue", "error", err)
 			continue
+		}
+		if len(items) > 0 {
+			s.log.Debug("Pyrus: выбраны входящие события для повторной постановки в очередь", "count", len(items))
 		}
 		for i := range items {
 			if !s.shouldProcessIncomingNow(&items[i]) {
@@ -286,6 +320,7 @@ func (s *pyrusIncomingService) consumeLoop(ctx context.Context) {
 					_ = s.redis.XAck(ctx, s.cfg.PyrusEventsStreamName, s.cfg.PyrusEventsConsumerGroup, msg.ID).Err()
 					continue
 				}
+				s.log.Debug("Pyrus: входящее событие прочитано из Redis Streams", "message_id", msg.ID, "event_id", eventID)
 				sem <- struct{}{}
 				wg.Add(1)
 				go func(messageID string, incomingID string) {
@@ -387,6 +422,7 @@ func (s *pyrusIncomingService) processAndAck(ctx context.Context, messageID stri
 	defer func() {
 		if s.redis != nil {
 			_ = s.redis.XAck(ctx, s.cfg.PyrusEventsStreamName, s.cfg.PyrusEventsConsumerGroup, messageID).Err()
+			s.log.Debug("Pyrus: Redis message подтверждён", "message_id", messageID, "event_id", eventID)
 		}
 	}()
 	s.processIncomingEvent(ctx, eventID)
@@ -395,20 +431,34 @@ func (s *pyrusIncomingService) processAndAck(ctx context.Context, messageID stri
 func (s *pyrusIncomingService) processIncomingEvent(ctx context.Context, eventID string) {
 	item, err := s.repo.GetIncomingEventByID(ctx, eventID)
 	if err != nil || item == nil {
+		if err != nil {
+			s.log.Error("Pyrus: не удалось получить входящее событие по id", "event_id", eventID, "error", err)
+		}
 		return
 	}
+	s.log.Debug(
+		"Pyrus: начало обработки входящего события",
+		"event_id", item.ID,
+		"event_name", item.EventName,
+		"task_id", safeInt64Pointer(item.PyrusTaskID),
+		"attempts", item.Attempts,
+		"status", item.Status,
+	)
 	if err := s.repo.MarkIncomingProcessing(ctx, item.ID); err != nil {
 		s.log.Warn("Pyrus: не удалось отметить событие как processing", "event_id", item.ID, "error", err)
 	}
 	status, reason, procErr := s.handleIncomingEvent(ctx, item)
 	if procErr != nil {
+		s.log.Error("Pyrus: ошибка обработки входящего события", "event_id", item.ID, "task_id", safeInt64Pointer(item.PyrusTaskID), "error", procErr)
 		_ = s.repo.MarkIncomingFailed(ctx, item.ID, procErr.Error())
 		return
 	}
 	if status == pyrus.IncomingEventStatusIgnored {
+		s.log.Info("Pyrus: входящее событие проигнорировано", "event_id", item.ID, "task_id", safeInt64Pointer(item.PyrusTaskID), "reason", reason)
 		_ = s.repo.MarkIncomingIgnored(ctx, item.ID, reason)
 		return
 	}
+	s.log.Debug("Pyrus: входящее событие успешно обработано", "event_id", item.ID, "task_id", safeInt64Pointer(item.PyrusTaskID), "result_status", status)
 	_ = s.repo.MarkIncomingDone(ctx, item.ID)
 }
 
@@ -423,6 +473,7 @@ func (s *pyrusIncomingService) handleIncomingEvent(ctx context.Context, item *py
 	if err != nil {
 		return "", "", err
 	}
+	s.log.Debug("Pyrus: входящее событие разобрано", "event_id", item.ID, "payload", pyrusWebhookPayloadSummary(payload))
 	taskID := resolvePyrusTaskID(payload)
 	if taskID <= 0 {
 		return pyrus.IncomingEventStatusIgnored, "в webhook отсутствует task_id", nil
@@ -442,17 +493,20 @@ func (s *pyrusIncomingService) handleIncomingEvent(ctx context.Context, item *py
 	if task == nil {
 		return pyrus.IncomingEventStatusIgnored, "задача Pyrus не найдена", nil
 	}
+	s.log.Debug("Pyrus: загружена задача для обработки webhook", "event_id", item.ID, "task_id", taskID, "task", pyrusTaskSummary(task))
 	if task.FormID != s.cfg.PyrusFormID {
 		return pyrus.IncomingEventStatusIgnored, "форма не входит в поддерживаемый контур", nil
 	}
 
 	extID := strings.TrimSpace(extractPyrusFieldString(task, "ext_id"))
 	if extID == "" {
+		s.log.Debug("Pyrus: webhook распознан как создание нового тикета", "event_id", item.ID, "task_id", taskID)
 		if _, err := s.createTicketFromPyrusTask(ctx, task); err != nil {
 			return "", "", err
 		}
 		return pyrus.IncomingEventStatusDone, "", nil
 	}
+	s.log.Debug("Pyrus: webhook распознан как обновление существующего тикета", "event_id", item.ID, "task_id", taskID, "ext_id", extID)
 	if err := s.syncExistingTicketFromPyrusTask(ctx, task, extID); err != nil {
 		return "", "", err
 	}
@@ -463,9 +517,11 @@ func (s *pyrusIncomingService) loadTask(ctx context.Context, payload *pyrusplugi
 	if payload != nil && payload.Task.ID > 0 {
 		taskCopy := payload.Task
 		if taskCopy.FormID > 0 {
+			s.log.Debug("Pyrus: используем задачу прямо из webhook payload", "task_id", taskID, "form_id", taskCopy.FormID)
 			return &taskCopy, nil
 		}
 	}
+	s.log.Debug("Pyrus: догружаем задачу через API", "task_id", taskID)
 	return s.client.GetTask(ctx, taskID)
 }
 
@@ -474,6 +530,7 @@ func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, ta
 	if err != nil {
 		return nil, err
 	}
+	s.log.Debug("Pyrus: определён company_id для нового тикета", "task_id", task.ID, "company_id", companyID)
 
 	reporterName := strings.TrimSpace(extractPyrusFieldString(task, "SenderName", "Sender Name"))
 	if reporterName == "" && task.Author != nil {
@@ -493,6 +550,7 @@ func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, ta
 	if err != nil {
 		return nil, err
 	}
+	s.log.Info("Pyrus: создан новый тикет из webhook", "task_id", task.ID, "ticket_id", ticket.ID, "company_id", companyID, "subject", ticket.Subject)
 
 	now := time.Now()
 	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
@@ -527,6 +585,7 @@ func (s *pyrusIncomingService) syncExistingTicketFromPyrusTask(ctx context.Conte
 	if ticket == nil {
 		return fmt.Errorf("локальный тикет %s для Pyrus task_id=%d не найден", extID, task.ID)
 	}
+	s.log.Debug("Pyrus: найден локальный тикет по ext_id", "task_id", task.ID, "ext_id", extID, "ticket_id", ticket.ID)
 
 	now := time.Now()
 	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
@@ -549,6 +608,7 @@ func (s *pyrusIncomingService) syncExistingTicketFromPyrusTask(ctx context.Conte
 	if err != nil {
 		return err
 	}
+	s.log.Debug("Pyrus: синхронизация существующего тикета завершена", "task_id", task.ID, "ticket_id", ticket.ID, "imported_comments", commentCount, "status_changed", statusChanged)
 	if commentCount > 0 {
 		s.publishTicketUpdated(ticket, "ticket_comment_added", "Добавлен комментарий из Pyrus")
 	}
@@ -566,6 +626,7 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 	for i := range task.Comments {
 		comment := task.Comments[i]
 		if isPyrusExtIDSystemComment(&comment, ticket.ID) {
+			s.log.Debug("Pyrus: пропускаем служебный комментарий ext_id", "task_id", task.ID, "ticket_id", ticket.ID, "comment_id", comment.ID)
 			continue
 		}
 		if comment.ID > 0 {
@@ -574,6 +635,7 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 				return added, err
 			}
 			if link != nil {
+				s.log.Debug("Pyrus: комментарий уже импортирован ранее", "task_id", task.ID, "ticket_id", ticket.ID, "comment_id", comment.ID)
 				continue
 			}
 		}
@@ -590,6 +652,7 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 			if err := s.upsertPyrusCommentLink(ctx, task.ID, localCommentID, &comment); err != nil {
 				return added, err
 			}
+			s.log.Debug("Pyrus: комментарий уже существует локально, обновлён только link", "task_id", task.ID, "ticket_id", ticket.ID, "comment_id", comment.ID, "local_comment_id", localCommentID)
 			continue
 		}
 
@@ -627,6 +690,14 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{item}); err != nil {
 			return added, err
 		}
+		s.log.Debug(
+			"Pyrus: импортирован комментарий из webhook",
+			"task_id", task.ID,
+			"ticket_id", ticket.ID,
+			"comment_id", comment.ID,
+			"local_comment_id", item.ID,
+			"comment", pyrusCommentSummaries([]pyrusplugin.Comment{comment}),
+		)
 		if err := s.upsertPyrusCommentLink(ctx, task.ID, localCommentID, &comment); err != nil {
 			return added, err
 		}
@@ -742,6 +813,7 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 			return false, "", "", assetErr
 		}
 		if asset != nil {
+			s.log.Debug("Pyrus: вложение уже было импортировано ранее", "task_id", taskID, "ticket_id", ticketID, "attachment_id", attachment.ID, "file_id", asset.ID)
 			return false, "/api/static/tickets/" + asset.StorageKey, asset.OriginalName, nil
 		}
 	}
@@ -821,6 +893,16 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 	if err := s.repo.UpsertFileLink(ctx, link); err != nil {
 		return false, "", "", err
 	}
+	s.log.Debug(
+		"Pyrus: вложение импортировано",
+		"task_id", taskID,
+		"ticket_id", ticketID,
+		"attachment_id", attachment.ID,
+		"comment_id", safeStringPointer(commentID),
+		"file_name", asset.OriginalName,
+		"file_id", asset.ID,
+		"size", len(fileData.Content),
+	)
 
 	return true, "/api/static/tickets/" + asset.StorageKey, asset.OriginalName, nil
 }
@@ -852,6 +934,7 @@ func (s *pyrusIncomingService) applyPyrusStatusToTicket(ctx context.Context, tic
 			},
 		})
 	}
+	s.log.Debug("Pyrus: применён новый статус к локальному тикету", "ticket_id", ticket.ID, "task_id", task.ID, "old_status", oldStatus, "new_status", nextStatus)
 	return true, nil
 }
 
@@ -962,6 +1045,7 @@ func (s *pyrusIncomingService) publishPyrusExtIDSyncRequested(ticketID string, t
 	if s.eventBus == nil || strings.TrimSpace(ticketID) == "" || taskID <= 0 {
 		return
 	}
+	s.log.Debug("Pyrus: публикуем событие обратной записи ext_id", "ticket_id", ticketID, "task_id", taskID)
 	s.eventBus.Publish(eventbus.Event{
 		Type: events.PyrusTicketExtIDSyncRequested,
 		Payload: events.PyrusSyncEntityPayload{
