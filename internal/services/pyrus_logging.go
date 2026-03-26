@@ -38,6 +38,7 @@ func pyrusTaskSummary(task *pyrusplugin.Task) map[string]any {
 	if task == nil {
 		return map[string]any{"is_nil": true}
 	}
+	context := buildPyrusTaskContext(task)
 	return map[string]any{
 		"id":                task.ID,
 		"form_id":           task.FormID,
@@ -54,10 +55,11 @@ func pyrusTaskSummary(task *pyrusplugin.Task) map[string]any {
 		"comment_count":     len(task.Comments),
 		"attachment_count":  len(task.Attachments),
 		"field_values":      pyrusFieldMap(task.Fields),
-		"comments":          pyrusCommentSummaries(task.Comments),
+		"comments":          pyrusCommentSummaries(task, task.Comments),
 		"task_attachments":  pyrusAttachmentSummaries(task.Attachments),
 		"author":            safePyrusPersonName(task.Author),
 		"responsible":       safePyrusPersonName(task.Responsible),
+		"context":           pyrusTicketContextSummary(context),
 		"close_date_exists": task.CloseDate != nil,
 	}
 }
@@ -81,7 +83,7 @@ func pyrusFieldMap(fields []pyrusplugin.Field) map[string]string {
 	return result
 }
 
-func pyrusCommentSummaries(comments []pyrusplugin.Comment) []map[string]any {
+func pyrusCommentSummaries(task *pyrusplugin.Task, comments []pyrusplugin.Comment) []map[string]any {
 	if len(comments) == 0 {
 		return nil
 	}
@@ -93,6 +95,10 @@ func pyrusCommentSummaries(comments []pyrusplugin.Comment) []map[string]any {
 			"author":            safePyrusPersonName(comment.Author),
 			"action":            strings.TrimSpace(comment.Action),
 			"channel_type":      safePyrusChannelType(comment.Channel),
+			"channel_from":      safePyrusChannelParty(comment.Channel, true),
+			"channel_to":        safePyrusChannelParty(comment.Channel, false),
+			"classification":    classifyPyrusComment(task, &comment),
+			"roles":             safePyrusCommentRoles(comment.CommentAsRoles),
 			"text_preview":      truncateForPyrusLog(comment.Text, pyrusLogTextPreviewLimit),
 			"attachment_count":  len(comment.Attachments),
 			"attachments":       pyrusAttachmentSummaries(comment.Attachments),
@@ -133,6 +139,7 @@ func localTicketCommentSummary(comment *tickets.TicketComment) map[string]any {
 		"text_preview":      truncateForPyrusLog(comment.Text, pyrusLogTextPreviewLimit),
 		"is_private":        comment.IsPrivate,
 		"is_internal":       comment.IsInternal,
+		"reply_to_client":   comment.ReplyToClient,
 		"has_author_user":   comment.AuthorUserID != nil,
 	}
 }
@@ -149,6 +156,63 @@ func safePyrusChannelType(channel *pyrusplugin.Channel) string {
 		return ""
 	}
 	return strings.TrimSpace(channel.Type)
+}
+
+func safePyrusChannelParty(channel *pyrusplugin.Channel, from bool) map[string]string {
+	if channel == nil {
+		return nil
+	}
+	party := channel.To
+	if from {
+		party = channel.From
+	}
+	if party == nil {
+		return nil
+	}
+	return map[string]string{
+		"name":  truncateForPyrusLog(party.Name, pyrusLogTextPreviewLimit),
+		"email": truncateForPyrusLog(party.Email, pyrusLogTextPreviewLimit),
+	}
+}
+
+func safePyrusCommentRoles(roles []pyrusplugin.CommentRole) []string {
+	if len(roles) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(roles))
+	for i := range roles {
+		label := strings.TrimSpace(roles[i].Name)
+		if label == "" {
+			label = fmt.Sprintf("%d", roles[i].ID)
+		}
+		result = append(result, label)
+	}
+	return result
+}
+
+func pyrusTicketContextSummary(context *pyrusTaskContext) map[string]any {
+	if context == nil {
+		return nil
+	}
+	return map[string]any{
+		"crm_id":                    context.CRMID,
+		"uid":                       context.UID,
+		"sender_name":               context.SenderName,
+		"sender_email":              context.SenderEmail,
+		"sender_position":           context.SenderPosition,
+		"sender_messenger_nickname": context.SenderMessengerNickname,
+		"restaurant_task_id":        safeInt64Pointer(context.RestaurantTaskID),
+		"restaurant_subject":        truncateForPyrusLog(context.RestaurantSubject, pyrusLogTextPreviewLimit),
+		"call_type":                 truncateForPyrusLog(context.CallType, pyrusLogTextPreviewLimit),
+		"module":                    truncateForPyrusLog(context.Module, pyrusLogTextPreviewLimit),
+		"partner_name":              truncateForPyrusLog(context.PartnerName, pyrusLogTextPreviewLimit),
+		"partner_crm_id":            truncateForPyrusLog(context.PartnerCRMID, pyrusLogTextPreviewLimit),
+		"iiko_web_link":             truncateForPyrusLog(context.IikoWebLink, pyrusLogTextPreviewLimit),
+		"iiko_biz_link":             truncateForPyrusLog(context.IikoBizLink, pyrusLogTextPreviewLimit),
+		"domain":                    truncateForPyrusLog(context.Domain, pyrusLogTextPreviewLimit),
+		"version":                   truncateForPyrusLog(context.Version, pyrusLogTextPreviewLimit),
+		"open_period":               context.OpenPeriod,
+	}
 }
 
 func safePyrusUserID(userID *int64) any {

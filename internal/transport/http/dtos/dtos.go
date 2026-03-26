@@ -453,12 +453,14 @@ type TicketBitrixFieldsUpdateDTO struct {
 }
 
 type TicketAddCommentDTO struct {
-	Comment   string `json:"comment"`
-	IsPrivate bool   `json:"is_private"`
+	Comment       string `json:"comment"`
+	IsPrivate     bool   `json:"is_private"`
+	ReplyToClient bool   `json:"reply_to_client"`
 }
 
 type TicketUpdateCommentDTO struct {
-	Comment string `json:"comment"`
+	Comment       string `json:"comment"`
+	ReplyToClient bool   `json:"reply_to_client"`
 }
 
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.

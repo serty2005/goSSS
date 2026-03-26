@@ -86,6 +86,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&pyrus.CommentLink{},
 		&pyrus.FileLink{},
 		&pyrus.UserMap{},
+		&pyrus.TicketContext{},
 		&pyrus.IncomingEvent{},
 		&pyrus.OutgoingEvent{},
 	); err != nil {

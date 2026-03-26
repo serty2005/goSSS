@@ -68,6 +68,7 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		&pyrus.CommentLink{},
 		&pyrus.FileLink{},
 		&pyrus.UserMap{},
+		&pyrus.TicketContext{},
 		&pyrus.IncomingEvent{},
 		&pyrus.OutgoingEvent{},
 	); err != nil {
@@ -257,6 +258,110 @@ func TestPyrusIncomingService_CreateTicketFromPyrusAndQueueExtIDSync(t *testing.
 	})
 }
 
+func TestBuildPyrusTaskContext_ParsesComplexFields(t *testing.T) {
+	task := &pyrusplugin.Task{
+		ID:     345176232,
+		FormID: 2315062,
+		Fields: []pyrusplugin.Field{
+			{
+				ID:    1,
+				Type:  "form_link",
+				Name:  "Ресторан",
+				Code:  "Restaurant",
+				Value: map[string]any{"task_id": 340297727, "subject": "Ресторан: 8837845; rmser-eremenko; 809-613-203 ;"},
+			},
+			{
+				ID:    3,
+				Type:  "catalog",
+				Name:  "Партнер",
+				Value: map[string]any{"item_id": 159108025, "headers": []any{"CRMID", "Partner_name"}, "values": []any{"1369041", "MY HoReCa"}},
+			},
+			{
+				ID:   32,
+				Type: "title",
+				Name: "Тех. информация",
+				Value: map[string]any{"fields": []any{
+					map[string]any{"id": 33, "type": "text", "name": "iikoWEB", "value": "https://809-613-203.iikoweb.ru"},
+					map[string]any{"id": 34, "type": "text", "name": "iikoBIZ", "value": "https://m1.iiko.cards"},
+					map[string]any{"id": 35, "type": "text", "name": "Домен", "value": "809-613-203"},
+					map[string]any{"id": 41, "type": "text", "name": "Версия", "value": "9.4.7039.0.176630176"},
+					map[string]any{"id": 42, "type": "text", "name": "Открытый период", "value": "60"},
+				}},
+			},
+			{Code: "CrmId", Name: "CrmId", Value: "8837845"},
+			{Code: "UID", Name: "UID", Value: "809-613-203"},
+			{Code: "CallType", Name: "CallType", Value: "Консультация"},
+			{Code: "Module", Name: "Module", Value: "Касса/Пречек"},
+			{Code: "Subject", Name: "Subject", Value: "Нужно настроить сберчаевые в пречеке. Тестово."},
+			{Code: "SenderName", Name: "SenderName", Value: "Юрий"},
+		},
+		Comments: []pyrusplugin.Comment{
+			{
+				ID:   1001,
+				Text: "Первое сообщение клиента",
+				Author: &pyrusplugin.Person{
+					FirstName: "Юрий",
+					LastName:  "Ерёменко",
+					Email:     "YEremenko@myhoreca.id",
+					Position:  "Инженер",
+					Messenger: &pyrusplugin.Messenger{Type: "Internet", Nickname: "@serty2005"},
+				},
+				Channel: &pyrusplugin.Channel{
+					Type: "mobile_app",
+					From: &pyrusplugin.ChannelParty{Name: "Юрий", Email: "YEremenko@myhoreca.id"},
+				},
+			},
+		},
+	}
+
+	context := buildPyrusTaskContext(task)
+	if context == nil {
+		t.Fatal("ожидали непустой контекст задачи Pyrus")
+	}
+	if context.CRMID != "8837845" {
+		t.Fatalf("ожидали CRMID=8837845, получили %q", context.CRMID)
+	}
+	if context.IikoWebLink != "https://809-613-203.iikoweb.ru" {
+		t.Fatalf("ожидали iikoWEB из вложенного title, получили %q", context.IikoWebLink)
+	}
+	if context.IikoBizLink != "https://m1.iiko.cards" {
+		t.Fatalf("ожидали iikoBIZ из вложенного title, получили %q", context.IikoBizLink)
+	}
+	if context.Domain != "809-613-203" {
+		t.Fatalf("ожидали домен из вложенного title, получили %q", context.Domain)
+	}
+	if context.Version != "9.4.7039.0.176630176" {
+		t.Fatalf("ожидали версию из вложенного title, получили %q", context.Version)
+	}
+	if context.OpenPeriod == nil || *context.OpenPeriod != 60 {
+		t.Fatalf("ожидали open_period=60, получили %+v", context.OpenPeriod)
+	}
+	if context.RestaurantTaskID == nil || *context.RestaurantTaskID != 340297727 {
+		t.Fatalf("ожидали Restaurant.task_id=340297727, получили %+v", context.RestaurantTaskID)
+	}
+	if context.RestaurantSubject == "" {
+		t.Fatal("ожидали Restaurant.subject из form_link")
+	}
+	if context.PartnerItemID == nil || *context.PartnerItemID != 159108025 {
+		t.Fatalf("ожидали item_id партнёра, получили %+v", context.PartnerItemID)
+	}
+	if context.PartnerName != "MY HoReCa" {
+		t.Fatalf("ожидали имя партнёра MY HoReCa, получили %q", context.PartnerName)
+	}
+	if context.PartnerCRMID != "1369041" {
+		t.Fatalf("ожидали CRMID партнёра 1369041, получили %q", context.PartnerCRMID)
+	}
+	if context.SenderEmail != "YEremenko@myhoreca.id" {
+		t.Fatalf("ожидали email клиента из payload, получили %q", context.SenderEmail)
+	}
+	if context.SenderPosition != "Инженер" {
+		t.Fatalf("ожидали position клиента из payload, получили %q", context.SenderPosition)
+	}
+	if context.SenderMessengerNickname != "@serty2005" {
+		t.Fatalf("ожидали messenger.nickname клиента из payload, получили %q", context.SenderMessengerNickname)
+	}
+}
+
 func TestPyrusIncomingService_FailsOnAmbiguousCRMID(t *testing.T) {
 	env := newPyrusTestEnv(t, false)
 	ownerID1 := createCompanyRecord(t, env.db, "company-owner-a", "Компания А")
@@ -364,6 +469,217 @@ func TestPyrusIncomingService_AddsCommentForExistingExtIDAndWritesPyrusHistory(t
 	}
 	if !foundPyrusHistory {
 		t.Fatalf("ожидали запись history с source=pyrus")
+	}
+}
+
+func TestPyrusIncomingService_CreateTicketFromPyrusSavesContextAndIikoWebLink(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ownerID := createCompanyRecord(t, env.db, "company-owner-context", "Компания контекста")
+	createServerRecord(t, env.db, "8837845", ownerID)
+
+	task := &pyrusplugin.Task{
+		ID:     6001,
+		FormID: env.cfg.PyrusFormID,
+		Text:   "Сообщение клиента",
+		Fields: []pyrusplugin.Field{
+			{Code: "CrmId", Name: "CrmId", Value: "8837845"},
+			{Code: "CallType", Name: "CallType", Value: tickets.TypeConsultation},
+			{Code: "Subject", Name: "Subject", Value: "Нужно настроить сберчаевые"},
+			{Code: "SenderName", Name: "SenderName", Value: "Юрий"},
+			{
+				ID:    1,
+				Type:  "form_link",
+				Name:  "Ресторан",
+				Code:  "Restaurant",
+				Value: map[string]any{"task_id": 340297727, "subject": "Ресторан: 8837845; rmser-eremenko; 809-613-203 ;"},
+			},
+			{
+				ID:   32,
+				Type: "title",
+				Name: "Тех. информация",
+				Value: map[string]any{"fields": []any{
+					map[string]any{"id": 33, "type": "text", "name": "iikoWEB", "value": "https://809-613-203.iikoweb.ru"},
+					map[string]any{"id": 42, "type": "text", "name": "Открытый период", "value": "60"},
+				}},
+			},
+		},
+		Comments: []pyrusplugin.Comment{
+			{
+				ID:   1002,
+				Text: "Пишу из клиента",
+				Author: &pyrusplugin.Person{
+					FirstName: "Юрий",
+					Email:     "YEremenko@myhoreca.id",
+				},
+				Channel: &pyrusplugin.Channel{
+					Type: "mobile_app",
+					From: &pyrusplugin.ChannelParty{Name: "Юрий", Email: "YEremenko@myhoreca.id"},
+				},
+			},
+		},
+	}
+
+	status, reason, err := env.incoming.handleIncomingEvent(context.Background(), &pyrus.IncomingEvent{
+		ID:         "incoming-context-1",
+		EventName:  "form_task_changed",
+		PayloadRaw: string(mustPyrusJSON(t, pyrusplugin.WebhookPayload{Event: "form_task_changed", TaskID: task.ID, Task: *task})),
+	})
+	if err != nil {
+		t.Fatalf("handleIncomingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.IncomingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+
+	ticket, err := env.ticketRepo.GetByServiceDeskUUID(context.Background(), "pyrus:task:6001")
+	if err != nil {
+		t.Fatalf("не удалось получить созданный тикет: %v", err)
+	}
+	if ticket == nil {
+		t.Fatal("ожидали созданный тикет")
+	}
+	if ticket.ReporterName != "Юрий" {
+		t.Fatalf("ожидали reporter_name=Юрий, получили %q", ticket.ReporterName)
+	}
+	if ticket.ReporterEmail != "YEremenko@myhoreca.id" {
+		t.Fatalf("ожидали reporter_email из payload, получили %q", ticket.ReporterEmail)
+	}
+	if ticket.Type != tickets.TypeConsultation {
+		t.Fatalf("ожидали тип тикета consultation, получили %q", ticket.Type)
+	}
+
+	contextItem, err := env.pyrusRepo.GetTicketContextByTicketID(context.Background(), ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось получить сохранённый контекст: %v", err)
+	}
+	if contextItem == nil {
+		t.Fatal("ожидали сохранённый ticket context")
+	}
+	if contextItem.IikoWebLink != "https://809-613-203.iikoweb.ru" {
+		t.Fatalf("ожидали iiko_web_link в ticket context, получили %q", contextItem.IikoWebLink)
+	}
+	if contextItem.OpenPeriod == nil || *contextItem.OpenPeriod != 60 {
+		t.Fatalf("ожидали open_period=60 в ticket context, получили %+v", contextItem.OpenPeriod)
+	}
+	if contextItem.RestaurantTaskID == nil || *contextItem.RestaurantTaskID != 340297727 {
+		t.Fatalf("ожидали restaurant_task_id=340297727, получили %+v", contextItem.RestaurantTaskID)
+	}
+
+	servers, err := env.serverRepo.ListByCRMid(context.Background(), "8837845")
+	if err != nil {
+		t.Fatalf("не удалось получить серверы по CRMID: %v", err)
+	}
+	if len(servers) != 1 {
+		t.Fatalf("ожидали один сервер по CRMID, получили %d", len(servers))
+	}
+	if servers[0].IikoWebLink == nil || *servers[0].IikoWebLink != "https://809-613-203.iikoweb.ru" {
+		t.Fatalf("ожидали перенос iikoWEB в отдельное поле сервера, получили %+v", servers[0].IikoWebLink)
+	}
+}
+
+func TestPyrusIncomingService_SyncTaskCommentsClassifiesComments(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ownerID := createCompanyRecord(t, env.db, "company-owner-comments", "Компания комментариев")
+
+	ticket := &tickets.Ticket{
+		Subject:         "Существующий тикет",
+		Description:     "Описание",
+		Status:          tickets.StatusNew,
+		Priority:        tickets.PriorityMedium,
+		Type:            tickets.TypeIncident,
+		CompanyID:       ownerID,
+		ServiceDeskUUID: "pyrus:task:6101",
+		ReporterName:    "Pyrus",
+		SyncWithBitrix:  false,
+	}
+	if err := env.ticketRepo.Create(context.Background(), ticket); err != nil {
+		t.Fatalf("не удалось создать локальный тикет: %v", err)
+	}
+
+	task := &pyrusplugin.Task{
+		ID:     6101,
+		FormID: env.cfg.PyrusFormID,
+		Fields: []pyrusplugin.Field{
+			{Code: "ext_id", Name: "ext_id", Value: ticket.ID},
+			{Code: "SenderName", Name: "SenderName", Value: "Юрий"},
+		},
+		Comments: []pyrusplugin.Comment{
+			{
+				ID:   2001,
+				Text: "Входящее сообщение клиента",
+				Author: &pyrusplugin.Person{
+					FirstName: "Юрий",
+					Email:     "client@example.com",
+				},
+				Channel: &pyrusplugin.Channel{
+					Type: "mobile_app",
+					From: &pyrusplugin.ChannelParty{Name: "Юрий", Email: "client@example.com"},
+				},
+			},
+			{
+				ID:   2002,
+				Text: "Ответ оператором клиенту",
+				Author: &pyrusplugin.Person{
+					FirstName: "Пётр",
+					LastName:  "Оператор",
+				},
+				Channel: &pyrusplugin.Channel{
+					Type: "mobile_app",
+					To:   &pyrusplugin.ChannelParty{Name: "Юрий"},
+				},
+				CommentAsRoles: []pyrusplugin.CommentRole{{ID: 532301, Name: "Поддержка", Type: "role"}},
+			},
+			{
+				ID:   2003,
+				Text: "Внутренний комментарий",
+				Author: &pyrusplugin.Person{
+					FirstName: "Пётр",
+					LastName:  "Оператор",
+				},
+				CommentAsRoles: []pyrusplugin.CommentRole{{ID: 532301, Name: "Поддержка", Type: "role"}},
+			},
+			{
+				ID:   2004,
+				Text: pyrusExtIDSystemCommentText,
+				FieldUpdates: []pyrusplugin.Field{
+					{Code: "ext_id", Name: "ext_id", Value: ticket.ID},
+				},
+			},
+		},
+	}
+
+	status, reason, err := env.incoming.handleIncomingEvent(context.Background(), &pyrus.IncomingEvent{
+		ID:         "incoming-comments-1",
+		EventName:  "form_task_changed",
+		PayloadRaw: string(mustPyrusJSON(t, pyrusplugin.WebhookPayload{Event: "form_task_changed", TaskID: task.ID, Task: *task})),
+	})
+	if err != nil {
+		t.Fatalf("handleIncomingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.IncomingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+
+	comments, err := env.ticketRepo.GetComments(context.Background(), ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось получить комментарии тикета: %v", err)
+	}
+	if len(comments) != 3 {
+		t.Fatalf("ожидали 3 импортированных комментария без служебного ext_id, получили %d", len(comments))
+	}
+
+	commentMap := make(map[string]tickets.TicketComment, len(comments))
+	for _, item := range comments {
+		commentMap[item.Text] = item
+	}
+	if item, ok := commentMap["Входящее сообщение клиента"]; !ok || item.IsInternal || item.IsPrivate {
+		t.Fatalf("ожидали публичный входящий клиентский комментарий, получили %+v", item)
+	}
+	if item, ok := commentMap["Ответ оператором клиенту"]; !ok || item.IsInternal || item.IsPrivate || !item.ReplyToClient {
+		t.Fatalf("ожидали публичный исходящий клиентский комментарий, получили %+v", item)
+	}
+	if item, ok := commentMap["Внутренний комментарий"]; !ok || !item.IsInternal || !item.IsPrivate {
+		t.Fatalf("ожидали внутренний приватный комментарий, получили %+v", item)
 	}
 }
 

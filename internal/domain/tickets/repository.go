@@ -80,7 +80,7 @@ type TicketRepository interface {
 	AddComments(ctx context.Context, comments []TicketComment) error
 	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)
 	GetCommentByUUID(ctx context.Context, ticketID string, commentUUID string) (*TicketComment, error)
-	UpdateCommentText(ctx context.Context, ticketID string, commentUUID string, text string) (*TicketComment, error)
+	UpdateComment(ctx context.Context, ticketID string, commentUUID string, text string, replyToClient bool) (*TicketComment, error)
 	SoftDeleteComment(ctx context.Context, ticketID string, commentUUID string, deletedAt time.Time) (*TicketComment, error)
 	HardDeleteComment(ctx context.Context, ticketID string, commentUUID string) (*TicketComment, error)
 	UpdateCommentFromBitrix(ctx context.Context, commentID string, text string, authorName string) error

@@ -31,6 +31,10 @@ type Repository interface {
 	GetUserMapByEtalonID(ctx context.Context, etalonUserID uint) (*UserMap, error)
 	GetUserMapByPyrusID(ctx context.Context, pyrusUserID int64) (*UserMap, error)
 
+	UpsertTicketContext(ctx context.Context, item *TicketContext) error
+	GetTicketContextByTicketID(ctx context.Context, ticketID string) (*TicketContext, error)
+	GetTicketContextByTaskID(ctx context.Context, taskID int64) (*TicketContext, error)
+
 	InsertIncomingEventIfNotExists(ctx context.Context, event *IncomingEvent) (bool, error)
 	ResetIncomingEventForReplay(ctx context.Context, id string) error
 	MarkIncomingQueued(ctx context.Context, id string) error

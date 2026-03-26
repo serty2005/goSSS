@@ -122,12 +122,13 @@ type TicketDetails struct {
 
 // Comment представляет легаси комментарий (планируется к замене на History).
 type Comment struct {
-	UUID         string    `json:"uuid"`
-	Text         string    `json:"text"`
-	AuthorName   string    `json:"author_name"`
-	CreationDate time.Time `json:"creation_date"`
-	IsInternal   bool      `json:"is_internal"`
-	IsPrivate    bool      `json:"is_private"`
+	UUID          string    `json:"uuid"`
+	Text          string    `json:"text"`
+	AuthorName    string    `json:"author_name"`
+	CreationDate  time.Time `json:"creation_date"`
+	IsInternal    bool      `json:"is_internal"`
+	IsPrivate     bool      `json:"is_private"`
+	ReplyToClient bool      `json:"reply_to_client"`
 }
 
 // TicketComment хранит комментарии в БД (офлайн-режим/сидер).
@@ -142,6 +143,7 @@ type TicketComment struct {
 	CreationDate      time.Time  `json:"creation_date" gorm:"index"`
 	IsInternal        bool       `json:"is_internal"`
 	IsPrivate         bool       `json:"is_private" gorm:"not null;default:false;index"`
+	ReplyToClient     bool       `json:"reply_to_client" gorm:"not null;default:false;index"`
 	DeletedInBitrix   bool       `json:"deleted_in_bitrix" gorm:"not null;default:false;index"`
 	DeletedInBitrixAt *time.Time `json:"deleted_in_bitrix_at"`
 }

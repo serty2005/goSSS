@@ -469,7 +469,7 @@ func (r *ticketRepo) GetCommentByUUID(ctx context.Context, ticketID string, comm
 	return &comment, nil
 }
 
-func (r *ticketRepo) UpdateCommentText(ctx context.Context, ticketID string, commentUUID string, text string) (*tickets.TicketComment, error) {
+func (r *ticketRepo) UpdateComment(ctx context.Context, ticketID string, commentUUID string, text string, replyToClient bool) (*tickets.TicketComment, error) {
 	comment, err := r.GetCommentByUUID(ctx, ticketID, commentUUID)
 	if err != nil || comment == nil {
 		return comment, err
@@ -478,10 +478,14 @@ func (r *ticketRepo) UpdateCommentText(ctx context.Context, ticketID string, com
 	if err := r.db.WithContext(ctx).
 		Model(&tickets.TicketComment{}).
 		Where("id = ?", comment.ID).
-		Update("text", text).Error; err != nil {
+		Updates(map[string]any{
+			"text":            text,
+			"reply_to_client": replyToClient,
+		}).Error; err != nil {
 		return nil, err
 	}
 	comment.Text = text
+	comment.ReplyToClient = replyToClient
 	return comment, nil
 }
 

@@ -67,11 +67,12 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 
 	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-1")
 	comment := &tickets.TicketComment{
-		ID:           "local-comment-1",
-		TicketID:     ticketID,
-		Text:         "Ответ оператора",
-		CreationDate: time.Now(),
-		IsPrivate:    false,
+		ID:            "local-comment-1",
+		TicketID:      ticketID,
+		Text:          "Комментарий сотрудника в общую ленту",
+		CreationDate:  time.Now(),
+		IsPrivate:     false,
+		ReplyToClient: false,
 	}
 
 	requests := make([]pyrusplugin.CommentRequest, 0, 1)
@@ -117,8 +118,8 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("ожидали один запрос комментария в Pyrus, получили %d", len(requests))
 	}
-	if requests[0].Channel == nil || requests[0].Channel.Type != "mobile_app" {
-		t.Fatalf("ожидали channel.type=mobile_app, получили %+v", requests[0].Channel)
+	if requests[0].Channel != nil {
+		t.Fatalf("не ожидали channel для обычного комментария сотрудника, получили %+v", requests[0].Channel)
 	}
 	if requests[0].EditCommentID != nil {
 		t.Fatalf("не ожидали edit_comment_id для нового комментария")
@@ -130,6 +131,80 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 	}
 	if link == nil || link.PyrusCommentID == nil || *link.PyrusCommentID != 9001 {
 		t.Fatalf("ожидали сохранённый link комментария с pyrus_comment_id=9001, получили %+v", link)
+	}
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientUsesMobileApp(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-reply-1")
+	if err := env.pyrusRepo.UpsertTicketContext(ctx, &pyrus.TicketContext{
+		TicketID:    ticketID,
+		PyrusTaskID: 7001,
+		SenderName:  "Юрий",
+		SenderEmail: "client@example.com",
+	}); err != nil {
+		t.Fatalf("не удалось сохранить ticket context: %v", err)
+	}
+	comment := &tickets.TicketComment{
+		ID:            "local-comment-reply-1",
+		TicketID:      ticketID,
+		Text:          "Ответ оператором клиенту",
+		CreationDate:  time.Now(),
+		ReplyToClient: true,
+	}
+
+	requests := make([]pyrusplugin.CommentRequest, 0, 1)
+	client := &fakePyrusAPIClient{
+		configured: true,
+		addCommentFunc: func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+			requests = append(requests, req)
+			return &pyrusplugin.Task{
+				ID: taskID,
+				Comments: []pyrusplugin.Comment{
+					{
+						ID:         9051,
+						Text:       comment.Text,
+						CreateDate: time.Now(),
+						Channel:    &pyrusplugin.Channel{Type: "mobile_app", To: &pyrusplugin.ChannelParty{Name: "Юрий", Email: "client@example.com"}},
+					},
+				},
+			}, nil
+		},
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	concrete := service.(*pyrusSyncService)
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		TaskID:   7001,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-reply-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err != nil {
+		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.OutgoingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("ожидали один запрос комментария в Pyrus, получили %d", len(requests))
+	}
+	if requests[0].Channel == nil || requests[0].Channel.Type != "mobile_app" {
+		t.Fatalf("ожидали channel.type=mobile_app для ответа клиенту, получили %+v", requests[0].Channel)
+	}
+	if requests[0].Channel.To == nil || requests[0].Channel.To.Name != "Юрий" || requests[0].Channel.To.Email != "client@example.com" {
+		t.Fatalf("ожидали channel.to из контекста клиента, получили %+v", requests[0].Channel)
 	}
 }
 
@@ -243,6 +318,13 @@ func TestPyrusSyncService_HandleOutgoingStatusSyncSendsPendingCommentBeforeFinis
 	}); err != nil {
 		t.Fatalf("не удалось сохранить ticket link: %v", err)
 	}
+	if err := env.pyrusRepo.UpsertTicketContext(ctx, &pyrus.TicketContext{
+		TicketID:    ticketID,
+		PyrusTaskID: 7002,
+		SenderName:  "Юрий",
+	}); err != nil {
+		t.Fatalf("не удалось сохранить ticket context: %v", err)
+	}
 
 	finalReport := tickets.TicketComment{
 		ID:              "local-comment-final",
@@ -276,7 +358,12 @@ func TestPyrusSyncService_HandleOutgoingStatusSyncSendsPendingCommentBeforeFinis
 				return &pyrusplugin.Task{
 					ID: taskID,
 					Comments: []pyrusplugin.Comment{
-						{ID: 9101, Text: finalReport.Text, CreateDate: time.Now()},
+						{
+							ID:         9101,
+							Text:       finalReport.Text,
+							CreateDate: time.Now(),
+							Channel:    &pyrusplugin.Channel{Type: "mobile_app", To: &pyrusplugin.ChannelParty{Name: "Юрий"}},
+						},
 					},
 				}, nil
 			case 2:
@@ -322,8 +409,11 @@ func TestPyrusSyncService_HandleOutgoingStatusSyncSendsPendingCommentBeforeFinis
 	if len(requests) != 2 {
 		t.Fatalf("ожидали два вызова AddComment, получили %d", len(requests))
 	}
-	if requests[0].Text != finalReport.Text || requests[0].Channel == nil || requests[0].Channel.Type != "mobile_app" {
+	if requests[0].Text != finalReport.Text {
 		t.Fatalf("первый вызов должен был отправить комментарий оператора, получили %+v", requests[0])
+	}
+	if requests[0].Channel != nil {
+		t.Fatalf("не ожидали channel для обычного комментария сотрудника, получили %+v", requests[0].Channel)
 	}
 	if requests[1].Action != "finished" {
 		t.Fatalf("второй вызов должен был закрыть задачу через action=finished, получили %+v", requests[1])
@@ -393,6 +483,117 @@ func TestPyrusSyncService_LeavesAssigneeSyncAsTODO(t *testing.T) {
 	}
 	if reason == "" {
 		t.Fatalf("ожидали явную причину TODO для sync исполнителя")
+	}
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncUsesTicketLinkWhenPayloadTaskIDEmpty(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-link-1")
+	if err := env.pyrusRepo.UpsertTicketLink(ctx, &pyrus.TicketLink{
+		TicketID:    ticketID,
+		PyrusTaskID: 7123,
+	}); err != nil {
+		t.Fatalf("не удалось сохранить ticket link: %v", err)
+	}
+	if err := env.pyrusRepo.UpsertTicketContext(ctx, &pyrus.TicketContext{
+		TicketID:    ticketID,
+		PyrusTaskID: 7123,
+		SenderName:  "Юрий",
+	}); err != nil {
+		t.Fatalf("не удалось сохранить ticket context: %v", err)
+	}
+
+	comment := &tickets.TicketComment{
+		ID:            "local-comment-link-1",
+		TicketID:      ticketID,
+		Text:          "Ответ через lookup link",
+		CreationDate:  time.Now(),
+		ReplyToClient: false,
+	}
+
+	var sentTaskID int64
+	client := &fakePyrusAPIClient{
+		configured: true,
+		addCommentFunc: func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+			sentTaskID = taskID
+			return &pyrusplugin.Task{
+				ID: taskID,
+				Comments: []pyrusplugin.Comment{
+					{ID: 9201, Text: comment.Text, CreateDate: time.Now()},
+				},
+			}, nil
+		},
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	concrete := service.(*pyrusSyncService)
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-link-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err != nil {
+		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.OutgoingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+	if sentTaskID != 7123 {
+		t.Fatalf("ожидали task_id из pyrus_ticket_links, получили %d", sentTaskID)
+	}
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncSkipsInternalComment(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-internal-1")
+	comment := &tickets.TicketComment{
+		ID:           "local-comment-internal-1",
+		TicketID:     ticketID,
+		Text:         "Внутренний комментарий",
+		CreationDate: time.Now(),
+		IsInternal:   true,
+	}
+
+	client := &fakePyrusAPIClient{configured: true}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	concrete := service.(*pyrusSyncService)
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		TaskID:   7001,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-internal-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err != nil {
+		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.OutgoingEventStatusIgnored {
+		t.Fatalf("ожидали ignored для внутреннего комментария, получили %q", status)
+	}
+	if reason == "" {
+		t.Fatal("ожидали явную причину пропуска внутреннего комментария")
 	}
 }
 

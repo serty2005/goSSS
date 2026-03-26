@@ -526,26 +526,23 @@ func (s *pyrusIncomingService) loadTask(ctx context.Context, payload *pyrusplugi
 }
 
 func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, task *pyrusplugin.Task) (*tickets.Ticket, error) {
-	companyID, err := s.resolveCompanyIDByCRMID(ctx, extractPyrusFieldString(task, "CRMID", "CrmId", "crm_id"))
+	taskContext := buildPyrusTaskContext(task)
+	companyID, err := s.resolveCompanyIDByCRMID(ctx, taskContext.CRMID)
 	if err != nil {
 		return nil, err
 	}
 	s.log.Debug("Pyrus: определён company_id для нового тикета", "task_id", task.ID, "company_id", companyID)
 
-	reporterName := strings.TrimSpace(extractPyrusFieldString(task, "SenderName", "Sender Name"))
-	if reporterName == "" && task.Author != nil {
-		reporterName = strings.TrimSpace(task.Author.DisplayName())
-	}
-
 	// TODO: после подтверждения бизнес-контракта формы Pyrus заменить временный консервативный маппинг статусов и типа тикета.
 	ticket, err := s.ticketService.CreateFromPyrus(ctx, TicketCreateFromPyrusInput{
-		TaskID:       task.ID,
-		CompanyID:    companyID,
-		Subject:      strings.TrimSpace(extractPyrusFieldString(task, "Subject")),
-		Description:  buildPyrusTicketDescription(task),
-		ReporterName: reporterName,
-		Status:       resolvePyrusTaskStatus(task),
-		Type:         "",
+		TaskID:        task.ID,
+		CompanyID:     companyID,
+		Subject:       strings.TrimSpace(taskContext.Subject),
+		Description:   buildPyrusTicketDescription(task),
+		ReporterName:  resolvePyrusTaskClientNameFromContext(taskContext),
+		ReporterEmail: strings.TrimSpace(taskContext.SenderEmail),
+		Status:        resolvePyrusTaskStatus(task),
+		Type:          strings.TrimSpace(taskContext.CallType),
 	})
 	if err != nil {
 		return nil, err
@@ -559,6 +556,12 @@ func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, ta
 		PyrusFormID:    task.FormID,
 		LastIncomingAt: &now,
 	}); err != nil {
+		return nil, err
+	}
+	if err := s.upsertPyrusTicketContext(ctx, ticket.ID, taskContext); err != nil {
+		return nil, err
+	}
+	if err := s.syncServersFromPyrusContext(ctx, ticket.ID, taskContext); err != nil {
 		return nil, err
 	}
 
@@ -586,6 +589,7 @@ func (s *pyrusIncomingService) syncExistingTicketFromPyrusTask(ctx context.Conte
 		return fmt.Errorf("локальный тикет %s для Pyrus task_id=%d не найден", extID, task.ID)
 	}
 	s.log.Debug("Pyrus: найден локальный тикет по ext_id", "task_id", task.ID, "ext_id", extID, "ticket_id", ticket.ID)
+	taskContext := buildPyrusTaskContext(task)
 
 	now := time.Now()
 	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
@@ -595,6 +599,18 @@ func (s *pyrusIncomingService) syncExistingTicketFromPyrusTask(ctx context.Conte
 		LastIncomingAt: &now,
 	}); err != nil {
 		return err
+	}
+	if err := s.upsertPyrusTicketContext(ctx, ticket.ID, taskContext); err != nil {
+		return err
+	}
+	if err := s.syncServersFromPyrusContext(ctx, ticket.ID, taskContext); err != nil {
+		return err
+	}
+	if applyPyrusClientContextToTicket(ticket, taskContext) {
+		ticket.LastUpdatedBy = "pyrus_webhook"
+		if err := s.ticketRepo.Update(ctx, ticket); err != nil {
+			return err
+		}
 	}
 
 	if _, err := s.syncTaskAttachments(ctx, ticket.ID, task.ID, nil, task.Attachments); err != nil {
@@ -625,8 +641,15 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 	added := 0
 	for i := range task.Comments {
 		comment := task.Comments[i]
-		if isPyrusExtIDSystemComment(&comment, ticket.ID) {
-			s.log.Debug("Pyrus: пропускаем служебный комментарий ext_id", "task_id", task.ID, "ticket_id", ticket.ID, "comment_id", comment.ID)
+		commentKind := classifyPyrusComment(task, &comment)
+		if commentKind == pyrusCommentKindSystem {
+			s.log.Debug(
+				"Pyrus: пропускаем служебный комментарий",
+				"task_id", task.ID,
+				"ticket_id", ticket.ID,
+				"comment_id", comment.ID,
+				"classification", commentKind,
+			)
 			continue
 		}
 		if comment.ID > 0 {
@@ -661,6 +684,13 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 			return added, err
 		}
 		if strings.TrimSpace(commentText) == "" {
+			s.log.Debug(
+				"Pyrus: пропускаем пустой комментарий после обработки вложений",
+				"task_id", task.ID,
+				"ticket_id", ticket.ID,
+				"comment_id", comment.ID,
+				"classification", commentKind,
+			)
 			continue
 		}
 
@@ -680,12 +710,13 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 			TicketID:        ticket.ID,
 			ServiceDeskUUID: localCommentID,
 			Text:            commentText,
-			AuthorName:      pyrusCommentAuthorName(&comment),
+			AuthorName:      pyrusCommentAuthorName(task, &comment),
 			AuthorUserID:    authorUserID,
 			Source:          tickets.CommentSourcePyrus,
 			CreationDate:    creationDate,
-			IsInternal:      false,
-			IsPrivate:       false,
+			IsInternal:      commentKind == pyrusCommentKindInternal,
+			IsPrivate:       commentKind == pyrusCommentKindInternal,
+			ReplyToClient:   commentKind == pyrusCommentKindClientOutgoing,
 		}
 		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{item}); err != nil {
 			return added, err
@@ -696,7 +727,8 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 			"ticket_id", ticket.ID,
 			"comment_id", comment.ID,
 			"local_comment_id", item.ID,
-			"comment", pyrusCommentSummaries([]pyrusplugin.Comment{comment}),
+			"classification", commentKind,
+			"comment", pyrusCommentSummaries(task, []pyrusplugin.Comment{comment}),
 		)
 		if err := s.upsertPyrusCommentLink(ctx, task.ID, localCommentID, &comment); err != nil {
 			return added, err
@@ -717,6 +749,60 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 		added++
 	}
 	return added, nil
+}
+
+func (s *pyrusIncomingService) upsertPyrusTicketContext(ctx context.Context, ticketID string, taskContext *pyrusTaskContext) error {
+	item := buildPyrusTicketContextEntity(ticketID, taskContext)
+	if item == nil {
+		return nil
+	}
+	if err := s.repo.UpsertTicketContext(ctx, item); err != nil {
+		return err
+	}
+	s.log.Debug(
+		"Pyrus: сохранён контекст тикета",
+		"ticket_id", ticketID,
+		"task_id", taskContext.TaskID,
+		"context", pyrusTicketContextSummary(taskContext),
+	)
+	return nil
+}
+
+func (s *pyrusIncomingService) syncServersFromPyrusContext(ctx context.Context, ticketID string, taskContext *pyrusTaskContext) error {
+	if s.serverRepo == nil || taskContext == nil || strings.TrimSpace(taskContext.CRMID) == "" {
+		return nil
+	}
+	servers, err := s.serverRepo.ListByCRMid(ctx, taskContext.CRMID)
+	if err != nil {
+		return err
+	}
+	if len(servers) == 0 {
+		s.log.Warn("Pyrus: по CRMID не найден сервер для обогащения", "ticket_id", ticketID, "crm_id", taskContext.CRMID)
+		return nil
+	}
+	for i := range servers {
+		updates := map[string]any{
+			"last_updated_by": "pyrus_webhook",
+		}
+		if value := strings.TrimSpace(taskContext.IikoWebLink); value != "" {
+			updates["iiko_web_link"] = value
+		}
+		if len(updates) == 1 {
+			continue
+		}
+		if _, err := s.serverRepo.Update(ctx, nil, servers[i].ID, updates); err != nil {
+			return err
+		}
+		s.log.Debug(
+			"Pyrus: обновлён сервер из контекста тикета",
+			"ticket_id", ticketID,
+			"task_id", taskContext.TaskID,
+			"server_id", servers[i].ID,
+			"crm_id", taskContext.CRMID,
+			"iiko_web_link", taskContext.IikoWebLink,
+		)
+	}
+	return nil
 }
 
 func (s *pyrusIncomingService) upsertPyrusCommentLink(ctx context.Context, taskID int64, localCommentID string, comment *pyrusplugin.Comment) error {

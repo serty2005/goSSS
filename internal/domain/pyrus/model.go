@@ -1,6 +1,10 @@
 package pyrus
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/datatypes"
+)
 
 type TicketLink struct {
 	TicketID        string     `json:"ticket_id" gorm:"primaryKey;type:text"`
@@ -46,6 +50,36 @@ type UserMap struct {
 }
 
 func (UserMap) TableName() string { return "pyrus_user_maps" }
+
+type TicketContext struct {
+	TicketID                 string         `json:"ticket_id" gorm:"primaryKey;type:text"`
+	PyrusTaskID              int64          `json:"pyrus_task_id" gorm:"uniqueIndex;not null"`
+	PyrusFormID              int64          `json:"pyrus_form_id"`
+	CRMID                    string         `json:"crm_id" gorm:"type:text"`
+	UID                      string         `json:"uid" gorm:"type:text"`
+	Subject                  string         `json:"subject" gorm:"type:text"`
+	CallType                 string         `json:"call_type" gorm:"type:text"`
+	Module                   string         `json:"module" gorm:"type:text"`
+	SenderName               string         `json:"sender_name" gorm:"type:text"`
+	SenderEmail              string         `json:"sender_email" gorm:"type:text"`
+	SenderPosition           string         `json:"sender_position" gorm:"type:text"`
+	SenderMessengerNickname  string         `json:"sender_messenger_nickname" gorm:"type:text"`
+	RestaurantTaskID         *int64         `json:"restaurant_task_id" gorm:"index"`
+	RestaurantSubject        string         `json:"restaurant_subject" gorm:"type:text"`
+	PartnerItemID            *int64         `json:"partner_item_id" gorm:"index"`
+	PartnerName              string         `json:"partner_name" gorm:"type:text"`
+	PartnerCRMID             string         `json:"partner_crm_id" gorm:"type:text"`
+	IikoWebLink              string         `json:"iiko_web_link" gorm:"type:text"`
+	IikoBizLink              string         `json:"iiko_biz_link" gorm:"type:text"`
+	Domain                   string         `json:"domain" gorm:"type:text"`
+	Version                  string         `json:"version" gorm:"type:text"`
+	OpenPeriod               *int           `json:"open_period"`
+	RawFields                datatypes.JSON `json:"raw_fields" gorm:"type:jsonb"`
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+}
+
+func (TicketContext) TableName() string { return "pyrus_ticket_contexts" }
 
 const (
 	IncomingEventStatusNew        = "new"

@@ -226,6 +226,7 @@ func toServerResponse(item server.Server) map[string]interface{} {
 		"unique_id":          item.UniqueID,
 		"ip":                 item.IP,
 		"cabinet_link":       item.CabinetLink,
+		"iiko_web_link":      item.IikoWebLink,
 		"device_name":        item.DeviceName,
 		"last_modified_date": item.LastModifiedDate,
 		"litemanager":        item.Litemanager,

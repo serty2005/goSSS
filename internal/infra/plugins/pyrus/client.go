@@ -29,7 +29,9 @@ type Person struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Email     string `json:"email"`
+	Position  string `json:"position"`
 	Type      string `json:"type"`
+	Messenger *Messenger `json:"messenger,omitzero"`
 }
 
 func (p *Person) DisplayName() string {
@@ -43,6 +45,11 @@ func (p *Person) DisplayName() string {
 	return strings.TrimSpace(p.Email)
 }
 
+type Messenger struct {
+	Type     string `json:"type"`
+	Nickname string `json:"nickname"`
+}
+
 type ChannelParty struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
@@ -52,6 +59,12 @@ type Channel struct {
 	Type string        `json:"type"`
 	From *ChannelParty `json:"from,omitzero"`
 	To   *ChannelParty `json:"to,omitzero"`
+}
+
+type CommentRole struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type Attachment struct {
@@ -84,6 +97,8 @@ type Comment struct {
 	Attachments  []Attachment `json:"attachments,omitzero"`
 	Action       string       `json:"action"`
 	Channel      *Channel     `json:"channel,omitzero"`
+	CommentAsRoles []CommentRole `json:"comment_as_roles,omitzero"`
+	EditCommentID  *int64        `json:"edit_comment_id,omitzero"`
 }
 
 type Task struct {

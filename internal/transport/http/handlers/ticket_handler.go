@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
@@ -23,12 +24,13 @@ import (
 )
 
 type TicketHandler struct {
-	service  services.TicketService
-	eventBus eventbus.EventBus
+	service   services.TicketService
+	eventBus  eventbus.EventBus
+	pyrusRepo pyrus.Repository
 }
 
-func NewTicketHandler(service services.TicketService, eventBus eventbus.EventBus) *TicketHandler {
-	return &TicketHandler{service: service, eventBus: eventBus}
+func NewTicketHandler(service services.TicketService, eventBus eventbus.EventBus, pyrusRepo pyrus.Repository) *TicketHandler {
+	return &TicketHandler{service: service, eventBus: eventBus, pyrusRepo: pyrusRepo}
 }
 
 var archivedStatusesForCompanyFilter = []string{
@@ -114,7 +116,7 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishBitrixTicketSyncForTicket(ticket, "ticket_status_changed")
-	h.publishPyrusStatusSyncForTicket(ticket, "ticket_status_changed")
+	h.publishPyrusStatusSyncForTicket(r.Context(), ticket, "ticket_status_changed")
 	h.publishTicketUpdated(
 		ticket.ID,
 		"ticket_status_changed",
@@ -144,7 +146,7 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comment, err := h.service.AddComment(r.Context(), id, dto.Comment, dto.IsPrivate, userID)
+	comment, err := h.service.AddComment(r.Context(), id, dto.Comment, dto.IsPrivate, dto.ReplyToClient, userID)
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -186,7 +188,7 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updatedComment, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, userID, getUserRolesFromContext(r))
+	updatedComment, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, dto.ReplyToClient, userID, getUserRolesFromContext(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTicketNotFound):
@@ -416,7 +418,7 @@ func (h *TicketHandler) Assign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishBitrixTicketSyncForTicket(ticket, "ticket_assignee_updated")
-	h.publishPyrusAssigneeSyncForTicket(ticket, "ticket_assignee_updated")
+	h.publishPyrusAssigneeSyncForTicket(r.Context(), ticket, "ticket_assignee_updated")
 	h.publishTicketUpdated(ticket.ID, "ticket_assignee_updated", "ui", "Изменён исполнитель тикета", userID, nil)
 	response.RespondWithJSON(w, http.StatusOK, ticket)
 }
@@ -599,8 +601,8 @@ func (h *TicketHandler) publishPyrusCommentSyncForTicket(ctx context.Context, ti
 	h.publishPyrusCommentSync(ticketID, taskID, comment, etalonUserID)
 }
 
-func (h *TicketHandler) publishPyrusStatusSyncForTicket(ticket *tickets.Ticket, reason string) {
-	taskID, ok := pyrusTaskIDFromTicket(ticket)
+func (h *TicketHandler) publishPyrusStatusSyncForTicket(ctx context.Context, ticket *tickets.Ticket, reason string) {
+	taskID, ok := h.resolvePyrusTaskID(ctx, ticket)
 	if !ok || h.eventBus == nil {
 		return
 	}
@@ -615,8 +617,8 @@ func (h *TicketHandler) publishPyrusStatusSyncForTicket(ticket *tickets.Ticket, 
 	})
 }
 
-func (h *TicketHandler) publishPyrusAssigneeSyncForTicket(ticket *tickets.Ticket, reason string) {
-	taskID, ok := pyrusTaskIDFromTicket(ticket)
+func (h *TicketHandler) publishPyrusAssigneeSyncForTicket(ctx context.Context, ticket *tickets.Ticket, reason string) {
+	taskID, ok := h.resolvePyrusTaskID(ctx, ticket)
 	if !ok || h.eventBus == nil {
 		return
 	}
@@ -646,14 +648,34 @@ func (h *TicketHandler) isBitrixSyncEnabledForTicket(ctx context.Context, ticket
 }
 
 func (h *TicketHandler) resolvePyrusTaskIDForTicket(ctx context.Context, ticketID string) (int64, bool) {
-	if h.service == nil || strings.TrimSpace(ticketID) == "" {
+	if strings.TrimSpace(ticketID) == "" {
 		return 0, false
 	}
-	details, err := h.service.GetDetails(ctx, ticketID)
-	if err != nil || details == nil {
+	if h.service != nil {
+		details, err := h.service.GetDetails(ctx, ticketID)
+		if err == nil && details != nil {
+			if taskID, ok := parsePyrusTaskID(details.Metadata.ServiceDeskUUID); ok {
+				return taskID, true
+			}
+		}
+	}
+	if h.pyrusRepo != nil {
+		link, err := h.pyrusRepo.GetTicketLinkByTicketID(ctx, ticketID)
+		if err == nil && link != nil && link.PyrusTaskID > 0 {
+			return link.PyrusTaskID, true
+		}
+	}
+	return 0, false
+}
+
+func (h *TicketHandler) resolvePyrusTaskID(ctx context.Context, ticket *tickets.Ticket) (int64, bool) {
+	if ticket == nil {
 		return 0, false
 	}
-	return parsePyrusTaskID(details.Metadata.ServiceDeskUUID)
+	if taskID, ok := pyrusTaskIDFromTicket(ticket); ok {
+		return taskID, true
+	}
+	return h.resolvePyrusTaskIDForTicket(ctx, ticket.ID)
 }
 
 func pyrusTaskIDFromTicket(ticket *tickets.Ticket) (int64, bool) {
@@ -995,23 +1017,25 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type safeCommentDTO struct {
-		UUID         string    `json:"uuid"`
-		Text         string    `json:"text"`
-		AuthorName   string    `json:"author_name"`
-		CreationDate time.Time `json:"creation_date"`
-		IsInternal   bool      `json:"is_internal"`
-		IsPrivate    bool      `json:"is_private"`
+		UUID          string    `json:"uuid"`
+		Text          string    `json:"text"`
+		AuthorName    string    `json:"author_name"`
+		CreationDate  time.Time `json:"creation_date"`
+		IsInternal    bool      `json:"is_internal"`
+		IsPrivate     bool      `json:"is_private"`
+		ReplyToClient bool      `json:"reply_to_client"`
 	}
 
 	comments := make([]safeCommentDTO, 0, len(details.Comments))
 	for _, item := range details.Comments {
 		comments = append(comments, safeCommentDTO{
-			UUID:         item.UUID,
-			Text:         item.Text,
-			AuthorName:   item.AuthorName,
-			CreationDate: item.CreationDate,
-			IsInternal:   item.IsInternal,
-			IsPrivate:    item.IsPrivate,
+			UUID:          item.UUID,
+			Text:          item.Text,
+			AuthorName:    item.AuthorName,
+			CreationDate:  item.CreationDate,
+			IsInternal:    item.IsInternal,
+			IsPrivate:     item.IsPrivate,
+			ReplyToClient: item.ReplyToClient,
 		})
 	}
 

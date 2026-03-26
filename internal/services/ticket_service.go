@@ -54,8 +54,8 @@ type TicketService interface {
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	CreateFromPyrus(ctx context.Context, input TicketCreateFromPyrusInput) (*tickets.Ticket, error)
 	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error)
-	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error)
-	UpdateComment(ctx context.Context, ticketID string, commentUUID string, comment string, userID uint, roles []string) (*tickets.TicketComment, error)
+	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, replyToClient bool, userID uint) (*tickets.TicketComment, error)
+	UpdateComment(ctx context.Context, ticketID string, commentUUID string, comment string, replyToClient bool, userID uint, roles []string) (*tickets.TicketComment, error)
 	DeleteComment(ctx context.Context, ticketID string, commentUUID string, userID uint, roles []string) error
 	RecordConnectionCopy(
 		ctx context.Context,
@@ -86,13 +86,14 @@ type DeferredStatusActivation struct {
 }
 
 type TicketCreateFromPyrusInput struct {
-	TaskID       int64
-	CompanyID    string
-	Subject      string
-	Description  string
-	ReporterName string
-	Status       string
-	Type         string
+	TaskID        int64
+	CompanyID     string
+	Subject       string
+	Description   string
+	ReporterName  string
+	ReporterEmail string
+	Status        string
+	Type          string
 }
 
 type ticketServiceImpl struct {
@@ -317,6 +318,7 @@ func (s *ticketServiceImpl) CreateFromPyrus(ctx context.Context, input TicketCre
 		Type:            normalizePyrusTicketType(input.Type),
 		CompanyID:       strings.TrimSpace(input.CompanyID),
 		ReporterName:    reporterName,
+		ReporterEmail:   strings.TrimSpace(input.ReporterEmail),
 		ServiceDeskUUID: fmt.Sprintf("pyrus:task:%d", input.TaskID),
 		SyncWithBitrix:  false,
 	}
@@ -708,7 +710,7 @@ func (s *ticketServiceImpl) Delete(ctx context.Context, ticketID string, actorID
 	return nil
 }
 
-func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, userID uint) (*tickets.TicketComment, error) {
+func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, replyToClient bool, userID uint) (*tickets.TicketComment, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
@@ -740,6 +742,7 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		CreationDate:    time.Now(),
 		IsInternal:      false,
 		IsPrivate:       isPrivate,
+		ReplyToClient:   !isPrivate && replyToClient,
 	}
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
 		return nil, err
@@ -754,6 +757,7 @@ func (s *ticketServiceImpl) UpdateComment(
 	ticketID string,
 	commentUUID string,
 	comment string,
+	replyToClient bool,
 	userID uint,
 	roles []string,
 ) (*tickets.TicketComment, error) {
@@ -785,11 +789,12 @@ func (s *ticketServiceImpl) UpdateComment(
 	if text == "" {
 		return nil, fmt.Errorf("комментарий пустой")
 	}
-	if target.Text == text {
+	nextReplyToClient := !target.IsPrivate && replyToClient
+	if target.Text == text && target.ReplyToClient == nextReplyToClient {
 		return target, nil
 	}
 
-	updated, err := s.ticketRepo.UpdateCommentText(ctx, ticketID, commentUUID, text)
+	updated, err := s.ticketRepo.UpdateComment(ctx, ticketID, commentUUID, text, nextReplyToClient)
 	if err != nil {
 		return nil, err
 	}
@@ -1206,12 +1211,13 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 				commentUUID = strings.TrimSpace(c.ID)
 			}
 			details.Comments = append(details.Comments, tickets.Comment{
-				UUID:         commentUUID,
-				Text:         c.Text,
-				AuthorName:   c.AuthorName,
-				CreationDate: c.CreationDate,
-				IsInternal:   c.IsInternal,
-				IsPrivate:    c.IsPrivate,
+				UUID:          commentUUID,
+				Text:          c.Text,
+				AuthorName:    c.AuthorName,
+				CreationDate:  c.CreationDate,
+				IsInternal:    c.IsInternal,
+				IsPrivate:     c.IsPrivate,
+				ReplyToClient: c.ReplyToClient,
 			})
 		}
 	}

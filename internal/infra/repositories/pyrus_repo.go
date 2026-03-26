@@ -135,6 +135,58 @@ func (r *pyrusRepo) GetUserMapByPyrusID(ctx context.Context, pyrusUserID int64) 
 	return &item, err
 }
 
+func (r *pyrusRepo) UpsertTicketContext(ctx context.Context, item *pyrus.TicketContext) error {
+	if item == nil {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "ticket_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"pyrus_task_id",
+			"pyrus_form_id",
+			"crm_id",
+			"uid",
+			"subject",
+			"call_type",
+			"module",
+			"sender_name",
+			"sender_email",
+			"sender_position",
+			"sender_messenger_nickname",
+			"restaurant_task_id",
+			"restaurant_subject",
+			"partner_item_id",
+			"partner_name",
+			"partner_crm_id",
+			"iiko_web_link",
+			"iiko_biz_link",
+			"domain",
+			"version",
+			"open_period",
+			"raw_fields",
+			"updated_at",
+		}),
+	}).Create(item).Error
+}
+
+func (r *pyrusRepo) GetTicketContextByTicketID(ctx context.Context, ticketID string) (*pyrus.TicketContext, error) {
+	var item pyrus.TicketContext
+	err := r.getDB(ctx).WithContext(ctx).Where("ticket_id = ?", strings.TrimSpace(ticketID)).First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *pyrusRepo) GetTicketContextByTaskID(ctx context.Context, taskID int64) (*pyrus.TicketContext, error) {
+	var item pyrus.TicketContext
+	err := r.getDB(ctx).WithContext(ctx).Where("pyrus_task_id = ?", taskID).First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
 func (r *pyrusRepo) InsertIncomingEventIfNotExists(ctx context.Context, event *pyrus.IncomingEvent) (bool, error) {
 	if event == nil {
 		return false, gorm.ErrInvalidData

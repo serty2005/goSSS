@@ -21,6 +21,7 @@ type Server struct {
 	Anydesk          *string    `gorm:"type:text"`
 	IP               *string    `gorm:"type:text"`
 	CabinetLink      *string    `gorm:"type:text"`
+	IikoWebLink      *string    `gorm:"column:iiko_web_link;type:text"`
 	DeviceName       *string    `gorm:"type:text;index"`
 	LastModifiedDate *time.Time `json:"last_modified_date"`
 	Litemanager      *string    `gorm:"type:text"`
