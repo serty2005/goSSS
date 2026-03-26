@@ -1,108 +1,91 @@
-﻿name: etalon
+name: gosss-prod
+
 services:
-  # 1. База данных
   db:
     image: postgres:16-alpine
-    container_name: db
     restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - pg-db:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
-      - etalon-net
+      - gosss-net
 
   redis:
     image: redis:7-alpine
-    container_name: redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
     networks:
-      - etalon-net
+      - gosss-net
 
-  # 2. Инициализатор (сидер)
-  init-seeder:
-    container_name: seeder
-    profiles:
-      - seed
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    restart: unless-stopped
     env_file:
       - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "9000:9000"
+    networks:
+      - gosss-net
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
     restart: "no"
-    command: ["--seed"]
-    volumes:
-      - type: bind
-        source: ${SEEDER_MOCK_DATA_PATH:-../tools/seeder/mock_data}
-        target: /app/tools/seeder/mock_data
-        read_only: true
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - etalon-net
-
-  # 3. Основной сервер
-  server:
-    container_name: server
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    restart: unless-stopped
     env_file:
       - .env
-    ports:
-      - "9999:8080"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_S3_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_S3_BUCKET}"'
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      init-seeder:
-        condition: service_completed_successfully
-        required: false
-    volumes:
-      # Монтируем кеш FTP из корня проекта внутрь контейнера
-      - ${HOST_PROJECT_PATH}/ftp_cache:/app/ftp_cache
+      - minio
     networks:
-      - etalon-net
+      - gosss-net
 
-  # 4. Фронт
-  frontend:
-    container_name: frontend
-    build:
-      # Путь относительно docker-compose.yml к папке фронта
-      context: ../front-ui
-      dockerfile: Dockerfile
+  agents-proxy:
+    image: nginx:1.27-alpine
     restart: unless-stopped
-    ports:
-      # Публикуем фронт на 80 порту хоста
-      - "80:80"
+    profiles:
+      - agents-proxy
     depends_on:
-      - server
+      minio:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "${AGENTS_PROXY_PORT:-8081}:80"
+    volumes:
+      - ./docs/nginx-agents-proxy.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - etalon-net
+      - gosss-net
 
 volumes:
-  pg-db:
+  pg_data:
   redis_data:
+  minio_data:
+  ftp_cache:
 
 networks:
-  etalon-net:
+  gosss-net:
     driver: bridge

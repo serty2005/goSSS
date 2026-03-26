@@ -9,6 +9,20 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        try {
+          var params = new URLSearchParams(window.location.search);
+          var locale = String(params.get('locale') || '').trim().toLowerCase();
+          if (locale === 'en' || locale === 'ru') {
+            window.localStorage.setItem('etalon-ui-locale', locale);
+            document.documentElement.lang = locale;
+          }
+        } catch (error) {
+          console.warn('Не удалось применить locale из URL до инициализации UI', error);
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
