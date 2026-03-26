@@ -47,12 +47,36 @@ func NewUserHandler(
 
 func (h *UserHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.GetUsers)
+	r.Get("/restore-candidate", h.GetRestoreCandidate)
 	r.Post("/", h.CreateUser)
+	r.Post("/restore", h.RestoreDeletedUser)
 	r.Put("/{id}", h.UpdateUser)
 	r.Post("/{id}/bitrix/sync-suggestion", h.ApplyUserBitrixSuggestion)
 	r.Post("/{id}/pyrus/sync-suggestion", h.ApplyUserPyrusSuggestion)
 	r.Patch("/{id}/status", h.UpdateUserStatus)
 	r.Delete("/{id}", h.DeleteUser)
+}
+
+func (h *UserHandler) GetRestoreCandidate(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		response.RespondWithJSON(w, http.StatusOK, map[string]any{"candidate": nil})
+		return
+	}
+
+	found, err := h.userRepo.GetDeletedByUsername(r.Context(), username)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось проверить удалённого пользователя")
+		return
+	}
+	if found == nil {
+		response.RespondWithJSON(w, http.StatusOK, map[string]any{"candidate": nil})
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]any{
+		"candidate": h.toDeletedUserRestoreCandidateDTO(*found),
+	})
 }
 
 func (h *UserHandler) ListAssignees(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +142,26 @@ func (h *UserHandler) UpdateMyCredentials(w http.ResponseWriter, r *http.Request
 			response.RespondWithError(w, http.StatusBadRequest, "Логин не может быть пустым")
 			return
 		}
+		existingUser, lookupErr := h.userRepo.GetByUsername(r.Context(), username)
+		if lookupErr != nil {
+			log.Error("Не удалось проверить логин пользователя", "username", username, "error", lookupErr)
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить пользователя")
+			return
+		}
+		if existingUser != nil && existingUser.ID != u.ID {
+			response.RespondWithError(w, http.StatusBadRequest, "Пользователь с таким логином уже существует")
+			return
+		}
+		deletedUser, lookupDeletedErr := h.userRepo.GetDeletedByUsername(r.Context(), username)
+		if lookupDeletedErr != nil {
+			log.Error("Не удалось проверить удалённого пользователя по логину", "username", username, "error", lookupDeletedErr)
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить пользователя")
+			return
+		}
+		if deletedUser != nil && deletedUser.ID != u.ID {
+			response.RespondWithError(w, http.StatusBadRequest, "Этот логин уже принадлежит удалённому пользователю. Используйте восстановление.")
+			return
+		}
 		u.Username = username
 	}
 
@@ -172,45 +216,10 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	lockedByKey := make(map[string]user.Integration, len(u.Integrations))
-	for _, existing := range u.Integrations {
-		if !existing.IsLocked {
-			continue
-		}
-		key := buildIntegrationKey(existing.IntegrationType, existing.ExternalID)
-		lockedByKey[key] = existing
-	}
-
-	normalized := make([]user.Integration, 0, len(dto.Integrations))
-	seen := make(map[string]struct{}, len(dto.Integrations))
-	for _, item := range dto.Integrations {
-		typeVal := strings.TrimSpace(strings.ToLower(item.IntegrationType))
-		idVal := strings.TrimSpace(item.ExternalID)
-		typePtr, idPtr, validateErr := validateExternalFields(&typeVal, &idVal)
-		if validateErr != nil {
-			response.RespondWithError(w, http.StatusBadRequest, validateErr.Error())
-			return
-		}
-		if typePtr == nil || idPtr == nil {
-			continue
-		}
-		key := *typePtr + ":" + *idPtr
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		if lockedExisting, isLocked := lockedByKey[key]; isLocked {
-			normalized = append(normalized, lockedExisting)
-			continue
-		}
-
-		integration := user.Integration{
-			IntegrationType: *typePtr,
-			ExternalID:      *idPtr,
-		}
-		h.enrichIntegration(r.Context(), u, &integration)
-		normalized = append(normalized, integration)
+	normalized, err := h.normalizeRequestedIntegrations(r.Context(), u, dto.Integrations, true)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := h.userRepo.ReplaceIntegrations(r.Context(), currentUserID, normalized); err != nil {
@@ -221,13 +230,7 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 	u.Integrations = normalized
 	h.persistVerifiedExternalMaps(r.Context(), u)
 
-	var legacyType *string
-	var legacyID *string
-	if len(normalized) > 0 {
-		first := normalized[0]
-		legacyType = &first.IntegrationType
-		legacyID = &first.ExternalID
-	}
+	legacyType, legacyID := pickPrimaryIntegration(normalized)
 	if err := h.userRepo.UpdateExternalFields(r.Context(), currentUserID, legacyType, legacyID); err != nil {
 		log.Error("Не удалось обновить legacy-поля интеграций", "id", currentUserID, "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
@@ -349,6 +352,38 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusBadRequest, "Некорректный тип графика")
 		return
 	}
+	if len(strings.TrimSpace(dto.Password)) < 6 {
+		response.RespondWithError(w, http.StatusBadRequest, "Пароль должен быть не менее 6 символов")
+		return
+	}
+
+	username := strings.TrimSpace(dto.Username)
+	if username == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Логин не может быть пустым")
+		return
+	}
+
+	existingUser, err := h.userRepo.GetByUsername(r.Context(), username)
+	if err != nil {
+		log.Error("Не удалось проверить логин пользователя", "username", username, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать пользователя")
+		return
+	}
+	if existingUser != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Пользователь с таким логином уже существует")
+		return
+	}
+
+	deletedCandidate, err := h.userRepo.GetDeletedByUsername(r.Context(), username)
+	if err != nil {
+		log.Error("Не удалось проверить удалённого пользователя", "username", username, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать пользователя")
+		return
+	}
+	if deletedCandidate != nil {
+		response.RespondWithError(w, http.StatusConflict, "Найден удалённый пользователь с таким логином. Используйте восстановление.")
+		return
+	}
 
 	externalType, externalID, err := validateExternalFields(dto.ExternalType, dto.ExternalSystemID)
 	if err != nil {
@@ -364,7 +399,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newUser := &user.User{
-		Username:     strings.TrimSpace(dto.Username),
+		Username:     username,
 		FirstName:    strings.TrimSpace(dto.FirstName),
 		LastName:     strings.TrimSpace(dto.LastName),
 		FullName:     buildFullName(dto.FirstName, dto.LastName),
@@ -379,15 +414,16 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if dto.Email != nil {
 		newUser.Email = normalizeOptionalString(dto.Email)
 	}
-	if externalType != nil && externalID != nil {
-		integration := user.Integration{
-			IntegrationType: *externalType,
-			ExternalID:      *externalID,
+
+	requestedIntegrations := mergeLegacyIntegrationItems(dto.Integrations, externalType, externalID)
+	if len(requestedIntegrations) > 0 {
+		normalizedIntegrations, normalizeErr := h.normalizeRequestedIntegrations(r.Context(), newUser, requestedIntegrations, false)
+		if normalizeErr != nil {
+			response.RespondWithError(w, http.StatusBadRequest, normalizeErr.Error())
+			return
 		}
-		h.enrichIntegration(r.Context(), newUser, &integration)
-		newUser.Integrations = []user.Integration{
-			integration,
-		}
+		newUser.Integrations = normalizedIntegrations
+		newUser.ExternalType, newUser.ExternalID = pickPrimaryIntegration(normalizedIntegrations)
 	}
 
 	if err := newUser.HashPassword(dto.Password); err != nil {
@@ -405,6 +441,113 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	h.persistVerifiedExternalMaps(r.Context(), newUser)
 
 	response.RespondWithJSON(w, http.StatusCreated, h.toUserDTO(r.Context(), *newUser))
+}
+
+func (h *UserHandler) RestoreDeletedUser(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+	var dto api.UserCreateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректное тело запроса")
+		return
+	}
+
+	username := strings.TrimSpace(dto.Username)
+	if username == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Логин не может быть пустым")
+		return
+	}
+
+	activeUser, err := h.userRepo.GetByUsername(r.Context(), username)
+	if err != nil {
+		log.Error("Не удалось проверить активного пользователя", "username", username, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
+		return
+	}
+	if activeUser != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Пользователь с таким логином уже существует")
+		return
+	}
+
+	deletedUser, err := h.userRepo.GetDeletedByUsername(r.Context(), username)
+	if err != nil {
+		log.Error("Не удалось получить удалённого пользователя", "username", username, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
+		return
+	}
+	if deletedUser == nil {
+		response.RespondWithError(w, http.StatusNotFound, "Удалённый пользователь с таким логином не найден")
+		return
+	}
+
+	position := strings.TrimSpace(dto.Position)
+	if !user.IsValidRole(position) {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректная должность")
+		return
+	}
+
+	schedule := strings.TrimSpace(dto.ScheduleType)
+	if !user.IsValidSchedule(schedule) {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный тип графика")
+		return
+	}
+	if len(strings.TrimSpace(dto.Password)) < 6 {
+		response.RespondWithError(w, http.StatusBadRequest, "Пароль должен быть не менее 6 символов")
+		return
+	}
+
+	externalType, externalID, err := validateExternalFields(dto.ExternalType, dto.ExternalSystemID)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	role, err := h.userRepo.EnsureRoleExists(r.Context(), position, roleDescription(position))
+	if err != nil {
+		log.Error("Не удалось подготовить роль для восстановления", "role", position, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
+		return
+	}
+
+	deletedUser.Username = username
+	deletedUser.FirstName = strings.TrimSpace(dto.FirstName)
+	deletedUser.LastName = strings.TrimSpace(dto.LastName)
+	deletedUser.FullName = buildFullName(dto.FirstName, dto.LastName)
+	deletedUser.Position = position
+	deletedUser.ScheduleType = schedule
+	deletedUser.Roles = []user.Role{*role}
+	deletedUser.IsActive = true
+	deletedUser.HasLoggedIn = false
+	if dto.Email != nil {
+		deletedUser.Email = normalizeOptionalString(dto.Email)
+	}
+	deletedUser.DeletedAt.Valid = false
+	deletedUser.DeletedAt.Time = deletedUser.UpdatedAt
+
+	requestedIntegrations := mergeLegacyIntegrationItems(dto.Integrations, externalType, externalID)
+	if len(requestedIntegrations) > 0 {
+		normalizedIntegrations, normalizeErr := h.normalizeRequestedIntegrations(r.Context(), deletedUser, requestedIntegrations, false)
+		if normalizeErr != nil {
+			response.RespondWithError(w, http.StatusBadRequest, normalizeErr.Error())
+			return
+		}
+		deletedUser.Integrations = normalizedIntegrations
+	}
+	deletedUser.ExternalType, deletedUser.ExternalID = pickPrimaryIntegration(deletedUser.Integrations)
+
+	if err := deletedUser.HashPassword(dto.Password); err != nil {
+		log.Error("Не удалось обновить пароль при восстановлении пользователя", "id", deletedUser.ID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
+		return
+	}
+
+	if err := h.userRepo.Restore(r.Context(), deletedUser); err != nil {
+		log.Error("Не удалось восстановить пользователя", "id", deletedUser.ID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
+		return
+	}
+	h.persistVerifiedExternalMaps(r.Context(), deletedUser)
+
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *deletedUser))
 }
 
 func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -492,43 +635,56 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	u.FullName = buildFullName(u.FirstName, u.LastName)
 
-	nextExternalType := u.ExternalType
-	nextExternalID := u.ExternalID
-	if dto.ExternalType != nil {
-		nextExternalType = dto.ExternalType
-	}
-	if dto.ExternalSystemID != nil {
-		nextExternalID = dto.ExternalSystemID
-	}
+	if dto.Integrations != nil {
+		normalizedIntegrations, normalizeErr := h.normalizeRequestedIntegrations(r.Context(), u, dto.Integrations, false)
+		if normalizeErr != nil {
+			response.RespondWithError(w, http.StatusBadRequest, normalizeErr.Error())
+			return
+		}
+		u.Integrations = normalizedIntegrations
+		u.ExternalType, u.ExternalID = pickPrimaryIntegration(normalizedIntegrations)
+	} else {
+		nextExternalType := u.ExternalType
+		nextExternalID := u.ExternalID
+		if dto.ExternalType != nil {
+			nextExternalType = dto.ExternalType
+		}
+		if dto.ExternalSystemID != nil {
+			nextExternalID = dto.ExternalSystemID
+		}
 
-	normalizedType, normalizedID, err := validateExternalFields(nextExternalType, nextExternalID)
-	if err != nil {
-		response.RespondWithError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	u.ExternalType = normalizedType
-	u.ExternalID = normalizedID
-	if normalizedType != nil && normalizedID != nil {
-		found := false
-		for i := range u.Integrations {
-			if strings.TrimSpace(strings.ToLower(u.Integrations[i].IntegrationType)) == strings.TrimSpace(strings.ToLower(*normalizedType)) {
+		normalizedType, normalizedID, err := validateExternalFields(nextExternalType, nextExternalID)
+		if err != nil {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		u.ExternalType = normalizedType
+		u.ExternalID = normalizedID
+		if normalizedType != nil && normalizedID != nil {
+			found := false
+			for i := range u.Integrations {
+				if strings.TrimSpace(strings.ToLower(u.Integrations[i].IntegrationType)) != strings.TrimSpace(strings.ToLower(*normalizedType)) {
+					continue
+				}
 				if u.Integrations[i].IsLocked && strings.TrimSpace(u.Integrations[i].ExternalID) != strings.TrimSpace(*normalizedID) {
-					response.RespondWithError(w, http.StatusBadRequest, "автоматически привязанную интеграцию нельзя редактировать")
+					response.RespondWithError(w, http.StatusBadRequest, "Автоматически привязанную интеграцию нельзя редактировать")
 					return
 				}
 				u.Integrations[i].ExternalID = *normalizedID
+				u.Integrations[i].IsEnabled = true
 				h.enrichIntegration(r.Context(), u, &u.Integrations[i])
 				found = true
 				break
 			}
-		}
-		if !found {
-			integration := user.Integration{
-				IntegrationType: *normalizedType,
-				ExternalID:      *normalizedID,
+			if !found {
+				integration := user.Integration{
+					IntegrationType: *normalizedType,
+					ExternalID:      *normalizedID,
+					IsEnabled:       true,
+				}
+				h.enrichIntegration(r.Context(), u, &integration)
+				u.Integrations = append(u.Integrations, integration)
 			}
-			h.enrichIntegration(r.Context(), u, &integration)
-			u.Integrations = append(u.Integrations, integration)
 		}
 	}
 
@@ -543,13 +699,47 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, "Некорректный ID пользователя")
 		return
 	}
-	h.setUserActiveStatus(w, r, uint(id), false)
+	targetUserID := uint(id)
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == targetUserID {
+		response.RespondWithError(w, http.StatusBadRequest, "Нельзя удалить текущего пользователя")
+		return
+	}
+
+	u, err := h.userRepo.GetByID(r.Context(), targetUserID)
+	if err != nil {
+		log.Error("Не удалось получить пользователя для удаления", "id", targetUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось удалить пользователя")
+		return
+	}
+	if u == nil {
+		response.RespondWithError(w, http.StatusNotFound, "Пользователь не найден")
+		return
+	}
+
+	u.IsActive = false
+	if err := h.userRepo.Update(r.Context(), u); err != nil {
+		log.Error("Не удалось деактивировать пользователя перед удалением", "id", targetUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось удалить пользователя")
+		return
+	}
+	if err := h.userRepo.Delete(r.Context(), targetUserID); err != nil {
+		log.Error("Не удалось выполнить мягкое удаление пользователя", "id", targetUserID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось удалить пользователя")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]any{
+		"status": "deleted",
+		"id":     targetUserID,
+	})
 }
 
 func (h *UserHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +805,7 @@ func (h *UserHandler) toUserDTOWithLookups(u user.User, cacheItems []bitrix.User
 			ID:              item.ID,
 			IntegrationType: item.IntegrationType,
 			ExternalID:      item.ExternalID,
+			IsEnabled:       item.IsEnabled,
 			IsVerified:      item.IsVerified,
 			IsLocked:        item.IsLocked,
 			VerifiedName:    item.VerifiedName,
@@ -646,6 +837,35 @@ func (h *UserHandler) toUserDTOWithLookups(u user.User, cacheItems []bitrix.User
 		PyrusSuggestion:  pyrusSuggestion,
 		ProfileConfig:    parseProfileConfig(u.ProfileConfig),
 	}
+}
+
+func (h *UserHandler) toDeletedUserRestoreCandidateDTO(u user.User) api.DeletedUserRestoreCandidateDTO {
+	candidate := api.DeletedUserRestoreCandidateDTO{
+		ID:           u.ID,
+		Username:     u.Username,
+		FullName:     u.FullName,
+		FirstName:    u.FirstName,
+		LastName:     u.LastName,
+		Position:     u.Position,
+		Email:        u.Email,
+		ScheduleType: u.ScheduleType,
+		Integrations: make([]api.UserIntegrationDTO, 0, len(u.Integrations)),
+	}
+	if u.DeletedAt.Valid {
+		candidate.DeletedAt = &u.DeletedAt.Time
+	}
+	for _, item := range u.Integrations {
+		candidate.Integrations = append(candidate.Integrations, api.UserIntegrationDTO{
+			ID:              item.ID,
+			IntegrationType: item.IntegrationType,
+			ExternalID:      item.ExternalID,
+			IsEnabled:       item.IsEnabled,
+			IsVerified:      item.IsVerified,
+			IsLocked:        item.IsLocked,
+			VerifiedName:    item.VerifiedName,
+		})
+	}
+	return candidate
 }
 
 func (h *UserHandler) getBitrixCache(ctx context.Context) ([]bitrix.UserCache, error) {
@@ -728,6 +948,12 @@ func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integ
 	if integration == nil {
 		return
 	}
+	if !integration.IsEnabled {
+		integration.IsVerified = false
+		integration.IsLocked = false
+		integration.VerifiedName = ""
+		return
+	}
 	integration.IsVerified = false
 	integration.VerifiedName = ""
 	switch strings.TrimSpace(strings.ToLower(integration.IntegrationType)) {
@@ -756,6 +982,9 @@ func (h *UserHandler) persistVerifiedExternalMaps(ctx context.Context, u *user.U
 	}
 	for i := range u.Integrations {
 		integration := u.Integrations[i]
+		if !integration.IsEnabled {
+			continue
+		}
 		if !integration.IsVerified {
 			continue
 		}
@@ -797,7 +1026,7 @@ func findBitrixSuggestionFromCache(u *user.User, cacheItems []bitrix.UserCache) 
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
 			continue
 		}
-		if integration.IsLocked && integration.IsVerified {
+		if integration.IsEnabled && integration.IsLocked && integration.IsVerified {
 			return nil
 		}
 	}
@@ -839,6 +1068,9 @@ func findBitrixSuggestionFromCache(u *user.User, cacheItems []bitrix.UserCache) 
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
 			continue
 		}
+		if !integration.IsEnabled {
+			continue
+		}
 		if strings.TrimSpace(integration.ExternalID) == foundID {
 			return nil
 		}
@@ -859,7 +1091,7 @@ func findPyrusSuggestionFromMembers(u *user.User, members []pyrusplugin.Member) 
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
 			continue
 		}
-		if integration.IsLocked && integration.IsVerified {
+		if integration.IsEnabled && integration.IsLocked && integration.IsVerified {
 			return nil
 		}
 	}
@@ -875,6 +1107,9 @@ func findPyrusSuggestionFromMembers(u *user.User, members []pyrusplugin.Member) 
 	}
 	for _, integration := range u.Integrations {
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
+			continue
+		}
+		if !integration.IsEnabled {
 			continue
 		}
 		if strings.TrimSpace(integration.ExternalID) == targetID {
@@ -998,11 +1233,12 @@ func (h *UserHandler) applyBitrixSuggestion(ctx context.Context, userID uint) (*
 			continue
 		}
 
-		if integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
+		if integration.IsEnabled && integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
 			return nil, fmt.Errorf("у пользователя уже есть другая автоматическая интеграция Bitrix24")
 		}
 
 		if strings.TrimSpace(integration.ExternalID) == targetID {
+			integration.IsEnabled = true
 			integration.IsVerified = true
 			integration.IsLocked = true
 			integration.VerifiedName = suggestion.Name
@@ -1016,6 +1252,7 @@ func (h *UserHandler) applyBitrixSuggestion(ctx context.Context, userID uint) (*
 			UserID:          u.ID,
 			IntegrationType: user.ExternalTypeBitrix24,
 			ExternalID:      targetID,
+			IsEnabled:       true,
 			IsVerified:      true,
 			IsLocked:        true,
 			VerifiedName:    suggestion.Name,
@@ -1035,9 +1272,8 @@ func (h *UserHandler) applyBitrixSuggestion(ctx context.Context, userID uint) (*
 		}
 	}
 
-	extType := user.ExternalTypeBitrix24
-	u.ExternalType = &extType
-	u.ExternalID = &targetID
+	u.Integrations = updatedIntegrations
+	u.ExternalType, u.ExternalID = pickPrimaryIntegration(updatedIntegrations)
 	if err := h.userRepo.Update(ctx, u); err != nil {
 		return nil, fmt.Errorf("не удалось обновить legacy-поля пользователя")
 	}
@@ -1073,11 +1309,12 @@ func (h *UserHandler) applyPyrusSuggestion(ctx context.Context, userID uint) (*u
 			continue
 		}
 
-		if integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
+		if integration.IsEnabled && integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
 			return nil, fmt.Errorf("у пользователя уже есть другая автоматическая интеграция Pyrus")
 		}
 
 		if strings.TrimSpace(integration.ExternalID) == targetID {
+			integration.IsEnabled = true
 			integration.IsVerified = true
 			integration.IsLocked = true
 			integration.VerifiedName = suggestion.Name
@@ -1091,6 +1328,7 @@ func (h *UserHandler) applyPyrusSuggestion(ctx context.Context, userID uint) (*u
 			UserID:          u.ID,
 			IntegrationType: user.ExternalTypePyrus,
 			ExternalID:      targetID,
+			IsEnabled:       true,
 			IsVerified:      true,
 			IsLocked:        true,
 			VerifiedName:    suggestion.Name,
@@ -1110,9 +1348,8 @@ func (h *UserHandler) applyPyrusSuggestion(ctx context.Context, userID uint) (*u
 		}
 	}
 
-	extType := user.ExternalTypePyrus
-	u.ExternalType = &extType
-	u.ExternalID = &targetID
+	u.Integrations = updatedIntegrations
+	u.ExternalType, u.ExternalID = pickPrimaryIntegration(updatedIntegrations)
 	if u.Email == nil || strings.TrimSpace(*u.Email) == "" {
 		u.Email = normalizeOptionalString(&suggestion.Email)
 	}
@@ -1136,6 +1373,122 @@ func normalizePersonToken(v string) string {
 
 func buildIntegrationKey(integrationType, externalID string) string {
 	return strings.TrimSpace(strings.ToLower(integrationType)) + ":" + strings.TrimSpace(externalID)
+}
+
+func mergeLegacyIntegrationItems(
+	items []api.ProfileIntegrationUpdateItemDTO,
+	externalType *string,
+	externalID *string,
+) []api.ProfileIntegrationUpdateItemDTO {
+	merged := make([]api.ProfileIntegrationUpdateItemDTO, 0, len(items)+1)
+	merged = append(merged, items...)
+	if externalType == nil && externalID == nil {
+		return merged
+	}
+	merged = append(merged, api.ProfileIntegrationUpdateItemDTO{
+		IntegrationType: strings.TrimSpace(strings.ToLower(derefString(externalType))),
+		ExternalID:      strings.TrimSpace(derefString(externalID)),
+	})
+	return merged
+}
+
+func (h *UserHandler) normalizeRequestedIntegrations(
+	ctx context.Context,
+	u *user.User,
+	items []api.ProfileIntegrationUpdateItemDTO,
+	preserveLocked bool,
+) ([]user.Integration, error) {
+	existingByKey := make(map[string]user.Integration, len(u.Integrations))
+	lockedByKey := make(map[string]user.Integration, len(u.Integrations))
+	for _, existing := range u.Integrations {
+		key := buildIntegrationKey(existing.IntegrationType, existing.ExternalID)
+		existingByKey[key] = existing
+		if preserveLocked && existing.IsEnabled && existing.IsLocked {
+			lockedByKey[key] = existing
+		}
+	}
+
+	normalized := make([]user.Integration, 0, len(items)+len(lockedByKey))
+	seen := make(map[string]struct{}, len(items)+len(lockedByKey))
+	for _, item := range items {
+		typeVal := strings.TrimSpace(strings.ToLower(item.IntegrationType))
+		idVal := strings.TrimSpace(item.ExternalID)
+		typePtr, idPtr, err := validateExternalFields(&typeVal, &idVal)
+		if err != nil {
+			return nil, err
+		}
+		if typePtr == nil || idPtr == nil {
+			continue
+		}
+
+		key := buildIntegrationKey(*typePtr, *idPtr)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		existing, hasExisting := existingByKey[key]
+		integration := user.Integration{
+			IntegrationType: *typePtr,
+			ExternalID:      *idPtr,
+			IsEnabled:       true,
+		}
+		if hasExisting {
+			integration = existing
+			integration.IntegrationType = *typePtr
+			integration.ExternalID = *idPtr
+		}
+
+		if item.IsEnabled != nil {
+			integration.IsEnabled = *item.IsEnabled
+		} else if hasExisting {
+			integration.IsEnabled = existing.IsEnabled
+		} else {
+			integration.IsEnabled = true
+		}
+
+		if preserveLocked {
+			if lockedExisting, ok := lockedByKey[key]; ok {
+				integration = lockedExisting
+			}
+		}
+
+		h.enrichIntegration(ctx, u, &integration)
+		normalized = append(normalized, integration)
+	}
+
+	if preserveLocked {
+		for key, integration := range lockedByKey {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			normalized = append(normalized, integration)
+		}
+	}
+
+	return normalized, nil
+}
+
+func pickPrimaryIntegration(items []user.Integration) (*string, *string) {
+	for _, item := range items {
+		if !item.IsEnabled {
+			continue
+		}
+		integrationType := strings.TrimSpace(strings.ToLower(item.IntegrationType))
+		externalID := strings.TrimSpace(item.ExternalID)
+		if integrationType == "" || externalID == "" {
+			continue
+		}
+		return &integrationType, &externalID
+	}
+	return nil, nil
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func normalizeOptionalString(value *string) *string {

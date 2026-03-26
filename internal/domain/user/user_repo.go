@@ -9,9 +9,11 @@ type Repository interface {
 	GetAll(ctx context.Context) ([]User, error)
 	GetByID(ctx context.Context, id uint) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
+	GetDeletedByUsername(ctx context.Context, username string) (*User, error)
 	Create(ctx context.Context, user *User) error
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id uint) error
+	Restore(ctx context.Context, user *User) error
 
 	// Методы для ролей
 	GetRoleByName(ctx context.Context, name string) (*Role, error)

@@ -368,7 +368,7 @@ const ServicePointsImportPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
-  const goBack = useBackNavigation('/admin');
+  const goBack = useBackNavigation('/admin/synchronizations');
   const queryClient = useQueryClient();
   const { setHeaderConfig } = useLayoutHeader();
   const abortRef = useRef<AbortController | null>(null);

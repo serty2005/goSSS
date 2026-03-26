@@ -233,9 +233,32 @@ func (h *BitrixHandler) RefreshUsers(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "ok",
-		"count":  count,
+	users, err := h.service.ListCachedUsers(r.Context())
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	items := make([]api.BitrixDirectoryUserDTO, 0, len(users))
+	for _, item := range users {
+		items = append(items, api.BitrixDirectoryUserDTO{
+			B24UserID:  item.B24UserID,
+			Name:       item.Name,
+			Active:     item.Active,
+			LastName:   item.LastName,
+			FirstName:  item.FirstName,
+			SecondName: item.SecondName,
+			Email:      item.Email,
+			Phone:      item.Phone,
+			LastSeenAt: item.LastSeenAt,
+			UpdatedAt:  item.UpdatedAt,
+		})
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, api.BitrixUsersRefreshDTO{
+		Status: "ok",
+		Count:  count,
+		Users:  items,
 	})
 }
 

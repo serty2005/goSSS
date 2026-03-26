@@ -657,6 +657,7 @@ type UserIntegrationDTO struct {
 	ID              uint   `json:"id"`
 	IntegrationType string `json:"integration_type"`
 	ExternalID      string `json:"external_id"`
+	IsEnabled       bool   `json:"is_enabled"`
 	IsVerified      bool   `json:"is_verified"`
 	IsLocked        bool   `json:"is_locked"`
 	VerifiedName    string `json:"verified_name,omitempty"`
@@ -673,6 +674,48 @@ type PyrusUserSuggestionDTO struct {
 	Email       string `json:"email,omitempty"`
 }
 
+type BitrixDirectoryUserDTO struct {
+	B24UserID  int64      `json:"b24_user_id"`
+	Name       string     `json:"name"`
+	Active     bool       `json:"active"`
+	LastName   string     `json:"last_name,omitempty"`
+	FirstName  string     `json:"first_name,omitempty"`
+	SecondName string     `json:"second_name,omitempty"`
+	Email      string     `json:"email,omitempty"`
+	Phone      string     `json:"phone,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type BitrixUsersRefreshDTO struct {
+	Status string                   `json:"status"`
+	Count  int                      `json:"count"`
+	Users  []BitrixDirectoryUserDTO `json:"users"`
+}
+
+type PyrusDirectoryUserDTO struct {
+	PyrusUserID     int64  `json:"pyrus_user_id"`
+	Name            string `json:"name"`
+	FirstName       string `json:"first_name,omitempty"`
+	LastName        string `json:"last_name,omitempty"`
+	Email           string `json:"email,omitempty"`
+	Position        string `json:"position,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Banned          bool   `json:"banned"`
+	Fired           bool   `json:"fired"`
+	MobilePhone     string `json:"mobile_phone,omitempty"`
+	Phone           string `json:"phone,omitempty"`
+	Location        string `json:"location,omitempty"`
+	PersonnelNumber string `json:"personnel_number,omitempty"`
+}
+
+type PyrusUsersRefreshDTO struct {
+	Status string                  `json:"status"`
+	Count  int                     `json:"count"`
+	Users  []PyrusDirectoryUserDTO `json:"users"`
+}
+
 // LoginResponseDTO - тело ответа при успешном входе.
 type LoginResponseDTO struct {
 	AccessToken string  `json:"access_token"`
@@ -681,30 +724,32 @@ type LoginResponseDTO struct {
 
 // UserCreateDTO - DTO для создания нового пользователя.
 type UserCreateDTO struct {
-	Username         string   `json:"username" validate:"required"`
-	Password         string   `json:"password" validate:"required,min=6"`
-	FirstName        string   `json:"first_name" validate:"required"`
-	LastName         string   `json:"last_name" validate:"required"`
-	Position         string   `json:"position" validate:"required"`
-	Email            *string  `json:"email,omitempty"`
-	Roles            []string `json:"roles,omitempty"`
-	ExternalSystemID *string  `json:"external_system_id,omitempty"`
-	ExternalType     *string  `json:"external_type,omitempty"`
-	ScheduleType     string   `json:"schedule_type" validate:"required"`
+	Username         string                            `json:"username" validate:"required"`
+	Password         string                            `json:"password" validate:"required,min=6"`
+	FirstName        string                            `json:"first_name" validate:"required"`
+	LastName         string                            `json:"last_name" validate:"required"`
+	Position         string                            `json:"position" validate:"required"`
+	Email            *string                           `json:"email,omitempty"`
+	Roles            []string                          `json:"roles,omitempty"`
+	ExternalSystemID *string                           `json:"external_system_id,omitempty"`
+	ExternalType     *string                           `json:"external_type,omitempty"`
+	Integrations     []ProfileIntegrationUpdateItemDTO `json:"integrations,omitempty"`
+	ScheduleType     string                            `json:"schedule_type" validate:"required"`
 }
 
 // UserUpdateDTO - DTO для обновления пользователя.
 type UserUpdateDTO struct {
-	Username         *string  `json:"username,omitempty"`
-	Password         *string  `json:"password,omitempty" validate:"omitempty,min=6"`
-	FirstName        *string  `json:"first_name,omitempty"`
-	LastName         *string  `json:"last_name,omitempty"`
-	Position         *string  `json:"position,omitempty"`
-	Email            *string  `json:"email,omitempty"`
-	Roles            []string `json:"roles,omitempty"`
-	ExternalSystemID *string  `json:"external_system_id,omitempty"`
-	ExternalType     *string  `json:"external_type,omitempty"`
-	ScheduleType     *string  `json:"schedule_type,omitempty"`
+	Username         *string                           `json:"username,omitempty"`
+	Password         *string                           `json:"password,omitempty" validate:"omitempty,min=6"`
+	FirstName        *string                           `json:"first_name,omitempty"`
+	LastName         *string                           `json:"last_name,omitempty"`
+	Position         *string                           `json:"position,omitempty"`
+	Email            *string                           `json:"email,omitempty"`
+	Roles            []string                          `json:"roles,omitempty"`
+	ExternalSystemID *string                           `json:"external_system_id,omitempty"`
+	ExternalType     *string                           `json:"external_type,omitempty"`
+	Integrations     []ProfileIntegrationUpdateItemDTO `json:"integrations,omitempty"`
+	ScheduleType     *string                           `json:"schedule_type,omitempty"`
 }
 
 type UserStatusUpdateDTO struct {
@@ -719,10 +764,24 @@ type ProfileCredentialsUpdateDTO struct {
 type ProfileIntegrationUpdateItemDTO struct {
 	IntegrationType string `json:"integration_type"`
 	ExternalID      string `json:"external_id"`
+	IsEnabled       *bool  `json:"is_enabled,omitempty"`
 }
 
 type ProfileIntegrationsUpdateDTO struct {
 	Integrations []ProfileIntegrationUpdateItemDTO `json:"integrations"`
+}
+
+type DeletedUserRestoreCandidateDTO struct {
+	ID           uint                 `json:"id"`
+	Username     string               `json:"username"`
+	FullName     string               `json:"full_name"`
+	FirstName    string               `json:"first_name"`
+	LastName     string               `json:"last_name"`
+	Position     string               `json:"position"`
+	Email        *string              `json:"email,omitempty"`
+	ScheduleType string               `json:"schedule_type"`
+	DeletedAt    *time.Time           `json:"deleted_at,omitempty"`
+	Integrations []UserIntegrationDTO `json:"integrations,omitempty"`
 }
 
 type ProfileConfigUpdateDTO struct {

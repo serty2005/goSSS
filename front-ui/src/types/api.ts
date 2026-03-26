@@ -584,6 +584,7 @@ export interface UserIntegrationDTO {
   id: number;
   integration_type: string;
   external_id: string;
+  is_enabled: boolean;
   is_verified: boolean;
   is_locked?: boolean;
   verified_name?: string;
@@ -654,6 +655,11 @@ export interface UserCreatePayload {
   email?: string;
   external_system_id?: string;
   external_type?: string;
+  integrations?: Array<{
+    integration_type: string;
+    external_id: string;
+    is_enabled?: boolean;
+  }>;
   schedule_type: UserSchedule;
 }
 
@@ -666,7 +672,67 @@ export interface UserUpdatePayload {
   email?: string;
   external_system_id?: string;
   external_type?: string;
+  integrations?: Array<{
+    integration_type: string;
+    external_id: string;
+    is_enabled?: boolean;
+  }>;
   schedule_type?: UserSchedule;
+}
+
+export interface DeletedUserRestoreCandidateDTO {
+  id: number;
+  username: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
+  position: UserPosition;
+  email?: string;
+  schedule_type: UserSchedule;
+  deleted_at?: string;
+  integrations?: UserIntegrationDTO[];
+}
+
+export interface BitrixDirectoryUserDTO {
+  b24_user_id: number;
+  name: string;
+  active: boolean;
+  last_name?: string;
+  first_name?: string;
+  second_name?: string;
+  email?: string;
+  phone?: string;
+  last_seen_at?: string;
+  updated_at: string;
+}
+
+export interface BitrixUsersRefreshDTO {
+  status: string;
+  count: number;
+  users: BitrixDirectoryUserDTO[];
+}
+
+export interface PyrusDirectoryUserDTO {
+  pyrus_user_id: number;
+  name: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  position?: string;
+  type?: string;
+  status?: string;
+  banned: boolean;
+  fired: boolean;
+  mobile_phone?: string;
+  phone?: string;
+  location?: string;
+  personnel_number?: string;
+}
+
+export interface PyrusUsersRefreshDTO {
+  status: string;
+  count: number;
+  users: PyrusDirectoryUserDTO[];
 }
 
 // DTO для обновления оборудования

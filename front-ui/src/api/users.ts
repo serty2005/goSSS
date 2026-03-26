@@ -1,5 +1,11 @@
 ﻿import apiClient from './axios';
-import { ApiResponse, UserAdminDTO, UserCreatePayload, UserUpdatePayload } from '@/types/api';
+import {
+  ApiResponse,
+  DeletedUserRestoreCandidateDTO,
+  UserAdminDTO,
+  UserCreatePayload,
+  UserUpdatePayload,
+} from '@/types/api';
 
 export const usersApi = {
   getUsers: async () => {
@@ -17,6 +23,18 @@ export const usersApi = {
     return response.data;
   },
 
+  getRestoreCandidate: async (username: string) => {
+    const response = await apiClient.get<ApiResponse<{ candidate?: DeletedUserRestoreCandidateDTO | null }>>('/users/restore-candidate', {
+      params: { username },
+    });
+    return response.data;
+  },
+
+  restoreUser: async (payload: UserCreatePayload) => {
+    const response = await apiClient.post<ApiResponse<UserAdminDTO>>('/users/restore', payload);
+    return response.data;
+  },
+
   updateUser: async (id: number, payload: UserUpdatePayload) => {
     const response = await apiClient.put<ApiResponse<UserAdminDTO>>(`/users/${id}`, payload);
     return response.data;
@@ -24,6 +42,11 @@ export const usersApi = {
 
   updateUserStatus: async (id: number, is_active: boolean) => {
     const response = await apiClient.patch<ApiResponse<UserAdminDTO>>(`/users/${id}/status`, { is_active });
+    return response.data;
+  },
+
+  deleteUser: async (id: number) => {
+    const response = await apiClient.delete<ApiResponse<{ status: string; id: number }>>(`/users/${id}`);
     return response.data;
   },
 

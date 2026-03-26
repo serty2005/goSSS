@@ -1096,6 +1096,9 @@ func (s *pyrusIncomingService) resolveEtalonUserIDByPyrusUserID(ctx context.Cont
 			if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
 				continue
 			}
+			if !integration.IsEnabled {
+				continue
+			}
 			if strings.TrimSpace(integration.ExternalID) != targetExternalID {
 				continue
 			}

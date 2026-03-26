@@ -440,7 +440,7 @@ func (s *pyrusSyncService) handleAssigneeSync(
 	}
 
 	req := pyrusplugin.CommentRequest{
-		Text: "Служебное сообщение goSSS: синхронизация исполнителя заявки.",
+		Text: "От XenionDesk: исполнителя заявки.",
 		ReassignTo: &pyrusplugin.UserReference{
 			ID: &pyrusUserID,
 		},

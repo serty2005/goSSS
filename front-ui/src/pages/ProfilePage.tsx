@@ -331,6 +331,7 @@ const ProfilePage: React.FC = () => {
               id: index + 1,
               integration_type: item.integration_type,
               external_id: item.external_id,
+              is_enabled: true,
               is_verified: false,
             })),
           };

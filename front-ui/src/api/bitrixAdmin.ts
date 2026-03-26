@@ -2,6 +2,7 @@ import apiClient from './axios';
 import {
   ApiResponse,
   BitrixUserSuggestionDTO,
+  BitrixUsersRefreshDTO,
   ContractSyncQueueItemDTO,
   ContractSyncExecuteResultDTO,
   ContractSyncStateDTO,
@@ -12,7 +13,7 @@ import {
 
 export const bitrixAdminApi = {
   refreshUsers: async () => {
-    const response = await apiClient.post<ApiResponse<{ status: string; count: number }>>('/bitrix/users/refresh');
+    const response = await apiClient.post<ApiResponse<BitrixUsersRefreshDTO>>('/bitrix/users/refresh');
     return response.data;
   },
 

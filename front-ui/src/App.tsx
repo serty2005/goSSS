@@ -29,6 +29,7 @@ const ServersPage = lazy(() => import('@/pages/equipment/ServersPage'));
 const WorkstationsPage = lazy(() => import('@/pages/equipment/WorkstationsPage'));
 const FiscalsPage = lazy(() => import('@/pages/equipment/FiscalsPage'));
 const UsersAdminPage = lazy(() => import('@/pages/admin/UsersAdminPage'));
+const AdminSynchronizationsPage = lazy(() => import('@/pages/admin/AdminSynchronizationsPage'));
 const ServicePointsImportPage = lazy(() => import('@/pages/admin/ServicePointsImportPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
 const AgentDiagnosticsPage = lazy(() => import('@/pages/AgentDiagnosticsPage'));
@@ -212,17 +213,37 @@ const App: React.FC = () => {
                       path="admin"
                       element={(
                         <AdminRoute>
+                          <Navigate to="/admin/users" replace />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="admin/users"
+                      element={(
+                        <AdminRoute>
                           <UsersAdminPage />
                         </AdminRoute>
                       )}
                     />
                     <Route
-                      path="admin/service-points-import"
+                      path="admin/synchronizations"
+                      element={(
+                        <AdminRoute>
+                          <AdminSynchronizationsPage />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="admin/synchronizations/service-points-import"
                       element={(
                         <AdminRoute>
                           <ServicePointsImportPage />
                         </AdminRoute>
                       )}
+                    />
+                    <Route
+                      path="admin/service-points-import"
+                      element={<Navigate to="/admin/synchronizations/service-points-import" replace />}
                     />
                   </Route>
 

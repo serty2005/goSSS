@@ -287,7 +287,7 @@ func (c *Client) ListMembers(ctx context.Context) ([]Member, error) {
 }
 
 func (c *Client) UpdateTaskExtID(ctx context.Context, taskID int64, extID string) (*Task, error) {
-	text := "Служебное сообщение goSSS: записан локальный идентификатор заявки."
+	text := "От XenionDesk: записан локальный идентификатор заявки."
 	return c.AddComment(ctx, taskID, CommentRequest{
 		Text: text,
 		FieldUpdates: []FieldUpdateRequest{

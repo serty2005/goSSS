@@ -136,6 +136,7 @@ func mapUserIntegrationsToDTO(items []user.Integration) []api.UserIntegrationDTO
 			ID:              item.ID,
 			IntegrationType: item.IntegrationType,
 			ExternalID:      item.ExternalID,
+			IsEnabled:       item.IsEnabled,
 			IsVerified:      item.IsVerified,
 			IsLocked:        item.IsLocked,
 			VerifiedName:    item.VerifiedName,

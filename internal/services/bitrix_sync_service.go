@@ -52,6 +52,7 @@ type BitrixSyncService interface {
 	SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
+	ListCachedUsers(ctx context.Context) ([]bitrix.UserCache, error)
 	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error)
 	SearchBitrixUsersByName(ctx context.Context, firstName, lastName, fullName string) ([]bitrix.UserCache, error)
 	RefreshUsers(ctx context.Context) (int, error)
@@ -106,6 +107,13 @@ func NewBitrixSyncService(
 
 func (s *bitrixSyncService) IsEnabled() bool {
 	return s.canReadBitrix()
+}
+
+func (s *bitrixSyncService) ListCachedUsers(ctx context.Context) ([]bitrix.UserCache, error) {
+	if s == nil || s.repo == nil {
+		return []bitrix.UserCache{}, nil
+	}
+	return s.repo.ListUserCache(ctx)
 }
 
 // canReadBitrix проверяет, доступно ли чтение списка точек и пользователей из Bitrix24.
@@ -1413,6 +1421,7 @@ func (s *bitrixSyncService) rebuildUserMapFromExternalIDs(ctx context.Context) e
 				if strings.TrimSpace(u.Integrations[i].ExternalID) != strconv.FormatInt(id, 10) {
 					continue
 				}
+				u.Integrations[i].IsEnabled = true
 				u.Integrations[i].IsVerified = true
 				u.Integrations[i].IsLocked = true
 				u.Integrations[i].VerifiedName = verifiedName
@@ -1422,6 +1431,7 @@ func (s *bitrixSyncService) rebuildUserMapFromExternalIDs(ctx context.Context) e
 					UserID:          u.ID,
 					IntegrationType: user.ExternalTypeBitrix24,
 					ExternalID:      strconv.FormatInt(id, 10),
+					IsEnabled:       true,
 					IsVerified:      true,
 					IsLocked:        true,
 					VerifiedName:    verifiedName,
@@ -1447,6 +1457,9 @@ func hasBitrixIntegration(u *user.User, b24UserID int64) bool {
 	target := strconv.FormatInt(b24UserID, 10)
 	for _, integration := range u.Integrations {
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+			continue
+		}
+		if !integration.IsEnabled {
 			continue
 		}
 		if strings.TrimSpace(integration.ExternalID) == target {
@@ -1492,6 +1505,9 @@ func collectBitrixCandidateIDs(u *user.User) []int64 {
 
 	for _, integration := range u.Integrations {
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
+			continue
+		}
+		if !integration.IsEnabled {
 			continue
 		}
 		if !integration.IsVerified {

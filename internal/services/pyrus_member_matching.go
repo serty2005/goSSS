@@ -132,6 +132,9 @@ func CollectVerifiedPyrusUserIDs(u *user.User) []int64 {
 		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
 			continue
 		}
+		if !integration.IsEnabled {
+			continue
+		}
 		if !integration.IsVerified && !integration.IsLocked {
 			continue
 		}

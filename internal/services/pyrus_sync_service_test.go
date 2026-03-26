@@ -606,6 +606,7 @@ func TestPyrusSyncService_HandleOutgoingAssigneeSync(t *testing.T) {
 		{
 			IntegrationType: user.ExternalTypePyrus,
 			ExternalID:      externalID,
+			IsEnabled:       true,
 			IsVerified:      true,
 			IsLocked:        true,
 			VerifiedName:    "Иван Петров",

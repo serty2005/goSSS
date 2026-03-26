@@ -68,6 +68,7 @@ type Integration struct {
 	UserID          uint   `gorm:"index;not null"`
 	IntegrationType string `gorm:"type:varchar(50);not null;index"`
 	ExternalID      string `gorm:"type:varchar(255);not null"`
+	IsEnabled       bool   `gorm:"not null;default:true;index"`
 	IsVerified      bool   `gorm:"not null;default:false;index"`
 	IsLocked        bool   `gorm:"not null;default:false;index"`
 	VerifiedName    string `gorm:"type:varchar(255)"`

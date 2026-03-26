@@ -1257,6 +1257,9 @@ func (s *bitrixIncomingService) resolveEtalonUserIDByBitrixUserID(ctx context.Co
 			if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeBitrix24 {
 				continue
 			}
+			if !integration.IsEnabled {
+				continue
+			}
 			if strings.TrimSpace(integration.ExternalID) != targetExternalID {
 				continue
 			}

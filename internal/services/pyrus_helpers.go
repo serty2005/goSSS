@@ -17,7 +17,7 @@ import (
 	"gorm.io/datatypes"
 )
 
-const pyrusExtIDSystemCommentText = "Служебное сообщение goSSS: записан локальный идентификатор заявки."
+const pyrusExtIDSystemCommentText = "От XenionDesk: записан локальный идентификатор заявки."
 
 type pyrusTaskContext struct {
 	TaskID                  int64

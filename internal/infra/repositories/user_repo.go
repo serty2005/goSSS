@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"etalon-server/internal/domain/user"
+	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -31,7 +33,21 @@ func (r *userRepo) GetByID(ctx context.Context, id uint) (*user.User, error) {
 
 func (r *userRepo) GetByUsername(ctx context.Context, username string) (*user.User, error) {
 	var u user.User
-	err := r.db.WithContext(ctx).Preload("Roles").Preload("Integrations").Where("username = ?", username).First(&u).Error
+	err := r.db.WithContext(ctx).Preload("Roles").Preload("Integrations").Where("username = ?", strings.TrimSpace(username)).First(&u).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &u, err
+}
+
+func (r *userRepo) GetDeletedByUsername(ctx context.Context, username string) (*user.User, error) {
+	var u user.User
+	err := r.db.WithContext(ctx).
+		Unscoped().
+		Preload("Roles").
+		Preload("Integrations").
+		Where("username = ? AND deleted_at IS NOT NULL", strings.TrimSpace(username)).
+		First(&u).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -73,6 +89,26 @@ func (r *userRepo) UpdateExternalFields(ctx context.Context, userID uint, extern
 
 func (r *userRepo) Delete(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&user.User{}, id).Error
+}
+
+func (r *userRepo) Restore(ctx context.Context, u *user.User) error {
+	if u == nil || u.ID == 0 {
+		return gorm.ErrInvalidData
+	}
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().
+			Model(&user.User{}).
+			Where("id = ?", u.ID).
+			Updates(map[string]any{
+				"deleted_at": nil,
+				"updated_at": time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+
+		return tx.Session(&gorm.Session{FullSaveAssociations: true}).Save(u).Error
+	})
 }
 
 func (r *userRepo) GetRoleByName(ctx context.Context, name string) (*user.Role, error) {

@@ -306,6 +306,16 @@ const MainLayout: React.FC = () => {
     navigate(key);
   };
 
+  const selectedMenuKey = (() => {
+    if (location.pathname.startsWith('/admin/synchronizations')) {
+      return '/admin/synchronizations';
+    }
+    if (location.pathname.startsWith('/admin/users')) {
+      return '/admin/users';
+    }
+    return location.pathname;
+  })();
+
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -375,7 +385,8 @@ const MainLayout: React.FC = () => {
       icon: <SettingOutlined />,
       label: t('layout:menu.admin'),
       children: [
-        { key: '/admin', label: t('layout:menu.settings') },
+        { key: '/admin/users', label: t('layout:menu.users') },
+        { key: '/admin/synchronizations', label: t('layout:menu.synchronizations') },
         { key: '/tasks', label: t('layout:menu.issues') },
         { key: '/reports/companies-contracts', label: t('layout:menu.companyContractsReport') },
       ],
@@ -522,7 +533,7 @@ const MainLayout: React.FC = () => {
         </div>
         <Menu
           mode="inline"
-          defaultSelectedKeys={[location.pathname]}
+          selectedKeys={[selectedMenuKey]}
           items={menuItems}
           onClick={({ key }) => handleMenuClick(key)}
           style={{ borderRight: 0, background: 'transparent' }}
