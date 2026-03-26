@@ -14,6 +14,7 @@ import (
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
+	"etalon-server/internal/transport/http/validators"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"html"
@@ -784,8 +785,8 @@ func (s *pyrusIncomingService) syncServersFromPyrusContext(ctx context.Context, 
 		updates := map[string]any{
 			"last_updated_by": "pyrus_webhook",
 		}
-		if value := strings.TrimSpace(taskContext.IikoWebLink); value != "" {
-			updates["iiko_web_link"] = value
+		if value := validators.ValidateIikoWebLink(taskContext.IikoWebLink); value != nil {
+			updates["iiko_web_link"] = *value
 		}
 		if len(updates) == 1 {
 			continue

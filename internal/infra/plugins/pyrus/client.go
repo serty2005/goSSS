@@ -25,12 +25,12 @@ const pyrusAuthURL = "https://accounts.pyrus.com/api/v4/auth"
 const pyrusClientLogPreviewLimit = 240
 
 type Person struct {
-	ID        int64  `json:"id"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Email     string `json:"email"`
-	Position  string `json:"position"`
-	Type      string `json:"type"`
+	ID        int64      `json:"id"`
+	FirstName string     `json:"first_name"`
+	LastName  string     `json:"last_name"`
+	Email     string     `json:"email"`
+	Position  string     `json:"position"`
+	Type      string     `json:"type"`
 	Messenger *Messenger `json:"messenger,omitzero"`
 }
 
@@ -50,9 +50,44 @@ type Messenger struct {
 	Nickname string `json:"nickname"`
 }
 
+type UserReference struct {
+	ID    *int64 `json:"id,omitzero"`
+	Email string `json:"email,omitempty"`
+}
+
+type Member struct {
+	ID              int64      `json:"id"`
+	FirstName       string     `json:"first_name"`
+	LastName        string     `json:"last_name"`
+	Email           string     `json:"email"`
+	Position        string     `json:"position"`
+	Type            string     `json:"type"`
+	Status          string     `json:"status"`
+	Banned          bool       `json:"banned"`
+	Fired           bool       `json:"fired"`
+	Messenger       *Messenger `json:"messenger,omitzero"`
+	MobilePhone     string     `json:"mobile_phone"`
+	Phone           string     `json:"phone"`
+	Location        string     `json:"location"`
+	Personality     string     `json:"personality"`
+	PersonnelNumber string     `json:"personnel_number"`
+	VacationDays    string     `json:"vacation_days"`
+}
+
+func (m *Member) DisplayName() string {
+	if m == nil {
+		return ""
+	}
+	fullName := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(m.FirstName), strings.TrimSpace(m.LastName)}, " "))
+	if fullName != "" {
+		return fullName
+	}
+	return strings.TrimSpace(m.Email)
+}
+
 type ChannelParty struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	Email string `json:"email,omitzero"`
+	Name  string `json:"name,omitzero"`
 }
 
 type Channel struct {
@@ -88,15 +123,15 @@ type Field struct {
 }
 
 type Comment struct {
-	ID           int64        `json:"id"`
-	Text         string       `json:"text"`
-	CreateDate   time.Time    `json:"create_date"`
-	Author       *Person      `json:"author"`
-	ReassignedTo *Person      `json:"reassigned_to,omitzero"`
-	FieldUpdates []Field      `json:"field_updates,omitzero"`
-	Attachments  []Attachment `json:"attachments,omitzero"`
-	Action       string       `json:"action"`
-	Channel      *Channel     `json:"channel,omitzero"`
+	ID             int64         `json:"id"`
+	Text           string        `json:"text"`
+	CreateDate     time.Time     `json:"create_date"`
+	Author         *Person       `json:"author"`
+	ReassignedTo   *Person       `json:"reassigned_to,omitzero"`
+	FieldUpdates   []Field       `json:"field_updates,omitzero"`
+	Attachments    []Attachment  `json:"attachments,omitzero"`
+	Action         string        `json:"action"`
+	Channel        *Channel      `json:"channel,omitzero"`
 	CommentAsRoles []CommentRole `json:"comment_as_roles,omitzero"`
 	EditCommentID  *int64        `json:"edit_comment_id,omitzero"`
 }
@@ -132,11 +167,29 @@ type FieldUpdateRequest struct {
 
 type CommentRequest struct {
 	Text          string               `json:"text,omitempty"`
+	FormattedText string               `json:"formatted_text,omitempty"`
 	Action        string               `json:"action,omitempty"`
+	ReassignTo    *UserReference       `json:"reassign_to,omitzero"`
 	FieldUpdates  []FieldUpdateRequest `json:"field_updates,omitzero"`
 	Attachments   []string             `json:"attachments,omitzero"`
 	Channel       *Channel             `json:"channel,omitzero"`
 	EditCommentID *int64               `json:"edit_comment_id,omitzero"`
+}
+
+type HTTPError struct {
+	StatusCode int
+	Code       string
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return fmt.Sprintf("Pyrus API вернул %d: %s", e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("Pyrus API вернул HTTP %d", e.StatusCode)
 }
 
 type DownloadedFile struct {
@@ -221,6 +274,16 @@ func (c *Client) AddComment(ctx context.Context, taskID int64, req CommentReques
 		return nil, err
 	}
 	return &response.Task, nil
+}
+
+func (c *Client) ListMembers(ctx context.Context) ([]Member, error) {
+	var response struct {
+		Members []Member `json:"members"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "members", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Members, nil
 }
 
 func (c *Client) UpdateTaskExtID(ctx context.Context, taskID int64, extID string) (*Task, error) {
@@ -669,15 +732,22 @@ func formatPyrusHTTPError(statusCode int, responseBody []byte) error {
 			message = strings.TrimSpace(payload.ErrorTitle)
 		}
 		if message != "" {
-			return fmt.Errorf("Pyrus API вернул %d: %s", statusCode, message)
+			return &HTTPError{
+				StatusCode: statusCode,
+				Code:       strings.TrimSpace(payload.ErrorCode),
+				Message:    message,
+			}
 		}
 	}
 
 	bodyText := strings.TrimSpace(string(responseBody))
 	if bodyText == "" {
-		return fmt.Errorf("Pyrus API вернул HTTP %d", statusCode)
+		return &HTTPError{StatusCode: statusCode}
 	}
-	return fmt.Errorf("Pyrus API вернул %d: %s", statusCode, bodyText)
+	return &HTTPError{
+		StatusCode: statusCode,
+		Message:    bodyText,
+	}
 }
 
 func fileNameFromHeader(contentDisposition string) string {

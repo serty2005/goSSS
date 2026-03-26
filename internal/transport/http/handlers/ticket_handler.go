@@ -146,7 +146,7 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comment, err := h.service.AddComment(r.Context(), id, dto.Comment, dto.IsPrivate, dto.ReplyToClient, userID)
+	comment, err := h.service.AddComment(r.Context(), id, dto.Comment, dto.IsPrivate, false, userID)
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -188,7 +188,7 @@ func (h *TicketHandler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updatedComment, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, dto.ReplyToClient, userID, getUserRolesFromContext(r))
+	updatedComment, err := h.service.UpdateComment(r.Context(), ticketID, commentUUID, dto.Comment, false, userID, getUserRolesFromContext(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrTicketNotFound):
@@ -864,6 +864,8 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			BitrixDealTitle:      item.BitrixDealTitle,
 			BitrixDealID:         item.BitrixDealID,
 			BitrixDealURL:        item.BitrixDealURL,
+			PyrusTaskID:          item.PyrusTaskID,
+			PyrusTaskURL:         item.PyrusTaskURL,
 			DeferredUntil:        item.DeferredUntil,
 			DeferredByID:         item.DeferredByID,
 			Assignee:             assignee,
@@ -1014,6 +1016,8 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		BitrixDealTitle      string     `json:"bitrix_deal_title"`
 		BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
 		BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
+		PyrusTaskID          *int64     `json:"pyrus_task_id,omitempty"`
+		PyrusTaskURL         string     `json:"pyrus_task_url,omitempty"`
 	}
 
 	type safeCommentDTO struct {
@@ -1073,6 +1077,8 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			BitrixDealTitle:      details.Metadata.BitrixDealTitle,
 			BitrixDealID:         details.Metadata.BitrixDealID,
 			BitrixDealURL:        details.Metadata.BitrixDealURL,
+			PyrusTaskID:          details.Metadata.PyrusTaskID,
+			PyrusTaskURL:         details.Metadata.PyrusTaskURL,
 		},
 		"company_name": details.CompanyName,
 		"history":      historyItems,

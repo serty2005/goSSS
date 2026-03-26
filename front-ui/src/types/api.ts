@@ -91,6 +91,7 @@ export interface ServerEntity {
   anydesk?: string;
   teamviewer?: string;
   litemanager?: string;
+  iiko_web_link?: string;
   partners_link?: string;
   
   operational_status?: 'active' | 'offline' | 'unknown';
@@ -249,6 +250,8 @@ export interface TicketListItemDTO {
   bitrix_deal_title?: string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
+  pyrus_task_id?: number;
+  pyrus_task_url?: string;
   deferred_until?: string;
   deferred_by_id?: number;
   assignee?: {
@@ -286,6 +289,8 @@ export interface TicketDTO {
   bitrix_deal_title?: string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
+  pyrus_task_id?: number;
+  pyrus_task_url?: string;
   deferred_until?: string;
   deferred_by_id?: number;
 }
@@ -486,6 +491,7 @@ export interface TicketCommentDTO {
   creation_date: string;
   is_internal: boolean;
   is_private?: boolean;
+  reply_to_client?: boolean;
 }
 
 export interface TicketDetailsDTO {
@@ -560,8 +566,10 @@ export interface UserAdminDTO {
   first_name: string;
   last_name: string;
   position: UserPosition;
+  email?: string;
   roles: string[];
   bitrix_enabled?: boolean;
+  pyrus_enabled?: boolean;
   external_system_id?: string;
   external_type?: string;
   schedule_type: UserSchedule;
@@ -569,6 +577,7 @@ export interface UserAdminDTO {
   has_logged_in: boolean;
   integrations?: UserIntegrationDTO[];
   bitrix_suggestion?: BitrixUserSuggestionDTO | null;
+  pyrus_suggestion?: PyrusUserSuggestionDTO | null;
 }
 
 export interface UserIntegrationDTO {
@@ -583,6 +592,12 @@ export interface UserIntegrationDTO {
 export interface BitrixUserSuggestionDTO {
   b24_user_id: number;
   name: string;
+}
+
+export interface PyrusUserSuggestionDTO {
+  pyrus_user_id: number;
+  name: string;
+  email?: string;
 }
 
 export interface ThemePaletteConfigDTO {
@@ -636,6 +651,7 @@ export interface UserCreatePayload {
   first_name: string;
   last_name: string;
   position: UserPosition;
+  email?: string;
   external_system_id?: string;
   external_type?: string;
   schedule_type: UserSchedule;
@@ -647,6 +663,7 @@ export interface UserUpdatePayload {
   first_name?: string;
   last_name?: string;
   position?: UserPosition;
+  email?: string;
   external_system_id?: string;
   external_type?: string;
   schedule_type?: UserSchedule;
@@ -759,6 +776,7 @@ export interface ServerDetailDTO {
   health_status?: 'ok' | 'attention_required' | 'locked';
   
   cabinet_link?: string;
+  iiko_web_link?: string;
   partners_link?: string;
   crm_id?: string;
   
@@ -802,6 +820,7 @@ export interface UpdateServerPayload {
   rdp?: string;
   litemanager?: string;
   cabinet_link?: string;
+  iiko_web_link?: string;
   description?: string;
   owner_id?: string;
 }

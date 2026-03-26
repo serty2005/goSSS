@@ -109,6 +109,8 @@ type Ticket struct {
 	BitrixDealTitle      string `json:"bitrix_deal_title" gorm:"type:text"`
 	BitrixDealID         *int64 `json:"bitrix_deal_id,omitempty" gorm:"-"`
 	BitrixDealURL        string `json:"bitrix_deal_url,omitempty" gorm:"-"`
+	PyrusTaskID          *int64 `json:"pyrus_task_id,omitempty" gorm:"-"`
+	PyrusTaskURL         string `json:"pyrus_task_url,omitempty" gorm:"-"`
 }
 
 // TicketDetails — составная структура для отображения на UI.

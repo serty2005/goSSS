@@ -32,4 +32,9 @@ export const profileApi = {
     const response = await apiClient.post<ApiResponse<UserAdminDTO>>('/profile/integrations/bitrix/sync-suggestion');
     return response.data;
   },
+
+  applyPyrusSuggestion: async () => {
+    const response = await apiClient.post<ApiResponse<UserAdminDTO>>('/profile/integrations/pyrus/sync-suggestion');
+    return response.data;
+  },
 };

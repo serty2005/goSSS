@@ -1,6 +1,6 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -16,6 +16,7 @@ import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, 
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
+import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
@@ -87,6 +88,13 @@ const resolveTicketCreatedSource = (metadata?: TicketDetailsDTO['metadata']) => 
   return 'system';
 };
 
+const hasPyrusLink = (metadata?: TicketDetailsDTO['metadata']) => {
+  if (!metadata) return false;
+  if (metadata.pyrus_task_id && metadata.pyrus_task_id > 0) return true;
+  if (String(metadata.pyrus_task_url || '').trim()) return true;
+  return String(metadata.service_desk_uuid || '').trim().startsWith('pyrus:task:');
+};
+
 const resolveEntityTitle = (item: InfrastructureItem) => {
   const dataRow = item.data as Record<string, string | undefined>;
   return (
@@ -110,14 +118,19 @@ const resolveEntityPath = (item: InfrastructureItem) => {
   return '';
 };
 
-const BitrixSyncIndicator: React.FC<{ sync?: boolean; dealURL?: string }> = ({ sync, dealURL }) => {
-  if (!sync || !dealURL) {
+const ExternalLinkBadge: React.FC<{
+  label: string;
+  href?: string;
+  title: string;
+  color: string;
+}> = ({ label, href, title, color }) => {
+  if (!String(href || '').trim()) {
     return null;
   }
   return (
-    <Tooltip title="Открыть сделку в Bitrix24">
-      <a href={dealURL} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        <Tag color="success" style={{ marginInlineEnd: 0 }}>Синхронизировано B24</Tag>
+    <Tooltip title={title}>
+      <a href={href} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Tag color={color} style={{ marginInlineEnd: 0 }}>{label}</Tag>
         <LinkOutlined />
       </a>
     </Tooltip>
@@ -181,6 +194,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
+  const isPyrusLinkedTicket = hasPyrusLink(metadata);
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
@@ -457,6 +471,8 @@ const TicketDetailsPage: React.FC = () => {
         const entityID = String(dataRow.uuid || '').trim();
         const address = String(dataRow.ip || '').trim();
         if (!entityID || !address) return null;
+        const iikoWebMeta = getIikoWebAppLinkMeta(dataRow.iiko_web_link || dataRow.ip);
+        const partnersLink = String(dataRow.partners_link || '').trim();
         return {
           key: `${keyPrefix}-Server-${entityID}`,
           entityType: 'Server' as const,
@@ -464,6 +480,8 @@ const TicketDetailsPage: React.FC = () => {
           entityPath: `/servers/${entityID}`,
           title: resolveEntityTitle(item),
           rows: [{ label: 'Адрес сервера', field: 'ip', value: address }],
+          iikoWebMeta,
+          partnersLink,
         };
       })
       .filter(Boolean) as Array<{
@@ -473,6 +491,8 @@ const TicketDetailsPage: React.FC = () => {
       entityPath: string;
       title: string;
       rows: Array<{ label: string; field: string; value: string }>;
+      iikoWebMeta: ReturnType<typeof getIikoWebAppLinkMeta>;
+      partnersLink: string;
     }>;
   };
 
@@ -849,6 +869,13 @@ const TicketDetailsPage: React.FC = () => {
       <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
         Приватный комментарий (не синхронизировать во внешние системы)
       </Checkbox>
+      {isPyrusLinkedTicket && !commentIsPrivate && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Публичный комментарий будет добавлен в Pyrus от имени бота интеграции."
+        />
+      )}
       <Space>
         <Button
           type="primary"
@@ -868,7 +895,22 @@ const TicketDetailsPage: React.FC = () => {
         <Space direction="vertical" size={0}>
           <Space align="center" size={8}>
             <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
-            {isBitrixEnabled && <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />}
+              <Space size={8} wrap>
+                {isBitrixEnabled && (
+                  <ExternalLinkBadge
+                    label="B24"
+                    href={metadata.bitrix_deal_url}
+                    title="Открыть сделку в Bitrix24"
+                    color="success"
+                  />
+                )}
+                <ExternalLinkBadge
+                  label="Pyrus"
+                  href={metadata.pyrus_task_url}
+                  title="Открыть задачу в Pyrus"
+                  color="geekblue"
+                />
+              </Space>
           </Space>
           <Text type="secondary">
             Создана {dayjs(metadata.created_at).format('DD.MM.YYYY HH:mm')}
@@ -1260,6 +1302,13 @@ const TicketDetailsPage: React.FC = () => {
                                               onFileUpload={uploadInlineFile}
                                               minHeight={100}
                                             />
+                                            {isPyrusLinkedTicket && !item.is_private && (
+                                              <Alert
+                                                type="warning"
+                                                showIcon
+                                                message="Публичный комментарий будет синхронизирован в Pyrus от имени бота интеграции."
+                                              />
+                                            )}
                                             <Space>
                                               <Button
                                                 type="primary"
@@ -1434,6 +1483,34 @@ const TicketDetailsPage: React.FC = () => {
                                               <Text type="secondary">{row.label}:</Text> {row.value}
                                             </Paragraph>
                                           ))}
+                                          {group.iikoWebMeta || group.partnersLink ? (
+                                            <Space size={4} wrap>
+                                              {group.iikoWebMeta ? (
+                                                <Button
+                                                  type="link"
+                                                  size="small"
+                                                  href={group.iikoWebMeta.url}
+                                                  target="_blank"
+                                                  icon={<LinkOutlined />}
+                                                  style={{ paddingInline: 0 }}
+                                                >
+                                                  {group.iikoWebMeta.label}
+                                                </Button>
+                                              ) : null}
+                                              {group.partnersLink ? (
+                                                <Button
+                                                  type="link"
+                                                  size="small"
+                                                  href={group.partnersLink}
+                                                  target="_blank"
+                                                  icon={<LinkOutlined />}
+                                                  style={{ paddingInline: 0 }}
+                                                >
+                                                  Партнёрский портал
+                                                </Button>
+                                              ) : null}
+                                            </Space>
+                                          ) : null}
                                         </Space>
                                       </Card>
                                     ))}
@@ -1474,6 +1551,34 @@ const TicketDetailsPage: React.FC = () => {
                                             <Text type="secondary">{row.label}:</Text> {row.value}
                                           </Paragraph>
                                         ))}
+                                        {group.entityType === 'Server' && ('iikoWebMeta' in group) && (group.iikoWebMeta || group.partnersLink) ? (
+                                          <Space size={4} wrap>
+                                            {group.iikoWebMeta ? (
+                                              <Button
+                                                type="link"
+                                                size="small"
+                                                href={group.iikoWebMeta.url}
+                                                target="_blank"
+                                                icon={<LinkOutlined />}
+                                                style={{ paddingInline: 0 }}
+                                              >
+                                                {group.iikoWebMeta.label}
+                                              </Button>
+                                            ) : null}
+                                            {group.partnersLink ? (
+                                              <Button
+                                                type="link"
+                                                size="small"
+                                                href={group.partnersLink}
+                                                target="_blank"
+                                                icon={<LinkOutlined />}
+                                                style={{ paddingInline: 0 }}
+                                              >
+                                                Партнёрский портал
+                                              </Button>
+                                            ) : null}
+                                          </Space>
+                                        ) : null}
                                       </Space>
                                     </Card>
                                   ))}
@@ -1498,6 +1603,7 @@ const TicketDetailsPage: React.FC = () => {
                                     {serverItems.map((item) => {
                                       const dataRow = item.data as Record<string, string | undefined>;
                                       const path = resolveEntityPath(item);
+                                      const iikoWebMeta = getIikoWebAppLinkMeta(dataRow.iiko_web_link || dataRow.ip);
                                       return (
                                         <Card
                                           key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
@@ -1514,13 +1620,37 @@ const TicketDetailsPage: React.FC = () => {
                                               <Text strong>{resolveEntityTitle(item)}</Text>
                                               <Tag color="geekblue">Сервер</Tag>
                                             </Space>
-                                            {dataRow.partners_link ? (
-                                              <a href={dataRow.partners_link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-                                                Партнёрский портал
-                                              </a>
-                                            ) : (
-                                              <Text type="secondary">Партнёрский портал: -</Text>
-                                            )}
+                                            <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
+                                              {iikoWebMeta ? (
+                                                <Button
+                                                  type="link"
+                                                  size="small"
+                                                  href={iikoWebMeta.url}
+                                                  target="_blank"
+                                                  icon={<LinkOutlined />}
+                                                  style={{ paddingInline: 0 }}
+                                                  onClick={(event) => event.stopPropagation()}
+                                                >
+                                                  {iikoWebMeta.label}
+                                                </Button>
+                                              ) : null}
+                                              {dataRow.partners_link ? (
+                                                <Button
+                                                  type="link"
+                                                  size="small"
+                                                  href={dataRow.partners_link}
+                                                  target="_blank"
+                                                  icon={<LinkOutlined />}
+                                                  style={{ paddingInline: 0 }}
+                                                  onClick={(event) => event.stopPropagation()}
+                                                >
+                                                  Партнёрский портал
+                                                </Button>
+                                              ) : null}
+                                            </Space>
+                                            {!dataRow.partners_link && !iikoWebMeta ? (
+                                              <Text type="secondary">Веб-ссылки: -</Text>
+                                            ) : null}
                                             <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
                                               <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
                                             </Paragraph>

@@ -44,6 +44,7 @@ type CredentialsForm = {
 
 const integrationOptions = [
   { value: 'bitrix24', label: 'Bitrix24' },
+  { value: 'pyrus', label: 'Pyrus' },
   { value: 'naumen', label: 'Naumen' },
   { value: 'telegram', label: 'Telegram' },
 ];
@@ -55,11 +56,17 @@ const ProfilePage: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const isBitrixEnabled = user?.bitrix_enabled === true;
+  const isPyrusEnabled = user?.pyrus_enabled === true;
   const [form] = Form.useForm<CredentialsForm>();
-  const availableIntegrationOptions = useMemo(
-    () => (isBitrixEnabled ? integrationOptions : integrationOptions.filter((item) => item.value !== 'bitrix24')),
-    [isBitrixEnabled],
-  );
+  const availableIntegrationOptions = useMemo(() => integrationOptions.filter((item) => {
+    if (item.value === 'bitrix24') {
+      return isBitrixEnabled;
+    }
+    if (item.value === 'pyrus') {
+      return isPyrusEnabled;
+    }
+    return true;
+  }), [isBitrixEnabled, isPyrusEnabled]);
   const localeOptions = useMemo(
     () => supportedLocales
       .filter((item) => item.enabled)
@@ -85,7 +92,15 @@ const ProfilePage: React.FC = () => {
 
   const initialIntegrations = useMemo(() => {
     return (user?.integrations || [])
-      .filter((item) => isBitrixEnabled || item.integration_type !== 'bitrix24')
+      .filter((item) => {
+        if (item.integration_type === 'bitrix24') {
+          return isBitrixEnabled;
+        }
+        if (item.integration_type === 'pyrus') {
+          return isPyrusEnabled;
+        }
+        return true;
+      })
       .map((item) => ({
       integration_type: item.integration_type,
       external_id: item.external_id,
@@ -93,7 +108,7 @@ const ProfilePage: React.FC = () => {
       is_verified: item.is_verified,
       verified_name: item.verified_name,
     }));
-  }, [isBitrixEnabled, user?.integrations]);
+  }, [isBitrixEnabled, isPyrusEnabled, user?.integrations]);
 
   const notificationsConfig = useMemo(() => {
     const cfg = (user?.profile_config || {}) as {
@@ -172,6 +187,22 @@ const ProfilePage: React.FC = () => {
     },
   });
 
+  const applyPyrusSuggestionMutation = useMutation({
+    mutationFn: () => profileApi.applyPyrusSuggestion(),
+    onSuccess: (response) => {
+      const dtoUser = response?.data;
+      if (!dtoUser) {
+        message.error('Не удалось применить интеграцию Pyrus');
+        return;
+      }
+      setUser(dtoUser as any);
+      message.success('Интеграция Pyrus добавлена');
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.error?.error || 'Не удалось применить интеграцию Pyrus');
+    },
+  });
+
   const onFinish = async (values: CredentialsForm) => {
     if (!user) return;
 
@@ -191,20 +222,32 @@ const ProfilePage: React.FC = () => {
         external_id: String(item.external_id || '').trim(),
       }))
       .filter((item) => item.integration_type && item.external_id);
-    const hiddenBitrixIntegrations = isBitrixEnabled
-      ? []
-      : (user.integrations || [])
-        .filter((item) => item.integration_type === 'bitrix24' && String(item.external_id || '').trim())
-        .map((item) => ({
-          integration_type: item.integration_type,
-          external_id: item.external_id,
-        }));
-    const nextIntegrationsPayload = [...normalizedIntegrations, ...hiddenBitrixIntegrations];
+    const hiddenIntegrations = (user.integrations || [])
+      .filter((item) => {
+        if (item.integration_type === 'bitrix24') {
+          return !isBitrixEnabled && String(item.external_id || '').trim();
+        }
+        if (item.integration_type === 'pyrus') {
+          return !isPyrusEnabled && String(item.external_id || '').trim();
+        }
+        return false;
+      })
+      .map((item) => ({
+        integration_type: item.integration_type,
+        external_id: item.external_id,
+      }));
+    const nextIntegrationsPayload = [...normalizedIntegrations, ...hiddenIntegrations];
 
-    const currentIntegrations = ((isBitrixEnabled
-      ? (user.integrations || [])
-      : (user.integrations || []).filter((item) => item.integration_type !== 'bitrix24'))
-    )
+    const currentIntegrations = (user.integrations || [])
+      .filter((item) => {
+        if (item.integration_type === 'bitrix24') {
+          return isBitrixEnabled;
+        }
+        if (item.integration_type === 'pyrus') {
+          return isPyrusEnabled;
+        }
+        return true;
+      })
       .map((item) => `${item.integration_type}:${item.external_id}`)
       .sort();
     const nextIntegrations = nextIntegrationsPayload
@@ -356,6 +399,22 @@ const ProfilePage: React.FC = () => {
               <Text type="secondary">{user.bitrix_suggestion.name} (ID: {user.bitrix_suggestion.b24_user_id})</Text>
             </Space>
             <Button type="primary" onClick={() => applySuggestionMutation.mutate()} loading={applySuggestionMutation.isPending}>
+              Синхронизировать
+            </Button>
+          </Space>
+        </Card>
+      )}
+
+      {isPyrusEnabled && user?.pyrus_suggestion && (
+        <Card className="glass-panel">
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space direction="vertical" size={0}>
+              <Text strong>Найден сотрудник в Pyrus. Синхронизировать?</Text>
+              <Text type="secondary">
+                {user.pyrus_suggestion.name} (ID: {user.pyrus_suggestion.pyrus_user_id}{user.pyrus_suggestion.email ? `, ${user.pyrus_suggestion.email}` : ''})
+              </Text>
+            </Space>
+            <Button type="primary" onClick={() => applyPyrusSuggestionMutation.mutate()} loading={applyPyrusSuggestionMutation.isPending}>
               Синхронизировать
             </Button>
           </Space>

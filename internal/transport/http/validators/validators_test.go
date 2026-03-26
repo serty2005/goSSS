@@ -131,6 +131,47 @@ func TestValidateWorkstationRemoteID(t *testing.T) {
 	}
 }
 
+func TestValidateIikoWebLink(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected *string
+	}{
+		{
+			name:     "Корректная ссылка iikoWeb",
+			input:    "https://809-613-203.iikoweb.ru",
+			expected: stringPtr("https://809-613-203.iikoweb.ru/"),
+		},
+		{
+			name:     "Корректная ссылка SyrveApp с query и регистром",
+			input:    "HTTP://Restaurant-Margaret.SYRVE.APP/app?foo=bar",
+			expected: stringPtr("https://restaurant-margaret.syrve.app/"),
+		},
+		{
+			name:     "Извлечение домена из произвольного текста",
+			input:    "смотри сюда: restaurant-margaret.syrve.app/login",
+			expected: stringPtr("https://restaurant-margaret.syrve.app/"),
+		},
+		{
+			name:     "Некорректный домен",
+			input:    "https://example.com",
+			expected: nil,
+		},
+		{
+			name:     "Пустая строка",
+			input:    "",
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ValidateIikoWebLink(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 // Вспомогательная функция для тестов, чтобы создавать указатели на строки.
 func stringPtr(s string) *string {
 	return &s

@@ -20,6 +20,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined, StopOutlined, CheckCircleOutlined, EditOutlined } from '@ant-design/icons';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
+import { pyrusAdminApi } from '@/api/pyrusAdmin';
 import { usersApi } from '@/api/users';
 import { UserAdminDTO, UserCreatePayload, UserPosition, UserSchedule, UserUpdatePayload } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
@@ -42,6 +43,7 @@ const externalTypeOptions: { label: string; value: string }[] = [
   { label: 'Telegram', value: 'telegram' },
   { label: 'Naumen', value: 'naumen' },
   { label: 'Bitrix24', value: 'bitrix24' },
+  { label: 'Pyrus', value: 'pyrus' },
 ];
 
 const mapPositionLabel = (position: UserPosition): string => {
@@ -57,6 +59,8 @@ const getExternalPlaceholder = (external_type?: string): string => {
       return '$uuid';
     case 'bitrix24':
       return '12345';
+    case 'pyrus':
+      return '12345';
     default:
       return 'ID внешней системы';
   }
@@ -69,23 +73,35 @@ const UsersAdminPage: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<UserAdminDTO | null>(null);
   const [createSuggestion, setCreateSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
   const [editSuggestion, setEditSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
+  const [createPyrusSuggestion, setCreatePyrusSuggestion] = useState<{ pyrus_user_id: number; name: string; email?: string } | null>(null);
+  const [editPyrusSuggestion, setEditPyrusSuggestion] = useState<{ pyrus_user_id: number; name: string; email?: string } | null>(null);
   const [createForm] = Form.useForm<UserCreatePayload>();
   const [editForm] = Form.useForm<UserUpdatePayload>();
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
   const isBitrixEnabled = currentUser?.bitrix_enabled === true;
+  const isPyrusEnabled = currentUser?.pyrus_enabled === true;
   const navigate = useNavigate();
-  const availableExternalTypeOptions = useMemo(
-    () => (isBitrixEnabled ? externalTypeOptions : externalTypeOptions.filter((item) => item.value !== 'bitrix24')),
-    [isBitrixEnabled],
-  );
+  const availableExternalTypeOptions = useMemo(() => {
+    return externalTypeOptions.filter((item) => {
+      if (item.value === 'bitrix24') {
+        return isBitrixEnabled;
+      }
+      if (item.value === 'pyrus') {
+        return isPyrusEnabled;
+      }
+      return true;
+    });
+  }, [isBitrixEnabled, isPyrusEnabled]);
 
   const watchedCreateExternalType = Form.useWatch('external_type', createForm);
   const watchedEditExternalType = Form.useWatch('external_type', editForm);
   const watchedCreateFirstName = Form.useWatch('first_name', createForm);
   const watchedCreateLastName = Form.useWatch('last_name', createForm);
+  const watchedCreateEmail = Form.useWatch('email', createForm);
   const watchedEditFirstName = Form.useWatch('first_name', editForm);
   const watchedEditLastName = Form.useWatch('last_name', editForm);
+  const watchedEditEmail = Form.useWatch('email', editForm);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-users'],
@@ -100,6 +116,7 @@ const UsersAdminPage: React.FC = () => {
       message.success('Пользователь создан');
       setIsCreateOpen(false);
       setCreateSuggestion(null);
+      setCreatePyrusSuggestion(null);
       createForm.resetFields();
       try {
         await refreshBitrixUsersMutation.mutateAsync();
@@ -120,6 +137,7 @@ const UsersAdminPage: React.FC = () => {
       setIsEditOpen(false);
       setSelectedUser(null);
       setEditSuggestion(null);
+      setEditPyrusSuggestion(null);
       editForm.resetFields();
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
@@ -161,12 +179,24 @@ const UsersAdminPage: React.FC = () => {
     },
   });
 
+  const applyPyrusSuggestionMutation = useMutation({
+    mutationFn: (id: number) => usersApi.applyPyrusSuggestion(id),
+    onSuccess: () => {
+      message.success('Интеграция Pyrus применена');
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.error?.error || 'Не удалось применить интеграцию Pyrus');
+    },
+  });
+
   const openEditModal = useCallback((user: UserAdminDTO) => {
     setSelectedUser(user);
     editForm.setFieldsValue({
       username: user.username,
       first_name: user.first_name,
       last_name: user.last_name,
+      email: user.email,
       position: user.position,
       schedule_type: user.schedule_type,
       external_type: user.external_type,
@@ -174,8 +204,9 @@ const UsersAdminPage: React.FC = () => {
       password: undefined,
     });
     setEditSuggestion(isBitrixEnabled ? (user.bitrix_suggestion || null) : null);
+    setEditPyrusSuggestion(isPyrusEnabled ? (user.pyrus_suggestion || null) : null);
     setIsEditOpen(true);
-  }, [editForm, isBitrixEnabled]);
+  }, [editForm, isBitrixEnabled, isPyrusEnabled]);
 
   useEffect(() => {
     if (!isBitrixEnabled) {
@@ -198,6 +229,34 @@ const UsersAdminPage: React.FC = () => {
     }, 400);
     return () => clearTimeout(timer);
   }, [isBitrixEnabled, watchedCreateFirstName, watchedCreateLastName]);
+
+  useEffect(() => {
+    if (!isPyrusEnabled) {
+      setCreatePyrusSuggestion(null);
+      return;
+    }
+    const firstName = String(watchedCreateFirstName || '').trim();
+    const lastName = String(watchedCreateLastName || '').trim();
+    const email = String(watchedCreateEmail || '').trim();
+    if (!email && (!firstName || !lastName)) {
+      setCreatePyrusSuggestion(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await pyrusAdminApi.suggestUserByIdentity({
+          first_name: firstName || undefined,
+          last_name: lastName || undefined,
+          full_name: firstName && lastName ? `${firstName} ${lastName}` : undefined,
+          email: email || undefined,
+        });
+        setCreatePyrusSuggestion(response?.data?.suggestion || null);
+      } catch {
+        setCreatePyrusSuggestion(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isPyrusEnabled, watchedCreateEmail, watchedCreateFirstName, watchedCreateLastName]);
 
   useEffect(() => {
     if (!isBitrixEnabled) {
@@ -223,6 +282,36 @@ const UsersAdminPage: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isBitrixEnabled, isEditOpen, watchedEditFirstName, watchedEditLastName]);
 
+  useEffect(() => {
+    if (!isPyrusEnabled) {
+      setEditPyrusSuggestion(null);
+      return;
+    }
+    const firstName = String(watchedEditFirstName || '').trim();
+    const lastName = String(watchedEditLastName || '').trim();
+    const email = String(watchedEditEmail || '').trim();
+    if (!isEditOpen || (!email && (!firstName || !lastName))) {
+      if (!isEditOpen) {
+        setEditPyrusSuggestion(null);
+      }
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await pyrusAdminApi.suggestUserByIdentity({
+          first_name: firstName || undefined,
+          last_name: lastName || undefined,
+          full_name: firstName && lastName ? `${firstName} ${lastName}` : undefined,
+          email: email || undefined,
+        });
+        setEditPyrusSuggestion(response?.data?.suggestion || null);
+      } catch {
+        setEditPyrusSuggestion(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isEditOpen, isPyrusEnabled, watchedEditEmail, watchedEditFirstName, watchedEditLastName]);
+
   const columns: ColumnsType<UserAdminDTO> = useMemo(
     () => [
       {
@@ -232,6 +321,7 @@ const UsersAdminPage: React.FC = () => {
           <Space direction="vertical" size={0}>
             <Text strong>{record.full_name}</Text>
             <Text type="secondary">@{record.username}</Text>
+            {record.email && <Text type="secondary">{record.email}</Text>}
           </Space>
         ),
       },
@@ -298,6 +388,15 @@ const UsersAdminPage: React.FC = () => {
                   Синхронизировать Битрикс24
                 </Button>
               )}
+              {isPyrusEnabled && record.pyrus_suggestion && (
+                <Button
+                  type="primary"
+                  onClick={() => applyPyrusSuggestionMutation.mutate(record.id)}
+                  loading={applyPyrusSuggestionMutation.isPending}
+                >
+                  Синхронизировать Pyrus
+                </Button>
+              )}
               {record.is_active ? (
                 <Popconfirm
                   title="Заблокировать пользователя?"
@@ -326,7 +425,7 @@ const UsersAdminPage: React.FC = () => {
         },
       },
     ],
-    [applySuggestionMutation, currentUser?.id, isBitrixEnabled, openEditModal, statusMutation]
+    [applyPyrusSuggestionMutation, applySuggestionMutation, currentUser?.id, isBitrixEnabled, isPyrusEnabled, openEditModal, statusMutation]
   );
 
   const normalizePayload = (values: UserCreatePayload | UserUpdatePayload) => ({
@@ -334,6 +433,7 @@ const UsersAdminPage: React.FC = () => {
     username: values.username?.trim(),
     first_name: values.first_name?.trim(),
     last_name: values.last_name?.trim(),
+    email: values.email?.trim() || undefined,
     password: values.password?.trim() || undefined,
     external_type: values.external_type?.trim() || undefined,
     external_system_id: values.external_system_id?.trim() || undefined,
@@ -407,6 +507,7 @@ const UsersAdminPage: React.FC = () => {
         onCancel={() => {
           setIsCreateOpen(false);
           setCreateSuggestion(null);
+          setCreatePyrusSuggestion(null);
         }}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
@@ -435,6 +536,10 @@ const UsersAdminPage: React.FC = () => {
             <Input placeholder="Фамилия" />
           </Form.Item>
 
+          <Form.Item name="email" label="Email">
+            <Input placeholder="user@example.com" />
+          </Form.Item>
+
           {isBitrixEnabled && createSuggestion && (
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -448,6 +553,31 @@ const UsersAdminPage: React.FC = () => {
                     createForm.setFieldsValue({
                       external_type: 'bitrix24',
                       external_system_id: String(createSuggestion.b24_user_id),
+                    });
+                  }}
+                >
+                  Синхронизировать
+                </Button>
+              </Space>
+            </Card>
+          )}
+
+          {isPyrusEnabled && createPyrusSuggestion && (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть сотрудник в Pyrus. Синхронизировать?</Text>
+                  <Text type="secondary">
+                    {createPyrusSuggestion.name} (ID: {createPyrusSuggestion.pyrus_user_id}{createPyrusSuggestion.email ? `, ${createPyrusSuggestion.email}` : ''})
+                  </Text>
+                </Space>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    createForm.setFieldsValue({
+                      external_type: 'pyrus',
+                      external_system_id: String(createPyrusSuggestion.pyrus_user_id),
+                      email: createPyrusSuggestion.email || createForm.getFieldValue('email'),
                     });
                   }}
                 >
@@ -487,6 +617,7 @@ const UsersAdminPage: React.FC = () => {
           setIsEditOpen(false);
           setSelectedUser(null);
           setEditSuggestion(null);
+          setEditPyrusSuggestion(null);
           editForm.resetFields();
         }}
         onOk={() => editForm.submit()}
@@ -518,6 +649,10 @@ const UsersAdminPage: React.FC = () => {
             <Input placeholder="Фамилия" />
           </Form.Item>
 
+          <Form.Item name="email" label="Email">
+            <Input placeholder="user@example.com" />
+          </Form.Item>
+
           {isBitrixEnabled && editSuggestion && (
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -531,6 +666,31 @@ const UsersAdminPage: React.FC = () => {
                     editForm.setFieldsValue({
                       external_type: 'bitrix24',
                       external_system_id: String(editSuggestion.b24_user_id),
+                    });
+                  }}
+                >
+                  Синхронизировать
+                </Button>
+              </Space>
+            </Card>
+          )}
+
+          {isPyrusEnabled && editPyrusSuggestion && (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть сотрудник в Pyrus. Синхронизировать?</Text>
+                  <Text type="secondary">
+                    {editPyrusSuggestion.name} (ID: {editPyrusSuggestion.pyrus_user_id}{editPyrusSuggestion.email ? `, ${editPyrusSuggestion.email}` : ''})
+                  </Text>
+                </Space>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    editForm.setFieldsValue({
+                      external_type: 'pyrus',
+                      external_system_id: String(editPyrusSuggestion.pyrus_user_id),
+                      email: editPyrusSuggestion.email || editForm.getFieldValue('email'),
                     });
                   }}
                 >

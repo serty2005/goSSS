@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/user"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ type fakePyrusAPIClient struct {
 	configured       bool
 	getTaskFunc      func(ctx context.Context, taskID int64) (*pyrusplugin.Task, error)
 	addCommentFunc   func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error)
+	listMembersFunc  func(ctx context.Context) ([]pyrusplugin.Member, error)
 	updateExtIDFunc  func(ctx context.Context, taskID int64, extID string) (*pyrusplugin.Task, error)
 	downloadFileFunc func(ctx context.Context, fileID int64) (*pyrusplugin.DownloadedFile, error)
 	uploadFileFunc   func(ctx context.Context, fileName string, mimeType string, content []byte) (string, error)
@@ -38,6 +40,13 @@ func (f *fakePyrusAPIClient) AddComment(ctx context.Context, taskID int64, req p
 		return nil, nil
 	}
 	return f.addCommentFunc(ctx, taskID, req)
+}
+
+func (f *fakePyrusAPIClient) ListMembers(ctx context.Context) ([]pyrusplugin.Member, error) {
+	if f == nil || f.listMembersFunc == nil {
+		return []pyrusplugin.Member{}, nil
+	}
+	return f.listMembersFunc(ctx)
 }
 
 func (f *fakePyrusAPIClient) UpdateTaskExtID(ctx context.Context, taskID int64, extID string) (*pyrusplugin.Task, error) {
@@ -88,7 +97,7 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 			}, nil
 		},
 	}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete, ok := service.(*pyrusSyncService)
 	if !ok {
 		t.Fatalf("не удалось привести PyrusSyncService к concrete type")
@@ -134,7 +143,75 @@ func TestPyrusSyncService_HandleOutgoingCommentSync(t *testing.T) {
 	}
 }
 
-func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientUsesMobileApp(t *testing.T) {
+func TestPyrusSyncService_HandleOutgoingCommentSyncUsesFormattedText(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-html-1")
+	comment := &tickets.TicketComment{
+		ID:           "local-comment-html-1",
+		TicketID:     ticketID,
+		Text:         `<p>Тест <strong>жирный</strong> <a href="https://example.com">линк</a></p>`,
+		CreationDate: time.Now(),
+	}
+
+	requests := make([]pyrusplugin.CommentRequest, 0, 1)
+	client := &fakePyrusAPIClient{
+		configured: true,
+		addCommentFunc: func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+			requests = append(requests, req)
+			return &pyrusplugin.Task{
+				ID: taskID,
+				Comments: []pyrusplugin.Comment{
+					{ID: 9011, Text: "Тест жирный линк", CreateDate: time.Now()},
+				},
+			}, nil
+		},
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
+	concrete := service.(*pyrusSyncService)
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		TaskID:   7001,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-html-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err != nil {
+		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
+	}
+	if status != pyrus.OutgoingEventStatusDone || reason != "" {
+		t.Fatalf("ожидали done без reason, получили status=%q reason=%q", status, reason)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("ожидали один запрос комментария в Pyrus, получили %d", len(requests))
+	}
+	if requests[0].Text != "" {
+		t.Fatalf("не ожидали text для rich-text комментария, получили %q", requests[0].Text)
+	}
+	expected := `Тест <b>жирный</b> <a href="https://example.com">линк</a>`
+	if requests[0].FormattedText != expected {
+		t.Fatalf("ожидали formatted_text %q, получили %q", expected, requests[0].FormattedText)
+	}
+	link, err := env.pyrusRepo.GetCommentLinkByEtalonID(ctx, comment.ID)
+	if err != nil {
+		t.Fatalf("не удалось получить link комментария: %v", err)
+	}
+	if link == nil || link.PyrusCommentID == nil || *link.PyrusCommentID != 9011 {
+		t.Fatalf("ожидали сохранённый link комментария с pyrus_comment_id=9011, получили %+v", link)
+	}
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientSendsRegularComment(t *testing.T) {
 	env := newPyrusTestEnv(t, false)
 	ctx := t.Context()
 
@@ -173,7 +250,7 @@ func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientUsesMobileApp(t 
 			}, nil
 		},
 	}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete := service.(*pyrusSyncService)
 
 	payload := events.PyrusSyncEntityPayload{
@@ -200,11 +277,73 @@ func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientUsesMobileApp(t 
 	if len(requests) != 1 {
 		t.Fatalf("ожидали один запрос комментария в Pyrus, получили %d", len(requests))
 	}
-	if requests[0].Channel == nil || requests[0].Channel.Type != "mobile_app" {
-		t.Fatalf("ожидали channel.type=mobile_app для ответа клиенту, получили %+v", requests[0].Channel)
+	if requests[0].Channel != nil {
+		t.Fatalf("не ожидали channel для обычного публичного комментария, получили %+v", requests[0].Channel)
 	}
-	if requests[0].Channel.To == nil || requests[0].Channel.To.Name != "Юрий" || requests[0].Channel.To.Email != "client@example.com" {
-		t.Fatalf("ожидали channel.to из контекста клиента, получили %+v", requests[0].Channel)
+}
+
+func TestPyrusSyncService_HandleOutgoingCommentSyncReplyToClientPropagatesRegularError(t *testing.T) {
+	env := newPyrusTestEnv(t, false)
+	ctx := t.Context()
+
+	ticketID := createPyrusSyncTicket(t, env, "ticket-comment-reply-ignored-1")
+	if err := env.pyrusRepo.UpsertTicketContext(ctx, &pyrus.TicketContext{
+		TicketID:    ticketID,
+		PyrusTaskID: 7001,
+		SenderName:  "Юрий",
+		SenderEmail: "client@example.com",
+	}); err != nil {
+		t.Fatalf("не удалось сохранить ticket context: %v", err)
+	}
+	comment := &tickets.TicketComment{
+		ID:            "local-comment-reply-ignored-1",
+		TicketID:      ticketID,
+		Text:          "Ответ клиенту без доступа к каналу",
+		CreationDate:  time.Now(),
+		ReplyToClient: true,
+	}
+
+	requests := make([]pyrusplugin.CommentRequest, 0, 1)
+	client := &fakePyrusAPIClient{
+		configured: true,
+		addCommentFunc: func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+			requests = append(requests, req)
+			return nil, &pyrusplugin.HTTPError{
+				StatusCode: 403,
+				Code:       "access_denied",
+				Message:    "Доступ запрещен",
+			}
+		},
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
+	concrete := service.(*pyrusSyncService)
+
+	payload := events.PyrusSyncEntityPayload{
+		TicketID: ticketID,
+		TaskID:   7001,
+		Comment:  comment,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("не удалось сериализовать payload: %v", err)
+	}
+
+	status, reason, err := concrete.handleOutgoingEvent(ctx, &pyrus.OutgoingEvent{
+		ID:          "outgoing-comment-reply-ignored-1",
+		EventName:   events.PyrusCommentSyncRequested,
+		PayloadJSON: string(rawPayload),
+	})
+	if err == nil {
+		t.Fatal("ожидали ошибку отправки комментария в Pyrus")
+	}
+	if len(requests) != 1 {
+		t.Fatalf("ожидали один запрос в Pyrus перед ошибкой, получили %d", len(requests))
+	}
+	if status != "" || reason != "" {
+		t.Fatalf("при ошибке не ожидали status/reason, получили status=%q reason=%q", status, reason)
+	}
+	if requests[0].Channel != nil {
+		t.Fatalf("не ожидали channel для обычного публичного комментария, получили %+v", requests[0].Channel)
 	}
 }
 
@@ -269,7 +408,7 @@ func TestPyrusSyncService_HandleOutgoingCommentSyncUploadsAttachments(t *testing
 			}, nil
 		},
 	}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete, ok := service.(*pyrusSyncService)
 	if !ok {
 		t.Fatalf("не удалось привести PyrusSyncService к concrete type")
@@ -379,7 +518,7 @@ func TestPyrusSyncService_HandleOutgoingStatusSyncSendsPendingCommentBeforeFinis
 			}
 		},
 	}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete, ok := service.(*pyrusSyncService)
 	if !ok {
 		t.Fatalf("не удалось привести PyrusSyncService к concrete type")
@@ -454,18 +593,63 @@ func TestBuildPyrusStatusCommentRequestReopensTaskAndUpdatesStatusField(t *testi
 	}
 }
 
-func TestPyrusSyncService_LeavesAssigneeSyncAsTODO(t *testing.T) {
+func TestPyrusSyncService_HandleOutgoingAssigneeSync(t *testing.T) {
 	env := newPyrusTestEnv(t, false)
 	ctx := t.Context()
 
+	assignee := createPyrusSyncUser(t, env, "pyrus-sync-assignee", "Иван", "Петров")
+	externalType := user.ExternalTypePyrus
+	externalID := "91234"
+	assignee.ExternalType = &externalType
+	assignee.ExternalID = &externalID
+	assignee.Integrations = []user.Integration{
+		{
+			IntegrationType: user.ExternalTypePyrus,
+			ExternalID:      externalID,
+			IsVerified:      true,
+			IsLocked:        true,
+			VerifiedName:    "Иван Петров",
+		},
+	}
+	if err := env.userRepo.Update(ctx, assignee); err != nil {
+		t.Fatalf("не удалось обновить пользователя исполнителя: %v", err)
+	}
+	if err := env.pyrusRepo.UpsertUserMap(ctx, &pyrus.UserMap{
+		EtalonUserID: assignee.ID,
+		PyrusUserID:  91234,
+	}); err != nil {
+		t.Fatalf("не удалось сохранить маппинг пользователя Pyrus: %v", err)
+	}
+
+	requests := make([]pyrusplugin.CommentRequest, 0, 1)
 	client := &fakePyrusAPIClient{configured: true}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	client.getTaskFunc = func(ctx context.Context, taskID int64) (*pyrusplugin.Task, error) {
+		return &pyrusplugin.Task{ID: taskID}, nil
+	}
+	client.addCommentFunc = func(ctx context.Context, taskID int64, req pyrusplugin.CommentRequest) (*pyrusplugin.Task, error) {
+		requests = append(requests, req)
+		return &pyrusplugin.Task{
+			ID: taskID,
+			Responsible: &pyrusplugin.Person{
+				ID:        91234,
+				FirstName: "Иван",
+				LastName:  "Петров",
+				Email:     "ivan.petrov@example.com",
+				Type:      "user",
+			},
+		}, nil
+	}
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete, ok := service.(*pyrusSyncService)
 	if !ok {
 		t.Fatalf("не удалось привести PyrusSyncService к concrete type")
 	}
 
-	rawPayload, err := json.Marshal(events.PyrusSyncEntityPayload{TicketID: "ticket-1", TaskID: 7004})
+	rawPayload, err := json.Marshal(events.PyrusSyncEntityPayload{
+		TicketID:   "ticket-1",
+		TaskID:     7004,
+		AssigneeID: &assignee.ID,
+	})
 	if err != nil {
 		t.Fatalf("не удалось сериализовать payload: %v", err)
 	}
@@ -478,11 +662,17 @@ func TestPyrusSyncService_LeavesAssigneeSyncAsTODO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleOutgoingEvent вернул ошибку: %v", err)
 	}
-	if status != pyrus.OutgoingEventStatusIgnored {
-		t.Fatalf("ожидали ignored для sync исполнителя, получили %q", status)
+	if status != pyrus.OutgoingEventStatusDone {
+		t.Fatalf("ожидали done для sync исполнителя, получили %q", status)
 	}
-	if reason == "" {
-		t.Fatalf("ожидали явную причину TODO для sync исполнителя")
+	if reason != "" {
+		t.Fatalf("не ожидали ignored reason для sync исполнителя, получили %q", reason)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("ожидали один запрос в Pyrus, получили %d", len(requests))
+	}
+	if requests[0].ReassignTo == nil || requests[0].ReassignTo.ID == nil || *requests[0].ReassignTo.ID != 91234 {
+		t.Fatalf("ожидали reassign_to.id=91234, получили %+v", requests[0].ReassignTo)
 	}
 }
 
@@ -526,7 +716,7 @@ func TestPyrusSyncService_HandleOutgoingCommentSyncUsesTicketLinkWhenPayloadTask
 			}, nil
 		},
 	}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete := service.(*pyrusSyncService)
 
 	payload := events.PyrusSyncEntityPayload{
@@ -568,7 +758,7 @@ func TestPyrusSyncService_HandleOutgoingCommentSyncSkipsInternalComment(t *testi
 	}
 
 	client := &fakePyrusAPIClient{configured: true}
-	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.pyrusRepo)
+	service := NewPyrusSyncService(env.cfg, env.log, client, nil, env.ticketRepo, env.userRepo, env.pyrusRepo)
 	concrete := service.(*pyrusSyncService)
 
 	payload := events.PyrusSyncEntityPayload{
@@ -615,4 +805,29 @@ func createPyrusSyncTicket(t *testing.T, env *pyrusTestEnv, ownerSuffix string) 
 		t.Fatalf("не удалось создать локальный тикет: %v", err)
 	}
 	return ticket.ID
+}
+
+func createPyrusSyncUser(t *testing.T, env *pyrusTestEnv, username, firstName, lastName string) *user.User {
+	t.Helper()
+	role, err := env.userRepo.EnsureRoleExists(t.Context(), user.RoleSupportSpecialist, "Специалист техподдержки")
+	if err != nil {
+		t.Fatalf("не удалось подготовить роль пользователя: %v", err)
+	}
+	u := &user.User{
+		Username:     username,
+		FirstName:    firstName,
+		LastName:     lastName,
+		FullName:     firstName + " " + lastName,
+		Position:     user.RoleSupportSpecialist,
+		ScheduleType: user.ScheduleFiveTwo,
+		IsActive:     true,
+		Roles:        []user.Role{*role},
+	}
+	if err := u.HashPassword("password-123"); err != nil {
+		t.Fatalf("не удалось захэшировать пароль: %v", err)
+	}
+	if err := env.userRepo.Create(t.Context(), u); err != nil {
+		t.Fatalf("не удалось создать пользователя: %v", err)
+	}
+	return u
 }

@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	coreIntegrations "etalon-server/internal/core/integrations"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/handlers"
+	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/pkg/eventbus"
 	"sync"
 
@@ -19,6 +21,7 @@ type pyrusModule struct {
 	eventBus        eventbus.EventBus
 	syncService     services.PyrusSyncService
 	incomingService services.PyrusIncomingService
+	pyrusHandler    *handlers.PyrusHandler
 	webhookHandler  *handlers.PyrusWebhookHandler
 }
 
@@ -28,6 +31,7 @@ func newPyrusModule(
 	bus eventbus.EventBus,
 	syncService services.PyrusSyncService,
 	incomingService services.PyrusIncomingService,
+	pyrusHandler *handlers.PyrusHandler,
 	webhookHandler *handlers.PyrusWebhookHandler,
 ) *pyrusModule {
 	return &pyrusModule{
@@ -36,6 +40,7 @@ func newPyrusModule(
 		eventBus:        bus,
 		syncService:     syncService,
 		incomingService: incomingService,
+		pyrusHandler:    pyrusHandler,
 		webhookHandler:  webhookHandler,
 	}
 }
@@ -56,6 +61,22 @@ func (m *pyrusModule) registerPublicRoutes(r chi.Router) {
 		return
 	}
 	r.Post("/api/integrations/pyrus/webhook", m.webhookHandler.HandleWebhook)
+}
+
+func (m *pyrusModule) registerProtectedRoutes(r chi.Router) {
+	if !m.Enabled() || m.pyrusHandler == nil {
+		return
+	}
+	r.Route("/pyrus", func(r chi.Router) {
+		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", m.pyrusHandler.SuggestUser)
+	})
+}
+
+func (m *pyrusModule) registerProfileRoutes(r chi.Router, userHandler *handlers.UserHandler) {
+	if !m.Enabled() || userHandler == nil {
+		return
+	}
+	r.Post("/integrations/pyrus/sync-suggestion", userHandler.ApplyMyPyrusSuggestion)
 }
 
 func (m *pyrusModule) start(ctx context.Context, wg *sync.WaitGroup) {

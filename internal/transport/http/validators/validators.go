@@ -13,6 +13,7 @@ var (
 	LiteManagerIDRegex       = regexp.MustCompile(`MH_\d{5}`)
 	iikoCloudDomainRegex     = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.iiko\.it)`)
 	syrveCloudDomainRegex    = regexp.MustCompile(`(?i)(?:https?://)?(?:[a-z0-9-]+\.)?([a-z0-9-]+\.syrve\.online)`)
+	iikoWebAppHostRegex      = regexp.MustCompile(`(?i)\b((?:[a-z0-9-]+\.)*[a-z0-9-]+\.(?:syrve\.app|iikoweb\.ru))\b`)
 	cabinetLinkIDRegex       = regexp.MustCompile(`\d+`)
 	workstationRemoteIDRegex = regexp.MustCompile(`^[A-Za-z0-9._:-]{3,128}$`)
 )
@@ -45,6 +46,27 @@ func ValidateWorkstationRemoteID(raw string) *string {
 		return nil
 	}
 	return &raw
+}
+
+// ValidateIikoWebLink извлекает и нормализует ссылку на SyrveApp или iikoWeb.
+func ValidateIikoWebLink(raw string) *string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	matches := iikoWebAppHostRegex.FindStringSubmatch(strings.ToLower(raw))
+	if len(matches) < 2 {
+		return nil
+	}
+
+	host := strings.TrimSpace(matches[1])
+	if host == "" {
+		return nil
+	}
+
+	normalized := fmt.Sprintf("https://%s/", host)
+	return &normalized
 }
 
 // ExtractLiteManagerID извлекает LiteManager ID из данных.

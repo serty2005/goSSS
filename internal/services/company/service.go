@@ -203,6 +203,7 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 					Litemanager:       srv.Litemanager,
 					UniqueID:          srv.UniqueID,
 					CRMid:             srv.CRMid,
+					IikoWebLink:       srv.IikoWebLink,
 					PartnersLink:      partnersLink,
 					ServerName:        srv.ServerName,
 					ServerVersion:     srv.ServerVersion,

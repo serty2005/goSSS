@@ -98,6 +98,7 @@ type Application struct {
 	WorkstationHandler      *handlers.WSHandler
 	FiscalHandler           *handlers.FiscalHandler
 	BitrixHandler           *handlers.BitrixHandler
+	PyrusHandler            *handlers.PyrusHandler
 	BitrixWebhookHandler    *handlers.BitrixWebhookHandler
 	PyrusWebhookHandler     *handlers.PyrusWebhookHandler
 	CandidateHandler        *handlers.CandidateHandler
@@ -401,6 +402,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		clients.PyrusClient,
 		clients.RedisClient,
 		repos.TicketRepo,
+		repos.UserRepo,
 		repos.PyrusRepo,
 	)
 	pyrusIncomingService := services.NewPyrusIncomingService(
@@ -502,11 +504,12 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.ServerActionsHandler = handlers.NewServerActionsHandler(srvs.ServerActionsService)
 	app.AuthHandler = handlers.NewAuthHandler(srvs.AuthService)
 	app.ContractHandler = handlers.NewContractHandler(srvs.ContractService)
-	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo, app.Config)
+	app.UserHandler = handlers.NewUserHandler(repos.UserRepo, repos.BitrixRepo, repos.PyrusRepo, srvs.PyrusSyncService, app.Config)
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus, repos.PyrusRepo)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway)
+	app.PyrusHandler = handlers.NewPyrusHandler(srvs.PyrusSyncService)
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
 	app.PyrusWebhookHandler = handlers.NewPyrusWebhookHandler(srvs.PyrusIncomingService)
 	app.CandidateHandler = handlers.NewCandidateHandler(repos.CandidateRepo, srvs.AgentObservation, srvs.CompanyService)
@@ -538,6 +541,7 @@ func setupIntegrationModules(app *Application, srvs Services) {
 		app.EventBus,
 		srvs.PyrusSyncService,
 		srvs.PyrusIncomingService,
+		app.PyrusHandler,
 		app.PyrusWebhookHandler,
 	)
 	app.PyrusModule.registerEventHandlers()
@@ -684,6 +688,9 @@ func (a *Application) setupRouter() *chi.Mux {
 		if a.BitrixModule != nil {
 			a.BitrixModule.registerProtectedRoutes(r)
 		}
+		if a.PyrusModule != nil {
+			a.PyrusModule.registerProtectedRoutes(r)
+		}
 		if a.IntegrationSyncHandler != nil {
 			r.Route("/integrations", func(r chi.Router) {
 				r.Use(middleware.RequireAnyRole(user.RoleAdmin))
@@ -698,6 +705,9 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.Patch("/integrations", a.UserHandler.UpdateMyIntegrations)
 			if a.BitrixModule != nil {
 				a.BitrixModule.registerProfileRoutes(r, a.UserHandler)
+			}
+			if a.PyrusModule != nil {
+				a.PyrusModule.registerProfileRoutes(r, a.UserHandler)
 			}
 			r.Get("/config", a.UserHandler.GetMyProfileConfig)
 			r.Patch("/config", a.UserHandler.UpdateMyProfileConfig)

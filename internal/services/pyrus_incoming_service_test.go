@@ -111,7 +111,7 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		nil,
 	)
 	pyrusClient := pyrusplugin.NewClient(cfg, log)
-	pyrusSync := NewPyrusSyncService(cfg, log, pyrusClient, nil, ticketRepo, pyrusRepo)
+	pyrusSync := NewPyrusSyncService(cfg, log, pyrusClient, nil, ticketRepo, userRepo, pyrusRepo)
 	bus.Subscribe(events.PyrusTicketExtIDSyncRequested, func(ctx context.Context, event eventbus.Event) {
 		payload, ok := event.Payload.(events.PyrusSyncEntityPayload)
 		if !ok {
@@ -321,7 +321,7 @@ func TestBuildPyrusTaskContext_ParsesComplexFields(t *testing.T) {
 	if context.CRMID != "8837845" {
 		t.Fatalf("ожидали CRMID=8837845, получили %q", context.CRMID)
 	}
-	if context.IikoWebLink != "https://809-613-203.iikoweb.ru" {
+	if context.IikoWebLink != "https://809-613-203.iikoweb.ru/" {
 		t.Fatalf("ожидали iikoWEB из вложенного title, получили %q", context.IikoWebLink)
 	}
 	if context.IikoBizLink != "https://m1.iiko.cards" {
@@ -555,7 +555,7 @@ func TestPyrusIncomingService_CreateTicketFromPyrusSavesContextAndIikoWebLink(t 
 	if contextItem == nil {
 		t.Fatal("ожидали сохранённый ticket context")
 	}
-	if contextItem.IikoWebLink != "https://809-613-203.iikoweb.ru" {
+	if contextItem.IikoWebLink != "https://809-613-203.iikoweb.ru/" {
 		t.Fatalf("ожидали iiko_web_link в ticket context, получили %q", contextItem.IikoWebLink)
 	}
 	if contextItem.OpenPeriod == nil || *contextItem.OpenPeriod != 60 {
@@ -572,7 +572,7 @@ func TestPyrusIncomingService_CreateTicketFromPyrusSavesContextAndIikoWebLink(t 
 	if len(servers) != 1 {
 		t.Fatalf("ожидали один сервер по CRMID, получили %d", len(servers))
 	}
-	if servers[0].IikoWebLink == nil || *servers[0].IikoWebLink != "https://809-613-203.iikoweb.ru" {
+	if servers[0].IikoWebLink == nil || *servers[0].IikoWebLink != "https://809-613-203.iikoweb.ru/" {
 		t.Fatalf("ожидали перенос iikoWEB в отдельное поле сервера, получили %+v", servers[0].IikoWebLink)
 	}
 }

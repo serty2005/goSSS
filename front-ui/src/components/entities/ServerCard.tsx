@@ -8,9 +8,8 @@ import { equipmentApi } from '@/api/equipment';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import { getEntityIcon } from '@/utils/mappers';
 import {
-  cleanWebUrl,
   formatServerEdition,
-  isIikoWebAddress,
+  getIikoWebAppLinkMeta,
   normalizeServerAddress,
 } from '@/utils/formatters';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
@@ -39,8 +38,9 @@ const ServerCard: React.FC<Props> = ({ data }) => {
 
   const rawAddress = data.ip || '';
   const displayAddress = normalizeServerAddress(rawAddress, { dropPort443: true });
-  const isCloud = isIikoWebAddress(rawAddress);
-  const cloudHost = cleanWebUrl(rawAddress);
+  const ipCloudMeta = getIikoWebAppLinkMeta(rawAddress);
+  const iikoWebMeta = getIikoWebAppLinkMeta(data.iiko_web_link || rawAddress);
+  const isCloud = Boolean(ipCloudMeta);
   const hasAccessData = Boolean(data.anydesk || data.teamviewer || data.rdp || data.litemanager);
   const agentUpdate = getAgentUpdateMeta(data);
 
@@ -68,7 +68,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
   };
 
   if (isCloud) {
-    const fullUrl = cloudHost ? `https://${cloudHost}` : '';
+    const fullUrl = iikoWebMeta?.url || '';
 
     return (
       <Card
@@ -95,7 +95,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
             icon={<LinkOutlined />}
             disabled={!fullUrl}
           >
-            iikoWeb
+            {iikoWebMeta?.label || 'iikoWeb'}
           </Button>
         </div>
       </Card>
@@ -186,19 +186,36 @@ const ServerCard: React.FC<Props> = ({ data }) => {
           <Text type="secondary">Версия:</Text>
           <Text>{data.server_version} {data.server_edition ? `(${formatServerEdition(data.server_edition)})` : ''}</Text>
         </div>
-        {data.partners_link && (
+        {(data.partners_link || iikoWebMeta) && (
           <div style={{ marginTop: 4, textAlign: 'right' }}>
-            <Button
-              type="link"
-              size="small"
-              href={data.partners_link}
-              target="_blank"
-              onClick={(e) => e.stopPropagation()}
-              icon={<LinkOutlined />}
-              style={{ paddingRight: 0 }}
-            >
-              Партнёрский портал
-            </Button>
+            <Space size={4} wrap>
+              {iikoWebMeta ? (
+                <Button
+                  type="link"
+                  size="small"
+                  href={iikoWebMeta.url}
+                  target="_blank"
+                  onClick={(e) => e.stopPropagation()}
+                  icon={<LinkOutlined />}
+                  style={{ paddingRight: 0 }}
+                >
+                  {iikoWebMeta.label}
+                </Button>
+              ) : null}
+              {data.partners_link ? (
+                <Button
+                  type="link"
+                  size="small"
+                  href={data.partners_link}
+                  target="_blank"
+                  onClick={(e) => e.stopPropagation()}
+                  icon={<LinkOutlined />}
+                  style={{ paddingRight: 0 }}
+                >
+                  Партнёрский портал
+                </Button>
+              ) : null}
+            </Space>
           </div>
         )}
       </div>

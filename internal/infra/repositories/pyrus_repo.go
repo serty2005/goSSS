@@ -42,6 +42,38 @@ func (r *pyrusRepo) GetTicketLinkByTicketID(ctx context.Context, ticketID string
 	return &item, err
 }
 
+func (r *pyrusRepo) GetTicketLinksByTicketIDs(ctx context.Context, ticketIDs []string) (map[string]pyrus.TicketLink, error) {
+	if len(ticketIDs) == 0 {
+		return map[string]pyrus.TicketLink{}, nil
+	}
+	normalizedIDs := make([]string, 0, len(ticketIDs))
+	seen := make(map[string]struct{}, len(ticketIDs))
+	for _, ticketID := range ticketIDs {
+		value := strings.TrimSpace(ticketID)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalizedIDs = append(normalizedIDs, value)
+	}
+	if len(normalizedIDs) == 0 {
+		return map[string]pyrus.TicketLink{}, nil
+	}
+
+	items := make([]pyrus.TicketLink, 0, len(normalizedIDs))
+	if err := r.getDB(ctx).WithContext(ctx).Where("ticket_id IN ?", normalizedIDs).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]pyrus.TicketLink, len(items))
+	for i := range items {
+		result[strings.TrimSpace(items[i].TicketID)] = items[i]
+	}
+	return result, nil
+}
+
 func (r *pyrusRepo) GetTicketLinkByTaskID(ctx context.Context, taskID int64) (*pyrus.TicketLink, error) {
 	var item pyrus.TicketLink
 	err := r.getDB(ctx).WithContext(ctx).Where("pyrus_task_id = ?", taskID).First(&item).Error

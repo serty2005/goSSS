@@ -405,6 +405,8 @@ type TicketListDTO struct {
 	BitrixDealTitle      string     `json:"bitrix_deal_title"`
 	BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
 	BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
+	PyrusTaskID          *int64     `json:"pyrus_task_id,omitempty"`
+	PyrusTaskURL         string     `json:"pyrus_task_url,omitempty"`
 	DeferredUntil        *time.Time `json:"deferred_until,omitempty"`
 	DeferredByID         *uint      `json:"deferred_by_id,omitempty"`
 	Assignee             *struct {
@@ -636,8 +638,10 @@ type UserDTO struct {
 	FirstName        string                   `json:"first_name"`
 	LastName         string                   `json:"last_name"`
 	Position         string                   `json:"position"`
+	Email            *string                  `json:"email,omitempty"`
 	Roles            []string                 `json:"roles"`
 	BitrixEnabled    bool                     `json:"bitrix_enabled"`
+	PyrusEnabled     bool                     `json:"pyrus_enabled"`
 	ExternalSystemID *string                  `json:"external_system_id,omitempty"`
 	ExternalType     *string                  `json:"external_type,omitempty"`
 	ScheduleType     string                   `json:"schedule_type"`
@@ -645,6 +649,7 @@ type UserDTO struct {
 	HasLoggedIn      bool                     `json:"has_logged_in"`
 	Integrations     []UserIntegrationDTO     `json:"integrations,omitempty"`
 	BitrixSuggestion *BitrixUserSuggestionDTO `json:"bitrix_suggestion,omitempty"`
+	PyrusSuggestion  *PyrusUserSuggestionDTO  `json:"pyrus_suggestion,omitempty"`
 	ProfileConfig    map[string]interface{}   `json:"profile_config,omitempty"`
 }
 
@@ -662,6 +667,12 @@ type BitrixUserSuggestionDTO struct {
 	Name      string `json:"name"`
 }
 
+type PyrusUserSuggestionDTO struct {
+	PyrusUserID int64  `json:"pyrus_user_id"`
+	Name        string `json:"name"`
+	Email       string `json:"email,omitempty"`
+}
+
 // LoginResponseDTO - тело ответа при успешном входе.
 type LoginResponseDTO struct {
 	AccessToken string  `json:"access_token"`
@@ -675,6 +686,7 @@ type UserCreateDTO struct {
 	FirstName        string   `json:"first_name" validate:"required"`
 	LastName         string   `json:"last_name" validate:"required"`
 	Position         string   `json:"position" validate:"required"`
+	Email            *string  `json:"email,omitempty"`
 	Roles            []string `json:"roles,omitempty"`
 	ExternalSystemID *string  `json:"external_system_id,omitempty"`
 	ExternalType     *string  `json:"external_type,omitempty"`
@@ -688,6 +700,7 @@ type UserUpdateDTO struct {
 	FirstName        *string  `json:"first_name,omitempty"`
 	LastName         *string  `json:"last_name,omitempty"`
 	Position         *string  `json:"position,omitempty"`
+	Email            *string  `json:"email,omitempty"`
 	Roles            []string `json:"roles,omitempty"`
 	ExternalSystemID *string  `json:"external_system_id,omitempty"`
 	ExternalType     *string  `json:"external_type,omitempty"`
@@ -772,6 +785,7 @@ type ServerRichDTO struct {
 	Litemanager       *string     `json:"litemanager,omitempty"`
 	UniqueID          *string     `json:"unique_id,omitempty"`
 	CRMid             *string     `json:"crm_id,omitempty"`
+	IikoWebLink       *string     `json:"iiko_web_link,omitempty"`
 	PartnersLink      *string     `json:"partners_link,omitempty"`
 	ServerName        *string     `json:"server_name,omitempty"`
 	ServerVersion     *string     `json:"server_version,omitempty"`
@@ -868,6 +882,7 @@ type ServerCreateDTO struct {
 	RDP           *string `json:"rdp"`
 	Anydesk       *string `json:"anydesk"`
 	IP            *string `json:"ip"`
+	IikoWebLink   *string `json:"iiko_web_link"`
 	DeviceName    *string `json:"device_name"`
 	ServerName    *string `json:"server_name"`
 	ServerVersion *string `json:"server_version"`

@@ -17,6 +17,7 @@ type OutgoingEventListFilter struct {
 type Repository interface {
 	UpsertTicketLink(ctx context.Context, link *TicketLink) error
 	GetTicketLinkByTicketID(ctx context.Context, ticketID string) (*TicketLink, error)
+	GetTicketLinksByTicketIDs(ctx context.Context, ticketIDs []string) (map[string]TicketLink, error)
 	GetTicketLinkByTaskID(ctx context.Context, taskID int64) (*TicketLink, error)
 
 	UpsertCommentLink(ctx context.Context, link *CommentLink) error

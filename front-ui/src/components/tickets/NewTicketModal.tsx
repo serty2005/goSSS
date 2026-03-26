@@ -6,7 +6,7 @@ import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
-import { normalizeServerAddress } from '@/utils/formatters';
+import { getIikoWebAppLinkMeta, normalizeServerAddress } from '@/utils/formatters';
 import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
@@ -261,6 +261,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     const formattedServerIp = item.entity_type === 'Server'
       ? normalizeServerAddress(data.ip as string | undefined, { dropPort443: true })
       : '';
+    const iikoWebMeta = item.entity_type === 'Server'
+      ? getIikoWebAppLinkMeta((data.iiko_web_link as string | undefined) || (data.ip as string | undefined))
+      : null;
 
     const items = [
       ...(item.entity_type === 'Server' ? [{ label: 'IP', value: formattedServerIp || undefined }] : []),
@@ -270,7 +273,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       { label: 'LM', value: data.litemanager as string | undefined },
       { label: 'RustDesk', value: data.rustdesk as string | undefined },
       ...(item.entity_type === 'Server'
-        ? [{ label: 'Partners', value: data.partners_link as string | undefined, isLink: true }]
+        ? [
+          ...(iikoWebMeta ? [{ label: iikoWebMeta.label, value: iikoWebMeta.url, isLink: true }] : []),
+          { label: 'Партнёрский портал', value: data.partners_link as string | undefined, isLink: true },
+        ]
         : []),
     ];
 

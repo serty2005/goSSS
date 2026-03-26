@@ -33,7 +33,7 @@ func (s *serviceImpl) Create(ctx context.Context, dto *api.ServerCreateDTO) (*se
 	}
 	entity := &server.Server{
 		UniqueID: dto.UniqueID, CRMid: nil, Teamviewer: dto.Teamviewer,
-		RDP: dto.RDP, Anydesk: dto.Anydesk, IP: dto.IP, DeviceName: dto.DeviceName,
+		RDP: dto.RDP, Anydesk: dto.Anydesk, IP: dto.IP, IikoWebLink: dto.IikoWebLink, DeviceName: dto.DeviceName,
 		ServerName: dto.ServerName, ServerVersion: dto.ServerVersion, Description: dto.Description,
 		OwnerID: dto.OwnerID, Status: "unknown",
 	}
@@ -203,6 +203,9 @@ func normalizeServerCreate(dto *api.ServerCreateDTO) error {
 			dto.IP = normalized
 		}
 	}
+	if dto.IikoWebLink != nil {
+		dto.IikoWebLink = validators.ValidateIikoWebLink(*dto.IikoWebLink)
+	}
 	return nil
 }
 
@@ -227,6 +230,24 @@ func normalizeServerUpdate(data map[string]interface{}) error {
 					return fmt.Errorf("некорректный формат URL/IP сервера")
 				}
 				data["ip"] = *normalized
+			}
+		}
+	}
+
+	rawIikoWebLink, existsIikoWebLink := data["iiko_web_link"]
+	if existsIikoWebLink {
+		if rawIikoWebLink == nil {
+			data["iiko_web_link"] = nil
+		} else {
+			iikoWebLinkValue, ok := rawIikoWebLink.(string)
+			if !ok {
+				return fmt.Errorf("поле iiko_web_link должно быть строкой")
+			}
+			normalized := validators.ValidateIikoWebLink(iikoWebLinkValue)
+			if normalized == nil {
+				data["iiko_web_link"] = nil
+			} else {
+				data["iiko_web_link"] = *normalized
 			}
 		}
 	}
@@ -332,6 +353,11 @@ func collectServerFieldChanges(before, after *server.Server, patch map[string]in
 			before: ptrString(before.CabinetLink),
 			after:  ptrString(after.CabinetLink),
 			label:  "Cabinet Link",
+		},
+		"iiko_web_link": {
+			before: ptrString(before.IikoWebLink),
+			after:  ptrString(after.IikoWebLink),
+			label:  "SyrveApp / iikoWeb",
 		},
 	}
 

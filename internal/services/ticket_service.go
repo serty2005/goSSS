@@ -161,6 +161,7 @@ func (s *ticketServiceImpl) List(ctx context.Context, filter tickets.TicketFilte
 	}
 	s.applyCommonContractFlag(items)
 	s.enrichBitrixDealLinks(ctx, items)
+	s.enrichPyrusTaskLinks(ctx, items)
 	count, err := s.ticketRepo.Count(ctx, filter)
 	if err != nil {
 		return nil, 0, fmt.Errorf("service: count tickets: %w", err)
@@ -710,7 +711,7 @@ func (s *ticketServiceImpl) Delete(ctx context.Context, ticketID string, actorID
 	return nil
 }
 
-func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, replyToClient bool, userID uint) (*tickets.TicketComment, error) {
+func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, _ bool, userID uint) (*tickets.TicketComment, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
@@ -742,7 +743,7 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 		CreationDate:    time.Now(),
 		IsInternal:      false,
 		IsPrivate:       isPrivate,
-		ReplyToClient:   !isPrivate && replyToClient,
+		ReplyToClient:   false,
 	}
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
 		return nil, err
@@ -757,7 +758,7 @@ func (s *ticketServiceImpl) UpdateComment(
 	ticketID string,
 	commentUUID string,
 	comment string,
-	replyToClient bool,
+	_ bool,
 	userID uint,
 	roles []string,
 ) (*tickets.TicketComment, error) {
@@ -789,7 +790,7 @@ func (s *ticketServiceImpl) UpdateComment(
 	if text == "" {
 		return nil, fmt.Errorf("комментарий пустой")
 	}
-	nextReplyToClient := !target.IsPrivate && replyToClient
+	nextReplyToClient := false
 	if target.Text == text && target.ReplyToClient == nextReplyToClient {
 		return target, nil
 	}
@@ -1186,6 +1187,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	}
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	s.enrichBitrixDealLink(ctx, ticket)
+	s.enrichPyrusTaskLink(ctx, ticket)
 
 	// Загрузка истории
 	history, _ := s.ticketRepo.GetHistory(ctx, ticketID)
@@ -1243,6 +1245,40 @@ func (s *ticketServiceImpl) enrichBitrixDealLinks(ctx context.Context, items []t
 	}
 }
 
+func (s *ticketServiceImpl) enrichPyrusTaskLinks(ctx context.Context, items []tickets.Ticket) {
+	if len(items) == 0 {
+		return
+	}
+	ticketIDs := make([]string, 0, len(items))
+	for i := range items {
+		if value := strings.TrimSpace(items[i].ID); value != "" {
+			ticketIDs = append(ticketIDs, value)
+		}
+	}
+	if len(ticketIDs) == 0 || s.pyrusRepo == nil {
+		for i := range items {
+			s.applyPyrusTaskLink(&items[i], nil)
+		}
+		return
+	}
+
+	linksByTicketID, err := s.pyrusRepo.GetTicketLinksByTicketIDs(ctx, ticketIDs)
+	if err != nil {
+		for i := range items {
+			s.applyPyrusTaskLink(&items[i], nil)
+		}
+		return
+	}
+	for i := range items {
+		link, ok := linksByTicketID[strings.TrimSpace(items[i].ID)]
+		if ok {
+			s.applyPyrusTaskLink(&items[i], &link)
+			continue
+		}
+		s.applyPyrusTaskLink(&items[i], nil)
+	}
+}
+
 func (s *ticketServiceImpl) enrichBitrixDealLink(ctx context.Context, ticket *tickets.Ticket) {
 	if ticket == nil || !ticket.SyncWithBitrix || s.bitrixRepo == nil {
 		return
@@ -1256,6 +1292,43 @@ func (s *ticketServiceImpl) enrichBitrixDealLink(ctx context.Context, ticket *ti
 	ticket.BitrixDealURL = s.buildBitrixDealURL(dealID)
 }
 
+func (s *ticketServiceImpl) enrichPyrusTaskLink(ctx context.Context, ticket *tickets.Ticket) {
+	if ticket == nil {
+		return
+	}
+	if s.pyrusRepo == nil {
+		s.applyPyrusTaskLink(ticket, nil)
+		return
+	}
+	link, err := s.pyrusRepo.GetTicketLinkByTicketID(ctx, ticket.ID)
+	if err != nil {
+		s.applyPyrusTaskLink(ticket, nil)
+		return
+	}
+	s.applyPyrusTaskLink(ticket, link)
+}
+
+func (s *ticketServiceImpl) applyPyrusTaskLink(ticket *tickets.Ticket, link *pyrus.TicketLink) {
+	if ticket == nil {
+		return
+	}
+	ticket.PyrusTaskID = nil
+	ticket.PyrusTaskURL = ""
+
+	taskID := int64(0)
+	switch {
+	case link != nil && link.PyrusTaskID > 0:
+		taskID = link.PyrusTaskID
+	default:
+		taskID = parsePyrusTaskIDFromServiceDeskUUID(ticket.ServiceDeskUUID)
+	}
+	if taskID <= 0 {
+		return
+	}
+	ticket.PyrusTaskID = &taskID
+	ticket.PyrusTaskURL = s.buildPyrusTaskURL(taskID)
+}
+
 func (s *ticketServiceImpl) buildBitrixDealURL(dealID int64) string {
 	if dealID <= 0 {
 		return ""
@@ -1265,6 +1338,17 @@ func (s *ticketServiceImpl) buildBitrixDealURL(dealID int64) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/crm/deal/details/%d/", base, dealID)
+}
+
+func (s *ticketServiceImpl) buildPyrusTaskURL(taskID int64) string {
+	if taskID <= 0 {
+		return ""
+	}
+	base := s.pyrusPortalBaseURL()
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/t#%d", base, taskID)
 }
 
 func (s *ticketServiceImpl) bitrixPortalBaseURL() string {
@@ -1283,6 +1367,41 @@ func (s *ticketServiceImpl) bitrixPortalBaseURL() string {
 		base = base[:index]
 	}
 	return strings.TrimRight(base, "/")
+}
+
+func (s *ticketServiceImpl) pyrusPortalBaseURL() string {
+	if s.cfg == nil {
+		return "https://pyrus.com"
+	}
+	base := strings.TrimSpace(s.cfg.PyrusAPIBaseURL)
+	if base == "" {
+		return "https://pyrus.com"
+	}
+	parsed, err := url.Parse(base)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		host := parsed.Host
+		if rest, ok := strings.CutPrefix(host, "api."); ok && strings.TrimSpace(rest) != "" {
+			host = rest
+		}
+		return strings.TrimRight(parsed.Scheme+"://"+host, "/")
+	}
+	return "https://pyrus.com"
+}
+
+func parsePyrusTaskIDFromServiceDeskUUID(serviceDeskUUID string) int64 {
+	value := strings.TrimSpace(serviceDeskUUID)
+	if value == "" {
+		return 0
+	}
+	rest, ok := strings.CutPrefix(value, "pyrus:task:")
+	if !ok {
+		return 0
+	}
+	taskID, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+	if err != nil || taskID <= 0 {
+		return 0
+	}
+	return taskID
 }
 
 // UpdateDescription обновляет описание тикета.

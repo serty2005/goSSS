@@ -2,12 +2,12 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DeleteOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { companiesApi } from '@/api/companies';
 import { getEntityIcon, getStatusColor } from '@/utils/mappers';
-import { formatDate } from '@/utils/formatters';
+import { formatDate, getIikoWebAppLinkMeta, normalizeIikoWebAppUrl } from '@/utils/formatters';
 import { EntityOwnerHistoryItemDTO, UpdateServerPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
@@ -65,6 +65,7 @@ const fieldLabelMap: Record<string, string> = {
   teamviewer: 'TeamViewer',
   anydesk: 'AnyDesk',
   partners_link: 'Ссылка партнёрского портала',
+  iiko_web_link: 'SyrveApp / iikoWeb',
 };
 
 const isPresent = (value: unknown) => {
@@ -268,6 +269,8 @@ const ServerDetails: React.FC = () => {
   if (!server) return <div>Сервер не найден</div>;
 
   const normalizedStatus = String(server.status || '').toLowerCase();
+  const iikoWebAppMeta = getIikoWebAppLinkMeta(server.iiko_web_link || server.ip);
+  const normalizedIikoWebLink = normalizeIikoWebAppUrl(server.iiko_web_link);
 
   const saveField = (field: keyof UpdateServerPayload, value: string) => {
     if (!canEdit) return;
@@ -290,6 +293,7 @@ const ServerDetails: React.FC = () => {
     'crm_id',
     'partners_link',
     'cabinet_link',
+    'iiko_web_link',
     'server_version',
     'server_edition',
     'teamviewer',
@@ -398,6 +402,24 @@ const ServerDetails: React.FC = () => {
                 onSave={(v) => saveField('cabinet_link', v)}
                 saving={updateMutation.isPending && activeField === 'cabinet_link'}
               />
+            </Descriptions.Item>
+            <Descriptions.Item label="SyrveApp / iikoWeb" span={2}>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <InlineFieldEditor
+                  value={normalizedIikoWebLink}
+                  placeholder="Вставьте ссылку вида https://restaurant.syrve.app/ или https://123-456.iikoweb.ru/"
+                  editable={canEdit}
+                  onSave={(v) => saveField('iiko_web_link', v)}
+                  saving={updateMutation.isPending && activeField === 'iiko_web_link'}
+                />
+                {iikoWebAppMeta ? (
+                  <Button type="link" href={iikoWebAppMeta.url} target="_blank" icon={<LinkOutlined />} style={{ paddingInline: 0, alignSelf: 'flex-start' }}>
+                    {iikoWebAppMeta.label}
+                  </Button>
+                ) : (
+                  <Text type="secondary">Сохраняются только домены `*.syrve.app` и `*.iikoweb.ru`.</Text>
+                )}
+              </Space>
             </Descriptions.Item>
             <Descriptions.Item label="Версия сервера">
               <InlineFieldEditor value={server.server_version} editable={canEdit} onSave={(v) => saveField('server_version', v)} saving={updateMutation.isPending && activeField === 'server_version'} />

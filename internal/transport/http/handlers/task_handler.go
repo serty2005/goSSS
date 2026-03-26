@@ -386,6 +386,7 @@ func (h *TaskHandler) modelToServerRichDTO(ctx context.Context, server server.Se
 		Litemanager:       server.Litemanager,
 		UniqueID:          server.UniqueID,
 		CRMid:             server.CRMid,
+		IikoWebLink:       server.IikoWebLink,
 		PartnersLink: validators.BuildPartnersPortalLink(
 			utils.SafeStringDereference(server.CabinetLink),
 			utils.SafeStringDereference(server.IP),

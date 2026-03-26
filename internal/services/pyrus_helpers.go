@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
+	"etalon-server/internal/transport/http/validators"
 	"fmt"
 	"strconv"
 	"strings"
@@ -115,6 +116,7 @@ func buildPyrusTaskContext(task *pyrusplugin.Task) *pyrusTaskContext {
 	if context.SenderName == "" {
 		context.SenderName = resolvePyrusTaskClientName(task)
 	}
+	context.IikoWebLink = strings.TrimSpace(trimmedPtrString(validators.ValidateIikoWebLink(context.IikoWebLink)))
 	context.SenderEmail = resolvePyrusTaskClientEmail(task)
 	context.SenderPosition = resolvePyrusTaskClientPosition(task)
 	context.SenderMessengerNickname = resolvePyrusTaskClientMessenger(task)
@@ -772,6 +774,13 @@ func resolvePyrusTaskClientNameFromContext(context *pyrusTaskContext) string {
 		}
 	}
 	return ""
+}
+
+func trimmedPtrString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func isPyrusExtIDSystemComment(comment *pyrusplugin.Comment, extID string) bool {

@@ -144,24 +144,57 @@ const TicketDateStamp: React.FC<{ label: string; value?: string }> = ({ label, v
   );
 };
 
-const BitrixSyncIndicator: React.FC<{
-  sync?: boolean;
-  dealURL?: string;
+const ExternalLinkBadge: React.FC<{
+  label: string;
+  href?: string;
+  title: string;
+  color: string;
   compact?: boolean;
   onClick?: (event: React.MouseEvent) => void;
-}> = ({ sync, dealURL, compact, onClick }) => {
-  if (!sync || !dealURL) {
+}> = ({ label, href, title, color, compact, onClick }) => {
+  if (!String(href || '').trim()) {
     return null;
   }
   return (
-    <Tooltip title="Открыть сделку в Bitrix24">
-      <a href={dealURL} target="_blank" rel="noreferrer" onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        <Tag color="success" style={{ marginInlineEnd: 0 }}>
-          {compact ? 'B24' : 'Синхронизировано B24'}
+    <Tooltip title={title}>
+      <a href={href} target="_blank" rel="noreferrer" onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Tag color={color} style={{ marginInlineEnd: 0 }}>
+          {compact ? label : label}
         </Tag>
         <LinkOutlined />
       </a>
     </Tooltip>
+  );
+};
+
+const ExternalLinksBadges: React.FC<{
+  bitrixURL?: string;
+  pyrusURL?: string;
+  compact?: boolean;
+  onClick?: (event: React.MouseEvent) => void;
+}> = ({ bitrixURL, pyrusURL, compact, onClick }) => {
+  if (!String(bitrixURL || '').trim() && !String(pyrusURL || '').trim()) {
+    return null;
+  }
+  return (
+    <Space size={4} wrap>
+      <ExternalLinkBadge
+        label="B24"
+        href={bitrixURL}
+        title="Открыть сделку в Bitrix24"
+        color="success"
+        compact={compact}
+        onClick={onClick}
+      />
+      <ExternalLinkBadge
+        label="Pyrus"
+        href={pyrusURL}
+        title="Открыть задачу в Pyrus"
+        color="geekblue"
+        compact={compact}
+        onClick={onClick}
+      />
+    </Space>
   );
 };
 
@@ -858,15 +891,15 @@ const TicketsPage: React.FC = () => {
         },
       },
       {
-        title: 'B24',
+        title: 'External',
         dataIndex: 'sync_with_bitrix',
         key: 'sync_with_bitrix',
-        width: 120,
-        minWidth: estimateHeaderMinWidth('B24'),
+        width: 160,
+        minWidth: estimateHeaderMinWidth('External'),
         render: (_value: boolean, row) => (
-          <BitrixSyncIndicator
-            sync={row.sync_with_bitrix}
-            dealURL={row.bitrix_deal_url}
+          <ExternalLinksBadges
+            bitrixURL={row.bitrix_deal_url}
+            pyrusURL={row.pyrus_task_url}
             compact
             onClick={(event) => event.stopPropagation()}
           />
@@ -1218,14 +1251,12 @@ const TicketsPage: React.FC = () => {
                         </Link>
                         {deferredTitle ? <Tooltip title={deferredTitle}><Tag color={meta.color}>{meta.label}</Tag></Tooltip> : <Tag color={meta.color}>{meta.label}</Tag>}
                         {item.is_common_contract && <Tag color="gold">Платный</Tag>}
-                        {isBitrixEnabled && (
-                          <BitrixSyncIndicator
-                            sync={item.sync_with_bitrix}
-                            dealURL={item.bitrix_deal_url}
-                            compact
-                            onClick={(event) => event.stopPropagation()}
-                          />
-                        )}
+                        <ExternalLinksBadges
+                          bitrixURL={isBitrixEnabled ? item.bitrix_deal_url : undefined}
+                          pyrusURL={item.pyrus_task_url}
+                          compact
+                          onClick={(event) => event.stopPropagation()}
+                        />
                       </Space>
                       <Text>{resolveTicketSubjectFromDescription(item.description)}</Text>
                       {item.last_comment && (
@@ -1270,14 +1301,12 @@ const TicketsPage: React.FC = () => {
                           >
                             <Text strong className="ticket-card-number">#{item.number}</Text>
                           </Link>
-                          {isBitrixEnabled && (
-                            <BitrixSyncIndicator
-                              sync={item.sync_with_bitrix}
-                              dealURL={item.bitrix_deal_url}
-                              compact
-                              onClick={(event) => event.stopPropagation()}
-                            />
-                          )}
+                          <ExternalLinksBadges
+                            bitrixURL={isBitrixEnabled ? item.bitrix_deal_url : undefined}
+                            pyrusURL={item.pyrus_task_url}
+                            compact
+                            onClick={(event) => event.stopPropagation()}
+                          />
                         </div>
                         <div className="ticket-company-centered ticket-company-top">
                           {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
@@ -1463,7 +1492,10 @@ const TicketsPage: React.FC = () => {
                   }}
                 />
               )}
-              {isBitrixEnabled && <BitrixSyncIndicator sync={metadata.sync_with_bitrix} dealURL={metadata.bitrix_deal_url} />}
+              <ExternalLinksBadges
+                bitrixURL={isBitrixEnabled ? metadata.bitrix_deal_url : undefined}
+                pyrusURL={metadata.pyrus_task_url}
+              />
               {metadata.status === 'deferred' && (
                 <Space size={4}>
                   <Tooltip title={formatDeferredTooltip(metadata.deferred_until)}>

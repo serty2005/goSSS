@@ -5,6 +5,14 @@ interface NormalizeServerAddressOptions {
   dropPort443?: boolean;
 }
 
+const iikoWebAppHostRegex = /\b((?:[a-z0-9-]+\.)*[a-z0-9-]+\.(?:syrve\.app|iikoweb\.ru))\b/i;
+
+export interface IikoWebAppLinkMeta {
+  host: string;
+  label: 'SyrveApp' | 'iikoWeb';
+  url: string;
+}
+
 export const formatRnm = (rnm?: string): string => {
   if (!rnm) return '';
   return rnm.replace(/\D/g, '').replace(/(\d{4})(?=\d)/g, '$1 ').trim();
@@ -49,10 +57,30 @@ export const normalizeServerAddress = (
 export const cleanWebUrl = (url?: string): string =>
   normalizeServerAddress(url, { dropAnyPort: true });
 
+export const normalizeIikoWebAppUrl = (raw?: string): string => {
+  if (!raw) return '';
+
+  const match = String(raw).trim().toLowerCase().match(iikoWebAppHostRegex);
+  const host = match?.[1]?.trim();
+  if (!host) return '';
+
+  return `https://${host}/`;
+};
+
+export const getIikoWebAppLinkMeta = (raw?: string): IikoWebAppLinkMeta | null => {
+  const url = normalizeIikoWebAppUrl(raw);
+  if (!url) return null;
+
+  const host = url.replace(/^https:\/\//, '').replace(/\/$/, '');
+  return {
+    host,
+    label: host.endsWith('.syrve.app') ? 'SyrveApp' : 'iikoWeb',
+    url,
+  };
+};
+
 export const isIikoWebAddress = (rawAddress?: string): boolean => {
-  const normalized = normalizeServerAddress(rawAddress, { dropAnyPort: true });
-  if (!normalized) return false;
-  return normalized.includes('iikoweb') || normalized.includes('syrve.app');
+  return Boolean(getIikoWebAppLinkMeta(rawAddress));
 };
 
 export const formatServerEdition = (edition?: string): string => {

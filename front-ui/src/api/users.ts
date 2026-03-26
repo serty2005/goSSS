@@ -31,5 +31,10 @@ export const usersApi = {
     const response = await apiClient.post<ApiResponse<UserAdminDTO>>(`/users/${id}/bitrix/sync-suggestion`);
     return response.data;
   },
+
+  applyPyrusSuggestion: async (id: number) => {
+    const response = await apiClient.post<ApiResponse<UserAdminDTO>>(`/users/${id}/pyrus/sync-suggestion`);
+    return response.data;
+  },
 };
 

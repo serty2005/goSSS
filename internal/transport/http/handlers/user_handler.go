@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/bitrix"
+	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
+	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
+	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
 	"etalon-server/internal/transport/http/response"
@@ -19,13 +22,27 @@ import (
 )
 
 type UserHandler struct {
-	userRepo   user.Repository
-	bitrixRepo bitrix.Repository
-	cfg        *config.Config
+	userRepo     user.Repository
+	bitrixRepo   bitrix.Repository
+	pyrusRepo    pyrus.Repository
+	pyrusService services.PyrusSyncService
+	cfg          *config.Config
 }
 
-func NewUserHandler(userRepo user.Repository, bitrixRepo bitrix.Repository, cfg *config.Config) *UserHandler {
-	return &UserHandler{userRepo: userRepo, bitrixRepo: bitrixRepo, cfg: cfg}
+func NewUserHandler(
+	userRepo user.Repository,
+	bitrixRepo bitrix.Repository,
+	pyrusRepo pyrus.Repository,
+	pyrusService services.PyrusSyncService,
+	cfg *config.Config,
+) *UserHandler {
+	return &UserHandler{
+		userRepo:     userRepo,
+		bitrixRepo:   bitrixRepo,
+		pyrusRepo:    pyrusRepo,
+		pyrusService: pyrusService,
+		cfg:          cfg,
+	}
 }
 
 func (h *UserHandler) RegisterRoutes(r chi.Router) {
@@ -33,6 +50,7 @@ func (h *UserHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/", h.CreateUser)
 	r.Put("/{id}", h.UpdateUser)
 	r.Post("/{id}/bitrix/sync-suggestion", h.ApplyUserBitrixSuggestion)
+	r.Post("/{id}/pyrus/sync-suggestion", h.ApplyUserPyrusSuggestion)
 	r.Patch("/{id}/status", h.UpdateUserStatus)
 	r.Delete("/{id}", h.DeleteUser)
 }
@@ -191,9 +209,7 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 			IntegrationType: *typePtr,
 			ExternalID:      *idPtr,
 		}
-		if integration.IntegrationType == user.ExternalTypeBitrix24 {
-			integration.IsVerified, integration.VerifiedName = h.verifyBitrixIntegration(r.Context(), u, integration.ExternalID)
-		}
+		h.enrichIntegration(r.Context(), u, &integration)
 		normalized = append(normalized, integration)
 	}
 
@@ -202,6 +218,8 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
 		return
 	}
+	u.Integrations = normalized
+	h.persistVerifiedExternalMaps(r.Context(), u)
 
 	var legacyType *string
 	var legacyID *string
@@ -303,9 +321,10 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheItems, _ := h.getBitrixCache(r.Context())
+	pyrusMembers, _ := h.getPyrusMembers(r.Context())
 	userDTOs := make([]api.UserDTO, len(users))
 	for i, u := range users {
-		userDTOs[i] = h.toUserDTOWithCache(u, cacheItems)
+		userDTOs[i] = h.toUserDTOWithLookups(u, cacheItems, pyrusMembers)
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, userDTOs)
@@ -357,17 +376,15 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		IsActive:     true,
 		HasLoggedIn:  false,
 	}
+	if dto.Email != nil {
+		newUser.Email = normalizeOptionalString(dto.Email)
+	}
 	if externalType != nil && externalID != nil {
 		integration := user.Integration{
 			IntegrationType: *externalType,
 			ExternalID:      *externalID,
 		}
-		if integration.IntegrationType == user.ExternalTypeBitrix24 {
-			integration.IsVerified, integration.VerifiedName = h.verifyBitrixIntegration(r.Context(), newUser, integration.ExternalID)
-			if integration.IsVerified {
-				integration.IsLocked = true
-			}
-		}
+		h.enrichIntegration(r.Context(), newUser, &integration)
 		newUser.Integrations = []user.Integration{
 			integration,
 		}
@@ -385,18 +402,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(newUser.Integrations) > 0 &&
-		newUser.Integrations[0].IntegrationType == user.ExternalTypeBitrix24 &&
-		newUser.Integrations[0].IsVerified &&
-		h.bitrixRepo != nil {
-		b24UserID, parseErr := strconv.ParseInt(strings.TrimSpace(newUser.Integrations[0].ExternalID), 10, 64)
-		if parseErr == nil && b24UserID > 0 {
-			_ = h.bitrixRepo.UpsertUserMap(r.Context(), &bitrix.UserMap{
-				EtalonUserID: newUser.ID,
-				B24UserID:    b24UserID,
-			})
-		}
-	}
+	h.persistVerifiedExternalMaps(r.Context(), newUser)
 
 	response.RespondWithJSON(w, http.StatusCreated, h.toUserDTO(r.Context(), *newUser))
 }
@@ -458,6 +464,9 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if dto.LastName != nil {
 		u.LastName = strings.TrimSpace(*dto.LastName)
 	}
+	if dto.Email != nil {
+		u.Email = normalizeOptionalString(dto.Email)
+	}
 	if dto.Position != nil {
 		position := strings.TrimSpace(*dto.Position)
 		if !user.IsValidRole(position) {
@@ -481,6 +490,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		u.ScheduleType = schedule
 	}
+	u.FullName = buildFullName(u.FirstName, u.LastName)
 
 	nextExternalType := u.ExternalType
 	nextExternalID := u.ExternalID
@@ -507,25 +517,27 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				u.Integrations[i].ExternalID = *normalizedID
+				h.enrichIntegration(r.Context(), u, &u.Integrations[i])
 				found = true
 				break
 			}
 		}
 		if !found {
-			u.Integrations = append(u.Integrations, user.Integration{
+			integration := user.Integration{
 				IntegrationType: *normalizedType,
 				ExternalID:      *normalizedID,
-			})
+			}
+			h.enrichIntegration(r.Context(), u, &integration)
+			u.Integrations = append(u.Integrations, integration)
 		}
 	}
-
-	u.FullName = buildFullName(u.FirstName, u.LastName)
 
 	if err := h.userRepo.Update(r.Context(), u); err != nil {
 		log.Error("Не удалось обновить пользователя", "id", id, "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить пользователя")
 		return
 	}
+	h.persistVerifiedExternalMaps(r.Context(), u)
 
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
 }
@@ -588,10 +600,11 @@ func (h *UserHandler) setUserActiveStatus(w http.ResponseWriter, r *http.Request
 
 func (h *UserHandler) toUserDTO(ctx context.Context, u user.User) api.UserDTO {
 	cacheItems, _ := h.getBitrixCache(ctx)
-	return h.toUserDTOWithCache(u, cacheItems)
+	pyrusMembers, _ := h.getPyrusMembers(ctx)
+	return h.toUserDTOWithLookups(u, cacheItems, pyrusMembers)
 }
 
-func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCache) api.UserDTO {
+func (h *UserHandler) toUserDTOWithLookups(u user.User, cacheItems []bitrix.UserCache, pyrusMembers []pyrusplugin.Member) api.UserDTO {
 	roles := make([]string, 0, len(u.Roles))
 	for _, role := range u.Roles {
 		roles = append(roles, role.Name)
@@ -607,6 +620,10 @@ func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCa
 			VerifiedName:    item.VerifiedName,
 		})
 	}
+	var pyrusSuggestion *api.PyrusUserSuggestionDTO
+	if suggestion := findPyrusSuggestionFromMembers(&u, pyrusMembers); suggestion != nil {
+		pyrusSuggestion = suggestion
+	}
 
 	return api.UserDTO{
 		ID:               u.ID,
@@ -615,8 +632,10 @@ func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCa
 		FirstName:        u.FirstName,
 		LastName:         u.LastName,
 		Position:         u.Position,
+		Email:            u.Email,
 		Roles:            roles,
 		BitrixEnabled:    h.cfg != nil && h.cfg.EnableBitrixGateway,
+		PyrusEnabled:     h.cfg != nil && h.cfg.EnablePyrusGateway,
 		ExternalSystemID: u.ExternalID,
 		ExternalType:     u.ExternalType,
 		ScheduleType:     u.ScheduleType,
@@ -624,6 +643,7 @@ func (h *UserHandler) toUserDTOWithCache(u user.User, cacheItems []bitrix.UserCa
 		HasLoggedIn:      u.HasLoggedIn,
 		Integrations:     integrations,
 		BitrixSuggestion: findBitrixSuggestionFromCache(&u, cacheItems),
+		PyrusSuggestion:  pyrusSuggestion,
 		ProfileConfig:    parseProfileConfig(u.ProfileConfig),
 	}
 }
@@ -633,6 +653,13 @@ func (h *UserHandler) getBitrixCache(ctx context.Context) ([]bitrix.UserCache, e
 		return nil, nil
 	}
 	return h.bitrixRepo.ListUserCache(ctx)
+}
+
+func (h *UserHandler) getPyrusMembers(ctx context.Context) ([]pyrusplugin.Member, error) {
+	if h.pyrusService == nil || !h.pyrusService.IsEnabled() {
+		return nil, nil
+	}
+	return h.pyrusService.ListMembers(ctx)
 }
 
 func parseProfileConfig(raw []byte) map[string]interface{} {
@@ -684,6 +711,81 @@ func (h *UserHandler) verifyBitrixIntegration(ctx context.Context, u *user.User,
 		return true, strings.TrimSpace(strings.Join([]string{matched.LastName, matched.FirstName, matched.SecondName}, " "))
 	}
 	return false, ""
+}
+
+func (h *UserHandler) verifyPyrusIntegration(ctx context.Context, u *user.User, externalID string) (bool, string, string) {
+	if h.pyrusService == nil || !h.pyrusService.IsEnabled() || u == nil {
+		return false, "", ""
+	}
+	members, err := h.getPyrusMembers(ctx)
+	if err != nil {
+		return false, "", ""
+	}
+	return services.VerifyPyrusUserMatch(u, externalID, members)
+}
+
+func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integration *user.Integration) {
+	if integration == nil {
+		return
+	}
+	integration.IsVerified = false
+	integration.VerifiedName = ""
+	switch strings.TrimSpace(strings.ToLower(integration.IntegrationType)) {
+	case user.ExternalTypeBitrix24:
+		integration.IsVerified, integration.VerifiedName = h.verifyBitrixIntegration(ctx, u, integration.ExternalID)
+		if integration.IsVerified {
+			integration.IsLocked = true
+		}
+	case user.ExternalTypePyrus:
+		var verifiedEmail string
+		integration.IsVerified, integration.VerifiedName, verifiedEmail = h.verifyPyrusIntegration(ctx, u, integration.ExternalID)
+		if integration.IsVerified {
+			integration.IsLocked = true
+		}
+		if verifiedEmail != "" && (u.Email == nil || strings.TrimSpace(*u.Email) == "") {
+			u.Email = normalizeOptionalString(&verifiedEmail)
+		}
+	default:
+		integration.IsLocked = false
+	}
+}
+
+func (h *UserHandler) persistVerifiedExternalMaps(ctx context.Context, u *user.User) {
+	if u == nil {
+		return
+	}
+	for i := range u.Integrations {
+		integration := u.Integrations[i]
+		if !integration.IsVerified {
+			continue
+		}
+		switch strings.TrimSpace(strings.ToLower(integration.IntegrationType)) {
+		case user.ExternalTypeBitrix24:
+			if h.bitrixRepo == nil {
+				continue
+			}
+			b24UserID, err := strconv.ParseInt(strings.TrimSpace(integration.ExternalID), 10, 64)
+			if err != nil || b24UserID <= 0 {
+				continue
+			}
+			_ = h.bitrixRepo.UpsertUserMap(ctx, &bitrix.UserMap{
+				EtalonUserID: u.ID,
+				B24UserID:    b24UserID,
+			})
+		case user.ExternalTypePyrus:
+			if h.pyrusRepo == nil {
+				continue
+			}
+			pyrusUserID, err := strconv.ParseInt(strings.TrimSpace(integration.ExternalID), 10, 64)
+			if err != nil || pyrusUserID <= 0 {
+				continue
+			}
+			_ = h.pyrusRepo.UpsertUserMap(ctx, &pyrus.UserMap{
+				EtalonUserID: u.ID,
+				PyrusUserID:  pyrusUserID,
+			})
+		}
+	}
 }
 
 func findBitrixSuggestionFromCache(u *user.User, cacheItems []bitrix.UserCache) *api.BitrixUserSuggestionDTO {
@@ -749,6 +851,43 @@ func findBitrixSuggestionFromCache(u *user.User, cacheItems []bitrix.UserCache) 
 	}
 }
 
+func findPyrusSuggestionFromMembers(u *user.User, members []pyrusplugin.Member) *api.PyrusUserSuggestionDTO {
+	if u == nil || len(members) == 0 {
+		return nil
+	}
+	for _, integration := range u.Integrations {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
+			continue
+		}
+		if integration.IsLocked && integration.IsVerified {
+			return nil
+		}
+	}
+	suggestion := services.FindPyrusUserSuggestionForUser(u, members)
+	if suggestion == nil {
+		return nil
+	}
+	targetID := strconv.FormatInt(suggestion.PyrusUserID, 10)
+	if u.ExternalType != nil && u.ExternalID != nil &&
+		strings.TrimSpace(strings.ToLower(*u.ExternalType)) == user.ExternalTypePyrus &&
+		strings.TrimSpace(*u.ExternalID) == targetID {
+		return nil
+	}
+	for _, integration := range u.Integrations {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
+			continue
+		}
+		if strings.TrimSpace(integration.ExternalID) == targetID {
+			return nil
+		}
+	}
+	return &api.PyrusUserSuggestionDTO{
+		PyrusUserID: suggestion.PyrusUserID,
+		Name:        suggestion.Name,
+		Email:       suggestion.Email,
+	}
+}
+
 func (h *UserHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 	currentUserID := getCurrentUserID(r)
 	if currentUserID == 0 {
@@ -784,6 +923,21 @@ func (h *UserHandler) ApplyMyBitrixSuggestion(w http.ResponseWriter, r *http.Req
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
 }
 
+func (h *UserHandler) ApplyMyPyrusSuggestion(w http.ResponseWriter, r *http.Request) {
+	currentUserID := getCurrentUserID(r)
+	if currentUserID == 0 {
+		response.RespondWithError(w, http.StatusUnauthorized, "Пользователь не определён")
+		return
+	}
+
+	updated, err := h.applyPyrusSuggestion(r.Context(), currentUserID)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
+}
+
 func (h *UserHandler) ApplyUserBitrixSuggestion(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -793,6 +947,22 @@ func (h *UserHandler) ApplyUserBitrixSuggestion(w http.ResponseWriter, r *http.R
 	}
 
 	updated, applyErr := h.applyBitrixSuggestion(r.Context(), uint(id))
+	if applyErr != nil {
+		response.RespondWithError(w, http.StatusBadRequest, applyErr.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *updated))
+}
+
+func (h *UserHandler) ApplyUserPyrusSuggestion(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректный ID пользователя")
+		return
+	}
+
+	updated, applyErr := h.applyPyrusSuggestion(r.Context(), uint(id))
 	if applyErr != nil {
 		response.RespondWithError(w, http.StatusBadRequest, applyErr.Error())
 		return
@@ -875,6 +1045,84 @@ func (h *UserHandler) applyBitrixSuggestion(ctx context.Context, userID uint) (*
 	return h.userRepo.GetByID(ctx, u.ID)
 }
 
+func (h *UserHandler) applyPyrusSuggestion(ctx context.Context, userID uint) (*user.User, error) {
+	u, err := h.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить пользователя")
+	}
+	if u == nil {
+		return nil, fmt.Errorf("пользователь не найден")
+	}
+
+	members, err := h.getPyrusMembers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить список сотрудников Pyrus")
+	}
+	suggestion := services.FindPyrusUserSuggestionForUser(u, members)
+	if suggestion == nil {
+		return nil, fmt.Errorf("не найдено однозначное предложение синхронизации Pyrus")
+	}
+
+	targetID := strconv.FormatInt(suggestion.PyrusUserID, 10)
+	updatedIntegrations := make([]user.Integration, 0, len(u.Integrations)+1)
+	foundExact := false
+	for i := range u.Integrations {
+		integration := u.Integrations[i]
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypePyrus {
+			updatedIntegrations = append(updatedIntegrations, integration)
+			continue
+		}
+
+		if integration.IsLocked && strings.TrimSpace(integration.ExternalID) != targetID {
+			return nil, fmt.Errorf("у пользователя уже есть другая автоматическая интеграция Pyrus")
+		}
+
+		if strings.TrimSpace(integration.ExternalID) == targetID {
+			integration.IsVerified = true
+			integration.IsLocked = true
+			integration.VerifiedName = suggestion.Name
+			foundExact = true
+		}
+		updatedIntegrations = append(updatedIntegrations, integration)
+	}
+
+	if !foundExact {
+		updatedIntegrations = append(updatedIntegrations, user.Integration{
+			UserID:          u.ID,
+			IntegrationType: user.ExternalTypePyrus,
+			ExternalID:      targetID,
+			IsVerified:      true,
+			IsLocked:        true,
+			VerifiedName:    suggestion.Name,
+		})
+	}
+
+	if err := h.userRepo.ReplaceIntegrations(ctx, u.ID, updatedIntegrations); err != nil {
+		return nil, fmt.Errorf("не удалось сохранить интеграции пользователя")
+	}
+
+	if h.pyrusRepo != nil {
+		if err := h.pyrusRepo.UpsertUserMap(ctx, &pyrus.UserMap{
+			EtalonUserID: u.ID,
+			PyrusUserID:  suggestion.PyrusUserID,
+		}); err != nil {
+			return nil, fmt.Errorf("не удалось сохранить связку с Pyrus")
+		}
+	}
+
+	extType := user.ExternalTypePyrus
+	u.ExternalType = &extType
+	u.ExternalID = &targetID
+	if u.Email == nil || strings.TrimSpace(*u.Email) == "" {
+		u.Email = normalizeOptionalString(&suggestion.Email)
+	}
+	if err := h.userRepo.Update(ctx, u); err != nil {
+		return nil, fmt.Errorf("не удалось обновить legacy-поля пользователя")
+	}
+
+	return h.userRepo.GetByID(ctx, u.ID)
+}
+
 func buildFullName(firstName, lastName string) string {
 	return strings.TrimSpace(fmt.Sprintf("%s %s", strings.TrimSpace(firstName), strings.TrimSpace(lastName)))
 }
@@ -888,6 +1136,17 @@ func normalizePersonToken(v string) string {
 
 func buildIntegrationKey(integrationType, externalID string) string {
 	return strings.TrimSpace(strings.ToLower(integrationType)) + ":" + strings.TrimSpace(externalID)
+}
+
+func normalizeOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func roleDescription(role string) string {

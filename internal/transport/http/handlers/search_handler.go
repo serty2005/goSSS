@@ -287,6 +287,7 @@ func (h *SearchHandler) groupServersByOwner(ctx context.Context, servers []serve
 					Litemanager:       s.Litemanager,
 					UniqueID:          s.UniqueID,
 					CRMid:             s.CRMid,
+					IikoWebLink:       s.IikoWebLink,
 					PartnersLink:      partnersLink,
 					ServerName:        s.ServerName,
 					ServerVersion:     s.ServerVersion,
