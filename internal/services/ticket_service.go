@@ -387,7 +387,7 @@ func (s *ticketServiceImpl) applyContractForTicket(ctx context.Context, ticket *
 	return nil
 }
 
-// ChangeStatus меняет статус тикета Рё пишет историю.
+// ChangeStatus меняет статус тикета и пишет историю.
 func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error) {
 	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
@@ -1348,7 +1348,7 @@ func (s *ticketServiceImpl) buildPyrusTaskURL(taskID int64) string {
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/t#%d", base, taskID)
+	return fmt.Sprintf("%s/t#id%d", base, taskID)
 }
 
 func (s *ticketServiceImpl) bitrixPortalBaseURL() string {
