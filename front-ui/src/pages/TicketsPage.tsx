@@ -34,6 +34,8 @@ import { ticketsApi } from '@/api/tickets';
 import { companiesApi } from '@/api/companies';
 import { usersApi } from '@/api/users';
 import { profileApi } from '@/api/profile';
+import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
+import TelephonyLineIndicator from '@/components/telephony/TelephonyLineIndicator';
 import { TicketDetailsDTO, TicketStatus } from '@/types/api';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
@@ -296,6 +298,7 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({ id, style, isResizing,
 
 const TicketsPage: React.FC = () => {
   const { token } = antTheme.useToken();
+  const { setHeaderAddon } = useLayoutHeader();
   const searchParamsRaw = useTicketParamsStore((state) => state.ticketParams);
   const setSearchParamsRaw = useTicketParamsStore((state) => state.setTicketParams);
   const createTicketRequestID = useTicketParamsStore((state) => state.createTicketRequestID);
@@ -310,6 +313,7 @@ const TicketsPage: React.FC = () => {
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
+  const canAccessTelephony = isAdminRole || userRoles.includes('support_specialist');
   const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
   const isCommentAuthor = (authorName?: string) => String(authorName || '').trim() === String(user?.full_name || '').trim();
   const canManageComment = (authorName?: string) => isAdminRole || isCommentAuthor(authorName);
@@ -392,11 +396,17 @@ const TicketsPage: React.FC = () => {
     return null;
   }, [tableSortParam]);
   const commentsNewFirst = ((user?.profile_config as any)?.tickets?.comments_new_first) !== false;
+  const headerAddon = useMemo(() => (canAccessTelephony ? <TelephonyLineIndicator /> : null), [canAccessTelephony]);
   const ticketSubscriptions = useMemo<string[]>(() => {
     const list = (user?.profile_config as any)?.tickets?.subscriptions;
     if (!Array.isArray(list)) return [];
     return list.map((item: unknown) => String(item).trim()).filter(Boolean);
   }, [user?.profile_config]);
+
+  useEffect(() => {
+    setHeaderAddon(headerAddon);
+    return () => setHeaderAddon(null);
+  }, [headerAddon, setHeaderAddon]);
 
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
     queryKey: ['tickets', {

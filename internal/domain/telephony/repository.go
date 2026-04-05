@@ -12,6 +12,19 @@ type IncomingEventListFilter struct {
 	Offset int
 }
 
+type CallListFilter struct {
+	Provider          string
+	EmployeeUserID    *uint
+	ClientPhone       string
+	Statuses          []string
+	StartedFrom       *time.Time
+	StartedTo         *time.Time
+	OnlyMissed        bool
+	OnlyWithoutTicket bool
+	Limit             int
+	Offset            int
+}
+
 type Repository interface {
 	ReplaceProviderEmployees(ctx context.Context, provider string, items []ProviderEmployee) error
 	ListProviderEmployees(ctx context.Context, provider string) ([]ProviderEmployee, error)
@@ -20,8 +33,12 @@ type Repository interface {
 	GetCallByExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
 	GetCallByAnyExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
 	UpsertCall(ctx context.Context, call *Call) error
+	ListCalls(ctx context.Context, filter CallListFilter) ([]Call, int64, error)
 	AddCallEvent(ctx context.Context, event *CallEvent) error
 	MergeCalls(ctx context.Context, target *Call, sourceCallID string) error
+	UpsertCallTicketLink(ctx context.Context, link *CallTicketLink) error
+	GetCallTicketLink(ctx context.Context, callID string) (*CallTicketLink, error)
+	ListCallTicketLinks(ctx context.Context, callIDs []string) ([]CallTicketLink, error)
 
 	InsertIncomingEventIfNotExists(ctx context.Context, event *IncomingEvent) (bool, error)
 	ResetIncomingEventForReplay(ctx context.Context, id string) error
@@ -34,4 +51,16 @@ type Repository interface {
 	ListIncomingQueuedForRecovery(ctx context.Context, limit int, queuedBefore time.Time) ([]IncomingEvent, error)
 	ListIncomingEvents(ctx context.Context, filter IncomingEventListFilter) ([]IncomingEvent, int64, error)
 	GetIncomingEventByID(ctx context.Context, id string) (*IncomingEvent, error)
+
+	EnsureContact(ctx context.Context, normalizedPhone string, displayPhone string) (*Contact, error)
+	GetContactByID(ctx context.Context, id uint) (*Contact, error)
+	GetContactByPhone(ctx context.Context, normalizedPhone string) (*Contact, error)
+	UpsertContactCompanyLink(ctx context.Context, contactID uint, companyID string, lastSeenAt time.Time) error
+	ListContactCompanyLinks(ctx context.Context, contactID uint) ([]ContactCompanyLink, error)
+
+	GetPendingContextByID(ctx context.Context, id string) (*PendingContext, error)
+	GetPendingContextByExternalCallID(ctx context.Context, externalCallID string) (*PendingContext, error)
+	GetActivePendingContextByUserID(ctx context.Context, userID uint, now time.Time) (*PendingContext, error)
+	UpsertPendingContext(ctx context.Context, item *PendingContext) error
+	UpdatePendingContext(ctx context.Context, id string, status string, linkedTicketID *string, decisionReason *string) error
 }

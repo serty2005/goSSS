@@ -54,6 +54,7 @@ func (h *SSEHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		events.ServerPollingSucceeded, // Обновление статуса сервера
 		events.ServerPollingFailed,
 		events.TicketUpdated,              // Обновление тикета
+		events.TelephonyLineUpdated,
 		events.ServiceDeskCreateRequested, // Задача ушла в работу
 		events.ServiceDeskUpdateRequested,
 		events.DuplicatesFound, // Найдены дубликаты

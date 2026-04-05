@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"etalon-server/internal/domain/telephony"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"etalon-server/pkg/eventbus"
 )
 
 var (
@@ -45,6 +47,8 @@ type megafonVATSIncomingService struct {
 	redis    *redis.Client
 	repo     telephony.Repository
 	userRepo user.Repository
+	ticketRepo tickets.TicketRepository
+	eventBus eventbus.EventBus
 
 	consumerName string
 	callLocks    keyedMutex
@@ -56,6 +60,8 @@ func NewMegafonVATSIncomingService(
 	redisClient *redis.Client,
 	repo telephony.Repository,
 	userRepo user.Repository,
+	ticketRepo tickets.TicketRepository,
+	eventBus eventbus.EventBus,
 ) MegafonVATSIncomingService {
 	host, _ := os.Hostname()
 	return &megafonVATSIncomingService{
@@ -64,6 +70,8 @@ func NewMegafonVATSIncomingService(
 		redis:        redisClient,
 		repo:         repo,
 		userRepo:     userRepo,
+		ticketRepo:   ticketRepo,
+		eventBus:     eventBus,
 		consumerName: fmt.Sprintf("%s-%d-%s", strings.TrimSpace(host), os.Getpid(), uuid.NewString()),
 	}
 }
@@ -571,8 +579,80 @@ func (s *megafonVATSIncomingService) handleIncomingEvent(
 	if err = s.repo.AddCallEvent(ctx, callEvent); err != nil {
 		return "", "", err
 	}
+	if err = s.ensureCallContext(ctx, call); err != nil {
+		return "", "", err
+	}
+	publishTelephonyLineUpdate(ctx, s.log, s.eventBus, s.repo, s.userRepo)
 
 	return telephony.IncomingEventStatusDone, "", nil
+}
+
+func (s *megafonVATSIncomingService) ensureCallContext(ctx context.Context, call *telephony.Call) error {
+	if s == nil || s.repo == nil || call == nil {
+		return nil
+	}
+	phone := safeMegafonStringPointer(call.ClientPhone)
+	if phone == "" {
+		return nil
+	}
+
+	contact, err := s.repo.EnsureContact(ctx, phone, phone)
+	if err != nil {
+		return err
+	}
+	return s.ensurePendingContext(ctx, call, contact)
+}
+
+func (s *megafonVATSIncomingService) ensurePendingContext(ctx context.Context, call *telephony.Call, contact *telephony.Contact) error {
+	if !shouldCreateMegafonPendingContext(call) {
+		return nil
+	}
+	if contact != nil && s.ticketRepo != nil {
+		activeContactID := contact.ID
+		activeTickets, countErr := s.ticketRepo.Count(ctx, tickets.TicketFilter{
+			ContactID:       &activeContactID,
+			ExcludeStatuses: []string{tickets.StatusResolved, tickets.StatusClosed, tickets.StatusSpam},
+		})
+		if countErr != nil {
+			return countErr
+		}
+		if activeTickets > 0 {
+			existing, err := s.repo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)
+			if err != nil || existing == nil || existing.Status != telephony.PendingContextStatusNew {
+				return err
+			}
+			reason := "по контакту найден активный тикет"
+			return s.repo.UpdatePendingContext(ctx, existing.ID, telephony.PendingContextStatusDismissed, nil, &reason)
+		}
+	}
+
+	existing, err := s.repo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.Status != telephony.PendingContextStatusNew {
+		return nil
+	}
+
+	expiresAt := megafonPendingContextExpiresAt(call)
+	if existing != nil {
+		existing.EmployeeUserID = *call.EmployeeUserID
+		existing.ClientPhone = safeMegafonStringPointer(call.ClientPhone)
+		existing.Status = telephony.PendingContextStatusNew
+		existing.ExpiresAt = expiresAt
+		existing.LinkedTicketID = nil
+		existing.DecisionReason = nil
+		return s.repo.UpsertPendingContext(ctx, existing)
+	}
+
+	return s.repo.UpsertPendingContext(ctx, &telephony.PendingContext{
+		ID:             uuid.NewString(),
+		EmployeeUserID: *call.EmployeeUserID,
+		ExternalCallID: call.ExternalCallID,
+		ClientPhone:    safeMegafonStringPointer(call.ClientPhone),
+		Status:         telephony.PendingContextStatusNew,
+		ExpiresAt:      expiresAt,
+	})
 }
 
 func (s *megafonVATSIncomingService) buildCallSnapshot(
@@ -699,11 +779,16 @@ func (s *megafonVATSIncomingService) applyEventSnapshot(call *telephony.Call, ev
 }
 
 func (s *megafonVATSIncomingService) applyHistorySnapshot(call *telephony.Call, payload megafonVATSPayload) {
+	applyMegafonHistorySnapshot(call, payload)
+}
+
+func applyMegafonHistorySnapshot(call *telephony.Call, payload megafonVATSPayload) {
 	if call == nil {
 		return
 	}
 
-	if status := strings.ToLower(strings.TrimSpace(payload.Status)); status != "" {
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	if status != "" {
 		call.Status = status
 	}
 
@@ -716,11 +801,29 @@ func (s *megafonVATSIncomingService) applyHistorySnapshot(call *telephony.Call, 
 	if payload.DurationSeconds != nil {
 		call.DurationSeconds = payload.DurationSeconds
 	}
-	if startedAt != nil && payload.WaitSeconds != nil {
-		answeredAt := startedAt.Add(time.Duration(*payload.WaitSeconds) * time.Second)
+
+	if startedAt == nil {
+		return
+	}
+
+	waitDuration := time.Duration(0)
+	if payload.WaitSeconds != nil {
+		waitDuration = time.Duration(*payload.WaitSeconds) * time.Second
+	}
+
+	if isMegafonAnsweredHistoryStatus(status, payload.DurationSeconds) {
+		answeredAt := startedAt.Add(waitDuration)
 		call.AnsweredAt = earlierTime(call.AnsweredAt, &answeredAt)
 	}
-	if startedAt != nil && payload.DurationSeconds != nil {
+
+	switch {
+	case payload.DurationSeconds != nil && isMegafonAnsweredHistoryStatus(status, payload.DurationSeconds):
+		completedAt := startedAt.Add(waitDuration + time.Duration(*payload.DurationSeconds)*time.Second)
+		call.CompletedAt = laterTime(call.CompletedAt, &completedAt)
+	case payload.WaitSeconds != nil:
+		completedAt := startedAt.Add(waitDuration)
+		call.CompletedAt = laterTime(call.CompletedAt, &completedAt)
+	case payload.DurationSeconds != nil:
 		completedAt := startedAt.Add(time.Duration(*payload.DurationSeconds) * time.Second)
 		call.CompletedAt = laterTime(call.CompletedAt, &completedAt)
 	}
@@ -998,11 +1101,17 @@ func parseMegafonVATSTime(value string) *time.Time {
 	if trimmed == "" {
 		return nil
 	}
-	parsed, err := time.Parse("20060102T150405Z", trimmed)
-	if err != nil {
-		return nil
+	for _, layout := range []string{
+		"20060102T150405Z",
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+	} {
+		parsed, err := time.Parse(layout, trimmed)
+		if err == nil {
+			return &parsed
+		}
 	}
-	return &parsed
+	return nil
 }
 
 func parseMegafonVATSInt(value string) *int {
@@ -1065,6 +1174,52 @@ func firstIntPtr(current *int, candidate *int) *int {
 		return current
 	}
 	return candidate
+}
+
+func isMegafonAnsweredHistoryStatus(status string, duration *int) bool {
+	if duration != nil && *duration > 0 {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "completed", "accepted", "transferred":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldCreateMegafonPendingContext(call *telephony.Call) bool {
+	if call == nil || call.EmployeeUserID == nil || *call.EmployeeUserID == 0 {
+		return false
+	}
+	if strings.TrimSpace(safeMegafonStringPointer(call.ClientPhone)) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Direction)) {
+	case "incoming", "in":
+	default:
+		return false
+	}
+	if call.AnsweredAt != nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Status)) {
+	case "accepted", "success", "completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func megafonPendingContextExpiresAt(call *telephony.Call) time.Time {
+	base := time.Now()
+	switch {
+	case call != nil && call.AnsweredAt != nil:
+		base = *call.AnsweredAt
+	case call != nil && call.StartedAt != nil:
+		base = *call.StartedAt
+	}
+	return base.Add(24 * time.Hour)
 }
 
 func callLockKey(value string) int64 {

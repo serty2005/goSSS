@@ -249,6 +249,9 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	if len(filter.CompanyIDs) > 0 {
 		query = query.Where("company_id IN ?", filter.CompanyIDs)
 	}
+	if filter.ContactID != nil && *filter.ContactID > 0 {
+		query = query.Where("contact_id = ?", *filter.ContactID)
+	}
 	if filter.AssetID != nil {
 		query = query.Where("asset_id = ?", *filter.AssetID)
 	}

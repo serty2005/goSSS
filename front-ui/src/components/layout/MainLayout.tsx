@@ -307,11 +307,17 @@ const MainLayout: React.FC = () => {
   };
 
   const selectedMenuKey = (() => {
+    if (location.pathname.startsWith('/admin/telephony')) {
+      return '/admin/telephony';
+    }
     if (location.pathname.startsWith('/admin/synchronizations')) {
       return '/admin/synchronizations';
     }
     if (location.pathname.startsWith('/admin/users')) {
       return '/admin/users';
+    }
+    if (location.pathname.startsWith('/telephony/users/')) {
+      return '/tickets';
     }
     return location.pathname;
   })();
@@ -386,6 +392,7 @@ const MainLayout: React.FC = () => {
       label: t('layout:menu.admin'),
       children: [
         { key: '/admin/users', label: t('layout:menu.users') },
+        { key: '/admin/telephony', label: t('layout:menu.telephony', { defaultValue: 'Телефония' }) },
         { key: '/admin/synchronizations', label: t('layout:menu.synchronizations') },
         { key: '/tasks', label: t('layout:menu.issues') },
         { key: '/reports/companies-contracts', label: t('layout:menu.companyContractsReport') },

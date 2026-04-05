@@ -181,6 +181,30 @@ func (r *telephonyRepo) UpsertCall(ctx context.Context, call *telephony.Call) er
 	}).Create(call).Error
 }
 
+func (r *telephonyRepo) ListCalls(ctx context.Context, filter telephony.CallListFilter) ([]telephony.Call, int64, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
+	baseQuery := r.applyCallListFilter(r.getDB(ctx).WithContext(ctx).Model(&telephony.Call{}), filter)
+
+	var total int64
+	if err := baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	items := make([]telephony.Call, 0, filter.Limit)
+	err := r.applyCallListFilter(r.getDB(ctx).WithContext(ctx).Model(&telephony.Call{}), filter).
+		Order("COALESCE(telephony_calls.started_at, telephony_calls.created_at) desc, telephony_calls.created_at desc").
+		Limit(filter.Limit).
+		Offset(filter.Offset).
+		Find(&items).Error
+	return items, total, err
+}
+
 func (r *telephonyRepo) AddCallEvent(ctx context.Context, event *telephony.CallEvent) error {
 	if event == nil {
 		return nil
@@ -236,6 +260,49 @@ func (r *telephonyRepo) MergeCalls(ctx context.Context, target *telephony.Call, 
 		}
 		return tx.Where("id = ?", sourceCallID).Delete(&telephony.Call{}).Error
 	})
+}
+
+func (r *telephonyRepo) UpsertCallTicketLink(ctx context.Context, link *telephony.CallTicketLink) error {
+	if link == nil {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("telephony_call_id = ?", link.TelephonyCallID).Delete(&telephony.CallTicketLink{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(link).Error
+	})
+}
+
+func (r *telephonyRepo) GetCallTicketLink(ctx context.Context, callID string) (*telephony.CallTicketLink, error) {
+	var item telephony.CallTicketLink
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("telephony_call_id = ?", strings.TrimSpace(callID)).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) ListCallTicketLinks(ctx context.Context, callIDs []string) ([]telephony.CallTicketLink, error) {
+	normalizedIDs := make([]string, 0, len(callIDs))
+	for _, item := range callIDs {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		normalizedIDs = append(normalizedIDs, item)
+	}
+	if len(normalizedIDs) == 0 {
+		return []telephony.CallTicketLink{}, nil
+	}
+
+	items := make([]telephony.CallTicketLink, 0, len(normalizedIDs))
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("telephony_call_id IN ?", normalizedIDs).
+		Find(&items).Error
+	return items, err
 }
 
 func (r *telephonyRepo) InsertIncomingEventIfNotExists(ctx context.Context, event *telephony.IncomingEvent) (bool, error) {
@@ -397,4 +464,212 @@ func (r *telephonyRepo) GetIncomingEventByID(ctx context.Context, id string) (*t
 		return nil, nil
 	}
 	return &item, err
+}
+
+func (r *telephonyRepo) EnsureContact(ctx context.Context, normalizedPhone string, displayPhone string) (*telephony.Contact, error) {
+	normalizedPhone = strings.TrimSpace(normalizedPhone)
+	if normalizedPhone == "" {
+		return nil, nil
+	}
+	displayPhone = strings.TrimSpace(displayPhone)
+	if displayPhone == "" {
+		displayPhone = normalizedPhone
+	}
+
+	item := &telephony.Contact{
+		PhoneNormalized: normalizedPhone,
+		PhoneDisplay:    displayPhone,
+	}
+	if err := r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "phone_normalized"}},
+		DoUpdates: clause.AssignmentColumns([]string{"phone_display", "updated_at"}),
+	}).Create(item).Error; err != nil {
+		return nil, err
+	}
+	return r.GetContactByPhone(ctx, normalizedPhone)
+}
+
+func (r *telephonyRepo) GetContactByID(ctx context.Context, id uint) (*telephony.Contact, error) {
+	if id == 0 {
+		return nil, nil
+	}
+	var item telephony.Contact
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("id = ?", id).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) GetContactByPhone(ctx context.Context, normalizedPhone string) (*telephony.Contact, error) {
+	normalizedPhone = strings.TrimSpace(normalizedPhone)
+	if normalizedPhone == "" {
+		return nil, nil
+	}
+	var item telephony.Contact
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("phone_normalized = ?", normalizedPhone).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) UpsertContactCompanyLink(ctx context.Context, contactID uint, companyID string, lastSeenAt time.Time) error {
+	companyID = strings.TrimSpace(companyID)
+	if contactID == 0 || companyID == "" {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "contact_id"},
+			{Name: "company_id"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"last_seen_at", "updated_at"}),
+	}).Create(&telephony.ContactCompanyLink{
+		ContactID:  contactID,
+		CompanyID:  companyID,
+		LastSeenAt: lastSeenAt,
+	}).Error
+}
+
+func (r *telephonyRepo) ListContactCompanyLinks(ctx context.Context, contactID uint) ([]telephony.ContactCompanyLink, error) {
+	if contactID == 0 {
+		return []telephony.ContactCompanyLink{}, nil
+	}
+	items := make([]telephony.ContactCompanyLink, 0)
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("contact_id = ?", contactID).
+		Order("last_seen_at desc, company_id asc").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *telephonyRepo) GetPendingContextByID(ctx context.Context, id string) (*telephony.PendingContext, error) {
+	var item telephony.PendingContext
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("id = ?", strings.TrimSpace(id)).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) GetPendingContextByExternalCallID(ctx context.Context, externalCallID string) (*telephony.PendingContext, error) {
+	var item telephony.PendingContext
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("external_call_id = ?", strings.TrimSpace(externalCallID)).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) GetActivePendingContextByUserID(ctx context.Context, userID uint, now time.Time) (*telephony.PendingContext, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	var item telephony.PendingContext
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("employee_user_id = ? AND status = ? AND expires_at > ?", userID, telephony.PendingContextStatusNew, now).
+		Order("created_at desc").
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) UpsertPendingContext(ctx context.Context, item *telephony.PendingContext) error {
+	if item == nil {
+		return nil
+	}
+	if strings.TrimSpace(item.ExternalCallID) == "" {
+		return gorm.ErrInvalidData
+	}
+
+	existing, err := r.GetPendingContextByExternalCallID(ctx, item.ExternalCallID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		item.ID = existing.ID
+		item.CreatedAt = existing.CreatedAt
+		return r.getDB(ctx).WithContext(ctx).
+			Model(&telephony.PendingContext{}).
+			Where("id = ?", existing.ID).
+			Updates(map[string]any{
+				"employee_user_id": item.EmployeeUserID,
+				"client_phone":     item.ClientPhone,
+				"status":           item.Status,
+				"expires_at":       item.ExpiresAt,
+				"linked_ticket_id": item.LinkedTicketID,
+				"decision_reason":  item.DecisionReason,
+				"updated_at":       time.Now(),
+			}).Error
+	}
+	return r.getDB(ctx).WithContext(ctx).Create(item).Error
+}
+
+func (r *telephonyRepo) UpdatePendingContext(ctx context.Context, id string, status string, linkedTicketID *string, decisionReason *string) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&telephony.PendingContext{}).
+		Where("id = ?", strings.TrimSpace(id)).
+		Updates(map[string]any{
+			"status":           strings.TrimSpace(status),
+			"linked_ticket_id": linkedTicketID,
+			"decision_reason":  decisionReason,
+			"updated_at":       time.Now(),
+		}).Error
+}
+
+func (r *telephonyRepo) applyCallListFilter(query *gorm.DB, filter telephony.CallListFilter) *gorm.DB {
+	provider := strings.TrimSpace(filter.Provider)
+	if provider != "" {
+		query = query.Where("provider = ?", provider)
+	}
+	if filter.EmployeeUserID != nil && *filter.EmployeeUserID > 0 {
+		query = query.Where("employee_user_id = ?", *filter.EmployeeUserID)
+	}
+	if clientPhone := strings.TrimSpace(filter.ClientPhone); clientPhone != "" {
+		query = query.Where("client_phone LIKE ?", "%"+clientPhone+"%")
+	}
+	if len(filter.Statuses) > 0 {
+		query = query.Where("LOWER(status) IN ?", normalizeTelephonyStatuses(filter.Statuses))
+	}
+	if filter.StartedFrom != nil {
+		query = query.Where("COALESCE(started_at, created_at) >= ?", *filter.StartedFrom)
+	}
+	if filter.StartedTo != nil {
+		query = query.Where("COALESCE(started_at, created_at) <= ?", *filter.StartedTo)
+	}
+	if filter.OnlyMissed || filter.OnlyWithoutTicket {
+		query = query.Joins("LEFT JOIN telephony_call_ticket_links ON telephony_call_ticket_links.telephony_call_id = telephony_calls.id")
+	}
+	if filter.OnlyMissed {
+		query = query.Where(
+			`LOWER(status) IN ? OR COALESCE(missed_status, '') <> ''`,
+			[]string{"missed", "cancel", "cancelled", "busy", "notavailable", "notallowed", "notfound", "noanswer"},
+		)
+	}
+	if filter.OnlyWithoutTicket {
+		query = query.Where("telephony_call_ticket_links.ticket_id IS NULL")
+	}
+	return query
+}
+
+func normalizeTelephonyStatuses(items []string) []string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.ToLower(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized
 }

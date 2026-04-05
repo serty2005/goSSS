@@ -241,6 +241,7 @@ export interface TicketListItemDTO {
   last_activity: string;
   created_at?: string;
   company_id: string;
+  contact_id?: number;
   contract_id?: string;
   is_common_contract?: boolean;
   sync_with_bitrix?: boolean;
@@ -280,6 +281,7 @@ export interface TicketDTO {
     full_name: string;
   };
   company_id: string;
+  contact_id?: number;
   contract_id?: string;
   is_common_contract?: boolean;
   sync_with_bitrix?: boolean;
@@ -305,6 +307,88 @@ export interface TicketCreatePayload {
   sync_with_bitrix?: boolean;
   bitrix_service_point_id?: number;
   bitrix_deal_title?: string;
+}
+
+export interface TelephonyContactDTO {
+  id: number;
+  phone_normalized: string;
+  phone_display: string;
+  name?: string;
+  bitrix_contact_id?: string;
+}
+
+export interface TelephonyCallDTO {
+  id: string;
+  external_call_id: string;
+  direction: string;
+  status: string;
+  missed_status?: string;
+  client_phone?: string;
+  vat_number?: string;
+  employee_login?: string;
+  employee_user_id?: number;
+  employee_name?: string;
+  employee_state?: string;
+  group_name?: string;
+  started_at?: string;
+  answered_at?: string;
+  completed_at?: string;
+  wait_seconds?: number;
+  duration_seconds?: number;
+  recording_url?: string;
+  has_recording: boolean;
+  ticket_id?: string;
+}
+
+export interface TelephonyPendingContextDTO {
+  id: string;
+  external_call_id: string;
+  client_phone: string;
+  expires_at: string;
+  contact?: TelephonyContactDTO;
+  call?: TelephonyCallDTO;
+}
+
+export interface TelephonyContactCompanyDTO {
+  company_id: string;
+  title: string;
+  parent_title?: string;
+  last_seen_at: string;
+  active_contract?: boolean;
+}
+
+export interface TelephonyCallListResponseDTO {
+  items: TelephonyCallDTO[];
+  total: number;
+}
+
+export interface TelephonyCallListParams {
+  employee_user_id?: number;
+  client_phone?: string;
+  status?: string | string[];
+  started_from?: string;
+  started_to?: string;
+  only_missed?: boolean;
+  only_without_ticket?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TelephonyLineEmployeeDTO {
+  user_id?: number;
+  login: string;
+  name: string;
+  status: 'online' | 'offline' | 'in_call' | string;
+  provider: string;
+  provider_ext?: string;
+  provider_line?: string;
+}
+
+export interface TelephonyLineDTO {
+  color: 'blue' | 'yellow' | 'green' | 'red' | string;
+  on_line_count: number;
+  missed_open_count: number;
+  employees: TelephonyLineEmployeeDTO[];
 }
 
 export interface BitrixServicePointDTO {

@@ -103,6 +103,7 @@ type Application struct {
 	BitrixHandler             *handlers.BitrixHandler
 	PyrusHandler              *handlers.PyrusHandler
 	MegafonVATSHandler        *handlers.MegafonVATSHandler
+	TelephonyHandler          *handlers.TelephonyHandler
 	BitrixWebhookHandler      *handlers.BitrixWebhookHandler
 	PyrusWebhookHandler       *handlers.PyrusWebhookHandler
 	MegafonVATSWebhookHandler *handlers.MegafonVATSWebhookHandler
@@ -353,6 +354,7 @@ type Services struct {
 	PyrusIncomingService       services.PyrusIncomingService
 	MegafonVATSSyncService     services.MegafonVATSSyncService
 	MegafonVATSIncomingService services.MegafonVATSIncomingService
+	TelephonyService           services.TelephonyService
 	IntegrationSyncControl     services.IntegrationSyncControlService
 	NetworkCandidateService    services.NetworkCandidateService
 	EntityDeletionService      services.EntityDeletionService
@@ -434,6 +436,16 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		clients.RedisClient,
 		repos.TelephonyRepo,
 		repos.UserRepo,
+		repos.TicketRepo,
+		app.EventBus,
+	)
+	telephonyService := services.NewTelephonyService(
+		app.Logger.With("component", "telephony_service"),
+		repos.TelephonyRepo,
+		repos.TicketRepo,
+		repos.CompanyRepo,
+		repos.UserRepo,
+		app.EventBus,
 	)
 	integrationSyncControl := services.NewIntegrationSyncControlService(
 		repos.PyrusRepo,
@@ -461,8 +473,9 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		BitrixIncomingService:      services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		PyrusSyncService:           pyrusSyncService,
 		PyrusIncomingService:       pyrusIncomingService,
-		MegafonVATSSyncService:     services.NewMegafonVATSSyncService(app.Config, app.Logger.With("component", "megafon_vats_sync_service"), clients.MegafonVATSClient, repos.TelephonyRepo, repos.UserRepo),
+		MegafonVATSSyncService:     services.NewMegafonVATSSyncService(app.Config, app.Logger.With("component", "megafon_vats_sync_service"), clients.MegafonVATSClient, repos.TelephonyRepo, repos.UserRepo, app.EventBus),
 		MegafonVATSIncomingService: megafonVATSIncomingService,
+		TelephonyService:           telephonyService,
 		IntegrationSyncControl:     integrationSyncControl,
 		NetworkCandidateService:    services.NewNetworkCandidateService(repos.NetworkCandidateRepo),
 		EntityDeletionService:      services.NewEntityDeletionService(app.Logger.With("component", "entity_deletion_service"), app.DB, transactor, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.CompanyRepo, repos.ContractRepo, repos.OwnerHistoryRepo),
@@ -536,6 +549,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway)
 	app.PyrusHandler = handlers.NewPyrusHandler(srvs.PyrusSyncService)
 	app.MegafonVATSHandler = handlers.NewMegafonVATSHandler(srvs.MegafonVATSSyncService)
+	app.TelephonyHandler = handlers.NewTelephonyHandler(srvs.TelephonyService)
 	app.BitrixWebhookHandler = handlers.NewBitrixWebhookHandler(srvs.BitrixIncomingService)
 	app.PyrusWebhookHandler = handlers.NewPyrusWebhookHandler(srvs.PyrusIncomingService)
 	app.MegafonVATSWebhookHandler = handlers.NewMegafonVATSWebhookHandler(srvs.MegafonVATSIncomingService)
@@ -579,6 +593,7 @@ func setupIntegrationModules(app *Application, srvs Services) {
 		srvs.MegafonVATSSyncService,
 		srvs.MegafonVATSIncomingService,
 		app.MegafonVATSHandler,
+		app.TelephonyHandler,
 		app.MegafonVATSWebhookHandler,
 	)
 }

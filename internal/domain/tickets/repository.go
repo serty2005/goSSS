@@ -27,6 +27,7 @@ type DashboardStats struct {
 type TicketFilter struct {
 	CompanyID       string
 	CompanyIDs      []string
+	ContactID       *uint
 	AssetID         *string
 	Statuses        []string
 	ExcludeStatuses []string

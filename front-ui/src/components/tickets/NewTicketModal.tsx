@@ -1,10 +1,11 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
+import { Alert, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
+import { telephonyApi } from '@/api/telephony';
 import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
-import type { CompanyModel, InfrastructureItem } from '@/types/api';
+import type { CompanyModel, InfrastructureItem, TelephonyContactCompanyDTO } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { getIikoWebAppLinkMeta, normalizeServerAddress } from '@/utils/formatters';
 import { normalizeTicketPreview } from '@/utils/ticketText';
@@ -37,6 +38,19 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const canDisableBitrixSync = isBitrixEnabled && isAdmin(user?.roles);
+  const { data: pendingContext, isFetching: isPendingContextLoading } = useQuery({
+    queryKey: ['telephony', 'pending-context', 'me'],
+    queryFn: () => telephonyApi.getMyPendingContext(),
+    enabled: open,
+    staleTime: 15_000,
+  });
+  const pendingContactID = pendingContext?.contact?.id;
+  const { data: contactCompanies = [], isLoading: isContactCompaniesLoading } = useQuery({
+    queryKey: ['telephony', 'contact-companies', pendingContactID],
+    queryFn: () => telephonyApi.getContactCompanies(pendingContactID ?? 0),
+    enabled: open && Boolean(pendingContactID),
+    staleTime: 30_000,
+  });
 
   const renderCompanyOptionLabel = (title: string, parentTitle?: string) => {
     const parts = getCompanyHierarchyParts(title, parentTitle);
@@ -44,11 +58,23 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       return parts.child;
     }
     return (
-      <Space orientation="vertical" size={0} style={{ lineHeight: 1.2 }}>
+      <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>{parts.parent}</Text>
         <Text style={{ paddingLeft: 14 }}>{parts.child}</Text>
       </Space>
     );
+  };
+
+  const selectCompany = (companyId: string, title?: string, parentTitle?: string) => {
+    const selectedLabel = String(title || companyId).trim();
+    const label = renderCompanyOptionLabel(selectedLabel, parentTitle);
+    const option = { value: companyId, label, selectedLabel };
+    form.setFieldValue('company_id', companyId);
+    setSelectedCompanyOption(option);
+    setCompanyOptions((prev) => {
+      const exists = prev.some((item) => item.value === companyId);
+      return exists ? prev : [option, ...prev];
+    });
   };
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
@@ -132,6 +158,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     }
 
   }, [open, presetCompany, form, isBitrixEnabled, user?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    form.setFieldValue('contact_display', pendingContext?.contact?.phone_display || pendingContext?.client_phone || undefined);
+  }, [open, pendingContext?.client_phone, pendingContext?.contact?.phone_display, form]);
 
   useEffect(() => {
     if (syncWithBitrix === false) {
@@ -373,6 +404,18 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     window.open(targetURL, '_blank', 'noopener,noreferrer');
   };
 
+  const telephonyContactDisplay = pendingContext?.contact?.name
+    ? `${pendingContext.contact.name} (${pendingContext.contact.phone_display || pendingContext.client_phone})`
+    : (pendingContext?.contact?.phone_display || pendingContext?.client_phone || '');
+  const telephonyCallTimestamp = pendingContext?.call?.answered_at || pendingContext?.call?.started_at;
+  const showTelephonySidebar = Boolean(
+    selectedCompanyId
+    || pendingContext
+    || isPendingContextLoading
+    || contactCompanies.length > 0
+    || isContactCompaniesLoading,
+  );
+
   const createMutation = useMutation({
     mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number }) => {
       const description = values.description.trim();
@@ -387,14 +430,33 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         bitrix_service_point_id: effectiveSyncWithBitrix ? values.bitrix_service_point_id : undefined,
       });
     },
-    onSuccess: () => {
-      message.success('Заявка создана');
+    onSuccess: async (response) => {
+      const createdTicketID = String(response?.data?.id || '').trim();
+      let bindFailed = false;
+
+      if (pendingContext?.id && createdTicketID) {
+        try {
+          await telephonyApi.bindPendingContext(pendingContext.id, createdTicketID);
+        } catch {
+          bindFailed = true;
+        }
+      }
+
+      if (pendingContext?.id && !bindFailed) {
+        message.success('Заявка создана и привязана к звонку');
+      } else if (bindFailed) {
+        message.warning('Заявка создана, но привязка к звонку не выполнилась');
+      } else {
+        message.success('Заявка создана');
+      }
+
       form.resetFields();
       setCompanySearch('');
       setSelectedCompanyOption(null);
       onClose();
       onCreated?.();
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['telephony'] });
     },
     onError: () => {
       message.error('Не удалось создать заявку');
@@ -415,7 +477,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       confirmLoading={createMutation.isPending}
       title="Новая заявка"
       destroyOnHidden
-      width={selectedCompanyId ? 980 : 640}
+      width={showTelephonySidebar ? 980 : 640}
       styles={{
         body: {
           maxHeight: MODAL_BODY_MAX_HEIGHT,
@@ -451,87 +513,163 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         }}
       >
         <Row gutter={24} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
-          {selectedCompanyId && (
+          {showTelephonySidebar && (
             <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
               <div style={{ maxHeight: '100%', overflowY: 'auto', paddingRight: 4 }}>
-                <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
-                  {isActiveTicketsLoading ? (
-                    <div style={{ textAlign: 'center', padding: 16 }}>
-                      <Spin />
-                    </div>
-                  ) : activeTickets.length === 0 ? (
-                    <Empty description="Активных тикетов нет" />
-                  ) : (
-                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                      {activeTickets.map((ticket) => {
-                        const statusMeta = getTicketStatusMeta(ticket.status);
-                        return (
-                          <Card
-                            key={ticket.id}
-                            size="small"
-                            className="glass-panel"
-                            hoverable
-                            style={{ cursor: 'pointer' }}
-                            onClick={() => openTicketInNewTab(ticket.id)}
-                          >
-                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                              <Space size={6} wrap>
-                                <Text strong>#{ticket.number}</Text>
-                                <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
-                              </Space>
-                              <Paragraph
-                                style={{ margin: 0, whiteSpace: 'pre-wrap' }}
-                                ellipsis={{ rows: 4 }}
-                              >
-                                {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
-                              </Paragraph>
-                              <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
-                            </Space>
-                          </Card>
-                        );
-                      })}
-                    </Space>
-                  )}
-                </Card>
-
-                {!isResolvedOrClosedTicketsLoading && resolvedOrClosedTickets.length > 0 && (
-                  <Card size="small" title="Последние 10 тикетов">
-                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                      {resolvedOrClosedTickets.map((ticket) => {
-                        const statusMeta = getTicketStatusMeta(ticket.status);
-                        return (
-                          <Card
-                            key={ticket.id}
-                            size="small"
-                            className="glass-panel"
-                            hoverable
-                            style={{ cursor: 'pointer' }}
-                            onClick={() => openTicketInNewTab(ticket.id)}
-                          >
-                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                              <Space size={6} wrap>
-                                <Text strong>#{ticket.number}</Text>
-                                <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
-                              </Space>
-                              <Paragraph
-                                style={{ margin: 0, whiteSpace: 'pre-wrap' }}
-                                ellipsis={{ rows: 4 }}
-                              >
-                                {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
-                              </Paragraph>
-                              <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
-                            </Space>
-                          </Card>
-                        );
-                      })}
-                    </Space>
+                {(pendingContext || isPendingContextLoading) && (
+                  <Card size="small" title="Контекст звонка" style={{ marginBottom: 12 }}>
+                    {isPendingContextLoading ? (
+                      <div style={{ textAlign: 'center', padding: 16 }}>
+                        <Spin />
+                      </div>
+                    ) : pendingContext ? (
+                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="Контакт подставлен из принятого звонка"
+                          description={telephonyContactDisplay || pendingContext.client_phone}
+                        />
+                        {telephonyCallTimestamp ? (
+                          <Text type="secondary">
+                            Время звонка: {new Date(telephonyCallTimestamp).toLocaleString()}
+                          </Text>
+                        ) : null}
+                        {pendingContext.call?.employee_name ? (
+                          <Text type="secondary">Оператор: {pendingContext.call.employee_name}</Text>
+                        ) : null}
+                        <Text type="secondary">
+                          Контекст активен до {new Date(pendingContext.expires_at).toLocaleString()}
+                        </Text>
+                      </Space>
+                    ) : null}
                   </Card>
+                )}
+
+                {(pendingContext?.contact?.id || isContactCompaniesLoading) && (
+                  <Card size="small" title="Компании по номеру" style={{ marginBottom: 12 }}>
+                    {isContactCompaniesLoading ? (
+                      <div style={{ textAlign: 'center', padding: 16 }}>
+                        <Spin />
+                      </div>
+                    ) : contactCompanies.length === 0 ? (
+                      <Empty description="История по номеру пока не найдена" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    ) : (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        {contactCompanies.map((item: TelephonyContactCompanyDTO) => (
+                          <Button
+                            key={item.company_id}
+                            type={selectedCompanyId === item.company_id ? 'primary' : 'default'}
+                            block
+                            style={{ height: 'auto', textAlign: 'left', paddingBlock: 10 }}
+                            onClick={() => selectCompany(item.company_id, item.title, item.parent_title)}
+                          >
+                            <Space direction="vertical" size={2} style={{ width: '100%', alignItems: 'flex-start' }}>
+                              <Text strong style={{ color: selectedCompanyId === item.company_id ? '#fff' : undefined }}>
+                                {item.parent_title ? `${item.parent_title} / ${item.title}` : item.title}
+                              </Text>
+                              <Text
+                                type={selectedCompanyId === item.company_id ? undefined : 'secondary'}
+                                style={{ fontSize: 12, color: selectedCompanyId === item.company_id ? '#fff' : undefined }}
+                              >
+                                Последняя связь: {new Date(item.last_seen_at).toLocaleString()}
+                              </Text>
+                              <Tag color={item.active_contract === false ? 'default' : 'success'} style={{ marginInlineEnd: 0 }}>
+                                {item.active_contract === false ? 'Контракт завершён' : 'Контракт активен'}
+                              </Tag>
+                            </Space>
+                          </Button>
+                        ))}
+                      </Space>
+                    )}
+                  </Card>
+                )}
+
+                {selectedCompanyId && (
+                  <>
+                    <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
+                      {isActiveTicketsLoading ? (
+                        <div style={{ textAlign: 'center', padding: 16 }}>
+                          <Spin />
+                        </div>
+                      ) : activeTickets.length === 0 ? (
+                        <Empty description="Активных тикетов нет" />
+                      ) : (
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          {activeTickets.map((ticket) => {
+                            const statusMeta = getTicketStatusMeta(ticket.status);
+                            return (
+                              <Card
+                                key={ticket.id}
+                                size="small"
+                                className="glass-panel"
+                                hoverable
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => openTicketInNewTab(ticket.id)}
+                              >
+                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                  <Space size={6} wrap>
+                                    <Text strong>#{ticket.number}</Text>
+                                    <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }} ellipsis={{ rows: 4 }}>
+                                    {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                                  </Paragraph>
+                                  <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                                </Space>
+                              </Card>
+                            );
+                          })}
+                        </Space>
+                      )}
+                    </Card>
+
+                    {!isResolvedOrClosedTicketsLoading && resolvedOrClosedTickets.length > 0 && (
+                      <Card size="small" title="Последние 10 тикетов">
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          {resolvedOrClosedTickets.map((ticket) => {
+                            const statusMeta = getTicketStatusMeta(ticket.status);
+                            return (
+                              <Card
+                                key={ticket.id}
+                                size="small"
+                                className="glass-panel"
+                                hoverable
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => openTicketInNewTab(ticket.id)}
+                              >
+                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                  <Space size={6} wrap>
+                                    <Text strong>#{ticket.number}</Text>
+                                    <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }} ellipsis={{ rows: 4 }}>
+                                    {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                                  </Paragraph>
+                                  <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                                </Space>
+                              </Card>
+                            );
+                          })}
+                        </Space>
+                      </Card>
+                    )}
+                  </>
                 )}
               </div>
             </Col>
           )}
 
-          <Col xs={24} md={selectedCompanyId ? 8 : 24} xl={selectedCompanyId ? 10 : 24} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT, overflowY: 'auto' }}>
+          <Col
+            xs={24}
+            md={showTelephonySidebar ? (selectedCompanyId ? 8 : 16) : 24}
+            xl={showTelephonySidebar ? (selectedCompanyId ? 10 : 17) : 24}
+            style={{ maxHeight: MODAL_BODY_MAX_HEIGHT, overflowY: 'auto' }}
+          >
+            <Form.Item name="contact_display" label="Контакт">
+              <Input readOnly placeholder="Контакт будет заполнен после принятого звонка" />
+            </Form.Item>
+
             <Form.Item
               name="company_id"
               label="Компания"
@@ -556,13 +694,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     return;
                   }
                   const selectedLabel = (option as { selectedLabel?: string } | undefined)?.selectedLabel ?? valueStr;
-                  const label = (option as { label?: React.ReactNode } | undefined)?.label ?? selectedLabel;
-                  form.setFieldValue('company_id', valueStr);
-                  setSelectedCompanyOption({ value: valueStr, label, selectedLabel });
-                  setCompanyOptions((prev) => {
-                    const exists = prev.some((opt) => opt.value === valueStr);
-                    return exists ? prev : [{ value: valueStr, label, selectedLabel }, ...prev];
-                  });
+                  selectCompany(valueStr, selectedLabel, companyMeta[valueStr]?.parent_title);
                 }}
               />
             </Form.Item>
@@ -655,7 +787,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     disabled={syncWithBitrix === false}
                   />
                 </Form.Item>
-
               </>
             )}
 
@@ -666,7 +797,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             >
               <Input.TextArea rows={4} placeholder="Опишите проблему или запрос" />
             </Form.Item>
-
           </Col>
 
           {selectedCompanyId && (
@@ -679,14 +809,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 ) : connectionsGroups.length === 0 ? (
                   <Empty description="Подключения не найдены" />
                 ) : (
-                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                     {connectionsGroups.map((group) => (
                       <Card key={group.key || group.title} size="small" className="glass-panel">
-                        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
                           <a href={group.entityPath} target="_blank" rel="noreferrer">
                             <Text strong>{group.title}</Text>
                           </a>
-                          <Space orientation="vertical" size={0} style={{ width: '100%' }}>
+                          <Space direction="vertical" size={0} style={{ width: '100%' }}>
                             {group.connections.map((entry) => (
                               entry.isLink ? (
                                 <Paragraph key={`${group.title}-${entry.label}-${entry.value}`} style={{ margin: 0 }}>

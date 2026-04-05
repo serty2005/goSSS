@@ -17,6 +17,7 @@ const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const TasksPage = lazy(() => import('@/pages/TasksPage'));
 const TicketsPage = lazy(() => import('@/pages/TicketsPage'));
 const TicketDetailsPage = lazy(() => import('@/pages/TicketDetailsPage'));
+const TelephonyUserCallsPage = lazy(() => import('@/pages/telephony/TelephonyUserCallsPage'));
 const CompanyPage = lazy(() => import('@/pages/companies/CompanyPage'));
 const CompaniesListPage = lazy(() => import('@/pages/companies/CompaniesListPage'));
 const AcceptancePage = lazy(() => import('@/pages/candidates/AcceptancePage'));
@@ -29,6 +30,7 @@ const ServersPage = lazy(() => import('@/pages/equipment/ServersPage'));
 const WorkstationsPage = lazy(() => import('@/pages/equipment/WorkstationsPage'));
 const FiscalsPage = lazy(() => import('@/pages/equipment/FiscalsPage'));
 const UsersAdminPage = lazy(() => import('@/pages/admin/UsersAdminPage'));
+const AdminTelephonyPage = lazy(() => import('@/pages/admin/AdminTelephonyPage'));
 const AdminSynchronizationsPage = lazy(() => import('@/pages/admin/AdminSynchronizationsPage'));
 const ServicePointsImportPage = lazy(() => import('@/pages/admin/ServicePointsImportPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
@@ -147,6 +149,14 @@ const App: React.FC = () => {
                     />
                     <Route path="tickets" element={<TicketsPage />} />
                     <Route path="tickets/:id" element={<TicketDetailsPage />} />
+                    <Route
+                      path="telephony/users/:id/calls"
+                      element={(
+                        <SupportOrAdminRoute>
+                          <TelephonyUserCallsPage />
+                        </SupportOrAdminRoute>
+                      )}
+                    />
                     <Route path="profile" element={<ProfilePage />} />
 
                     <Route path="companies" element={<CompaniesListPage />} />
@@ -230,6 +240,14 @@ const App: React.FC = () => {
                       element={(
                         <AdminRoute>
                           <AdminSynchronizationsPage />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="admin/telephony"
+                      element={(
+                        <AdminRoute>
+                          <AdminTelephonyPage />
                         </AdminRoute>
                       )}
                     />

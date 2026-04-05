@@ -289,7 +289,7 @@ func newMegafonVATSIncomingTestEnv(t *testing.T) *megafonIncomingTestEnv {
 	if err != nil {
 		t.Fatalf("не удалось открыть sqlite: %v", err)
 	}
-	if err = db.AutoMigrate(&telephony.IncomingEvent{}, &telephony.Call{}, &telephony.CallEvent{}); err != nil {
+	if err = db.AutoMigrate(&telephony.IncomingEvent{}, &telephony.Call{}, &telephony.CallEvent{}, &telephony.PendingContext{}, &telephony.Contact{}); err != nil {
 		t.Fatalf("не удалось подготовить схему БД: %v", err)
 	}
 
@@ -305,6 +305,8 @@ func newMegafonVATSIncomingTestEnv(t *testing.T) *megafonIncomingTestEnv {
 		logger.New("", "test", "error", true),
 		nil,
 		repo,
+		nil,
+		nil,
 		nil,
 	).(*megafonVATSIncomingService)
 	if !ok {

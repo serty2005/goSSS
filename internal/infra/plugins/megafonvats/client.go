@@ -40,6 +40,42 @@ type User struct {
 	Status         string         `json:"status"`
 }
 
+type HistoryFilter struct {
+	UID           string
+	Start         string
+	End           string
+	Period        string
+	Type          string
+	Limit         int
+	User          string
+	Diversion     string
+	Client        string
+	Groups        []string
+	FirstAnswered bool
+	ProcessMissed bool
+	MissedStatus  []string
+}
+
+type HistoryRecord struct {
+	UID          string `json:"uid"`
+	Type         string `json:"type"`
+	Status       string `json:"status"`
+	Client       string `json:"client"`
+	Diversion    string `json:"diversion"`
+	TelnumName   string `json:"telnum_name"`
+	Destination  string `json:"destination"`
+	User         string `json:"user"`
+	UserName     string `json:"user_name"`
+	GroupName    string `json:"group_name"`
+	Start        string `json:"start"`
+	Wait         *int   `json:"wait"`
+	Duration     *int   `json:"duration"`
+	Record       string `json:"record"`
+	Rating       *int   `json:"rating"`
+	Note         string `json:"note"`
+	MissedStatus *int   `json:"missedStatus"`
+}
+
 type MobileRedirect struct {
 	Enabled bool `json:"enabled"`
 	Forward bool `json:"forward"`
@@ -146,6 +182,18 @@ func (c *Client) GetUser(ctx context.Context, login string, withStatus bool) (*U
 	return &response, nil
 }
 
+func (c *Client) ListHistory(ctx context.Context, filter HistoryFilter) ([]HistoryRecord, error) {
+	if !c.IsConfigured() {
+		return nil, errors.New("клиент Мегафон ВАТС не настроен")
+	}
+
+	items := make([]HistoryRecord, 0)
+	if err := c.doJSON(ctx, http.MethodGet, "history/json", filter.toQuery(), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (c *Client) doJSON(ctx context.Context, method string, path string, query url.Values, out any) error {
 	endpoint, err := c.buildURL(path, query)
 	if err != nil {
@@ -228,4 +276,56 @@ func redactAPIKey(rawURL string) string {
 		return rawURL
 	}
 	return parsed.String()
+}
+
+func (f HistoryFilter) toQuery() url.Values {
+	query := url.Values{}
+	if uid := strings.TrimSpace(f.UID); uid != "" {
+		query.Set("uid", uid)
+	}
+	if start := strings.TrimSpace(f.Start); start != "" {
+		query.Set("start", start)
+	}
+	if end := strings.TrimSpace(f.End); end != "" {
+		query.Set("end", end)
+	}
+	if period := strings.TrimSpace(f.Period); period != "" {
+		query.Set("period", period)
+	}
+	if historyType := strings.TrimSpace(f.Type); historyType != "" {
+		query.Set("type", historyType)
+	}
+	if f.Limit > 0 {
+		query.Set("limit", strconv.Itoa(f.Limit))
+	}
+	if user := strings.TrimSpace(f.User); user != "" {
+		query.Set("user", user)
+	}
+	if diversion := strings.TrimSpace(f.Diversion); diversion != "" {
+		query.Set("diversion", diversion)
+	}
+	if client := strings.TrimSpace(f.Client); client != "" {
+		query.Set("client", client)
+	}
+	for _, group := range f.Groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		query.Add("groups", group)
+	}
+	if f.FirstAnswered {
+		query.Set("first_answered", strconv.FormatBool(true))
+	}
+	if f.ProcessMissed {
+		query.Set("processMissed", strconv.FormatBool(true))
+	}
+	for _, missedStatus := range f.MissedStatus {
+		missedStatus = strings.TrimSpace(missedStatus)
+		if missedStatus == "" {
+			continue
+		}
+		query.Add("missedStatus", missedStatus)
+	}
+	return query
 }

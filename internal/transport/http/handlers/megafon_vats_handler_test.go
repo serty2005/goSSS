@@ -29,6 +29,10 @@ func (f *fakeMegafonVATSSyncService) RefreshEmployees(_ context.Context) (int, e
 	return f.refreshCount, f.refreshErr
 }
 
+func (f *fakeMegafonVATSSyncService) SyncHistory(_ context.Context) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeMegafonVATSSyncService) ListCachedEmployees(_ context.Context) ([]telephony.ProviderEmployee, error) {
 	return f.employees, nil
 }
