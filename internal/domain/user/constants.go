@@ -22,6 +22,7 @@ const (
 	ExternalTypeNaumen   = "naumen"
 	ExternalTypeBitrix24 = "bitrix24"
 	ExternalTypePyrus    = "pyrus"
+	ExternalTypeMegafon  = "megafon_vats"
 )
 
 func IsValidRole(role string) bool {
@@ -44,7 +45,7 @@ func IsValidSchedule(schedule string) bool {
 
 func IsValidExternalType(externalType string) bool {
 	switch strings.ToLower(strings.TrimSpace(externalType)) {
-	case ExternalTypeTelegram, ExternalTypeNaumen, ExternalTypeBitrix24, ExternalTypePyrus:
+	case ExternalTypeTelegram, ExternalTypeNaumen, ExternalTypeBitrix24, ExternalTypePyrus, ExternalTypeMegafon:
 		return true
 	default:
 		return false
@@ -66,6 +67,8 @@ func IsValidExternalID(externalType, externalID string) bool {
 		return regexp.MustCompile(`^[0-9]+$`).MatchString(externalID)
 	case ExternalTypePyrus:
 		return regexp.MustCompile(`^[0-9]+$`).MatchString(externalID)
+	case ExternalTypeMegafon:
+		return externalID != ""
 	default:
 		return false
 	}

@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/pyrus"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
@@ -22,26 +23,29 @@ import (
 )
 
 type UserHandler struct {
-	userRepo     user.Repository
-	bitrixRepo   bitrix.Repository
-	pyrusRepo    pyrus.Repository
-	pyrusService services.PyrusSyncService
-	cfg          *config.Config
+	userRepo      user.Repository
+	bitrixRepo    bitrix.Repository
+	pyrusRepo     pyrus.Repository
+	telephonyRepo telephony.Repository
+	pyrusService  services.PyrusSyncService
+	cfg           *config.Config
 }
 
 func NewUserHandler(
 	userRepo user.Repository,
 	bitrixRepo bitrix.Repository,
 	pyrusRepo pyrus.Repository,
+	telephonyRepo telephony.Repository,
 	pyrusService services.PyrusSyncService,
 	cfg *config.Config,
 ) *UserHandler {
 	return &UserHandler{
-		userRepo:     userRepo,
-		bitrixRepo:   bitrixRepo,
-		pyrusRepo:    pyrusRepo,
-		pyrusService: pyrusService,
-		cfg:          cfg,
+		userRepo:      userRepo,
+		bitrixRepo:    bitrixRepo,
+		pyrusRepo:     pyrusRepo,
+		telephonyRepo: telephonyRepo,
+		pyrusService:  pyrusService,
+		cfg:           cfg,
 	}
 }
 
@@ -944,6 +948,17 @@ func (h *UserHandler) verifyPyrusIntegration(ctx context.Context, u *user.User, 
 	return services.VerifyPyrusUserMatch(u, externalID, members)
 }
 
+func (h *UserHandler) verifyMegafonIntegration(ctx context.Context, externalID string) (bool, string) {
+	if h.telephonyRepo == nil {
+		return false, ""
+	}
+	item, err := h.telephonyRepo.GetProviderEmployee(ctx, telephony.ProviderMegafonVATS, externalID)
+	if err != nil || item == nil {
+		return false, ""
+	}
+	return true, strings.TrimSpace(item.EmployeeName)
+}
+
 func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integration *user.Integration) {
 	if integration == nil {
 		return
@@ -970,6 +985,11 @@ func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integ
 		}
 		if verifiedEmail != "" && (u.Email == nil || strings.TrimSpace(*u.Email) == "") {
 			u.Email = normalizeOptionalString(&verifiedEmail)
+		}
+	case user.ExternalTypeMegafon:
+		integration.IsVerified, integration.VerifiedName = h.verifyMegafonIntegration(ctx, integration.ExternalID)
+		if integration.IsVerified {
+			integration.IsLocked = true
 		}
 	default:
 		integration.IsLocked = false
@@ -1563,6 +1583,8 @@ func validateExternalFields(rawType, rawID *string) (*string, *string, error) {
 			return nil, nil, fmt.Errorf("для Bitrix24 ID должен быть числом")
 		case user.ExternalTypePyrus:
 			return nil, nil, fmt.Errorf("для Pyrus ID должен быть числом")
+		case user.ExternalTypeMegafon:
+			return nil, nil, fmt.Errorf("для Мегафон ВАТС нужно указать логин сотрудника")
 		default:
 			return nil, nil, fmt.Errorf("некорректный ID внешней системы")
 		}

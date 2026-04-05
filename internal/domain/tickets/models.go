@@ -91,6 +91,7 @@ type Ticket struct {
 	// `->` означает, что поле только для чтения (не будет создана колонка в таблице tickets).
 	CompanyName string  `json:"company_name,omitempty" gorm:"->"`
 	ContractID  *string `json:"contract_id,omitempty" gorm:"type:text"`
+	ContactID   *uint   `json:"contact_id,omitempty" gorm:"index"`
 	// Признак тикета по общему контракту (вычисляется, не хранится в БД).
 	IsCommonContract bool `json:"is_common_contract,omitempty" gorm:"-"`
 

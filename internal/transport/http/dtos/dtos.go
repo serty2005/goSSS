@@ -674,6 +674,27 @@ type PyrusUserSuggestionDTO struct {
 	Email       string `json:"email,omitempty"`
 }
 
+type MegafonVATSEmployeeDTO struct {
+	Login      string     `json:"login"`
+	Name       string     `json:"name"`
+	Ext        string     `json:"ext,omitempty"`
+	Telnum     string     `json:"telnum,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type MegafonVATSEmployeesRefreshDTO struct {
+	Status    string                   `json:"status"`
+	Count     int                      `json:"count"`
+	Employees []MegafonVATSEmployeeDTO `json:"employees"`
+}
+
+type MegafonVATSUserSuggestionDTO struct {
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
 type BitrixDirectoryUserDTO struct {
 	B24UserID  int64      `json:"b24_user_id"`
 	Name       string     `json:"name"`

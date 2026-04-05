@@ -126,6 +126,18 @@ type Config struct {
 	PyrusIncomingMaxAttempts int
 	PyrusSuppressTTL         time.Duration
 
+	EnableMegafonVATS              bool
+	MegafonVATSBaseURL             string
+	MegafonVATSAPIKey              string
+	MegafonVATSCRMToken            string
+	MegafonVATSSyncInterval        time.Duration
+	MegafonVATSEventsStreamName    string
+	MegafonVATSEventsConsumerGroup string
+	MegafonVATSIncomingParallelism int
+	MegafonVATSIncomingMaxAttempts int
+	MegafonVATSRetryBase           time.Duration
+	MegafonVATSRetryMax            time.Duration
+
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
@@ -263,6 +275,18 @@ func New() *Config {
 		PyrusIncomingMaxAttempts: getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
 		PyrusSuppressTTL:         time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
 
+		EnableMegafonVATS:              getEnvAsBool("ENABLE_MEGAFON_VATS", false),
+		MegafonVATSBaseURL:             normalizeAPIBaseURL(getEnv("MEGAFON_VATS_BASE_URL", "")),
+		MegafonVATSAPIKey:              strings.TrimSpace(getEnv("MEGAFON_VATS_API_KEY", "")),
+		MegafonVATSCRMToken:            strings.TrimSpace(getEnv("MEGAFON_VATS_CRM_TOKEN", "")),
+		MegafonVATSSyncInterval:        getEnvAsDuration("MEGAFON_VATS_SYNC_INTERVAL", 5*time.Minute),
+		MegafonVATSEventsStreamName:    strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_STREAM_NAME", "megafon_vats:events")),
+		MegafonVATSEventsConsumerGroup: strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_CONSUMER_GROUP", "megafon-vats-workers")),
+		MegafonVATSIncomingParallelism: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_PARALLELISM", 4)),
+		MegafonVATSIncomingMaxAttempts: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_MAX_ATTEMPTS", 10)),
+		MegafonVATSRetryBase:           time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_BASE_MS", 500))) * time.Millisecond,
+		MegafonVATSRetryMax:            time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_MAX_MS", 30000))) * time.Millisecond,
+
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       getEnvAsInt("REDIS_DB", 0),
@@ -340,6 +364,15 @@ func getEnvAsInt(key string, fallback int) int {
 func getEnvAsBool(key string, fallback bool) bool {
 	if valueStr := getEnv(key, ""); valueStr != "" {
 		if value, err := strconv.ParseBool(valueStr); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
+
+func getEnvAsDuration(key string, fallback time.Duration) time.Duration {
+	if valueStr := strings.TrimSpace(getEnv(key, "")); valueStr != "" {
+		if value, err := time.ParseDuration(valueStr); err == nil {
 			return value
 		}
 	}

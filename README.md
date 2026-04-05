@@ -147,3 +147,22 @@ go run ./cmd/etalon-server/main.go --seed
   - `BITRIX_INCOMING_RETRY_MAX_MS`
   - `BITRIX_INCOMING_MAX_ATTEMPTS`
   - `BITRIX_SUPPRESS_TTL_SEC`
+
+## 8. Интеграция Мегафон ВАТС
+
+- Включение интеграции: `ENABLE_MEGAFON_VATS=true`.
+- Публичный входящий webhook:
+  - `POST /api/integrations/megafon-vats/webhook`
+  - `Content-Type: application/x-www-form-urlencoded`
+  - проверка `crm_token` по `MEGAFON_VATS_CRM_TOKEN`
+- На текущем этапе webhook сохраняет сырой payload в Postgres (`telephony_incoming_events`) и выполняет дедупликацию по `payload_hash`.
+- Поддерживаемые входящие команды MVP:
+  - `cmd=event`
+  - `cmd=history`
+- Базовые настройки очереди и ретраев уже заведены в конфиг:
+  - `MEGAFON_VATS_EVENTS_STREAM_NAME`
+  - `MEGAFON_VATS_EVENTS_CONSUMER_GROUP`
+  - `MEGAFON_VATS_INCOMING_PARALLELISM`
+  - `MEGAFON_VATS_INCOMING_MAX_ATTEMPTS`
+  - `MEGAFON_VATS_RETRY_BASE_MS`
+  - `MEGAFON_VATS_RETRY_MAX_MS`
