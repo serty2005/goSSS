@@ -206,22 +206,51 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, query u
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-KEY", c.apiKey)
 
+	maskedURL := RedactURLForLog(endpoint)
+	maskedHeaders := RedactHeadersForLog(req.Header)
+	if c.logger != nil {
+		c.logger.Debug(
+			"Мегафон ВАТС API исходящий запрос",
+			"method", method,
+			"url", maskedURL,
+			"headers", maskedHeaders,
+		)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error(
+				"Мегафон ВАТС API ошибка запроса",
+				"method", method,
+				"url", maskedURL,
+				"headers", maskedHeaders,
+				"error", err,
+			)
+		}
 		return fmt.Errorf("ошибка HTTP-запроса к Мегафон ВАТС: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error(
+				"Мегафон ВАТС API ошибка чтения ответа",
+				"method", method,
+				"url", maskedURL,
+				"status_code", resp.StatusCode,
+				"error", err,
+			)
+		}
 		return fmt.Errorf("не удалось прочитать ответ Мегафон ВАТС: %w", err)
 	}
 
 	if c.logger != nil {
 		c.logger.Debug(
-			"Мегафон ВАТС API запрос",
+			"Мегафон ВАТС API входящий ответ",
 			"method", method,
-			"url", redactAPIKey(endpoint),
+			"url", maskedURL,
 			"status_code", resp.StatusCode,
 			"body", string(body),
 		)
@@ -268,14 +297,6 @@ func normalizeMegafonBaseURL(raw string) string {
 		value += "/crmapi/v1"
 	}
 	return value + "/"
-}
-
-func redactAPIKey(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	return parsed.String()
 }
 
 func (f HistoryFilter) toQuery() url.Values {
