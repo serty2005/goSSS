@@ -300,6 +300,7 @@ func newMegafonVATSSyncTestEnv(
 		&telephony.ProviderEmployee{},
 		&telephony.Call{},
 		&telephony.CallEvent{},
+		&telephony.CallArtifact{},
 	); err != nil {
 		t.Fatalf("не удалось подготовить схему БД: %v", err)
 	}
@@ -315,6 +316,7 @@ func newMegafonVATSSyncTestEnv(
 		&fakeMegafonVATSDirectoryClient{users: users},
 		telephonyRepo,
 		userRepo,
+		nil,
 		nil,
 	).(*megafonVATSSyncService)
 	if !ok {

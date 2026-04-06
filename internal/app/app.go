@@ -296,15 +296,16 @@ func setupRepositories(db *gorm.DB) Repositories {
 }
 
 type ExternalClients struct {
-	SDClient          external.ExternalSystemClient
-	FTPClient         services.FTPClient
-	IikoClient        iiko.IikoClient
-	BitrixClient      *bitrixplugin.Client
-	PyrusClient       *pyrusplugin.Client
-	MegafonVATSClient *megafonvatsplugin.Client
-	ContractMailbox   contractSvc.ContractMailboxClient
-	RedisClient       *redis.Client
-	AgentAdapterStore services.AgentAdapterObjectStore
+	SDClient                external.ExternalSystemClient
+	FTPClient               services.FTPClient
+	IikoClient              iiko.IikoClient
+	BitrixClient            *bitrixplugin.Client
+	PyrusClient             *pyrusplugin.Client
+	MegafonVATSClient       *megafonvatsplugin.Client
+	ContractMailbox         contractSvc.ContractMailboxClient
+	RedisClient             *redis.Client
+	AgentAdapterStore       services.AgentAdapterObjectStore
+	TelephonyRecordingStore services.TelephonyRecordingObjectStore
 }
 
 func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) (ExternalClients, error) {
@@ -320,16 +321,21 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 	if err != nil {
 		return ExternalClients{}, err
 	}
+	telephonyRecordingStore, err := adapterstore.NewTelephonyRecordingObjectStore(context.Background(), cfg)
+	if err != nil {
+		return ExternalClients{}, err
+	}
 	return ExternalClients{
-		SDClient:          naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
-		FTPClient:         services.NewFTPClient(cfg, log.With("component", "ftp_client")),
-		IikoClient:        iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
-		BitrixClient:      bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
-		PyrusClient:       pyrusplugin.NewClient(cfg, log.With("component", "pyrus_client")),
-		MegafonVATSClient: megafonvatsplugin.NewClient(cfg, log.With("component", "megafon_vats_client")),
-		ContractMailbox:   contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
-		RedisClient:       redisClient,
-		AgentAdapterStore: agentAdapterStore,
+		SDClient:                naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
+		FTPClient:               services.NewFTPClient(cfg, log.With("component", "ftp_client")),
+		IikoClient:              iiko.NewIikoClient(cfg.RequestTimeout, log.With("component", "iiko_client")),
+		BitrixClient:            bitrixplugin.NewClient(cfg, log.With("component", "bitrix_client")),
+		PyrusClient:             pyrusplugin.NewClient(cfg, log.With("component", "pyrus_client")),
+		MegafonVATSClient:       megafonvatsplugin.NewClient(cfg, log.With("component", "megafon_vats_client")),
+		ContractMailbox:         contractSvc.NewContractMailboxClient(cfg, log.With("component", "contract_mailbox_client")),
+		RedisClient:             redisClient,
+		AgentAdapterStore:       agentAdapterStore,
+		TelephonyRecordingStore: telephonyRecordingStore,
 	}, nil
 }
 
@@ -393,6 +399,12 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		clients.AgentAdapterStore,
 		app.Config,
 	)
+	megafonVATSRecordingService := services.NewMegafonVATSRecordingService(
+		app.Config,
+		app.Logger.With("component", "megafon_vats_recording_service"),
+		repos.TelephonyRepo,
+		clients.TelephonyRecordingStore,
+	)
 
 	ticketService := services.NewTicketService(
 		app.Logger.With("component", "ticket_service"),
@@ -438,6 +450,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.UserRepo,
 		repos.TicketRepo,
 		app.EventBus,
+		megafonVATSRecordingService,
 	)
 	telephonyService := services.NewTelephonyService(
 		app.Logger.With("component", "telephony_service"),
@@ -473,7 +486,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		BitrixIncomingService:      services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		PyrusSyncService:           pyrusSyncService,
 		PyrusIncomingService:       pyrusIncomingService,
-		MegafonVATSSyncService:     services.NewMegafonVATSSyncService(app.Config, app.Logger.With("component", "megafon_vats_sync_service"), clients.MegafonVATSClient, repos.TelephonyRepo, repos.UserRepo, app.EventBus),
+		MegafonVATSSyncService:     services.NewMegafonVATSSyncService(app.Config, app.Logger.With("component", "megafon_vats_sync_service"), clients.MegafonVATSClient, repos.TelephonyRepo, repos.UserRepo, app.EventBus, megafonVATSRecordingService),
 		MegafonVATSIncomingService: megafonVATSIncomingService,
 		TelephonyService:           telephonyService,
 		IntegrationSyncControl:     integrationSyncControl,

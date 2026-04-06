@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"etalon-server/pkg/eventbus"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"etalon-server/pkg/eventbus"
 )
 
 var (
@@ -42,13 +42,14 @@ type MegafonVATSIncomingService interface {
 }
 
 type megafonVATSIncomingService struct {
-	cfg      *config.Config
-	log      logger.LoggerInterface
-	redis    *redis.Client
-	repo     telephony.Repository
-	userRepo user.Repository
-	ticketRepo tickets.TicketRepository
-	eventBus eventbus.EventBus
+	cfg              *config.Config
+	log              logger.LoggerInterface
+	redis            *redis.Client
+	repo             telephony.Repository
+	userRepo         user.Repository
+	ticketRepo       tickets.TicketRepository
+	eventBus         eventbus.EventBus
+	recordingService MegafonVATSRecordingService
 
 	consumerName string
 	callLocks    keyedMutex
@@ -62,17 +63,19 @@ func NewMegafonVATSIncomingService(
 	userRepo user.Repository,
 	ticketRepo tickets.TicketRepository,
 	eventBus eventbus.EventBus,
+	recordingService MegafonVATSRecordingService,
 ) MegafonVATSIncomingService {
 	host, _ := os.Hostname()
 	return &megafonVATSIncomingService{
-		cfg:          cfg,
-		log:          log,
-		redis:        redisClient,
-		repo:         repo,
-		userRepo:     userRepo,
-		ticketRepo:   ticketRepo,
-		eventBus:     eventBus,
-		consumerName: fmt.Sprintf("%s-%d-%s", strings.TrimSpace(host), os.Getpid(), uuid.NewString()),
+		cfg:              cfg,
+		log:              log,
+		redis:            redisClient,
+		repo:             repo,
+		userRepo:         userRepo,
+		ticketRepo:       ticketRepo,
+		eventBus:         eventBus,
+		recordingService: recordingService,
+		consumerName:     fmt.Sprintf("%s-%d-%s", strings.TrimSpace(host), os.Getpid(), uuid.NewString()),
 	}
 }
 
@@ -194,10 +197,17 @@ func (s *megafonVATSIncomingService) Start(ctx context.Context) {
 		)
 	}
 
-	if s.redis != nil {
-		if err := s.ensureConsumerGroup(ctx); err != nil && s.log != nil {
+	if err := s.ensureRedisAvailable(ctx); err != nil {
+		if s.log != nil {
+			s.log.Error("Мегафон ВАТС: Redis недоступен, webhook worker остановлен", "error", err)
+		}
+		return
+	}
+	if err := s.ensureConsumerGroup(ctx); err != nil {
+		if s.log != nil {
 			s.log.Error("Мегафон ВАТС: не удалось подготовить consumer group", "error", err)
 		}
+		return
 	}
 
 	var wg sync.WaitGroup
@@ -216,13 +226,11 @@ func (s *megafonVATSIncomingService) Start(ctx context.Context) {
 		defer wg.Done()
 		s.recoveryLoop(ctx)
 	}()
-	if s.redis != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.claimPendingLoop(ctx)
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.claimPendingLoop(ctx)
+	}()
 
 	<-ctx.Done()
 	wg.Wait()
@@ -230,13 +238,22 @@ func (s *megafonVATSIncomingService) Start(ctx context.Context) {
 
 func (s *megafonVATSIncomingService) ensureConsumerGroup(ctx context.Context) error {
 	if s.redis == nil {
-		return nil
+		return errors.New("redis не настроен")
 	}
 	err := s.redis.XGroupCreateMkStream(ctx, s.cfg.MegafonVATSEventsStreamName, s.cfg.MegafonVATSEventsConsumerGroup, "$").Err()
 	if err != nil && strings.Contains(strings.ToUpper(err.Error()), "BUSYGROUP") {
 		return nil
 	}
 	return err
+}
+
+func (s *megafonVATSIncomingService) ensureRedisAvailable(ctx context.Context) error {
+	if s.redis == nil {
+		return errors.New("redis не настроен")
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return s.redis.Ping(pingCtx).Err()
 }
 
 func (s *megafonVATSIncomingService) enqueueEvent(ctx context.Context, eventID string) error {
@@ -578,6 +595,11 @@ func (s *megafonVATSIncomingService) handleIncomingEvent(
 	}
 	if err = s.repo.AddCallEvent(ctx, callEvent); err != nil {
 		return "", "", err
+	}
+	if s.recordingService != nil {
+		if err = s.recordingService.SyncCallRecording(ctx, call.ID); err != nil && s.log != nil {
+			s.log.Warn("Мегафон ВАТС: не удалось синхронизировать запись звонка", "call_id", call.ID, "external_call_id", incomingEvent.ExternalCallID, "error", err)
+		}
 	}
 	if err = s.ensureCallContext(ctx, call); err != nil {
 		return "", "", err
@@ -948,7 +970,7 @@ func buildMegafonVATSPayload(form url.Values) megafonVATSPayload {
 		User:            strings.TrimSpace(form.Get("user")),
 		Direction:       strings.TrimSpace(form.Get("direction")),
 		Diversion:       strings.TrimSpace(form.Get("diversion")),
-		GroupRealName:   strings.TrimSpace(form.Get("groupRealName")),
+		GroupRealName:   firstMegafonValue(form.Get("groupRealName"), form.Get("telnum_name")),
 		Status:          strings.TrimSpace(form.Get("status")),
 		Start:           strings.TrimSpace(form.Get("start")),
 		Link:            strings.TrimSpace(form.Get("link")),

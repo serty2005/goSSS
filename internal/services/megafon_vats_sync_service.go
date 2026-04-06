@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"etalon-server/pkg/eventbus"
+	"github.com/google/uuid"
 )
 
 type megafonVATSClient interface {
@@ -34,12 +34,13 @@ type MegafonVATSSyncService interface {
 }
 
 type megafonVATSSyncService struct {
-	cfg      *config.Config
-	log      logger.LoggerInterface
-	client   megafonVATSClient
-	repo     telephony.Repository
-	userRepo user.Repository
-	eventBus eventbus.EventBus
+	cfg              *config.Config
+	log              logger.LoggerInterface
+	client           megafonVATSClient
+	repo             telephony.Repository
+	userRepo         user.Repository
+	eventBus         eventbus.EventBus
+	recordingService MegafonVATSRecordingService
 }
 
 func NewMegafonVATSSyncService(
@@ -49,14 +50,16 @@ func NewMegafonVATSSyncService(
 	repo telephony.Repository,
 	userRepo user.Repository,
 	eventBus eventbus.EventBus,
+	recordingService MegafonVATSRecordingService,
 ) MegafonVATSSyncService {
 	return &megafonVATSSyncService{
-		cfg:      cfg,
-		log:      log,
-		client:   client,
-		repo:     repo,
-		userRepo: userRepo,
-		eventBus: eventBus,
+		cfg:              cfg,
+		log:              log,
+		client:           client,
+		repo:             repo,
+		userRepo:         userRepo,
+		eventBus:         eventBus,
+		recordingService: recordingService,
 	}
 }
 
@@ -209,6 +212,7 @@ func (s *megafonVATSSyncService) GetEmployee(ctx context.Context, login string) 
 func (s *megafonVATSSyncService) refreshAllSafe(ctx context.Context) {
 	s.refreshEmployeesSafe(ctx)
 	s.syncHistorySafe(ctx)
+	s.cleanupRecordingsSafe(ctx)
 }
 
 func (s *megafonVATSSyncService) refreshEmployeesSafe(ctx context.Context) {
@@ -234,6 +238,22 @@ func (s *megafonVATSSyncService) syncHistorySafe(ctx context.Context) {
 	}
 	if s.log != nil {
 		s.log.Info("Мегафон ВАТС: синхронизирована история звонков", "count", count)
+	}
+}
+
+func (s *megafonVATSSyncService) cleanupRecordingsSafe(ctx context.Context) {
+	if s.recordingService == nil {
+		return
+	}
+	count, err := s.recordingService.CleanupExpiredRecordings(ctx)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("Мегафон ВАТС: не удалось очистить локальные записи звонков", "error", err)
+		}
+		return
+	}
+	if count > 0 && s.log != nil {
+		s.log.Info("Мегафон ВАТС: очищены просроченные локальные записи звонков", "count", count)
 	}
 }
 
@@ -387,6 +407,11 @@ func (s *megafonVATSSyncService) syncHistoryRecord(ctx context.Context, item *me
 	if err = s.repo.UpsertCall(ctx, call); err != nil {
 		return false, err
 	}
+	if s.recordingService != nil {
+		if err = s.recordingService.SyncCallRecording(ctx, call.ID); err != nil && s.log != nil {
+			s.log.Warn("Мегафон ВАТС: не удалось синхронизировать запись звонка", "call_id", call.ID, "external_call_id", callID, "error", err)
+		}
+	}
 
 	return true, nil
 }
@@ -398,7 +423,7 @@ func buildMegafonHistoryPayload(item *megafonvats.HistoryRecord) megafonVATSPayl
 		Phone:         strings.TrimSpace(item.Client),
 		User:          strings.TrimSpace(item.User),
 		Diversion:     strings.TrimSpace(item.Diversion),
-		GroupRealName: strings.TrimSpace(item.GroupName),
+		GroupRealName: firstMegafonValue(item.GroupName, item.TelnumName),
 		Status:        strings.TrimSpace(item.Status),
 		Start:         strings.TrimSpace(item.Start),
 		Link:          strings.TrimSpace(item.Record),
@@ -411,6 +436,15 @@ func buildMegafonHistoryPayload(item *megafonvats.HistoryRecord) megafonVATSPayl
 		}
 	}
 	return payload
+}
+
+func firstMegafonValue(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (s *megafonVATSSyncService) resolveMegafonUserID(ctx context.Context, login string) (uint, bool, error) {

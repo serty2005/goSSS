@@ -17,6 +17,7 @@ type CallListFilter struct {
 	EmployeeUserID    *uint
 	ClientPhone       string
 	Statuses          []string
+	GroupNames        []string
 	StartedFrom       *time.Time
 	StartedTo         *time.Time
 	OnlyMissed        bool
@@ -32,9 +33,15 @@ type Repository interface {
 
 	GetCallByExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
 	GetCallByAnyExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
+	GetCallByID(ctx context.Context, id string) (*Call, error)
 	UpsertCall(ctx context.Context, call *Call) error
 	ListCalls(ctx context.Context, filter CallListFilter) ([]Call, int64, error)
 	AddCallEvent(ctx context.Context, event *CallEvent) error
+	GetCallArtifact(ctx context.Context, callID string, artifactType string) (*CallArtifact, error)
+	UpsertCallArtifact(ctx context.Context, artifact *CallArtifact) error
+	DeleteCallArtifact(ctx context.Context, callID string, artifactType string) error
+	ListExpiredCallArtifacts(ctx context.Context, artifactType string, olderThan time.Time, limit int) ([]CallArtifact, error)
+	ClearCallRecording(ctx context.Context, callID string) error
 	MergeCalls(ctx context.Context, target *Call, sourceCallID string) error
 	UpsertCallTicketLink(ctx context.Context, link *CallTicketLink) error
 	GetCallTicketLink(ctx context.Context, callID string) (*CallTicketLink, error)

@@ -27,6 +27,10 @@ const (
 	PendingContextStatusDismissed = "dismissed"
 )
 
+const (
+	CallArtifactTypeRecording = "recording"
+)
+
 type ProviderEmployee struct {
 	Provider      string    `json:"provider" gorm:"primaryKey;type:varchar(50)"`
 	EmployeeLogin string    `json:"employee_login" gorm:"primaryKey;type:varchar(255)"`
@@ -112,8 +116,8 @@ func (CallEvent) TableName() string {
 
 type CallArtifact struct {
 	ID              uint      `json:"id" gorm:"primaryKey"`
-	TelephonyCallID string    `json:"telephony_call_id" gorm:"type:uuid;not null;index"`
-	ArtifactType    string    `json:"artifact_type" gorm:"type:varchar(64);not null;index"`
+	TelephonyCallID string    `json:"telephony_call_id" gorm:"type:uuid;not null;uniqueIndex:idx_telephony_call_artifacts_call_type,priority:1"`
+	ArtifactType    string    `json:"artifact_type" gorm:"type:varchar(64);not null;uniqueIndex:idx_telephony_call_artifacts_call_type,priority:2;index"`
 	URL             *string   `json:"url,omitempty" gorm:"type:text"`
 	StorageKey      *string   `json:"storage_key,omitempty" gorm:"type:text"`
 	MimeType        *string   `json:"mime_type,omitempty" gorm:"type:varchar(128)"`

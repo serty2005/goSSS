@@ -29,27 +29,60 @@ func NewS3ObjectStore(ctx context.Context, cfg *config.Config) (services.AgentAd
 	if cfg == nil || !cfg.AgentAdapterS3Enabled {
 		return nil, nil
 	}
+	return newS3ObjectStore(
+		ctx,
+		strings.TrimSpace(cfg.AgentAdapterS3Endpoint),
+		strings.TrimSpace(cfg.AgentAdapterS3Region),
+		strings.TrimSpace(cfg.AgentAdapterS3Bucket),
+		strings.TrimSpace(cfg.AgentAdapterS3AccessKey),
+		cfg.AgentAdapterS3SecretKey,
+		false,
+	)
+}
 
-	endpoint := strings.TrimSpace(cfg.AgentAdapterS3Endpoint)
+func NewTelephonyRecordingObjectStore(ctx context.Context, cfg *config.Config) (services.TelephonyRecordingObjectStore, error) {
+	if cfg == nil || !cfg.MegafonVATSRecordingsS3Enabled {
+		return nil, nil
+	}
+	return newS3ObjectStore(
+		ctx,
+		strings.TrimSpace(cfg.AgentAdapterS3Endpoint),
+		strings.TrimSpace(cfg.AgentAdapterS3Region),
+		strings.TrimSpace(cfg.MegafonVATSRecordingsS3Bucket),
+		strings.TrimSpace(cfg.AgentAdapterS3AccessKey),
+		cfg.AgentAdapterS3SecretKey,
+		true,
+	)
+}
+
+func newS3ObjectStore(
+	ctx context.Context,
+	endpoint string,
+	region string,
+	bucket string,
+	accessKey string,
+	secretKey string,
+	ensureBucket bool,
+) (*s3ObjectStore, error) {
 	if endpoint == "" {
-		return nil, errors.New("AGENT_ADAPTER_S3_ENDPOINT обязателен при включённом S3-каталоге адаптеров")
+		return nil, errors.New("S3 endpoint обязателен")
 	}
-	if strings.TrimSpace(cfg.AgentAdapterS3Bucket) == "" {
-		return nil, errors.New("AGENT_ADAPTER_S3_BUCKET обязателен при включённом S3-каталоге адаптеров")
+	if bucket == "" {
+		return nil, errors.New("S3 bucket обязателен")
 	}
-	if strings.TrimSpace(cfg.AgentAdapterS3AccessKey) == "" {
-		return nil, errors.New("AGENT_ADAPTER_S3_ACCESS_KEY обязателен при включённом S3-каталоге адаптеров")
+	if accessKey == "" {
+		return nil, errors.New("S3 access key обязателен")
 	}
-	if strings.TrimSpace(cfg.AgentAdapterS3SecretKey) == "" {
-		return nil, errors.New("AGENT_ADAPTER_S3_SECRET_KEY обязателен при включённом S3-каталоге адаптеров")
+	if strings.TrimSpace(secretKey) == "" {
+		return nil, errors.New("S3 secret key обязателен")
 	}
 
 	awsConfig, err := awscfg.LoadDefaultConfig(
 		ctx,
-		awscfg.WithRegion(strings.TrimSpace(cfg.AgentAdapterS3Region)),
+		awscfg.WithRegion(region),
 		awscfg.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			cfg.AgentAdapterS3AccessKey,
-			cfg.AgentAdapterS3SecretKey,
+			accessKey,
+			secretKey,
 			"",
 		)),
 	)
@@ -61,11 +94,16 @@ func NewS3ObjectStore(ctx context.Context, cfg *config.Config) (services.AgentAd
 		options.UsePathStyle = true
 		options.BaseEndpoint = aws.String(endpoint)
 	})
-
-	return &s3ObjectStore{
+	store := &s3ObjectStore{
 		client: client,
-		bucket: strings.TrimSpace(cfg.AgentAdapterS3Bucket),
-	}, nil
+		bucket: bucket,
+	}
+	if ensureBucket {
+		if err = store.ensureBucket(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return store, nil
 }
 
 func (s *s3ObjectStore) GetObject(ctx context.Context, key string) ([]byte, error) {
@@ -136,6 +174,42 @@ func (s *s3ObjectStore) StatObject(ctx context.Context, key string) (services.Ag
 		Size:         aws.ToInt64(response.ContentLength),
 		LastModified: aws.ToTime(response.LastModified),
 	}, nil
+}
+
+func (s *s3ObjectStore) DeleteObject(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("не удалось удалить объект %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *s3ObjectStore) ensureBucket(ctx context.Context) error {
+	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(s.bucket),
+	})
+	if err == nil {
+		return nil
+	}
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NotFound", "NoSuchBucket", "404":
+			_, createErr := s.client.CreateBucket(ctx, &s3.CreateBucketInput{
+				Bucket: aws.String(s.bucket),
+			})
+			if createErr != nil {
+				return fmt.Errorf("не удалось создать S3 bucket %s: %w", s.bucket, createErr)
+			}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("не удалось проверить bucket %s: %w", s.bucket, err)
 }
 
 func mapObjectStoreError(err error) error {

@@ -1,6 +1,6 @@
 ﻿// Общий конверт ответа API
 export interface ApiResponse<T> {
-  status: 'success' | 'error';
+  status: "success" | "error";
   data: T;
   meta?: PaginationMeta;
   error?: {
@@ -27,7 +27,6 @@ export interface CompanyOwner {
 }
 
 export interface CompanyModel {
-
   id?: string;
 
   title?: string;
@@ -71,7 +70,12 @@ export interface CompanyContractReportRowDTO {
   contract_state?: string;
 }
 
-export type AntBadgeStatus = 'success' | 'processing' | 'error' | 'default' | 'warning';
+export type AntBadgeStatus =
+  | "success"
+  | "processing"
+  | "error"
+  | "default"
+  | "warning";
 
 // --- CMDB Entities (Rich DTOs) ---
 
@@ -82,28 +86,28 @@ export interface ServerEntity {
   last_updated_by?: string;
   last_modified_date?: string;
   updated_at?: string;
-  
+
   device_name?: string;
   server_name?: string;
   ip?: string;
-  
+
   rdp?: string;
   anydesk?: string;
   teamviewer?: string;
   litemanager?: string;
   iiko_web_link?: string;
   partners_link?: string;
-  
-  operational_status?: 'active' | 'offline' | 'unknown';
-  health_status: 'ok' | 'attention_required' | 'locked';
+
+  operational_status?: "active" | "offline" | "unknown";
+  health_status: "ok" | "attention_required" | "locked";
   status_details?: unknown;
   last_polled_at?: string;
-  
+
   server_version?: string;
   server_edition?: string;
-  
+
   crm_id?: string;
-  
+
   address?: string;
   description?: string;
 
@@ -118,13 +122,13 @@ export interface WorkstationEntity {
   last_updated_by?: string;
   last_modified_date?: string;
   updated_at?: string;
-  
+
   anydesk?: string;
   teamviewer?: string;
   litemanager?: string;
   rustdesk?: string;
-  
-  health_status: 'ok' | 'attention_required' | 'locked';
+
+  health_status: "ok" | "attention_required" | "locked";
   status_details?: unknown;
 
   description?: string;
@@ -139,26 +143,26 @@ export interface FiscalEntity {
   last_updated_by?: string;
   last_modified_date?: string;
   updated_at?: string;
-  
+
   model_kkt?: string;
   serial_number?: string;
   rn_kkt?: string;
-  
+
   fn_number?: string;
   fn_registration_date?: string;
   fn_expire_date?: string;
   fn_execution?: string;
   fnExecution?: string;
-  
+
   driver_version?: string;
   fr_firmware?: string;
   fr_downloader?: string;
-  
+
   organization_name?: string;
   legal_name?: string;
   inn?: string;
-  
-  health_status: 'ok' | 'attention_required' | 'locked';
+
+  health_status: "ok" | "attention_required" | "locked";
   status_details?: unknown;
 
   address?: string;
@@ -170,13 +174,13 @@ export interface FiscalEntity {
 export type EntityData = ServerEntity | WorkstationEntity | FiscalEntity;
 
 export interface InfrastructureItem {
-  entity_type: 'Server' | 'Workstation' | 'FiscalRegister';
+  entity_type: "Server" | "Workstation" | "FiscalRegister";
   data: EntityData;
 }
 
 // --- Search DTO ---
 export interface SearchFoundEntity {
-  entity_type: 'Server' | 'Workstation' | 'FiscalRegister';
+  entity_type: "Server" | "Workstation" | "FiscalRegister";
   data: EntityData;
 }
 
@@ -190,8 +194,13 @@ export interface SearchResponseData {
 }
 
 // --- Tasks DTO ---
-export type TaskStatus = 'new' | 'resolved' | 'rejected' | 'pending_sd_action' | 'sd_error';
-export type TaskType = 'add_equipment' | 'conflict' | 'offline_alert';
+export type TaskStatus =
+  | "new"
+  | "resolved"
+  | "rejected"
+  | "pending_sd_action"
+  | "sd_error";
+export type TaskType = "add_equipment" | "conflict" | "offline_alert";
 
 export interface TaskDTO {
   id: number;
@@ -199,11 +208,11 @@ export interface TaskDTO {
   entity_type: string;
   status: TaskStatus;
   created_at: string;
-  details: Record<string, unknown>; 
+  details: Record<string, unknown>;
 }
 
 export interface TaskResolutionPayload {
-  status: 'resolved' | 'rejected';
+  status: "resolved" | "rejected";
   comment?: string;
   resolution_payload?: {
     action: string;
@@ -214,16 +223,16 @@ export interface TaskResolutionPayload {
 
 // --- Tickets DTO ---
 export type TicketStatus =
-  | 'new'
-  | 'in_progress'
-  | 'pending'
-  | 'deferred'
-  | 'onsite'
-  | 'to_manager'
-  | 'resolved'
-  | 'spam'
-  | 'execution'
-  | 'closed';
+  | "new"
+  | "in_progress"
+  | "pending"
+  | "deferred"
+  | "onsite"
+  | "to_manager"
+  | "resolved"
+  | "spam"
+  | "execution"
+  | "closed";
 
 export interface TicketListItemDTO {
   id: string;
@@ -232,7 +241,7 @@ export interface TicketListItemDTO {
   company_name?: string;
   description?: string;
   reporter_name?: string;
-  created_source?: 'ui' | 'bitrix' | 'servicedesk' | 'system' | string;
+  created_source?: "ui" | "bitrix" | "servicedesk" | "system" | string;
   result?: string;
   status: TicketStatus;
   last_comment?: string;
@@ -366,6 +375,7 @@ export interface TelephonyCallListParams {
   employee_user_id?: number;
   client_phone?: string;
   status?: string | string[];
+  group_name?: string | string[];
   started_from?: string;
   started_to?: string;
   only_missed?: boolean;
@@ -378,14 +388,14 @@ export interface TelephonyLineEmployeeDTO {
   user_id?: number;
   login: string;
   name: string;
-  status: 'online' | 'offline' | 'in_call' | string;
+  status: "online" | "offline" | "in_call" | string;
   provider: string;
   provider_ext?: string;
   provider_line?: string;
 }
 
 export interface TelephonyLineDTO {
-  color: 'blue' | 'yellow' | 'green' | 'red' | string;
+  color: "blue" | "yellow" | "green" | "red" | string;
   on_line_count: number;
   missed_open_count: number;
   employees: TelephonyLineEmployeeDTO[];
@@ -423,7 +433,13 @@ export interface ServicePointImportResultDTO {
   ambiguous_names?: string[];
 }
 
-export type ServicePointSyncAction = 'create' | 'update' | 'delete' | 'unchanged' | 'skipped' | 'ambiguous';
+export type ServicePointSyncAction =
+  | "create"
+  | "update"
+  | "delete"
+  | "unchanged"
+  | "skipped"
+  | "ambiguous";
 
 export interface ServicePointSyncPlanItemDTO {
   key: string;
@@ -479,7 +495,7 @@ export interface ContractMailImportDTO {
 
 export interface ContractSyncQueueItemDTO {
   key: string;
-  action: 'create' | 'update' | 'delete';
+  action: "create" | "update" | "delete";
   service_point_name: string;
   service_point_code: string;
   contractor_id?: string;
@@ -540,7 +556,7 @@ export interface ContractSyncExecuteResultDTO {
 
 export interface ContractSyncExecuteErrorDTO {
   key: string;
-  action: 'create' | 'update' | 'delete';
+  action: "create" | "update" | "delete";
   service_point_name?: string;
   service_point_code?: string;
   b24_element_id?: number;
@@ -554,7 +570,7 @@ export interface TicketHistoryDTO {
   user_name?: string;
   action: string;
   field: string;
-  source?: 'ui' | 'bitrix' | 'servicedesk' | 'system' | string;
+  source?: "ui" | "bitrix" | "servicedesk" | "system" | string;
   old_value: string;
   new_value: string;
   meta?: Record<string, unknown>;
@@ -562,7 +578,7 @@ export interface TicketHistoryDTO {
 }
 
 export interface ConnectionCopyStatDTO {
-  entity_type: 'Server' | 'Workstation' | string;
+  entity_type: "Server" | "Workstation" | string;
   entity_id: string;
   copy_count: number;
   last_copied_at?: string;
@@ -619,7 +635,7 @@ export interface TicketListParams {
   offset?: number;
   status?: string | string[];
   search?: string;
-  archive_mode?: 'active' | 'archive' | 'all';
+  archive_mode?: "active" | "archive" | "all";
   period_from?: string;
   period_to?: string;
   created_from?: string;
@@ -640,8 +656,8 @@ export interface TicketFiltersResponse {
   companies: TicketCompanyFilterItem[];
 }
 
-export type UserPosition = 'admin' | 'support_specialist' | 'intern';
-export type UserSchedule = '2/2' | '3/3' | '5/2';
+export type UserPosition = "admin" | "support_specialist" | "intern";
+export type UserSchedule = "2/2" | "3/3" | "5/2";
 
 export interface UserAdminDTO {
   id: number;
@@ -693,8 +709,8 @@ export interface ThemePaletteConfigDTO {
 }
 
 export interface UserInterfaceConfigDTO {
-  theme_mode?: 'light' | 'dark';
-  locale?: 'en' | 'ru' | string;
+  theme_mode?: "light" | "dark";
+  locale?: "en" | "ru" | string;
   theme_palettes?: {
     light?: ThemePaletteConfigDTO;
     dark?: ThemePaletteConfigDTO;
@@ -865,11 +881,11 @@ export interface FiscalDetailDTO {
   fr_serial_number?: string;
   fn_number?: string;
   fn_execution?: string;
-  
+
   // Внимание: смешанный регистр в JSON
   kkt_reg_date?: string;
   fn_expire_date?: string;
-  
+
   fr_firmware?: string;
   fr_downloader?: string;
   driver_version?: string;
@@ -877,19 +893,19 @@ export interface FiscalDetailDTO {
   fr_serial_normalized?: string;
   workstation_id?: string;
   health_status_before_lock?: string;
-  
-  health_status?: 'ok' | 'attention_required' | 'locked';
-  
+
+  health_status?: "ok" | "attention_required" | "locked";
+
   // Внимание: lowercase в JSON
   address?: string;
   description?: string;
-  
+
   licenses?: LicensesDict | string;
   attribute_excise?: boolean | null;
   attribute_marked?: boolean | null;
   ofd_name?: string;
   owner_id?: string;
-  owner_binding_mode?: 'auto' | 'manual';
+  owner_binding_mode?: "auto" | "manual";
 }
 
 export interface WorkstationDetailDTO {
@@ -904,9 +920,9 @@ export interface WorkstationDetailDTO {
   litemanager?: string;
   rustdesk?: string;
   description?: string;
-  health_status?: 'ok' | 'attention_required' | 'locked';
+  health_status?: "ok" | "attention_required" | "locked";
   owner_id?: string;
-  owner_binding_mode?: 'auto' | 'manual';
+  owner_binding_mode?: "auto" | "manual";
 }
 
 export interface ServerDetailDTO {
@@ -920,28 +936,28 @@ export interface ServerDetailDTO {
   server_name?: string;
   server_version?: string;
   server_edition?: string;
-  
+
   last_polled_at?: string;
-  status?: 'active' | 'offline' | 'unknown'; // Operational status
-  health_status?: 'ok' | 'attention_required' | 'locked';
-  
+  status?: "active" | "offline" | "unknown"; // Operational status
+  health_status?: "ok" | "attention_required" | "locked";
+
   cabinet_link?: string;
   iiko_web_link?: string;
   partners_link?: string;
   crm_id?: string;
-  
+
   rdp?: string;
   teamviewer?: string;
   anydesk?: string;
   litemanager?: string;
   description?: string;
   owner_id?: string;
-  owner_binding_mode?: 'auto' | 'manual';
+  owner_binding_mode?: "auto" | "manual";
 }
 
 // ... (предыдущие TaskDTO и прочее остаются)
 export interface ApiResponse<T> {
-  status: 'success' | 'error';
+  status: "success" | "error";
   data: T;
   meta?: PaginationMeta;
   error?: {
@@ -1036,7 +1052,7 @@ export interface ContractDetailDTO {
 }
 
 export interface MaterialEntityRefDTO {
-  entity_type: 'Company' | 'Server' | 'Workstation' | 'FiscalRegister';
+  entity_type: "Company" | "Server" | "Workstation" | "FiscalRegister";
   entity_id: string;
 }
 
@@ -1058,7 +1074,12 @@ export interface MaterialPayload {
 }
 
 // --- Candidate Acceptance DTO ---
-export type CandidateStatus = 'NEW' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+export type CandidateStatus =
+  | "NEW"
+  | "IN_REVIEW"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
 
 export interface CandidateWorkstationStagingDTO {
   id: number;
@@ -1127,49 +1148,54 @@ export interface CandidateRecalculationResultDTO {
 }
 
 export interface CandidateApprovePayload {
-	company_id?: string;
-	company?: {
-		title: string;
-		address?: string;
-		additional_name?: string;
-		parent_id?: string;
-		contract_mode?: 'inherit_parent' | 'new';
-		contract_type?: string;
-	};
-	server?: {
-		mode: 'existing' | 'new';
-		server_id?: string;
-		crm_id?: string;
-		url_rms?: string;
-		unique_id?: string;
-		cabinet_link?: string;
-		device_name?: string;
-		description?: string;
-	};
-	workstations?: Array<{
-		staging_id?: number;
-		name: string;
-		workstation_uuid?: string;
-	}>;
-	comment?: string;
-	bitrix_service_point_id?: number;
-	// Ручной ввод remote IDs (опционально).
-	// Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
-	teamviewer_id?: string;
-	litemanager_id?: string;
-	rustdesk_id?: string;
-	anydesk_id?: string;
+  company_id?: string;
+  company?: {
+    title: string;
+    address?: string;
+    additional_name?: string;
+    parent_id?: string;
+    contract_mode?: "inherit_parent" | "new";
+    contract_type?: string;
+  };
+  server?: {
+    mode: "existing" | "new";
+    server_id?: string;
+    crm_id?: string;
+    url_rms?: string;
+    unique_id?: string;
+    cabinet_link?: string;
+    device_name?: string;
+    description?: string;
+  };
+  workstations?: Array<{
+    staging_id?: number;
+    name: string;
+    workstation_uuid?: string;
+  }>;
+  comment?: string;
+  bitrix_service_point_id?: number;
+  // Ручной ввод remote IDs (опционально).
+  // Используется когда агент не собрал TeamViewer/LiteManager/AnyDesk.
+  teamviewer_id?: string;
+  litemanager_id?: string;
+  rustdesk_id?: string;
+  anydesk_id?: string;
 }
 
 export interface CandidateRejectPayload {
   comment?: string;
 }
 
-export type CompanyMode = 'existing' | 'new';
-export type ServerMode = 'existing' | 'new';
-export type ContractMode = 'inherit_parent' | 'new';
+export type CompanyMode = "existing" | "new";
+export type ServerMode = "existing" | "new";
+export type ContractMode = "inherit_parent" | "new";
 
-export type NetworkCandidateStatus = 'NEW' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+export type NetworkCandidateStatus =
+  | "NEW"
+  | "IN_REVIEW"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
 
 export interface NetworkCandidateDTO {
   id: number;
@@ -1252,23 +1278,26 @@ export interface EntityOwnerHistoryItemDTO {
   change_source: string;
   comment?: string;
   changed_by_user_id?: string;
-  actor_type?: 'user' | 'agent' | 'system';
+  actor_type?: "user" | "agent" | "system";
   agent_uuid?: string;
   observation_id?: number;
   created_at: string;
   is_agent_update?: boolean;
 }
 
-export type EntityDeletionCandidateStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED';
+export type EntityDeletionCandidateStatus =
+  | "PENDING"
+  | "CONFIRMED"
+  | "CANCELLED";
 
 export interface EntityDeletionCandidateDTO {
   id: number;
-  entity_type: 'Server' | 'Workstation' | 'FiscalRegister' | string;
+  entity_type: "Server" | "Workstation" | "FiscalRegister" | string;
   entity_id: string;
   entity_display_name?: string;
   status: EntityDeletionCandidateStatus;
   reason?: string;
-  source: 'manual' | 'duplicate_worker' | string;
+  source: "manual" | "duplicate_worker" | string;
   comment?: string;
   requested_by_user_id?: string;
   requested_at: string;
@@ -1294,7 +1323,7 @@ export interface EntityDeletionCandidateAgentDataDTO {
 }
 
 export interface EntityDeletionCandidateEntityDetailsDTO {
-  entity_type: 'Server' | 'Workstation' | 'FiscalRegister' | string;
+  entity_type: "Server" | "Workstation" | "FiscalRegister" | string;
   entity_id: string;
   display_name: string;
   owner_id: string;
@@ -1550,7 +1579,7 @@ export interface AgentCOMSignatureCandidateDTO {
 
 export interface AgentAdapterRuntimeDeviceDTO {
   label?: string;
-  connection_type?: 'tcp' | 'com' | string;
+  connection_type?: "tcp" | "com" | string;
   transport?: string;
   address?: string;
   ip?: string;
@@ -1663,4 +1692,3 @@ export interface AgentObservationDetailsDTO {
   created_at?: string;
   updated_at?: string;
 }
-

@@ -126,17 +126,21 @@ type Config struct {
 	PyrusIncomingMaxAttempts int
 	PyrusSuppressTTL         time.Duration
 
-	EnableMegafonVATS              bool
-	MegafonVATSBaseURL             string
-	MegafonVATSAPIKey              string
-	MegafonVATSCRMToken            string
-	MegafonVATSSyncInterval        time.Duration
-	MegafonVATSEventsStreamName    string
-	MegafonVATSEventsConsumerGroup string
-	MegafonVATSIncomingParallelism int
-	MegafonVATSIncomingMaxAttempts int
-	MegafonVATSRetryBase           time.Duration
-	MegafonVATSRetryMax            time.Duration
+	EnableMegafonVATS                  bool
+	MegafonVATSBaseURL                 string
+	MegafonVATSAPIKey                  string
+	MegafonVATSCRMToken                string
+	MegafonVATSSyncInterval            time.Duration
+	MegafonVATSEventsStreamName        string
+	MegafonVATSEventsConsumerGroup     string
+	MegafonVATSIncomingParallelism     int
+	MegafonVATSIncomingMaxAttempts     int
+	MegafonVATSRetryBase               time.Duration
+	MegafonVATSRetryMax                time.Duration
+	MegafonVATSRecordingsS3Enabled     bool
+	MegafonVATSRecordingsS3Bucket      string
+	MegafonVATSRecordingsPublicBaseURL string
+	MegafonVATSRecordingsRetentionDays int
 
 	RedisAddr     string
 	RedisPassword string
@@ -275,17 +279,21 @@ func New() *Config {
 		PyrusIncomingMaxAttempts: getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
 		PyrusSuppressTTL:         time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
 
-		EnableMegafonVATS:              getEnvAsBool("ENABLE_MEGAFON_VATS", false),
-		MegafonVATSBaseURL:             normalizeAPIBaseURL(getEnv("MEGAFON_VATS_BASE_URL", "")),
-		MegafonVATSAPIKey:              strings.TrimSpace(getEnv("MEGAFON_VATS_API_KEY", "")),
-		MegafonVATSCRMToken:            strings.TrimSpace(getEnv("MEGAFON_VATS_CRM_TOKEN", "")),
-		MegafonVATSSyncInterval:        getEnvAsDuration("MEGAFON_VATS_SYNC_INTERVAL", 5*time.Minute),
-		MegafonVATSEventsStreamName:    strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_STREAM_NAME", "megafon_vats:events")),
-		MegafonVATSEventsConsumerGroup: strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_CONSUMER_GROUP", "megafon-vats-workers")),
-		MegafonVATSIncomingParallelism: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_PARALLELISM", 4)),
-		MegafonVATSIncomingMaxAttempts: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_MAX_ATTEMPTS", 10)),
-		MegafonVATSRetryBase:           time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_BASE_MS", 500))) * time.Millisecond,
-		MegafonVATSRetryMax:            time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_MAX_MS", 30000))) * time.Millisecond,
+		EnableMegafonVATS:                  getEnvAsBool("ENABLE_MEGAFON_VATS", false),
+		MegafonVATSBaseURL:                 normalizeAPIBaseURL(getEnv("MEGAFON_VATS_BASE_URL", "")),
+		MegafonVATSAPIKey:                  strings.TrimSpace(getEnv("MEGAFON_VATS_API_KEY", "")),
+		MegafonVATSCRMToken:                strings.TrimSpace(getEnv("MEGAFON_VATS_CRM_TOKEN", "")),
+		MegafonVATSSyncInterval:            getEnvAsDuration("MEGAFON_VATS_SYNC_INTERVAL", 5*time.Minute),
+		MegafonVATSEventsStreamName:        strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_STREAM_NAME", "megafon_vats:events")),
+		MegafonVATSEventsConsumerGroup:     strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_CONSUMER_GROUP", "megafon-vats-workers")),
+		MegafonVATSIncomingParallelism:     max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_PARALLELISM", 4)),
+		MegafonVATSIncomingMaxAttempts:     max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_MAX_ATTEMPTS", 10)),
+		MegafonVATSRetryBase:               time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_BASE_MS", 500))) * time.Millisecond,
+		MegafonVATSRetryMax:                time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_MAX_MS", 30000))) * time.Millisecond,
+		MegafonVATSRecordingsS3Enabled:     getEnvAsBool("MEGAFON_VATS_RECORDINGS_S3_ENABLED", false),
+		MegafonVATSRecordingsS3Bucket:      strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_S3_BUCKET", "telephony-recordings")),
+		MegafonVATSRecordingsPublicBaseURL: strings.TrimRight(strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_PUBLIC_BASE_URL", getEnv("AGENT_ADAPTER_PUBLIC_BASE_URL", ""))), "/"),
+		MegafonVATSRecordingsRetentionDays: max(1, getEnvAsInt("MEGAFON_VATS_RECORDINGS_RETENTION_DAYS", 7)),
 
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),

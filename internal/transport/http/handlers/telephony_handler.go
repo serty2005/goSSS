@@ -206,6 +206,7 @@ func buildTelephonyCallFilter(r *http.Request) services.TelephonyCallFilter {
 		EmployeeUserID:    employeeUserID,
 		ClientPhone:       strings.TrimSpace(r.URL.Query().Get("client_phone")),
 		Statuses:          parseStringCSV(r.URL.Query().Get("status")),
+		GroupNames:        parseStringCSV(r.URL.Query().Get("group_name")),
 		StartedFrom:       parseDateTimeParam(r.URL.Query().Get("started_from"), false),
 		StartedTo:         parseDateTimeParam(r.URL.Query().Get("started_to"), true),
 		OnlyMissed:        strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("only_missed")), "true"),

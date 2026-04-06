@@ -23,6 +23,7 @@ type TelephonyCallFilter struct {
 	EmployeeUserID    *uint
 	ClientPhone       string
 	Statuses          []string
+	GroupNames        []string
 	StartedFrom       *time.Time
 	StartedTo         *time.Time
 	OnlyMissed        bool
@@ -291,6 +292,7 @@ func (s *telephonyService) listCalls(ctx context.Context, userID *uint, filter T
 		EmployeeUserID:    cmp.Or(userID, filter.EmployeeUserID),
 		ClientPhone:       strings.TrimSpace(filter.ClientPhone),
 		Statuses:          filter.Statuses,
+		GroupNames:        filter.GroupNames,
 		StartedFrom:       filter.StartedFrom,
 		StartedTo:         filter.StartedTo,
 		OnlyMissed:        filter.OnlyMissed,
@@ -516,23 +518,22 @@ func loadMegafonIntegratedEmployees(
 	for i := range providerEmployees {
 		login := strings.TrimSpace(providerEmployees[i].EmployeeLogin)
 		localUser, ok := usersByLogin[login]
-		if !ok {
-			continue
-		}
-
 		status := "offline"
 		if strings.EqualFold(strings.TrimSpace(safeTelephonyString(providerEmployees[i].Status)), "online") {
 			status = "online"
 		}
-		items = append(items, TelephonyLineEmployeeView{
-			UserID:       &localUser.ID,
+		item := TelephonyLineEmployeeView{
 			Login:        login,
 			Name:         cmp.Or(strings.TrimSpace(providerEmployees[i].EmployeeName), strings.TrimSpace(localUser.FullName), login),
 			Status:       status,
 			Provider:     providerEmployees[i].Provider,
 			ProviderExt:  providerEmployees[i].Ext,
 			ProviderLine: providerEmployees[i].Telnum,
-		})
+		}
+		if ok {
+			item.UserID = &localUser.ID
+		}
+		items = append(items, item)
 	}
 
 	sort.SliceStable(items, func(i, j int) bool {

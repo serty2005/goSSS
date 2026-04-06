@@ -149,6 +149,17 @@ func (r *telephonyRepo) GetCallByAnyExternalID(ctx context.Context, provider str
 	return &call, nil
 }
 
+func (r *telephonyRepo) GetCallByID(ctx context.Context, id string) (*telephony.Call, error) {
+	var item telephony.Call
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("id = ?", strings.TrimSpace(id)).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
 func (r *telephonyRepo) UpsertCall(ctx context.Context, call *telephony.Call) error {
 	if call == nil {
 		return nil
@@ -215,6 +226,81 @@ func (r *telephonyRepo) AddCallEvent(ctx context.Context, event *telephony.CallE
 	}).Create(event).Error
 }
 
+func (r *telephonyRepo) GetCallArtifact(ctx context.Context, callID string, artifactType string) (*telephony.CallArtifact, error) {
+	var item telephony.CallArtifact
+	err := r.getDB(ctx).WithContext(ctx).
+		Where(
+			"telephony_call_id = ? AND artifact_type = ?",
+			strings.TrimSpace(callID),
+			strings.TrimSpace(artifactType),
+		).
+		First(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &item, err
+}
+
+func (r *telephonyRepo) UpsertCallArtifact(ctx context.Context, artifact *telephony.CallArtifact) error {
+	if artifact == nil {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "telephony_call_id"},
+			{Name: "artifact_type"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"url",
+			"storage_key",
+			"mime_type",
+			"updated_at",
+		}),
+	}).Create(artifact).Error
+}
+
+func (r *telephonyRepo) DeleteCallArtifact(ctx context.Context, callID string, artifactType string) error {
+	return r.getDB(ctx).WithContext(ctx).
+		Where(
+			"telephony_call_id = ? AND artifact_type = ?",
+			strings.TrimSpace(callID),
+			strings.TrimSpace(artifactType),
+		).
+		Delete(&telephony.CallArtifact{}).Error
+}
+
+func (r *telephonyRepo) ListExpiredCallArtifacts(
+	ctx context.Context,
+	artifactType string,
+	olderThan time.Time,
+	limit int,
+) ([]telephony.CallArtifact, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	items := make([]telephony.CallArtifact, 0, limit)
+	err := r.getDB(ctx).WithContext(ctx).
+		Table("telephony_call_artifacts").
+		Select("telephony_call_artifacts.*").
+		Joins("JOIN telephony_calls ON telephony_calls.id = telephony_call_artifacts.telephony_call_id").
+		Where("telephony_call_artifacts.artifact_type = ?", strings.TrimSpace(artifactType)).
+		Where("COALESCE(telephony_calls.completed_at, telephony_calls.started_at, telephony_calls.created_at) < ?", olderThan).
+		Order("COALESCE(telephony_calls.completed_at, telephony_calls.started_at, telephony_calls.created_at) asc, telephony_call_artifacts.id asc").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+func (r *telephonyRepo) ClearCallRecording(ctx context.Context, callID string) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&telephony.Call{}).
+		Where("id = ?", strings.TrimSpace(callID)).
+		Updates(map[string]any{
+			"recording_url": nil,
+			"has_recording": false,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
 func (r *telephonyRepo) MergeCalls(ctx context.Context, target *telephony.Call, sourceCallID string) error {
 	if target == nil {
 		return gorm.ErrInvalidData
@@ -256,6 +342,30 @@ func (r *telephonyRepo) MergeCalls(ctx context.Context, target *telephony.Call, 
 		if err := tx.Model(&telephony.CallEvent{}).
 			Where("telephony_call_id = ?", sourceCallID).
 			Update("telephony_call_id", target.ID).Error; err != nil {
+			return err
+		}
+		sourceArtifacts := make([]telephony.CallArtifact, 0)
+		if err := tx.Where("telephony_call_id = ?", sourceCallID).Find(&sourceArtifacts).Error; err != nil {
+			return err
+		}
+		for i := range sourceArtifacts {
+			sourceArtifacts[i].TelephonyCallID = target.ID
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "telephony_call_id"},
+					{Name: "artifact_type"},
+				},
+				DoUpdates: clause.AssignmentColumns([]string{
+					"url",
+					"storage_key",
+					"mime_type",
+					"updated_at",
+				}),
+			}).Create(&sourceArtifacts[i]).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("telephony_call_id = ?", sourceCallID).Delete(&telephony.CallArtifact{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", sourceCallID).Delete(&telephony.Call{}).Error
@@ -641,6 +751,9 @@ func (r *telephonyRepo) applyCallListFilter(query *gorm.DB, filter telephony.Cal
 	if len(filter.Statuses) > 0 {
 		query = query.Where("LOWER(status) IN ?", normalizeTelephonyStatuses(filter.Statuses))
 	}
+	if len(filter.GroupNames) > 0 {
+		query = query.Where("COALESCE(group_name, '') IN ?", normalizeTelephonyGroupNames(filter.GroupNames))
+	}
 	if filter.StartedFrom != nil {
 		query = query.Where("COALESCE(started_at, created_at) >= ?", *filter.StartedFrom)
 	}
@@ -666,6 +779,18 @@ func normalizeTelephonyStatuses(items []string) []string {
 	normalized := make([]string, 0, len(items))
 	for _, item := range items {
 		item = strings.ToLower(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized
+}
+
+func normalizeTelephonyGroupNames(items []string) []string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
 		}

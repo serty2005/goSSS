@@ -82,6 +82,33 @@ func TestTelephonyServiceGetLineViewColorPriority(t *testing.T) {
 	require.Equal(t, 1, lineView.MissedOpenCount)
 }
 
+func TestTelephonyServiceGetLineViewIncludesUnboundMegafonEmployees(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+
+	statusOnline := "online"
+	require.NoError(t, env.telephonyRepo.ReplaceProviderEmployees(ctx, telephony.ProviderMegafonVATS, []telephony.ProviderEmployee{
+		{
+			Provider:      telephony.ProviderMegafonVATS,
+			EmployeeLogin: "boris_gorbunov",
+			EmployeeName:  "Борис Горбунов",
+			Status:        &statusOnline,
+			LastSeenAt:    time.Now(),
+		},
+	}))
+
+	lineView, err := env.service.GetLineView(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lineView)
+	require.Equal(t, "green", lineView.Color)
+	require.Equal(t, 1, lineView.OnLineCount)
+	require.Len(t, lineView.Employees, 1)
+	require.Equal(t, "boris_gorbunov", lineView.Employees[0].Login)
+	require.Equal(t, "Борис Горбунов", lineView.Employees[0].Name)
+	require.Equal(t, "online", lineView.Employees[0].Status)
+	require.Nil(t, lineView.Employees[0].UserID)
+}
+
 func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 	ctx := context.Background()
 	env := newTelephonyServiceTestEnv(t)
