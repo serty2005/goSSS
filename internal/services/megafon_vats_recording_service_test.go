@@ -65,11 +65,13 @@ func TestMegafonVATSRecordingService_SyncCallRecordingStoresLocalCopy(t *testing
 	store := &fakeTelephonyRecordingStore{}
 	service := NewMegafonVATSRecordingService(
 		&config.Config{
-			EnableMegafonVATS:                  true,
-			MegafonVATSRecordingsS3Enabled:     true,
-			MegafonVATSRecordingsPublicBaseURL: "https://storage.local/records",
-			MegafonVATSRecordingsRetentionDays: 7,
-			RequestTimeout:                     2 * time.Second,
+			EnableMegafonVATS: true,
+			MegafonVATSRecordings: config.MegafonVATSRecordingsConfig{
+				Enabled:       true,
+				PublicBaseURL: "https://storage.local/records",
+				RetentionDays: 7,
+			},
+			RequestTimeout: 2 * time.Second,
 		},
 		nil,
 		repo,
@@ -143,10 +145,12 @@ func TestMegafonVATSRecordingService_CleanupExpiredRecordingsRemovesLocalCopy(t 
 	}
 	service := NewMegafonVATSRecordingService(
 		&config.Config{
-			EnableMegafonVATS:                  true,
-			MegafonVATSRecordingsS3Enabled:     true,
-			MegafonVATSRecordingsPublicBaseURL: "https://storage.local/records",
-			MegafonVATSRecordingsRetentionDays: 7,
+			EnableMegafonVATS: true,
+			MegafonVATSRecordings: config.MegafonVATSRecordingsConfig{
+				Enabled:       true,
+				PublicBaseURL: "https://storage.local/records",
+				RetentionDays: 7,
+			},
 		},
 		nil,
 		repo,

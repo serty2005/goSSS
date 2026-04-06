@@ -317,7 +317,7 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 			DB:       cfg.RedisDB,
 		})
 	}
-	agentAdapterStore, err := adapterstore.NewS3ObjectStore(context.Background(), cfg)
+	agentAdapterStore, err := adapterstore.NewAgentAdapterObjectStore(context.Background(), cfg)
 	if err != nil {
 		return ExternalClients{}, err
 	}
@@ -391,7 +391,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ownerResolver,
 		hubDetector,
 	)
-	agentOperatorFlow := services.NewAgentOperatorFlowService(app.DB, app.Config.AgentAdapterDefaultChannel)
+	agentOperatorFlow := services.NewAgentOperatorFlowService(app.DB, app.Config.AgentAdapterCatalog.DefaultChannel)
 
 	agentAdapterCatalogSync := services.NewAgentAdapterCatalogSyncService(
 		app.DB,

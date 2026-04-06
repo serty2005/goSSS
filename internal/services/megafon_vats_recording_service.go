@@ -216,7 +216,7 @@ func (s *megafonVATSRecordingService) recordingStorageKey(call *telephony.Call, 
 }
 
 func (s *megafonVATSRecordingService) publicURL(storageKey string) string {
-	baseURL := strings.TrimRight(strings.TrimSpace(s.cfg.MegafonVATSRecordingsPublicBaseURL), "/")
+	baseURL := strings.TrimRight(strings.TrimSpace(s.cfg.MegafonVATSRecordings.PublicBaseURL), "/")
 	return baseURL + "/" + strings.TrimLeft(storageKey, "/")
 }
 
@@ -224,17 +224,17 @@ func (s *megafonVATSRecordingService) isEnabled() bool {
 	return s != nil &&
 		s.cfg != nil &&
 		s.cfg.EnableMegafonVATS &&
-		s.cfg.MegafonVATSRecordingsS3Enabled &&
+		s.cfg.MegafonVATSRecordings.Enabled &&
 		s.repo != nil &&
 		s.store != nil &&
-		strings.TrimSpace(s.cfg.MegafonVATSRecordingsPublicBaseURL) != ""
+		strings.TrimSpace(s.cfg.MegafonVATSRecordings.PublicBaseURL) != ""
 }
 
 func (s *megafonVATSRecordingService) retentionDays() int {
-	if s == nil || s.cfg == nil || s.cfg.MegafonVATSRecordingsRetentionDays <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.MegafonVATSRecordings.RetentionDays <= 0 {
 		return 7
 	}
-	return s.cfg.MegafonVATSRecordingsRetentionDays
+	return s.cfg.MegafonVATSRecordings.RetentionDays
 }
 
 func (s *megafonVATSRecordingService) isExpired(call *telephony.Call) bool {

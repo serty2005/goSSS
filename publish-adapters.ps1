@@ -316,17 +316,17 @@ try {
             -RemotePort $SshRemotePort `
             -ReadyTimeoutSec $SshReadyTimeoutSec
 
-        $env:AGENT_ADAPTER_S3_ENDPOINT = "http://127.0.0.1:$SshLocalPort"
+        $env:S3_ENDPOINT = "http://127.0.0.1:$SshLocalPort"
         Write-Host ('SSH-туннель поднят: 127.0.0.1:{0} -> {1}@{2} -> {3}:{4}' -f $SshLocalPort, $SshUser, $SshHost, $SshRemoteHost, $SshRemotePort)
     }
 
     Assert-Env -Names @(
-        "AGENT_ADAPTER_S3_ENABLED",
-        "AGENT_ADAPTER_S3_ENDPOINT",
-        "AGENT_ADAPTER_S3_BUCKET",
-        "AGENT_ADAPTER_S3_ACCESS_KEY",
-        "AGENT_ADAPTER_S3_SECRET_KEY",
-        "AGENT_ADAPTER_PUBLIC_BASE_URL",
+        "S3_ENDPOINT",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "AGENT_ADAPTER_CATALOG_ENABLED",
+        "AGENT_ADAPTER_CATALOG_BUCKET",
+        "AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL",
         "AGENT_ADAPTER_CATALOG_KEY"
     )
 

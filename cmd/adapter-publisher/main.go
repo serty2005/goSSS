@@ -34,14 +34,14 @@ func main() {
 	}
 
 	cfg := config.New()
-	if !cfg.AgentAdapterS3Enabled {
-		fmt.Fprintln(os.Stderr, "AGENT_ADAPTER_S3_ENABLED должен быть true для publish/promote CLI")
+	if !cfg.AgentAdapterCatalog.Enabled {
+		fmt.Fprintln(os.Stderr, "AGENT_ADAPTER_CATALOG_ENABLED должен быть true для publish/promote CLI")
 		os.Exit(1)
 	}
 
 	log := logger.New("", "adapter-publisher", "info", true)
 	ctx := context.Background()
-	store, err := adapterstore.NewS3ObjectStore(ctx, cfg)
+	store, err := adapterstore.NewAgentAdapterObjectStore(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Не удалось инициализировать S3-клиент: %v\n", err)
 		os.Exit(1)

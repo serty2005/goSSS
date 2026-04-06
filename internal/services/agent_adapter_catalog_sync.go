@@ -49,20 +49,20 @@ func NewAgentAdapterCatalogSyncService(
 	store AgentAdapterObjectStore,
 	cfg *config.Config,
 ) AgentAdapterCatalogSyncService {
-	if cfg == nil || !cfg.AgentAdapterS3Enabled || store == nil {
+	if cfg == nil || !cfg.AgentAdapterCatalog.Enabled || store == nil {
 		return noopAgentAdapterCatalogSyncService{}
 	}
 
-	defaultChannel := normalizeAgentAdapterChannel(cfg.AgentAdapterDefaultChannel)
+	defaultChannel := normalizeAgentAdapterChannel(cfg.AgentAdapterCatalog.DefaultChannel)
 	return &agentAdapterCatalogSyncService{
 		db:             db,
 		logger:         log,
 		store:          store,
 		enabled:        true,
-		catalogKey:     normalizeObjectKey(cfg.AgentAdapterCatalogKey),
+		catalogKey:     normalizeObjectKey(cfg.AgentAdapterCatalog.CatalogKey),
 		defaultChannel: defaultChannel,
-		interval:       max(time.Minute, cfg.AgentAdapterSyncInterval),
-		publicBaseURL:  normalizePublicBaseURL(cfg.AgentAdapterPublicBaseURL),
+		interval:       max(time.Minute, cfg.AgentAdapterCatalog.SyncInterval),
+		publicBaseURL:  normalizePublicBaseURL(cfg.AgentAdapterCatalog.PublicBaseURL),
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
