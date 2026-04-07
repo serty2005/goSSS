@@ -13,7 +13,7 @@ export const profileApi = {
     return response.data;
   },
 
-  updateIntegrations: async (payload: { integrations: Array<{ integration_type: string; external_id: string }> }) => {
+  updateIntegrations: async (payload: { integrations: Array<{ integration_type: string; external_id: string; is_enabled?: boolean }> }) => {
     const response = await apiClient.patch<ApiResponse<any>>('/profile/integrations', payload);
     return response.data;
   },

@@ -27,6 +27,7 @@ import {
 } from '@ant-design/icons';
 import { bitrixAdminApi } from '@/api/bitrixAdmin';
 import { pyrusAdminApi } from '@/api/pyrusAdmin';
+import { telephonyApi } from '@/api/telephony';
 import { usersApi } from '@/api/users';
 import {
   DeletedUserRestoreCandidateDTO,
@@ -60,6 +61,7 @@ const integrationCatalog: IntegrationOption[] = [
   { label: 'Telegram', value: 'telegram', color: 'cyan' },
   { label: 'Naumen', value: 'naumen', color: 'orange' },
   { label: 'Bitrix24', value: 'bitrix24', color: 'blue' },
+  { label: 'Мегафон', value: 'megafon_vats', color: 'gold' },
   { label: 'Pyrus', value: 'pyrus', color: 'geekblue' },
 ];
 
@@ -87,6 +89,8 @@ const getExternalPlaceholder = (externalType?: string) => {
     case 'bitrix24':
     case 'pyrus':
       return '12345';
+    case 'megafon_vats':
+      return 'Логин сотрудника ВАТС';
     default:
       return 'ID внешней системы';
   }
@@ -218,6 +222,8 @@ const UsersAdminPage: React.FC = () => {
   const [restoreCandidate, setRestoreCandidate] = useState<DeletedUserRestoreCandidateDTO | null>(null);
   const [createSuggestion, setCreateSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
   const [editSuggestion, setEditSuggestion] = useState<{ b24_user_id: number; name: string } | null>(null);
+  const [createMegafonSuggestion, setCreateMegafonSuggestion] = useState<{ login: string; name: string } | null>(null);
+  const [editMegafonSuggestion, setEditMegafonSuggestion] = useState<{ login: string; name: string } | null>(null);
   const [createPyrusSuggestion, setCreatePyrusSuggestion] = useState<{ pyrus_user_id: number; name: string; email?: string } | null>(null);
   const [editPyrusSuggestion, setEditPyrusSuggestion] = useState<{ pyrus_user_id: number; name: string; email?: string } | null>(null);
 
@@ -275,6 +281,7 @@ const UsersAdminPage: React.FC = () => {
     setIsCreateOpen(false);
     setRestoreCandidate(null);
     setCreateSuggestion(null);
+    setCreateMegafonSuggestion(null);
     setCreatePyrusSuggestion(null);
     createForm.resetFields();
   };
@@ -283,6 +290,7 @@ const UsersAdminPage: React.FC = () => {
     setIsEditOpen(false);
     setSelectedUser(null);
     setEditSuggestion(null);
+    setEditMegafonSuggestion(null);
     setEditPyrusSuggestion(null);
     editForm.resetFields();
   };
@@ -474,6 +482,35 @@ const UsersAdminPage: React.FC = () => {
   }, [isBitrixEnabled, isCreateOpen, watchedCreateFirstName, watchedCreateLastName]);
 
   useEffect(() => {
+    if (!isCreateOpen) {
+      setCreateMegafonSuggestion(null);
+      return;
+    }
+
+    const firstName = normalizeString(watchedCreateFirstName);
+    const lastName = normalizeString(watchedCreateLastName);
+    if (!firstName || !lastName) {
+      setCreateMegafonSuggestion(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await telephonyApi.suggestMegafonUser({
+          first_name: firstName,
+          last_name: lastName,
+          full_name: `${firstName} ${lastName}`,
+        });
+        setCreateMegafonSuggestion(response.data?.suggestion || null);
+      } catch {
+        setCreateMegafonSuggestion(null);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [isCreateOpen, watchedCreateFirstName, watchedCreateLastName]);
+
+  useEffect(() => {
     if (!isPyrusEnabled || !isCreateOpen) {
       setCreatePyrusSuggestion(null);
       return;
@@ -532,6 +569,35 @@ const UsersAdminPage: React.FC = () => {
 
     return () => clearTimeout(timer);
   }, [isBitrixEnabled, isEditOpen, watchedEditFirstName, watchedEditIntegrations, watchedEditLastName]);
+
+  useEffect(() => {
+    if (!isEditOpen || hasIntegrationType(watchedEditIntegrations, 'megafon_vats')) {
+      setEditMegafonSuggestion(null);
+      return;
+    }
+
+    const firstName = normalizeString(watchedEditFirstName);
+    const lastName = normalizeString(watchedEditLastName);
+    if (!firstName || !lastName) {
+      setEditMegafonSuggestion(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await telephonyApi.suggestMegafonUser({
+          first_name: firstName,
+          last_name: lastName,
+          full_name: `${firstName} ${lastName}`,
+        });
+        setEditMegafonSuggestion(response.data?.suggestion || null);
+      } catch {
+        setEditMegafonSuggestion(null);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [isEditOpen, watchedEditFirstName, watchedEditIntegrations, watchedEditLastName]);
 
   useEffect(() => {
     if (!isPyrusEnabled || !isEditOpen || hasIntegrationType(watchedEditIntegrations, 'pyrus')) {
@@ -839,6 +905,27 @@ const UsersAdminPage: React.FC = () => {
             </Card>
           ) : null}
 
+          {createMegafonSuggestion ? (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть сотрудник в Мегафон. Подключить?</Text>
+                  <Text type="secondary">{createMegafonSuggestion.name} (логин: {createMegafonSuggestion.login})</Text>
+                </Space>
+                <Button
+                  onClick={() => {
+                    createForm.setFieldsValue({
+                      external_type: 'megafon_vats',
+                      external_system_id: createMegafonSuggestion.login,
+                    });
+                  }}
+                >
+                  Подставить
+                </Button>
+              </Space>
+            </Card>
+          ) : null}
+
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="position" label="Должность" rules={[{ required: true, message: 'Выберите должность' }]}>
@@ -965,6 +1052,25 @@ const UsersAdminPage: React.FC = () => {
                   }}
                 >
                   Добавить Pyrus
+                </Button>
+              </Space>
+            </Card>
+          ) : null}
+
+          {editMegafonSuggestion ? (
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                <Space direction="vertical" size={0}>
+                  <Text strong>Есть сотрудник в Мегафон. Добавить интеграцию?</Text>
+                  <Text type="secondary">{editMegafonSuggestion.name} (логин: {editMegafonSuggestion.login})</Text>
+                </Space>
+                <Button
+                  onClick={() => {
+                    const nextItems = appendIntegration(editForm.getFieldValue('integrations'), 'megafon_vats', editMegafonSuggestion.login);
+                    editForm.setFieldsValue({ integrations: nextItems });
+                  }}
+                >
+                  Добавить Мегафон
                 </Button>
               </Space>
             </Card>

@@ -701,6 +701,11 @@ export interface PyrusUserSuggestionDTO {
   email?: string;
 }
 
+export interface MegafonUserSuggestionDTO {
+  login: string;
+  name: string;
+}
+
 export interface ThemePaletteConfigDTO {
   primary?: string;
   bg_layout?: string;

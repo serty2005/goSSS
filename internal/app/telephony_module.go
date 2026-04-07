@@ -61,7 +61,7 @@ func (m *telephonyModule) registerProtectedRoutes(r chi.Router) {
 	if m.telephonyHandler != nil {
 		r.Route("/megafon-vats", func(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/users/refresh", m.telephonyHandler.RefreshUsers)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", m.telephonyHandler.SuggestUser)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist, user.RoleIntern)).Get("/users/suggest", m.telephonyHandler.SuggestUser)
 		})
 	}
 	if m.apiHandler != nil {

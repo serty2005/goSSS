@@ -192,6 +192,22 @@ func (r *telephonyRepo) UpsertCall(ctx context.Context, call *telephony.Call) er
 	}).Create(call).Error
 }
 
+func (r *telephonyRepo) SyncCallEmployeeUser(ctx context.Context, provider string, login string, userID *uint) error {
+	provider = strings.TrimSpace(provider)
+	login = strings.TrimSpace(login)
+	if provider == "" || login == "" {
+		return nil
+	}
+
+	return r.getDB(ctx).WithContext(ctx).
+		Model(&telephony.Call{}).
+		Where("provider = ? AND employee_login = ?", provider, login).
+		Updates(map[string]any{
+			"employee_user_id": userID,
+			"updated_at":       time.Now(),
+		}).Error
+}
+
 func (r *telephonyRepo) ListCalls(ctx context.Context, filter telephony.CallListFilter) ([]telephony.Call, int64, error) {
 	if filter.Limit <= 0 {
 		filter.Limit = 50

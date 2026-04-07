@@ -452,6 +452,15 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.EventBus,
 		megafonVATSRecordingService,
 	)
+	megafonVATSSyncService := services.NewMegafonVATSSyncService(
+		app.Config,
+		app.Logger.With("component", "megafon_vats_sync_service"),
+		clients.MegafonVATSClient,
+		repos.TelephonyRepo,
+		repos.UserRepo,
+		app.EventBus,
+		megafonVATSRecordingService,
+	)
 	telephonyService := services.NewTelephonyService(
 		app.Logger.With("component", "telephony_service"),
 		repos.TelephonyRepo,
@@ -459,6 +468,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.CompanyRepo,
 		repos.UserRepo,
 		app.EventBus,
+		megafonVATSSyncService,
 	)
 	integrationSyncControl := services.NewIntegrationSyncControlService(
 		repos.PyrusRepo,
@@ -486,7 +496,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		BitrixIncomingService:      services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		PyrusSyncService:           pyrusSyncService,
 		PyrusIncomingService:       pyrusIncomingService,
-		MegafonVATSSyncService:     services.NewMegafonVATSSyncService(app.Config, app.Logger.With("component", "megafon_vats_sync_service"), clients.MegafonVATSClient, repos.TelephonyRepo, repos.UserRepo, app.EventBus, megafonVATSRecordingService),
+		MegafonVATSSyncService:     megafonVATSSyncService,
 		MegafonVATSIncomingService: megafonVATSIncomingService,
 		TelephonyService:           telephonyService,
 		IntegrationSyncControl:     integrationSyncControl,

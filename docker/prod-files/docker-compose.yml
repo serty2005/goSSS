@@ -1,0 +1,240 @@
+name: gosss-prod
+
+services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    command:
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --api.basepath=/_traefik
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+      - --accesslog=true
+      - --accesslog.filepath=/logs/access.log
+      - --accesslog.format=common
+      - --ping=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/etalon/traefik/logs:/logs
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=gosss-prod_edge
+
+      - traefik.http.routers.traefik-admin.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/_traefik`)
+      - traefik.http.routers.traefik-admin.entrypoints=websecure
+      - traefik.http.routers.traefik-admin.tls=true
+      - traefik.http.routers.traefik-admin.tls.certresolver=le
+      - traefik.http.routers.traefik-admin.priority=200
+      - traefik.http.routers.traefik-admin.service=api@internal
+      - traefik.http.routers.traefik-admin.middlewares=admin-auth,etalon-secure-headers
+
+      - traefik.http.middlewares.admin-auth.basicauth.users=${TRAEFIK_ADMIN_AUTH}
+
+      - traefik.http.middlewares.etalon-secure-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.etalon-secure-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.etalon-secure-headers.headers.stsPreload=true
+      - traefik.http.middlewares.etalon-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.etalon-secure-headers.headers.browserXssFilter=true
+      - traefik.http.middlewares.etalon-secure-headers.headers.frameDeny=true
+      - traefik.http.middlewares.etalon-secure-headers.headers.referrerPolicy=no-referrer
+
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    environment:
+      DOZZLE_BASE: /logs
+      DOZZLE_LEVEL: info
+      DOZZLE_NO_ANALYTICS: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/etalon/dozzle/data:/data
+    networks:
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=gosss-prod_edge
+
+      - traefik.http.routers.dozzle.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/logs`)
+      - traefik.http.routers.dozzle.entrypoints=websecure
+      - traefik.http.routers.dozzle.tls=true
+      - traefik.http.routers.dozzle.tls.certresolver=le
+      - traefik.http.routers.dozzle.priority=190
+      - traefik.http.routers.dozzle.middlewares=admin-auth,etalon-secure-headers
+      - traefik.http.services.dozzle.loadbalancer.server.port=8080
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gosss-net
+      
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+    networks:
+      - gosss-net
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=gosss-prod_edge
+
+      - traefik.http.routers.minio-console.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/minio`)
+      - traefik.http.routers.minio-console.entrypoints=websecure
+      - traefik.http.routers.minio-console.tls=true
+      - traefik.http.routers.minio-console.tls.certresolver=le
+      - traefik.http.routers.minio-console.priority=185
+      - traefik.http.routers.minio-console.service=minio-console
+      - traefik.http.routers.minio-console.middlewares=minio-console-slash,minio-console-strip,admin-auth,etalon-secure-headers
+      - traefik.http.services.minio-console.loadbalancer.server.port=9001
+      - traefik.http.middlewares.minio-console-slash.redirectregex.regex=^https://([^/]+)/minio$$
+      - traefik.http.middlewares.minio-console-slash.redirectregex.replacement=https://$${1}/minio/
+      - traefik.http.middlewares.minio-console-slash.redirectregex.permanent=true
+      - traefik.http.middlewares.minio-console-strip.stripprefix.prefixes=/minio
+
+      - traefik.http.routers.minio-agents.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/agents`)
+      - traefik.http.routers.minio-agents.entrypoints=websecure
+      - traefik.http.routers.minio-agents.tls=true
+      - traefik.http.routers.minio-agents.tls.certresolver=le
+      - traefik.http.routers.minio-agents.priority=180
+      - traefik.http.routers.minio-agents.service=minio-agents
+      - traefik.http.routers.minio-agents.middlewares=etalon-secure-headers
+      - traefik.http.services.minio-agents.loadbalancer.server.port=9000
+
+      - traefik.http.routers.minio-recordings.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/recordings`)
+      - traefik.http.routers.minio-recordings.entrypoints=websecure
+      - traefik.http.routers.minio-recordings.tls=true
+      - traefik.http.routers.minio-recordings.tls.certresolver=le
+      - traefik.http.routers.minio-recordings.priority=179
+      - traefik.http.routers.minio-recordings.service=minio-recordings
+      - traefik.http.routers.minio-recordings.middlewares=minio-recordings-slash,minio-recordings-rewrite,etalon-secure-headers
+      - traefik.http.services.minio-recordings.loadbalancer.server.port=9000
+      - traefik.http.middlewares.minio-recordings-slash.redirectregex.regex=^https://([^/]+)/recordings$$
+      - traefik.http.middlewares.minio-recordings-slash.redirectregex.replacement=https://$${1}/recordings/
+      - traefik.http.middlewares.minio-recordings-slash.redirectregex.permanent=true
+      - traefik.http.middlewares.minio-recordings-rewrite.replacepathregex.regex=^/recordings/(.*)
+      - traefik.http.middlewares.minio-recordings-rewrite.replacepathregex.replacement=/telephony-recordings/$${1}
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
+    restart: "no"
+    env_file:
+      - .env
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; if [ -n "${MEGAFON_VATS_RECORDINGS_BUCKET}" ]; then mc mb --ignore-existing "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; mc anonymous set download "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; fi'
+    depends_on:
+      - minio
+    networks:
+      - gosss-net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - gosss-net
+
+  server:
+    image: ${BACKEND_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - storage_tickets:/app/storage/tickets
+      - ftp_cache:/app/ftp_cache
+      - app_logs:/app/logs
+    networks:
+      - gosss-net
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      - server
+    volumes:
+      - /opt/etalon/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - gosss-net
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=gosss-prod_edge
+
+      - traefik.http.routers.etalon-web.rule=Host(`${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.etalon-web.entrypoints=websecure
+      - traefik.http.routers.etalon-web.tls=true
+      - traefik.http.routers.etalon-web.tls.certresolver=le
+      - traefik.http.routers.etalon-web.priority=10
+      - traefik.http.routers.etalon-web.middlewares=etalon-ratelimit,etalon-secure-headers
+      - traefik.http.services.etalon-web.loadbalancer.server.port=80
+
+      - traefik.http.middlewares.etalon-ratelimit.ratelimit.average=30
+      - traefik.http.middlewares.etalon-ratelimit.ratelimit.burst=60
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+  ftp_cache:
+  storage_tickets:
+  app_logs:
+  traefik_letsencrypt:
+
+networks:
+  gosss-net:
+    driver: bridge
+  edge:
+    driver: bridge

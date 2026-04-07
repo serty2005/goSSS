@@ -28,9 +28,18 @@ type MegafonVATSSyncService interface {
 	Start(ctx context.Context)
 	RefreshEmployees(ctx context.Context) (int, error)
 	SyncHistory(ctx context.Context) (int, error)
+	SyncHistoryByFilter(ctx context.Context, filter MegafonVATSHistorySyncFilter) (int, error)
 	ListCachedEmployees(ctx context.Context) ([]telephony.ProviderEmployee, error)
 	SearchEmployeesByName(ctx context.Context, firstName, lastName, fullName string) ([]telephony.ProviderEmployee, error)
 	GetEmployee(ctx context.Context, login string) (*telephony.ProviderEmployee, error)
+}
+
+type MegafonVATSHistorySyncFilter struct {
+	StartedFrom   *time.Time
+	StartedTo     *time.Time
+	EmployeeLogin string
+	ClientPhone   string
+	Groups        []string
 }
 
 type megafonVATSSyncService struct {
@@ -141,14 +150,25 @@ func (s *megafonVATSSyncService) RefreshEmployees(ctx context.Context) (int, err
 }
 
 func (s *megafonVATSSyncService) SyncHistory(ctx context.Context) (int, error) {
+	return s.SyncHistoryByFilter(ctx, MegafonVATSHistorySyncFilter{})
+}
+
+func (s *megafonVATSSyncService) SyncHistoryByFilter(ctx context.Context, filter MegafonVATSHistorySyncFilter) (int, error) {
 	if !s.IsEnabled() {
 		return 0, nil
 	}
 
-	items, err := s.client.ListHistory(ctx, megafonvats.HistoryFilter{
-		Period:        "today",
+	startedFrom, startedTo := normalizeTelephonyDateRange(filter.StartedFrom, filter.StartedTo, time.Now())
+	historyFilter := megafonvats.HistoryFilter{
+		Start:         formatMegafonHistoryDateTime(startedFrom),
+		End:           formatMegafonHistoryDateTime(startedTo),
+		User:          strings.TrimSpace(filter.EmployeeLogin),
+		Client:        normalizeMegafonPhone(filter.ClientPhone),
+		Groups:        sanitizeMegafonGroups(filter.Groups),
 		ProcessMissed: true,
-	})
+	}
+
+	items, err := s.client.ListHistory(ctx, historyFilter)
 	if err != nil {
 		return 0, err
 	}
@@ -166,6 +186,27 @@ func (s *megafonVATSSyncService) SyncHistory(ctx context.Context) (int, error) {
 	publishTelephonyLineUpdate(ctx, s.log, s.eventBus, s.repo, s.userRepo)
 
 	return synced, nil
+}
+
+func formatMegafonHistoryDateTime(value time.Time) string {
+	return value.UTC().Format("20060102T150405Z")
+}
+
+func sanitizeMegafonGroups(groups []string) []string {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	items := make([]string, 0, len(groups))
+	for _, group := range groups {
+		if trimmed := strings.TrimSpace(group); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 func (s *megafonVATSSyncService) ListCachedEmployees(ctx context.Context) ([]telephony.ProviderEmployee, error) {
@@ -276,7 +317,7 @@ func (s *megafonVATSSyncService) refreshMegafonIntegrations(ctx context.Context,
 		return err
 	}
 	for i := range users {
-		if !s.refreshMegafonUserIntegrations(&users[i], employeesByLogin) {
+		if !s.refreshMegafonUserIntegrations(ctx, &users[i], employeesByLogin) {
 			continue
 		}
 		if err = s.userRepo.ReplaceIntegrations(ctx, users[i].ID, users[i].Integrations); err != nil {
@@ -289,7 +330,11 @@ func (s *megafonVATSSyncService) refreshMegafonIntegrations(ctx context.Context,
 	return nil
 }
 
-func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(u *user.User, employeesByLogin map[string]telephony.ProviderEmployee) bool {
+func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(
+	ctx context.Context,
+	u *user.User,
+	employeesByLogin map[string]telephony.ProviderEmployee,
+) bool {
 	if u == nil {
 		return false
 	}
@@ -301,7 +346,9 @@ func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(u *user.User, em
 			continue
 		}
 
+		login := strings.TrimSpace(integration.ExternalID)
 		if !integration.IsEnabled {
+			s.syncMegafonCallEmployeeUser(ctx, login, nil)
 			if integration.IsVerified || integration.IsLocked || integration.VerifiedName != "" {
 				integration.IsVerified = false
 				integration.IsLocked = false
@@ -311,8 +358,9 @@ func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(u *user.User, em
 			continue
 		}
 
-		employee, exists := employeesByLogin[strings.TrimSpace(integration.ExternalID)]
+		employee, exists := employeesByLogin[login]
 		if !exists {
+			s.syncMegafonCallEmployeeUser(ctx, login, nil)
 			if integration.IsVerified || integration.IsLocked || integration.VerifiedName != "" {
 				integration.IsVerified = false
 				integration.IsLocked = false
@@ -322,6 +370,7 @@ func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(u *user.User, em
 			continue
 		}
 
+		s.syncMegafonCallEmployeeUser(ctx, login, &u.ID)
 		if !integration.IsVerified || !integration.IsLocked || integration.VerifiedName != employee.EmployeeName {
 			integration.IsVerified = true
 			integration.IsLocked = true
@@ -334,6 +383,15 @@ func (s *megafonVATSSyncService) refreshMegafonUserIntegrations(u *user.User, em
 		u.ExternalType, u.ExternalID = pickPrimaryEnabledIntegration(u.Integrations)
 	}
 	return changed
+}
+
+func (s *megafonVATSSyncService) syncMegafonCallEmployeeUser(ctx context.Context, login string, userID *uint) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	if err := s.repo.SyncCallEmployeeUser(ctx, telephony.ProviderMegafonVATS, login, userID); err != nil && s.log != nil {
+		s.log.Warn("Мегафон ВАТС: не удалось синхронизировать историю звонков с сотрудником", "login", strings.TrimSpace(login), "error", err)
+	}
 }
 
 func (s *megafonVATSSyncService) syncHistoryRecord(ctx context.Context, item *megafonvats.HistoryRecord) (bool, error) {

@@ -16,8 +16,9 @@ import (
 )
 
 type fakeMegafonVATSDirectoryClient struct {
-	users   []megafonvats.User
-	history []megafonvats.HistoryRecord
+	users             []megafonvats.User
+	history           []megafonvats.HistoryRecord
+	lastHistoryFilter megafonvats.HistoryFilter
 }
 
 func (f *fakeMegafonVATSDirectoryClient) IsConfigured() bool {
@@ -37,7 +38,8 @@ func (f *fakeMegafonVATSDirectoryClient) GetUser(_ context.Context, login string
 	return nil, nil
 }
 
-func (f *fakeMegafonVATSDirectoryClient) ListHistory(_ context.Context, _ megafonvats.HistoryFilter) ([]megafonvats.HistoryRecord, error) {
+func (f *fakeMegafonVATSDirectoryClient) ListHistory(_ context.Context, filter megafonvats.HistoryFilter) ([]megafonvats.HistoryRecord, error) {
+	f.lastHistoryFilter = filter
 	return f.history, nil
 }
 
@@ -115,6 +117,63 @@ func TestMegafonVATSSyncService_RefreshEmployeesStoresDirectoryAndVerifiesIntegr
 	}
 	if integration.VerifiedName != "Иван Иванов" {
 		t.Fatalf("ожидали VerifiedName=Иван Иванов, получили %q", integration.VerifiedName)
+	}
+}
+
+func TestMegafonVATSSyncService_RefreshEmployeesBackfillsEmployeeUserIDForStoredCalls(t *testing.T) {
+	service, telephonyRepo, userRepo := newMegafonVATSSyncTestEnv(t, []megafonvats.User{
+		{
+			Login:  "admin",
+			Name:   "Иван Иванов",
+			Status: "online",
+		},
+	})
+
+	u := &user.User{
+		Username:     "ivanov",
+		PasswordHash: "hash",
+		FullName:     "Иван Иванов",
+		FirstName:    "Иван",
+		LastName:     "Иванов",
+		Position:     user.RoleSupportSpecialist,
+		ScheduleType: user.ScheduleFiveTwo,
+		IsActive:     true,
+		Integrations: []user.Integration{
+			{
+				IntegrationType: user.ExternalTypeMegafon,
+				ExternalID:      "admin",
+				IsEnabled:       true,
+			},
+		},
+	}
+	if err := userRepo.Create(context.Background(), u); err != nil {
+		t.Fatalf("не удалось создать пользователя: %v", err)
+	}
+
+	login := "admin"
+	clientPhone := "79990001122"
+	if err := telephonyRepo.UpsertCall(context.Background(), &telephony.Call{
+		ID:             "call-backfill-1",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-backfill-1",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &clientPhone,
+		EmployeeLogin:  &login,
+	}); err != nil {
+		t.Fatalf("не удалось сохранить звонок без employee_user_id: %v", err)
+	}
+
+	if _, err := service.RefreshEmployees(context.Background()); err != nil {
+		t.Fatalf("RefreshEmployees вернул ошибку: %v", err)
+	}
+
+	call, err := telephonyRepo.GetCallByExternalID(context.Background(), telephony.ProviderMegafonVATS, "call-backfill-1")
+	if err != nil {
+		t.Fatalf("не удалось получить звонок: %v", err)
+	}
+	if call == nil || call.EmployeeUserID == nil || *call.EmployeeUserID != u.ID {
+		t.Fatalf("ожидали employee_user_id=%d после backfill, получили %+v", u.ID, call)
 	}
 }
 
@@ -279,6 +338,74 @@ func TestMegafonVATSSyncService_SyncHistoryUpdatesMissedCallState(t *testing.T) 
 	}
 	if call.MissedStatus == nil || *call.MissedStatus != "3" {
 		t.Fatalf("ожидали missed_status=3, получили %+v", call.MissedStatus)
+	}
+}
+
+func TestMegafonVATSSyncService_SyncHistoryUsesLastSevenDaysByDefault(t *testing.T) {
+	service, _, _ := newMegafonVATSSyncTestEnv(t, nil)
+	client := &fakeMegafonVATSDirectoryClient{}
+	service.client = client
+
+	if _, err := service.SyncHistory(context.Background()); err != nil {
+		t.Fatalf("SyncHistory вернул ошибку: %v", err)
+	}
+
+	if client.lastHistoryFilter.Period != "" {
+		t.Fatalf("не ожидали period в дефолтной синхронизации, получили %q", client.lastHistoryFilter.Period)
+	}
+	if client.lastHistoryFilter.Start == "" || client.lastHistoryFilter.End == "" {
+		t.Fatalf("ожидали заполненные start/end, получили %+v", client.lastHistoryFilter)
+	}
+	if !client.lastHistoryFilter.ProcessMissed {
+		t.Fatal("ожидали processMissed=true")
+	}
+
+	startedFrom, err := time.Parse("20060102T150405Z", client.lastHistoryFilter.Start)
+	if err != nil {
+		t.Fatalf("не удалось распарсить start: %v", err)
+	}
+	startedTo, err := time.Parse("20060102T150405Z", client.lastHistoryFilter.End)
+	if err != nil {
+		t.Fatalf("не удалось распарсить end: %v", err)
+	}
+	diff := startedTo.Sub(startedFrom)
+	if diff < (6*24*time.Hour) || diff > (7*24*time.Hour) {
+		t.Fatalf("ожидали диапазон около 7 дней, получили %v", diff)
+	}
+}
+
+func TestMegafonVATSSyncService_SyncHistoryByFilterUsesExplicitRange(t *testing.T) {
+	service, _, _ := newMegafonVATSSyncTestEnv(t, nil)
+	client := &fakeMegafonVATSDirectoryClient{}
+	service.client = client
+
+	startedFrom := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	startedTo := time.Date(2026, 4, 7, 23, 59, 59, 0, time.UTC)
+	_, err := service.SyncHistoryByFilter(context.Background(), MegafonVATSHistorySyncFilter{
+		StartedFrom:   &startedFrom,
+		StartedTo:     &startedTo,
+		EmployeeLogin: "admin",
+		ClientPhone:   "+7 (999) 000-11-22",
+		Groups:        []string{"Техподдержка", "  "},
+	})
+	if err != nil {
+		t.Fatalf("SyncHistoryByFilter вернул ошибку: %v", err)
+	}
+
+	if client.lastHistoryFilter.Start != "20260401T000000Z" {
+		t.Fatalf("ожидали start=20260401T000000Z, получили %q", client.lastHistoryFilter.Start)
+	}
+	if client.lastHistoryFilter.End != "20260407T235959Z" {
+		t.Fatalf("ожидали end=20260407T235959Z, получили %q", client.lastHistoryFilter.End)
+	}
+	if client.lastHistoryFilter.User != "admin" {
+		t.Fatalf("ожидали user=admin, получили %q", client.lastHistoryFilter.User)
+	}
+	if client.lastHistoryFilter.Client != "79990001122" {
+		t.Fatalf("ожидали client=79990001122, получили %q", client.lastHistoryFilter.Client)
+	}
+	if len(client.lastHistoryFilter.Groups) != 1 || client.lastHistoryFilter.Groups[0] != "Техподдержка" {
+		t.Fatalf("ожидали groups=[Техподдержка], получили %+v", client.lastHistoryFilter.Groups)
 	}
 }
 

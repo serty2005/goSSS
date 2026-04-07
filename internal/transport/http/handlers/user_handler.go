@@ -231,6 +231,7 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), currentUserID, u.Integrations, normalized)
 	u.Integrations = normalized
 	h.persistVerifiedExternalMaps(r.Context(), u)
 
@@ -441,7 +442,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать пользователя")
 		return
 	}
-
+	h.syncMegafonBindingsForUser(r.Context(), newUser.ID, nil, newUser.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), newUser)
 
 	response.RespondWithJSON(w, http.StatusCreated, h.toUserDTO(r.Context(), *newUser))
@@ -549,6 +550,7 @@ func (h *UserHandler) RestoreDeletedUser(w http.ResponseWriter, r *http.Request)
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), deletedUser.ID, nil, deletedUser.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), deletedUser)
 
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *deletedUser))
@@ -638,6 +640,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		u.ScheduleType = schedule
 	}
 	u.FullName = buildFullName(u.FirstName, u.LastName)
+	prevIntegrations := append([]user.Integration(nil), u.Integrations...)
 
 	if dto.Integrations != nil {
 		normalizedIntegrations, normalizeErr := h.normalizeRequestedIntegrations(r.Context(), u, dto.Integrations, false)
@@ -697,6 +700,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить пользователя")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), u.ID, prevIntegrations, u.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), u)
 
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
@@ -1520,6 +1524,49 @@ func normalizeOptionalString(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func (h *UserHandler) syncMegafonBindingsForUser(
+	ctx context.Context,
+	userID uint,
+	previous []user.Integration,
+	next []user.Integration,
+) {
+	if h == nil || h.telephonyRepo == nil || userID == 0 {
+		return
+	}
+
+	actions := make(map[string]*uint)
+	for _, integration := range previous {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeMegafon {
+			continue
+		}
+		login := strings.TrimSpace(integration.ExternalID)
+		if login == "" {
+			continue
+		}
+		actions[login] = nil
+	}
+	for _, integration := range next {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeMegafon {
+			continue
+		}
+		login := strings.TrimSpace(integration.ExternalID)
+		if login == "" {
+			continue
+		}
+		if integration.IsEnabled {
+			actions[login] = &userID
+			continue
+		}
+		actions[login] = nil
+	}
+
+	for login, targetUserID := range actions {
+		if err := h.telephonyRepo.SyncCallEmployeeUser(ctx, telephony.ProviderMegafonVATS, login, targetUserID); err != nil {
+			continue
+		}
+	}
 }
 
 func roleDescription(role string) string {

@@ -22,6 +22,45 @@ type telephonyServiceTestEnv struct {
 	telephonyRepo telephony.Repository
 	ticketRepo    tickets.TicketRepository
 	userRepo      user.Repository
+	historySync   *fakeTelephonyHistorySyncService
+}
+
+type fakeTelephonyHistorySyncService struct {
+	enabled    bool
+	lastFilter MegafonVATSHistorySyncFilter
+	callCount  int
+}
+
+func (f *fakeTelephonyHistorySyncService) IsEnabled() bool {
+	return f != nil && f.enabled
+}
+
+func (f *fakeTelephonyHistorySyncService) Start(_ context.Context) {}
+
+func (f *fakeTelephonyHistorySyncService) RefreshEmployees(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeTelephonyHistorySyncService) SyncHistory(ctx context.Context) (int, error) {
+	return f.SyncHistoryByFilter(ctx, MegafonVATSHistorySyncFilter{})
+}
+
+func (f *fakeTelephonyHistorySyncService) SyncHistoryByFilter(_ context.Context, filter MegafonVATSHistorySyncFilter) (int, error) {
+	f.lastFilter = filter
+	f.callCount++
+	return 0, nil
+}
+
+func (f *fakeTelephonyHistorySyncService) ListCachedEmployees(_ context.Context) ([]telephony.ProviderEmployee, error) {
+	return []telephony.ProviderEmployee{}, nil
+}
+
+func (f *fakeTelephonyHistorySyncService) SearchEmployeesByName(_ context.Context, _, _, _ string) ([]telephony.ProviderEmployee, error) {
+	return []telephony.ProviderEmployee{}, nil
+}
+
+func (f *fakeTelephonyHistorySyncService) GetEmployee(_ context.Context, _ string) (*telephony.ProviderEmployee, error) {
+	return nil, nil
 }
 
 func TestTelephonyServiceGetLineViewColorPriority(t *testing.T) {
@@ -173,6 +212,144 @@ func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 	require.Equal(t, ticket.ID, *pendingContext.LinkedTicketID)
 }
 
+func TestTelephonyServiceListCallsAdminSeesAllCallsByDefault(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	firstUser := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+	secondUser := createMegafonTestUser(t, ctx, env.userRepo, "boris", "Борис")
+
+	now := time.Now()
+	firstPhone := "79990000001"
+	secondPhone := "79990000002"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-admin-all-1",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-admin-all-1",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &firstPhone,
+		EmployeeUserID: &firstUser.ID,
+		StartedAt:      &now,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-admin-all-2",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-admin-all-2",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &secondPhone,
+		EmployeeUserID: &secondUser.ID,
+		StartedAt:      &now,
+	}))
+
+	items, total, err := env.service.ListCalls(ctx, TelephonyCallFilter{}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+	require.Len(t, items, 2)
+}
+
+func TestTelephonyServiceListCallsAdminFiltersByEmployeeUserID(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	firstUser := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+	secondUser := createMegafonTestUser(t, ctx, env.userRepo, "boris", "Борис")
+
+	now := time.Now()
+	firstPhone := "79990000011"
+	secondPhone := "79990000012"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-admin-filter-1",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-admin-filter-1",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &firstPhone,
+		EmployeeUserID: &firstUser.ID,
+		StartedAt:      &now,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-admin-filter-2",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-admin-filter-2",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &secondPhone,
+		EmployeeUserID: &secondUser.ID,
+		StartedAt:      &now,
+	}))
+
+	items, total, err := env.service.ListCalls(ctx, TelephonyCallFilter{
+		EmployeeUserID: &firstUser.ID,
+	}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, items, 1)
+	require.NotNil(t, items[0].Call.EmployeeUserID)
+	require.Equal(t, firstUser.ID, *items[0].Call.EmployeeUserID)
+}
+
+func TestTelephonyServiceListCallsAppliesDefaultSevenDayRange(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	oldStartedAt := time.Now().AddDate(0, 0, -10)
+	recentStartedAt := time.Now().AddDate(0, 0, -2)
+	oldPhone := "79990000101"
+	recentPhone := "79990000102"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-old",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-old",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &oldPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &oldStartedAt,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-recent",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-recent",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &recentPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &recentStartedAt,
+	}))
+
+	items, total, err := env.service.ListCalls(ctx, TelephonyCallFilter{}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, items, 1)
+	require.Equal(t, "call-recent", items[0].Call.ExternalCallID)
+}
+
+func TestTelephonyServiceListUserCallsSyncsHistoryByRequestedDateRange(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	startedFrom := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	startedTo := time.Date(2026, 4, 7, 23, 59, 59, 0, time.UTC)
+
+	_, _, err := env.service.ListUserCalls(ctx, operator.ID, TelephonyCallFilter{
+		StartedFrom: &startedFrom,
+		StartedTo:   &startedTo,
+		ClientPhone: "+7 (999) 000-00-55",
+		GroupNames:  []string{"Техподдержка"},
+	}, operator.ID, []string{user.RoleSupportSpecialist})
+	require.NoError(t, err)
+	require.Equal(t, 1, env.historySync.callCount)
+	require.Equal(t, "alice", env.historySync.lastFilter.EmployeeLogin)
+	require.NotNil(t, env.historySync.lastFilter.StartedFrom)
+	require.NotNil(t, env.historySync.lastFilter.StartedTo)
+	require.Equal(t, startedFrom, *env.historySync.lastFilter.StartedFrom)
+	require.Equal(t, startedTo, *env.historySync.lastFilter.StartedTo)
+	require.Equal(t, "+7 (999) 000-00-55", env.historySync.lastFilter.ClientPhone)
+	require.Equal(t, []string{"Техподдержка"}, env.historySync.lastFilter.Groups)
+}
+
 func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
 	t.Helper()
 
@@ -196,12 +373,14 @@ func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
 	telephonyRepo := infraRepos.NewTelephonyRepo(db)
 	ticketRepo := infraRepos.NewTicketRepo(db)
 	userRepo := infraRepos.NewUserRepo(db)
+	historySync := &fakeTelephonyHistorySyncService{enabled: true}
 
 	return &telephonyServiceTestEnv{
-		service:       NewTelephonyService(nil, telephonyRepo, ticketRepo, nil, userRepo, nil),
+		service:       NewTelephonyService(nil, telephonyRepo, ticketRepo, nil, userRepo, nil, historySync),
 		telephonyRepo: telephonyRepo,
 		ticketRepo:    ticketRepo,
 		userRepo:      userRepo,
+		historySync:   historySync,
 	}
 }
 

@@ -722,8 +722,6 @@ const MainLayout: React.FC = () => {
     headerAddonPlacement === "inline" ? headerAddon : null;
   const belowHeaderAddon =
     headerAddonPlacement === "below" ? headerAddon : null;
-  const shouldLeftAlignHeaderCenter =
-    Boolean(inlineHeaderAddon) || hasCustomHeaderControls;
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -822,65 +820,28 @@ const MainLayout: React.FC = () => {
               style={{
                 flex: 1,
                 display: "flex",
-                justifyContent: shouldLeftAlignHeaderCenter
-                  ? "flex-start"
-                  : "center",
+                justifyContent: "center",
                 minWidth: 0,
                 overflow: "visible",
                 paddingInlineEnd: screens.md ? 16 : 8,
               }}
             >
-              {hasCustomHeaderControls ? (
+              <div
+                style={{
+                  width: "100%",
+                  display: "grid",
+                  gridTemplateColumns:
+                    "minmax(0, 1fr) minmax(0, 920px) minmax(0, 1fr)",
+                  alignItems: "center",
+                  columnGap: screens.md ? 12 : 8,
+                  minWidth: 0,
+                  overflow: "visible",
+                }}
+              >
                 <div
                   style={{
-                    width: "100%",
                     display: "flex",
                     alignItems: "center",
-                    justifyContent: shouldLeftAlignHeaderCenter
-                      ? "flex-start"
-                      : "center",
-                    minWidth: 0,
-                    overflow: "visible",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: shouldLeftAlignHeaderCenter
-                        ? "flex-start"
-                        : "center",
-                      gap: 8,
-                      maxWidth: "100%",
-                      minWidth: 0,
-                      overflow: "visible",
-                    }}
-                  >
-                    {inlineHeaderAddon ? (
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          flex: "0 0 auto",
-                          minWidth: 0,
-                        }}
-                      >
-                        {inlineHeaderAddon}
-                      </div>
-                    ) : null}
-                    {headerConfig?.controls}
-                  </div>
-                </div>
-              ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: shouldLeftAlignHeaderCenter
-                      ? "flex-start"
-                      : "center",
-                    gap: screens.md ? 12 : 8,
                     minWidth: 0,
                     overflow: "visible",
                   }}
@@ -890,27 +851,57 @@ const MainLayout: React.FC = () => {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        flex: "0 0 auto",
+                        justifyContent: "flex-start",
                         minWidth: 0,
                       }}
                     >
                       {inlineHeaderAddon}
                     </div>
                   ) : null}
-                  <div
-                    style={{
-                      minWidth: 0,
-                      flex: 1,
-                      display: "flex",
-                      justifyContent: shouldLeftAlignHeaderCenter
-                        ? "flex-start"
-                        : "center",
-                    }}
-                  >
-                    <HeaderSearch />
-                  </div>
                 </div>
-              )}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    minWidth: 0,
+                    overflow: "visible",
+                  }}
+                >
+                  {hasCustomHeaderControls ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 8,
+                        maxWidth: "100%",
+                        width: "100%",
+                        minWidth: 0,
+                      }}
+                    >
+                      {headerConfig?.controls}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        minWidth: 0,
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <HeaderSearch />
+                    </div>
+                  )}
+                </div>
+                <div
+                  aria-hidden
+                  style={{
+                    minWidth: 0,
+                  }}
+                />
+              </div>
             </div>
 
             <Space

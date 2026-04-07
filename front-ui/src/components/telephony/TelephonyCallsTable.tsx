@@ -111,6 +111,11 @@ const formatDuration = (value?: number) => {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 };
 
+const buildDefaultTelephonyPeriod = (): [Dayjs, Dayjs] => [
+  dayjs().subtract(6, "day").startOf("day"),
+  dayjs().endOf("day"),
+];
+
 const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
@@ -120,7 +125,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [groupNames, setGroupNames] = useState<string[]>([]);
   const [period, setPeriod] = useState<[Dayjs | null, Dayjs | null] | null>(
-    null,
+    () => buildDefaultTelephonyPeriod(),
   );
   const [onlyMissed, setOnlyMissed] = useState(false);
   const [onlyWithoutTicket, setOnlyWithoutTicket] = useState(false);
@@ -338,7 +343,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
     setClientPhoneInput("");
     setStatuses([]);
     setGroupNames([]);
-    setPeriod(null);
+    setPeriod(buildDefaultTelephonyPeriod());
     setOnlyMissed(false);
     setOnlyWithoutTicket(false);
     setPage(1);
@@ -419,7 +424,9 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
             <RangePicker
               showTime
               value={period}
-              onChange={(value) => setPeriod(value)}
+              onChange={(value) =>
+                setPeriod(value ?? buildDefaultTelephonyPeriod())
+              }
             />
 
             <Checkbox

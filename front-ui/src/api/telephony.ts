@@ -1,6 +1,7 @@
 import apiClient from "./axios";
 import type {
   ApiResponse,
+  MegafonUserSuggestionDTO,
   TelephonyCallListParams,
   TelephonyCallListResponseDTO,
   TelephonyContactCompanyDTO,
@@ -68,5 +69,18 @@ export const telephonyApi = {
       params: normalizeTelephonyParams(params),
     });
     return response.data.data;
+  },
+
+  suggestMegafonUser: async (params: {
+    first_name: string;
+    last_name: string;
+    full_name?: string;
+  }) => {
+    const response = await apiClient.get<
+      ApiResponse<{ suggestion?: MegafonUserSuggestionDTO | null }>
+    >("/megafon-vats/users/suggest", {
+      params,
+    });
+    return response.data;
   },
 };

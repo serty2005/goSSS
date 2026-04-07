@@ -87,6 +87,7 @@ type telephonyService struct {
 	companyRepo   company.Repository
 	userRepo      user.Repository
 	eventBus      eventbus.EventBus
+	historySync   MegafonVATSSyncService
 }
 
 func NewTelephonyService(
@@ -96,6 +97,7 @@ func NewTelephonyService(
 	companyRepo company.Repository,
 	userRepo user.Repository,
 	eventBus eventbus.EventBus,
+	historySync MegafonVATSSyncService,
 ) TelephonyService {
 	return &telephonyService{
 		log:           log,
@@ -104,6 +106,7 @@ func NewTelephonyService(
 		companyRepo:   companyRepo,
 		userRepo:      userRepo,
 		eventBus:      eventBus,
+		historySync:   historySync,
 	}
 }
 
@@ -287,9 +290,16 @@ func (s *telephonyService) listCalls(ctx context.Context, userID *uint, filter T
 		return []TelephonyCallView{}, 0, nil
 	}
 
+	filter = normalizeTelephonyCallFilter(filter, time.Now())
+	effectiveEmployeeUserID := filter.EmployeeUserID
+	if userID != nil {
+		effectiveEmployeeUserID = userID
+	}
+	s.syncMegafonHistoryForCalls(ctx, effectiveEmployeeUserID, filter)
+
 	items, total, err := s.telephonyRepo.ListCalls(ctx, telephony.CallListFilter{
 		Provider:          telephony.ProviderMegafonVATS,
-		EmployeeUserID:    cmp.Or(userID, filter.EmployeeUserID),
+		EmployeeUserID:    effectiveEmployeeUserID,
 		ClientPhone:       strings.TrimSpace(filter.ClientPhone),
 		Statuses:          filter.Statuses,
 		GroupNames:        filter.GroupNames,
@@ -351,6 +361,86 @@ func (s *telephonyService) listCalls(ctx context.Context, userID *uint, filter T
 		result = append(result, view)
 	}
 	return result, total, nil
+}
+
+func normalizeTelephonyCallFilter(filter TelephonyCallFilter, now time.Time) TelephonyCallFilter {
+	startedFrom, startedTo := normalizeTelephonyDateRange(filter.StartedFrom, filter.StartedTo, now)
+	filter.StartedFrom = &startedFrom
+	filter.StartedTo = &startedTo
+	return filter
+}
+
+func normalizeTelephonyDateRange(startedFrom *time.Time, startedTo *time.Time, now time.Time) (time.Time, time.Time) {
+	switch {
+	case startedFrom == nil && startedTo == nil:
+		return beginningOfDay(now.AddDate(0, 0, -6)), endOfDay(now)
+	case startedFrom == nil:
+		return beginningOfDay(*startedTo), *startedTo
+	case startedTo == nil:
+		return *startedFrom, endOfDay(*startedFrom)
+	default:
+		if startedTo.Before(*startedFrom) {
+			return *startedTo, *startedFrom
+		}
+		return *startedFrom, *startedTo
+	}
+}
+
+func beginningOfDay(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
+func endOfDay(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 23, 59, 59, 0, value.Location())
+}
+
+func (s *telephonyService) syncMegafonHistoryForCalls(ctx context.Context, employeeUserID *uint, filter TelephonyCallFilter) {
+	if s == nil || s.historySync == nil || !s.historySync.IsEnabled() {
+		return
+	}
+
+	historyFilter := MegafonVATSHistorySyncFilter{
+		StartedFrom: filter.StartedFrom,
+		StartedTo:   filter.StartedTo,
+		ClientPhone: filter.ClientPhone,
+		Groups:      filter.GroupNames,
+	}
+	if employeeUserID != nil {
+		login, err := s.resolveMegafonLogin(ctx, *employeeUserID)
+		if err != nil {
+			if s.log != nil {
+				s.log.Warn("Телефония: не удалось определить логин сотрудника для backfill истории Мегафон", "user_id", *employeeUserID, "error", err)
+			}
+		} else {
+			historyFilter.EmployeeLogin = login
+		}
+	}
+
+	if _, err := s.historySync.SyncHistoryByFilter(ctx, historyFilter); err != nil && s.log != nil {
+		s.log.Warn("Телефония: не удалось подтянуть историю звонков Мегафон по фильтру", "error", err)
+	}
+}
+
+func (s *telephonyService) resolveMegafonLogin(ctx context.Context, userID uint) (string, error) {
+	if s == nil || s.userRepo == nil || userID == 0 {
+		return "", nil
+	}
+
+	item, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || item == nil {
+		return "", err
+	}
+	for i := range item.Integrations {
+		integration := item.Integrations[i]
+		if !integration.IsEnabled {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeMegafon {
+			continue
+		}
+		return strings.TrimSpace(integration.ExternalID), nil
+	}
+	return "", nil
 }
 
 func publishTelephonyLineUpdate(

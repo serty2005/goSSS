@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"etalon-server/internal/domain/telephony"
+	"etalon-server/internal/services"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,10 @@ func (f *fakeMegafonVATSSyncService) RefreshEmployees(_ context.Context) (int, e
 }
 
 func (f *fakeMegafonVATSSyncService) SyncHistory(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeMegafonVATSSyncService) SyncHistoryByFilter(_ context.Context, _ services.MegafonVATSHistorySyncFilter) (int, error) {
 	return 0, nil
 }
 

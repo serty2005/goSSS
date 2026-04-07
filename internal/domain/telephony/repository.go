@@ -35,6 +35,7 @@ type Repository interface {
 	GetCallByAnyExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
 	GetCallByID(ctx context.Context, id string) (*Call, error)
 	UpsertCall(ctx context.Context, call *Call) error
+	SyncCallEmployeeUser(ctx context.Context, provider string, login string, userID *uint) error
 	ListCalls(ctx context.Context, filter CallListFilter) ([]Call, int64, error)
 	AddCallEvent(ctx context.Context, event *CallEvent) error
 	GetCallArtifact(ctx context.Context, callID string, artifactType string) (*CallArtifact, error)
