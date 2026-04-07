@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"etalon-server/internal/domain/telephony"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
@@ -47,6 +48,7 @@ type megafonVATSSyncService struct {
 	log              logger.LoggerInterface
 	client           megafonVATSClient
 	repo             telephony.Repository
+	ticketRepo       tickets.TicketRepository
 	userRepo         user.Repository
 	eventBus         eventbus.EventBus
 	recordingService MegafonVATSRecordingService
@@ -57,6 +59,7 @@ func NewMegafonVATSSyncService(
 	log logger.LoggerInterface,
 	client megafonVATSClient,
 	repo telephony.Repository,
+	ticketRepo tickets.TicketRepository,
 	userRepo user.Repository,
 	eventBus eventbus.EventBus,
 	recordingService MegafonVATSRecordingService,
@@ -66,6 +69,7 @@ func NewMegafonVATSSyncService(
 		log:              log,
 		client:           client,
 		repo:             repo,
+		ticketRepo:       ticketRepo,
 		userRepo:         userRepo,
 		eventBus:         eventBus,
 		recordingService: recordingService,
@@ -487,6 +491,13 @@ func (s *megafonVATSSyncService) syncHistoryRecord(ctx context.Context, item *me
 
 	applyMegafonHistorySnapshot(call, payload)
 	if err = s.repo.UpsertCall(ctx, call); err != nil {
+		return false, err
+	}
+	contact, err := s.repo.EnsureContact(ctx, phone, phone)
+	if err != nil {
+		return false, err
+	}
+	if _, err = autoBindTelephonyCallToActiveTicket(ctx, s.repo, s.ticketRepo, call, contact); err != nil {
 		return false, err
 	}
 	if s.recordingService != nil {

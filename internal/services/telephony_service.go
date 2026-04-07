@@ -19,6 +19,8 @@ import (
 
 var ErrTelephonyForbidden = errors.New("недостаточно прав для работы с телефонией")
 
+const telephonyHeaderMissedWindow = 12 * time.Hour
+
 type TelephonyCallFilter struct {
 	EmployeeUserID    *uint
 	ClientPhone       string
@@ -256,11 +258,11 @@ func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketI
 	switch {
 	case ticket.ContactID == nil:
 		ticket.ContactID = &contact.ID
-	case *ticket.ContactID != contact.ID:
-		return nil, nil, errors.New("тикет уже привязан к другому контакту")
 	}
-	if err = s.ticketRepo.Update(ctx, ticket); err != nil {
-		return nil, nil, err
+	if ticket.ContactID != nil && *ticket.ContactID == contact.ID {
+		if err = s.ticketRepo.Update(ctx, ticket); err != nil {
+			return nil, nil, err
+		}
 	}
 	if strings.TrimSpace(ticket.CompanyID) != "" {
 		if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
@@ -646,6 +648,9 @@ func buildTelephonyLineView(ctx context.Context, telephonyRepo telephony.Reposit
 		return nil, err
 	}
 
+	now := time.Now()
+	missedStartedFrom := now.Add(-telephonyHeaderMissedWindow)
+
 	activeCalls, _, err := telephonyRepo.ListCalls(ctx, telephony.CallListFilter{
 		Provider: telephony.ProviderMegafonVATS,
 		Statuses: []string{"incoming", "accepted", "outgoing", "transferred"},
@@ -670,9 +675,11 @@ func buildTelephonyLineView(ctx context.Context, telephonyRepo telephony.Reposit
 	}
 
 	missedCalls, _, err := telephonyRepo.ListCalls(ctx, telephony.CallListFilter{
-		Provider:   telephony.ProviderMegafonVATS,
-		OnlyMissed: true,
-		Limit:      500,
+		Provider:    telephony.ProviderMegafonVATS,
+		OnlyMissed:  true,
+		StartedFrom: &missedStartedFrom,
+		StartedTo:   &now,
+		Limit:       500,
 	})
 	if err != nil {
 		return nil, err

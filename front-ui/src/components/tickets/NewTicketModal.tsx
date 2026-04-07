@@ -8,7 +8,7 @@ import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem, TelephonyCallDTO, TelephonyContactCompanyDTO } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { getIikoWebAppLinkMeta, normalizeServerAddress } from '@/utils/formatters';
-import { getTelephonyContactLabel, getTelephonyContactPhoneDisplay } from '@/utils/telephony';
+import { getTelephonyContactPhoneDisplay } from '@/utils/telephony';
 import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
@@ -220,11 +220,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       form.setFieldValue('telephony_call_id', selectableCalls[0].id);
     }
   }, [open, pendingContext?.call?.id, selectableCalls, form]);
-
-  useEffect(() => {
-    if (!open) return;
-    form.setFieldValue('contact_display', getTelephonyContactLabel(selectedTelephonyCall?.contact, selectedTelephonyCall?.client_phone) || undefined);
-  }, [open, selectedTelephonyCall, form]);
 
   useEffect(() => {
     if (!open) return;
@@ -740,11 +735,6 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     optionFilterProp="searchLabel"
                     notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Свободных звонков пока нет" />}
                   />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={8}>
-                <Form.Item name="contact_display" label="Контакт">
-                  <Input readOnly placeholder="Контакт будет определён по выбранному номеру" />
                 </Form.Item>
               </Col>
               <Col xs={24} lg={8}>

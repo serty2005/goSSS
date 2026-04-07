@@ -120,9 +120,17 @@ type TicketDetails struct {
 	Metadata    Ticket             `json:"metadata"`
 	CompanyName string             `json:"company_name,omitempty"`
 	Contact     *telephony.Contact `json:"contact,omitempty"`
+	Calls       []TicketCall       `json:"calls,omitempty"`
 	History     []TicketHistory    `json:"history"`
 	Attachments []Attachment       `json:"attachments"`
 	Comments    []Comment          `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
+}
+
+type TicketCall struct {
+	Call          telephony.Call     `json:"call"`
+	Contact       *telephony.Contact `json:"contact,omitempty"`
+	EmployeeName  string             `json:"employee_name,omitempty"`
+	EmployeeState string             `json:"employee_state,omitempty"`
 }
 
 // Comment представляет легаси комментарий (планируется к замене на History).

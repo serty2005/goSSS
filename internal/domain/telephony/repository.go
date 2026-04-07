@@ -49,6 +49,7 @@ type Repository interface {
 	UpsertCallTicketLink(ctx context.Context, link *CallTicketLink) error
 	GetCallTicketLink(ctx context.Context, callID string) (*CallTicketLink, error)
 	ListCallTicketLinks(ctx context.Context, callIDs []string) ([]CallTicketLink, error)
+	ListCallsByTicketID(ctx context.Context, ticketID string) ([]Call, error)
 
 	InsertIncomingEventIfNotExists(ctx context.Context, event *IncomingEvent) (bool, error)
 	ResetIncomingEventForReplay(ctx context.Context, id string) error

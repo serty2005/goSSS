@@ -599,6 +599,7 @@ export interface TicketDetailsDTO {
   metadata: TicketDTO;
   company_name?: string;
   contact?: TelephonyContactDTO;
+  calls?: TelephonyCallDTO[];
   comments: TicketCommentDTO[];
   history?: TicketHistoryDTO[];
   attachments?: unknown[];

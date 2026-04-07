@@ -1187,9 +1187,66 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 		Metadata: *ticket,
 		// CompanyName: ticket.CompanyName, // Если это поле есть РІ структуре (gorm ->)
 		Contact:     contact,
+		Calls:       make([]tickets.TicketCall, 0),
 		History:     history,
 		Attachments: attachments,
 		Comments:    make([]tickets.Comment, 0),
+	}
+
+	if s.telephonyRepo != nil {
+		callItems, callErr := s.telephonyRepo.ListCallsByTicketID(ctx, ticketID)
+		if callErr != nil {
+			return nil, callErr
+		}
+		if len(callItems) > 0 {
+			employees, employeeErr := loadMegafonIntegratedEmployees(ctx, s.telephonyRepo, s.userRepo)
+			if employeeErr != nil {
+				return nil, employeeErr
+			}
+			employeesByLogin := make(map[string]TelephonyLineEmployeeView, len(employees))
+			employeesByUserID := make(map[uint]TelephonyLineEmployeeView, len(employees))
+			for _, item := range employees {
+				employeesByLogin[item.Login] = item
+				if item.UserID != nil {
+					employeesByUserID[*item.UserID] = item
+				}
+			}
+
+			contactsByPhone := make(map[string]*telephony.Contact, len(callItems))
+			details.Calls = make([]tickets.TicketCall, 0, len(callItems))
+			for _, callItem := range callItems {
+				var callContact *telephony.Contact
+				if phone := strings.TrimSpace(safeTelephonyString(callItem.ClientPhone)); phone != "" {
+					if cached, ok := contactsByPhone[phone]; ok {
+						callContact = cached
+					} else {
+						callContact, callErr = s.telephonyRepo.GetContactByPhone(ctx, phone)
+						if callErr != nil {
+							return nil, callErr
+						}
+						contactsByPhone[phone] = callContact
+					}
+				}
+
+				callView := tickets.TicketCall{
+					Call:    callItem,
+					Contact: callContact,
+				}
+				if callItem.EmployeeUserID != nil {
+					if employee, ok := employeesByUserID[*callItem.EmployeeUserID]; ok {
+						callView.EmployeeName = employee.Name
+						callView.EmployeeState = employee.Status
+					}
+				}
+				if callView.EmployeeName == "" && callItem.EmployeeLogin != nil {
+					if employee, ok := employeesByLogin[strings.TrimSpace(*callItem.EmployeeLogin)]; ok {
+						callView.EmployeeName = employee.Name
+						callView.EmployeeState = employee.Status
+					}
+				}
+				details.Calls = append(details.Calls, callView)
+			}
+		}
 	}
 
 	// Комментарии из локальной БД (офлайн/сидер)

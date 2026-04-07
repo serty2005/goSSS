@@ -135,6 +135,63 @@ func TestTelephonyServiceGetLineViewColorPriority(t *testing.T) {
 	require.Equal(t, 1, lineView.MissedOpenCount)
 }
 
+func TestTelephonyServiceGetLineViewIgnoresOldOpenMissedCalls(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	statusOnline := "online"
+	require.NoError(t, env.telephonyRepo.ReplaceProviderEmployees(ctx, telephony.ProviderMegafonVATS, []telephony.ProviderEmployee{
+		{
+			EmployeeLogin: "alice",
+			EmployeeName:  "Алиса",
+			Status:        &statusOnline,
+			LastSeenAt:    time.Now(),
+		},
+	}))
+
+	clientPhone := "79990001123"
+	oldMissedStatus := "3"
+	oldStartedAt := time.Now().Add(-(telephonyHeaderMissedWindow + time.Hour))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-missed-old",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-missed-old",
+		Direction:      "incoming",
+		Status:         "missed",
+		MissedStatus:   &oldMissedStatus,
+		ClientPhone:    &clientPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &oldStartedAt,
+	}))
+
+	lineView, err := env.service.GetLineView(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lineView)
+	require.Equal(t, "green", lineView.Color)
+	require.Equal(t, 0, lineView.MissedOpenCount)
+
+	recentMissedStatus := "4"
+	recentStartedAt := time.Now().Add(-(telephonyHeaderMissedWindow - time.Hour))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-missed-recent",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-missed-recent",
+		Direction:      "incoming",
+		Status:         "missed",
+		MissedStatus:   &recentMissedStatus,
+		ClientPhone:    &clientPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &recentStartedAt,
+	}))
+
+	lineView, err = env.service.GetLineView(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lineView)
+	require.Equal(t, "blue", lineView.Color)
+	require.Equal(t, 1, lineView.MissedOpenCount)
+}
+
 func TestTelephonyServiceGetLineViewSkipsEmployeesWithoutActiveMegafonIntegration(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
@@ -283,6 +340,73 @@ func TestTelephonyServiceBindCallToTicket(t *testing.T) {
 	require.Equal(t, ticket.ID, *pendingContext.LinkedTicketID)
 }
 
+func TestTelephonyServiceBindCallToTicketAllowsDifferentContactForSameTicket(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	ticket := &tickets.Ticket{
+		Subject:     "Проблема с терминалом",
+		Description: "Нужно сохранить историю по нескольким номерам",
+		Status:      tickets.StatusNew,
+		Type:        tickets.TypeIncident,
+		CompanyID:   "company-1",
+	}
+	require.NoError(t, env.ticketRepo.Create(ctx, ticket))
+
+	firstPhone := "+79990000091"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-multi-contact-1",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-multi-contact-1",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &firstPhone,
+		EmployeeUserID: &operator.ID,
+	}))
+	require.NoError(t, env.service.BindCallToTicket(ctx, "call-multi-contact-1", ticket.ID, "Анна", operator.ID, nil))
+
+	updatedTicket, err := env.ticketRepo.GetByID(ctx, ticket.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedTicket)
+	require.NotNil(t, updatedTicket.ContactID)
+	firstContactID := *updatedTicket.ContactID
+
+	secondPhone := "+79990000092"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-multi-contact-2",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-multi-contact-2",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &secondPhone,
+		EmployeeUserID: &operator.ID,
+	}))
+
+	require.NoError(t, env.service.BindCallToTicket(ctx, "call-multi-contact-2", ticket.ID, "Борис", operator.ID, nil))
+
+	updatedTicket, err = env.ticketRepo.GetByID(ctx, ticket.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedTicket)
+	require.NotNil(t, updatedTicket.ContactID)
+	require.Equal(t, firstContactID, *updatedTicket.ContactID)
+
+	secondContact, err := env.telephonyRepo.GetContactByPhone(ctx, secondPhone)
+	require.NoError(t, err)
+	require.NotNil(t, secondContact)
+	require.NotEqual(t, firstContactID, secondContact.ID)
+
+	callLinks, err := env.telephonyRepo.ListCallTicketLinks(ctx, []string{"call-multi-contact-2"})
+	require.NoError(t, err)
+	require.Len(t, callLinks, 1)
+	require.Equal(t, ticket.ID, callLinks[0].TicketID)
+
+	companyLinks, err := env.telephonyRepo.ListContactCompanyLinks(ctx, secondContact.ID)
+	require.NoError(t, err)
+	require.Len(t, companyLinks, 1)
+	require.Equal(t, ticket.CompanyID, companyLinks[0].CompanyID)
+}
+
 func TestTelephonyServiceListCallsAdminSeesAllCallsByDefault(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
@@ -429,6 +553,51 @@ func TestTelephonyServiceListCallsOnlyMissedReturnsOnlyMissedCalls(t *testing.T)
 	require.EqualValues(t, 1, total)
 	require.Len(t, items, 1)
 	require.Equal(t, "call-missed-only", items[0].Call.ExternalCallID)
+}
+
+func TestTelephonyServiceListCallsOnlyWithoutTicketWithinDateRange(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+
+	startedAt := time.Date(2026, 4, 7, 4, 5, 0, 0, time.UTC)
+	startedFrom := startedAt.Add(-30 * time.Minute)
+	startedTo := startedAt.Add(30 * time.Minute)
+	firstPhone := "79990000981"
+	secondPhone := "79990000982"
+
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-without-ticket",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-without-ticket",
+		Direction:      "incoming",
+		Status:         "accepted",
+		ClientPhone:    &firstPhone,
+		StartedAt:      &startedAt,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-with-ticket",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-with-ticket",
+		Direction:      "incoming",
+		Status:         "accepted",
+		ClientPhone:    &secondPhone,
+		StartedAt:      &startedAt,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCallTicketLink(ctx, &telephony.CallTicketLink{
+		TelephonyCallID: "call-with-ticket",
+		TicketID:        "ticket-123",
+	}))
+
+	items, total, err := env.service.ListCalls(ctx, TelephonyCallFilter{
+		StartedFrom:       &startedFrom,
+		StartedTo:         &startedTo,
+		OnlyWithoutTicket: true,
+	}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, items, 1)
+	require.Equal(t, "call-without-ticket", items[0].Call.ExternalCallID)
+	require.Nil(t, items[0].TicketID)
 }
 
 func TestTelephonyServiceListUserCallsSyncsHistoryByRequestedDateRange(t *testing.T) {

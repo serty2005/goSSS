@@ -525,6 +525,23 @@ func (r *telephonyRepo) ListCallTicketLinks(ctx context.Context, callIDs []strin
 	return items, err
 }
 
+func (r *telephonyRepo) ListCallsByTicketID(ctx context.Context, ticketID string) ([]telephony.Call, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return []telephony.Call{}, nil
+	}
+
+	items := make([]telephony.Call, 0)
+	err := r.getDB(ctx).WithContext(ctx).
+		Table("telephony_calls").
+		Select("telephony_calls.*").
+		Joins("JOIN telephony_call_ticket_links ON telephony_call_ticket_links.telephony_call_id = telephony_calls.id").
+		Where("telephony_call_ticket_links.ticket_id = ?", ticketID).
+		Order("COALESCE(telephony_calls.started_at, telephony_calls.created_at) desc, telephony_calls.created_at desc").
+		Find(&items).Error
+	return items, err
+}
+
 func (r *telephonyRepo) InsertIncomingEventIfNotExists(ctx context.Context, event *telephony.IncomingEvent) (bool, error) {
 	if event == nil {
 		return false, gorm.ErrInvalidData
@@ -890,25 +907,31 @@ func (r *telephonyRepo) UpdatePendingContext(ctx context.Context, id string, sta
 func (r *telephonyRepo) applyCallListFilter(query *gorm.DB, filter telephony.CallListFilter) *gorm.DB {
 	provider := strings.TrimSpace(filter.Provider)
 	if provider != "" {
-		query = query.Where("provider = ?", provider)
+		query = query.Where("telephony_calls.provider = ?", provider)
 	}
 	if filter.EmployeeUserID != nil && *filter.EmployeeUserID > 0 {
-		query = query.Where("employee_user_id = ?", *filter.EmployeeUserID)
+		query = query.Where("telephony_calls.employee_user_id = ?", *filter.EmployeeUserID)
 	}
 	if clientPhone := strings.TrimSpace(filter.ClientPhone); clientPhone != "" {
-		query = query.Where("client_phone LIKE ?", "%"+clientPhone+"%")
+		query = query.Where("telephony_calls.client_phone LIKE ?", "%"+clientPhone+"%")
 	}
 	if len(filter.Statuses) > 0 {
-		query = query.Where("LOWER(status) IN ?", normalizeTelephonyStatuses(filter.Statuses))
+		query = query.Where("LOWER(telephony_calls.status) IN ?", normalizeTelephonyStatuses(filter.Statuses))
 	}
 	if len(filter.GroupNames) > 0 {
-		query = query.Where("COALESCE(group_name, '') IN ?", normalizeTelephonyGroupNames(filter.GroupNames))
+		query = query.Where("COALESCE(telephony_calls.group_name, '') IN ?", normalizeTelephonyGroupNames(filter.GroupNames))
 	}
 	if filter.StartedFrom != nil {
-		query = query.Where("COALESCE(started_at, created_at) >= ?", *filter.StartedFrom)
+		query = query.Where(
+			"COALESCE(telephony_calls.started_at, telephony_calls.created_at) >= ?",
+			*filter.StartedFrom,
+		)
 	}
 	if filter.StartedTo != nil {
-		query = query.Where("COALESCE(started_at, created_at) <= ?", *filter.StartedTo)
+		query = query.Where(
+			"COALESCE(telephony_calls.started_at, telephony_calls.created_at) <= ?",
+			*filter.StartedTo,
+		)
 	}
 	if filter.OnlyWithoutTicket {
 		query = query.Joins("LEFT JOIN telephony_call_ticket_links ON telephony_call_ticket_links.telephony_call_id = telephony_calls.id")

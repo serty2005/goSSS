@@ -1054,6 +1054,15 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			BitrixContactID: details.Contact.BitrixContactID,
 		}
 	}
+	calls := make([]api.TelephonyCallDTO, 0, len(details.Calls))
+	for _, item := range details.Calls {
+		calls = append(calls, mapTelephonyCallDTO(services.TelephonyCallView{
+			Call:          item.Call,
+			Contact:       item.Contact,
+			EmployeeName:  item.EmployeeName,
+			EmployeeState: item.EmployeeState,
+		}))
+	}
 
 	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"metadata": safeMetadataDTO{
@@ -1092,6 +1101,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		},
 		"company_name": details.CompanyName,
 		"contact":      contact,
+		"calls":        calls,
 		"history":      historyItems,
 		"attachments":  details.Attachments,
 		"comments":     comments,

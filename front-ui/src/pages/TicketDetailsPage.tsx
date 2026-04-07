@@ -1,17 +1,18 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, EditOutlined, LinkOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
+import { telephonyApi } from '@/api/telephony';
 import { profileApi } from '@/api/profile';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
 import { equipmentApi } from '@/api/equipment';
-import { CompanyModel, InfrastructureItem, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { CompanyModel, InfrastructureItem, TelephonyCallDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
@@ -172,6 +173,7 @@ const TicketDetailsPage: React.FC = () => {
   const [isDescriptionEditMode, setIsDescriptionEditMode] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isAttachCallModalOpen, setIsAttachCallModalOpen] = useState(false);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
@@ -204,6 +206,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
+  const ticketCalls = useMemo(() => details?.calls || [], [details?.calls]);
   const isPyrusLinkedTicket = hasPyrusLink(metadata);
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
@@ -331,6 +334,21 @@ const TicketDetailsPage: React.FC = () => {
   });
 
   const parentInfrastructure = useMemo(() => parentInfraResponse?.data || [], [parentInfraResponse?.data]);
+  const { data: attachableCallsResponse, isFetching: isAttachableCallsLoading } = useQuery({
+    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen],
+    queryFn: () => {
+      const now = new Date();
+      return telephonyApi.getCalls({
+        only_without_ticket: true,
+        started_from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+        started_to: now.toISOString(),
+        limit: 100,
+      });
+    },
+    enabled: isAttachCallModalOpen && isAdminRole,
+    staleTime: 15_000,
+  });
+  const attachableCalls = useMemo(() => attachableCallsResponse?.items || [], [attachableCallsResponse?.items]);
 
   const companyTitle = useMemo(() => {
     const companyData = companyResponse?.data as { title?: string; additional_name?: string } | undefined;
@@ -800,6 +818,26 @@ const TicketDetailsPage: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ticket-connection-stats', id] });
+    },
+  });
+  const bindTicketCallMutation = useMutation({
+    mutationFn: async (call: TelephonyCallDTO) => {
+      if (!id) return;
+      return telephonyApi.bindCallToTicket(
+        call.id,
+        id,
+        String(call.contact?.name || '').trim() || undefined,
+      );
+    },
+    onSuccess: () => {
+      message.success('Звонок привязан к тикету');
+      setIsAttachCallModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['telephony'] });
+    },
+    onError: () => {
+      message.error('Не удалось привязать звонок');
     },
   });
 
@@ -1618,6 +1656,78 @@ const TicketDetailsPage: React.FC = () => {
                         ),
                       },
                       {
+                        key: 'overview-calls',
+                        label: 'Звонки',
+                        children: (
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            {ticketCalls.length === 0 ? (
+                              <Empty description="Звонки по тикету пока не привязаны" />
+                            ) : (
+                              <List
+                                dataSource={ticketCalls}
+                                renderItem={(call) => {
+                                  const phoneDisplay = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
+                                  const phoneForCopy = getTelephonyContactPhoneForCopy(call.contact, call.client_phone) || '';
+                                  const contactName = String(call.contact?.name || '').trim();
+                                  const employeeName = String(call.employee_name || call.employee_login || '').trim();
+                                  const startedAt = call.started_at || call.answered_at || call.completed_at;
+                                  return (
+                                    <List.Item
+                                      actions={[
+                                        <Button
+                                          key="recording"
+                                          type="link"
+                                          size="small"
+                                          href={call.recording_url}
+                                          target="_blank"
+                                          disabled={!call.recording_url}
+                                        >
+                                          Открыть запись
+                                        </Button>,
+                                      ]}
+                                    >
+                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                        <Space size={8} wrap>
+                                          <Button
+                                            type="link"
+                                            size="small"
+                                            icon={<CopyOutlined />}
+                                            style={{ paddingInline: 0 }}
+                                            onClick={() => copyTicketPhone(phoneForCopy)}
+                                          >
+                                            {phoneDisplay}
+                                          </Button>
+                                          {contactName ? <Tag color="blue">{contactName}</Tag> : <Text type="secondary">Имя не указано</Text>}
+                                          {employeeName ? <Tag>{employeeName}</Tag> : <Tag>Сотрудник не определён</Tag>}
+                                        </Space>
+                                        <Text type="secondary">
+                                          {[
+                                            startedAt ? dayjs(startedAt).format('DD.MM.YYYY HH:mm') : '',
+                                            String(call.direction || '').trim(),
+                                            String(call.status || '').trim(),
+                                          ].filter(Boolean).join(' · ')}
+                                        </Text>
+                                      </Space>
+                                    </List.Item>
+                                  );
+                                }}
+                              />
+                            )}
+                            {isAdminRole ? (
+                              <Button
+                                type="dashed"
+                                block
+                                icon={<PlusOutlined />}
+                                onClick={() => setIsAttachCallModalOpen(true)}
+                                style={{ height: 44 }}
+                              >
+                                Прикрепить звонок за последние 24 часа
+                              </Button>
+                            ) : null}
+                          </Space>
+                        ),
+                      },
+                      {
                         key: 'overview-equipment',
                         label: 'Оборудование',
                         children: (
@@ -1862,6 +1972,70 @@ const TicketDetailsPage: React.FC = () => {
             value={statusComment}
             onChange={(event) => setStatusComment(event.target.value)}
             placeholder="Добавьте отчёт по выполнению"
+          />
+        )}
+      </Modal>
+      <Modal
+        open={isAttachCallModalOpen}
+        title="Непривязанные звонки за последние 24 часа"
+        onCancel={() => setIsAttachCallModalOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        {isAttachableCallsLoading ? (
+          <div style={{ textAlign: 'center', padding: 24 }}>
+            <Spin />
+          </div>
+        ) : attachableCalls.length === 0 ? (
+          <Empty description="Свободных звонков не найдено" />
+        ) : (
+          <List
+            dataSource={attachableCalls}
+            renderItem={(call) => {
+              const phoneDisplay = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
+              const phoneForCopy = getTelephonyContactPhoneForCopy(call.contact, call.client_phone) || '';
+              const contactName = String(call.contact?.name || '').trim();
+              const employeeName = String(call.employee_name || call.employee_login || '').trim();
+              const startedAt = call.started_at || call.answered_at || call.completed_at;
+              return (
+                <List.Item
+                  actions={[
+                    <Button
+                      key="attach"
+                      type="primary"
+                      size="small"
+                      loading={bindTicketCallMutation.isPending && bindTicketCallMutation.variables?.id === call.id}
+                      onClick={() => bindTicketCallMutation.mutate(call)}
+                    >
+                      Прикрепить
+                    </Button>,
+                  ]}
+                >
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space size={8} wrap>
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<CopyOutlined />}
+                        style={{ paddingInline: 0 }}
+                        onClick={() => copyTicketPhone(phoneForCopy)}
+                      >
+                        {phoneDisplay}
+                      </Button>
+                      {contactName ? <Tag color="blue">{contactName}</Tag> : <Text type="secondary">Имя не указано</Text>}
+                      {employeeName ? <Tag>{employeeName}</Tag> : <Tag>Сотрудник не определён</Tag>}
+                    </Space>
+                    <Text type="secondary">
+                      {[
+                        startedAt ? dayjs(startedAt).format('DD.MM.YYYY HH:mm') : '',
+                        String(call.direction || '').trim(),
+                        String(call.status || '').trim(),
+                      ].filter(Boolean).join(' · ')}
+                    </Text>
+                  </Space>
+                </List.Item>
+              );
+            }}
           />
         )}
       </Modal>

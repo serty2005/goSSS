@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/telephony"
+	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
@@ -452,14 +454,19 @@ func newMegafonVATSSyncTestEnv(
 		t.Fatalf("не удалось открыть sqlite: %v", err)
 	}
 	if err = db.AutoMigrate(
+		&company.Company{},
 		&user.User{},
 		&user.Role{},
 		&user.Integration{},
+		&tickets.Ticket{},
 		&telephony.ProviderEmployee{},
 		&telephony.Call{},
+		&telephony.CallTicketLink{},
 		&telephony.CallHistorySyncWindow{},
 		&telephony.CallEvent{},
 		&telephony.CallArtifact{},
+		&telephony.Contact{},
+		&telephony.ContactCompanyLink{},
 	); err != nil {
 		t.Fatalf("не удалось подготовить схему БД: %v", err)
 	}
@@ -474,6 +481,7 @@ func newMegafonVATSSyncTestEnv(
 		logger.New("", "test", "error", true),
 		&fakeMegafonVATSDirectoryClient{users: users},
 		telephonyRepo,
+		infraRepos.NewTicketRepo(db),
 		userRepo,
 		nil,
 		nil,

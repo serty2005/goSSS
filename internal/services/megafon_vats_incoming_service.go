@@ -622,30 +622,30 @@ func (s *megafonVATSIncomingService) ensureCallContext(ctx context.Context, call
 	if err != nil {
 		return err
 	}
-	return s.ensurePendingContext(ctx, call, contact)
+	linkedTicket, err := autoBindTelephonyCallToActiveTicket(ctx, s.repo, s.ticketRepo, call, contact)
+	if err != nil {
+		return err
+	}
+	return s.ensurePendingContext(ctx, call, contact, linkedTicket)
 }
 
-func (s *megafonVATSIncomingService) ensurePendingContext(ctx context.Context, call *telephony.Call, contact *telephony.Contact) error {
+func (s *megafonVATSIncomingService) ensurePendingContext(
+	ctx context.Context,
+	call *telephony.Call,
+	_ *telephony.Contact,
+	linkedTicket *tickets.Ticket,
+) error {
+	if linkedTicket != nil {
+		existing, err := s.repo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)
+		if err != nil || existing == nil {
+			return err
+		}
+		ticketID := linkedTicket.ID
+		reason := "звонок автоматически привязан к активному тикету по контакту"
+		return s.repo.UpdatePendingContext(ctx, existing.ID, telephony.PendingContextStatusBound, &ticketID, &reason)
+	}
 	if !shouldCreateMegafonPendingContext(call) {
 		return nil
-	}
-	if contact != nil && s.ticketRepo != nil {
-		activeContactID := contact.ID
-		activeTickets, countErr := s.ticketRepo.Count(ctx, tickets.TicketFilter{
-			ContactID:       &activeContactID,
-			ExcludeStatuses: []string{tickets.StatusResolved, tickets.StatusClosed, tickets.StatusSpam},
-		})
-		if countErr != nil {
-			return countErr
-		}
-		if activeTickets > 0 {
-			existing, err := s.repo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)
-			if err != nil || existing == nil || existing.Status != telephony.PendingContextStatusNew {
-				return err
-			}
-			reason := "по контакту найден активный тикет"
-			return s.repo.UpdatePendingContext(ctx, existing.ID, telephony.PendingContextStatusDismissed, nil, &reason)
-		}
 	}
 
 	existing, err := s.repo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)

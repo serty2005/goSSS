@@ -458,6 +458,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.Logger.With("component", "megafon_vats_sync_service"),
 		clients.MegafonVATSClient,
 		repos.TelephonyRepo,
+		repos.TicketRepo,
 		repos.UserRepo,
 		app.EventBus,
 		megafonVATSRecordingService,
