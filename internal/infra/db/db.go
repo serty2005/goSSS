@@ -86,6 +86,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&telephony.ProviderEmployee{},
 		&telephony.IncomingEvent{},
 		&telephony.Call{},
+		&telephony.CallHistorySyncWindow{},
 		&telephony.CallEvent{},
 		&telephony.CallArtifact{},
 		&telephony.CallTicketLink{},

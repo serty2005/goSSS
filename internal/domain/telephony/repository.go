@@ -36,6 +36,8 @@ type Repository interface {
 	GetCallByID(ctx context.Context, id string) (*Call, error)
 	UpsertCall(ctx context.Context, call *Call) error
 	SyncCallEmployeeUser(ctx context.Context, provider string, login string, userID *uint) error
+	IsCallHistoryRangeCovered(ctx context.Context, provider string, employeeLogin *string, startedFrom time.Time, startedTo time.Time) (bool, error)
+	MarkCallHistoryRangeCovered(ctx context.Context, provider string, employeeLogin *string, startedFrom time.Time, startedTo time.Time, syncedAt time.Time) error
 	ListCalls(ctx context.Context, filter CallListFilter) ([]Call, int64, error)
 	AddCallEvent(ctx context.Context, event *CallEvent) error
 	GetCallArtifact(ctx context.Context, callID string, artifactType string) (*CallArtifact, error)

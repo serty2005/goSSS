@@ -4,6 +4,7 @@ import (
 	"context"
 	"etalon-server/internal/domain/telephony"
 	infraDB "etalon-server/internal/infra/db"
+	"sort"
 	"strings"
 	"time"
 
@@ -206,6 +207,99 @@ func (r *telephonyRepo) SyncCallEmployeeUser(ctx context.Context, provider strin
 			"employee_user_id": userID,
 			"updated_at":       time.Now(),
 		}).Error
+}
+
+func (r *telephonyRepo) IsCallHistoryRangeCovered(
+	ctx context.Context,
+	provider string,
+	employeeLogin *string,
+	startedFrom time.Time,
+	startedTo time.Time,
+) (bool, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false, nil
+	}
+	if startedTo.Before(startedFrom) {
+		startedFrom, startedTo = startedTo, startedFrom
+	}
+
+	windows := make([]telephony.CallHistorySyncWindow, 0)
+	query := r.getDB(ctx).WithContext(ctx).
+		Model(&telephony.CallHistorySyncWindow{}).
+		Where("provider = ?", provider).
+		Where("started_from <= ? AND started_to >= ?", startedTo, startedFrom).
+		Order("started_from asc, started_to asc")
+	query = applyTelephonyHistoryCoverageScope(query, employeeLogin)
+	if err := query.Find(&windows).Error; err != nil {
+		return false, err
+	}
+	return isTelephonyHistoryRangeCovered(windows, startedFrom, startedTo), nil
+}
+
+func (r *telephonyRepo) MarkCallHistoryRangeCovered(
+	ctx context.Context,
+	provider string,
+	employeeLogin *string,
+	startedFrom time.Time,
+	startedTo time.Time,
+	syncedAt time.Time,
+) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return gorm.ErrInvalidData
+	}
+	if startedTo.Before(startedFrom) {
+		startedFrom, startedTo = startedTo, startedFrom
+	}
+	if syncedAt.IsZero() {
+		syncedAt = time.Now()
+	}
+
+	return r.getDB(ctx).WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		mergedFrom := startedFrom
+		mergedTo := startedTo
+		windows := make([]telephony.CallHistorySyncWindow, 0)
+		query := tx.Model(&telephony.CallHistorySyncWindow{}).
+			Where("provider = ?", provider).
+			Where(
+				"started_from <= ? AND started_to >= ?",
+				startedTo.Add(time.Second),
+				startedFrom.Add(-time.Second),
+			).
+			Order("started_from asc, started_to asc")
+		query = applyTelephonyHistoryExactScope(query, employeeLogin)
+		if err := query.Find(&windows).Error; err != nil {
+			return err
+		}
+
+		ids := make([]uint, 0, len(windows))
+		for i := range windows {
+			if windows[i].StartedFrom.Before(mergedFrom) {
+				mergedFrom = windows[i].StartedFrom
+			}
+			if windows[i].StartedTo.After(mergedTo) {
+				mergedTo = windows[i].StartedTo
+			}
+			ids = append(ids, windows[i].ID)
+		}
+		if len(ids) > 0 {
+			if err := tx.Where("id IN ?", ids).Delete(&telephony.CallHistorySyncWindow{}).Error; err != nil {
+				return err
+			}
+		}
+
+		window := telephony.CallHistorySyncWindow{
+			Provider:    provider,
+			StartedFrom: mergedFrom,
+			StartedTo:   mergedTo,
+			SyncedAt:    syncedAt,
+		}
+		if login := normalizeTelephonyHistoryEmployeeLogin(employeeLogin); login != "" {
+			window.EmployeeLogin = &login
+		}
+		return tx.Create(&window).Error
+	})
 }
 
 func (r *telephonyRepo) ListCalls(ctx context.Context, filter telephony.CallListFilter) ([]telephony.Call, int64, error) {
@@ -776,12 +870,12 @@ func (r *telephonyRepo) applyCallListFilter(query *gorm.DB, filter telephony.Cal
 	if filter.StartedTo != nil {
 		query = query.Where("COALESCE(started_at, created_at) <= ?", *filter.StartedTo)
 	}
-	if filter.OnlyMissed || filter.OnlyWithoutTicket {
+	if filter.OnlyWithoutTicket {
 		query = query.Joins("LEFT JOIN telephony_call_ticket_links ON telephony_call_ticket_links.telephony_call_id = telephony_calls.id")
 	}
 	if filter.OnlyMissed {
 		query = query.Where(
-			`LOWER(status) IN ? OR COALESCE(missed_status, '') <> ''`,
+			`(LOWER(telephony_calls.status) IN ? OR COALESCE(telephony_calls.missed_status, '') <> '')`,
 			[]string{"missed", "cancel", "cancelled", "busy", "notavailable", "notallowed", "notfound", "noanswer"},
 		)
 	}
@@ -813,4 +907,65 @@ func normalizeTelephonyGroupNames(items []string) []string {
 		normalized = append(normalized, item)
 	}
 	return normalized
+}
+
+func applyTelephonyHistoryCoverageScope(query *gorm.DB, employeeLogin *string) *gorm.DB {
+	if login := normalizeTelephonyHistoryEmployeeLogin(employeeLogin); login != "" {
+		return query.Where("(employee_login = ? OR employee_login IS NULL)", login)
+	}
+	return query.Where("employee_login IS NULL")
+}
+
+func applyTelephonyHistoryExactScope(query *gorm.DB, employeeLogin *string) *gorm.DB {
+	if login := normalizeTelephonyHistoryEmployeeLogin(employeeLogin); login != "" {
+		return query.Where("employee_login = ?", login)
+	}
+	return query.Where("employee_login IS NULL")
+}
+
+func normalizeTelephonyHistoryEmployeeLogin(employeeLogin *string) string {
+	if employeeLogin == nil {
+		return ""
+	}
+	return strings.TrimSpace(*employeeLogin)
+}
+
+func isTelephonyHistoryRangeCovered(
+	windows []telephony.CallHistorySyncWindow,
+	startedFrom time.Time,
+	startedTo time.Time,
+) bool {
+	if len(windows) == 0 {
+		return false
+	}
+
+	sort.SliceStable(windows, func(i, j int) bool {
+		if windows[i].StartedFrom.Equal(windows[j].StartedFrom) {
+			return windows[i].StartedTo.Before(windows[j].StartedTo)
+		}
+		return windows[i].StartedFrom.Before(windows[j].StartedFrom)
+	})
+
+	coverageEnd := time.Time{}
+	for i := range windows {
+		window := windows[i]
+		if coverageEnd.IsZero() {
+			if window.StartedFrom.After(startedFrom) {
+				return false
+			}
+			coverageEnd = window.StartedTo
+		} else {
+			if window.StartedFrom.After(coverageEnd.Add(time.Second)) {
+				return false
+			}
+			if window.StartedTo.After(coverageEnd) {
+				coverageEnd = window.StartedTo
+			}
+		}
+		if !coverageEnd.Before(startedTo) {
+			return true
+		}
+	}
+
+	return false
 }

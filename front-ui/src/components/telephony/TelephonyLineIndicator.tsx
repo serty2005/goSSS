@@ -55,6 +55,11 @@ const TelephonyLineIndicator: React.FC = () => {
   };
   const employees = Array.isArray(line.employees) ? line.employees : [];
   const indicatorColor = colorMap[line.color] ?? colorMap.red;
+  const missedCallsURL = isAdmin(user?.roles)
+    ? "/admin/telephony?only_missed=true"
+    : user?.id
+      ? `/telephony/users/${user.id}/calls?only_missed=true`
+      : undefined;
 
   return (
     <Popover
@@ -68,13 +73,39 @@ const TelephonyLineIndicator: React.FC = () => {
             <div style={{ textAlign: "center", padding: 16 }}>
               <Spin size="small" />
             </div>
-          ) : employees.length === 0 ? (
-            <Empty
-              description="Сотрудники ВАТС не найдены"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
           ) : (
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              {line.missed_open_count > 0 ? (
+                missedCallsURL ? (
+                  <Button
+                    type="link"
+                    style={{
+                      alignSelf: "flex-start",
+                      paddingInline: 0,
+                      height: "auto",
+                    }}
+                    onClick={() => {
+                      setPopoverOpen(false);
+                      navigate(missedCallsURL);
+                    }}
+                  >
+                    <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                      Пропущенных без обратного действия:{" "}
+                      {line.missed_open_count}
+                    </Tag>
+                  </Button>
+                ) : (
+                  <Tag color="blue" style={{ alignSelf: "flex-start" }}>
+                    Пропущенных без обратного действия: {line.missed_open_count}
+                  </Tag>
+                )
+              ) : null}
+              {employees.length === 0 ? (
+                <Empty
+                  description="Сотрудники ВАТС не найдены"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              ) : null}
               {employees.map((employee) => {
                 const canOpenEmployeeCalls =
                   isAdmin(user?.roles) ||
@@ -103,9 +134,6 @@ const TelephonyLineIndicator: React.FC = () => {
                             ? "На линии"
                             : "Оффлайн"}
                       </Tag>
-                      {employee.user_id === undefined ? (
-                        <Tag>Не привязан</Tag>
-                      ) : null}
                       {employee.provider_ext ? (
                         <Text type="secondary">
                           Вн. {employee.provider_ext}
@@ -144,11 +172,6 @@ const TelephonyLineIndicator: React.FC = () => {
                   </Button>
                 );
               })}
-              {line.missed_open_count > 0 ? (
-                <Tag color="blue" style={{ alignSelf: "flex-start" }}>
-                  Пропущенных без обратного действия: {line.missed_open_count}
-                </Tag>
-              ) : null}
             </Space>
           )}
         </div>

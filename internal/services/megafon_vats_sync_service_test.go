@@ -341,7 +341,7 @@ func TestMegafonVATSSyncService_SyncHistoryUpdatesMissedCallState(t *testing.T) 
 	}
 }
 
-func TestMegafonVATSSyncService_SyncHistoryUsesLastSevenDaysByDefault(t *testing.T) {
+func TestMegafonVATSSyncService_SyncHistoryUsesLastTwentyFourHoursByDefault(t *testing.T) {
 	service, _, _ := newMegafonVATSSyncTestEnv(t, nil)
 	client := &fakeMegafonVATSDirectoryClient{}
 	service.client = client
@@ -369,8 +369,39 @@ func TestMegafonVATSSyncService_SyncHistoryUsesLastSevenDaysByDefault(t *testing
 		t.Fatalf("не удалось распарсить end: %v", err)
 	}
 	diff := startedTo.Sub(startedFrom)
-	if diff < (6*24*time.Hour) || diff > (7*24*time.Hour) {
-		t.Fatalf("ожидали диапазон около 7 дней, получили %v", diff)
+	if diff < (23*time.Hour) || diff > (25*time.Hour) {
+		t.Fatalf("ожидали диапазон около 24 часов, получили %v", diff)
+	}
+}
+
+func TestMegafonVATSSyncService_SyncHistoryMarksCoveredRangeInLocalDB(t *testing.T) {
+	service, telephonyRepo, _ := newMegafonVATSSyncTestEnv(t, nil)
+	client := &fakeMegafonVATSDirectoryClient{}
+	service.client = client
+
+	startedFrom := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	startedTo := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+	_, err := service.SyncHistoryByFilter(context.Background(), MegafonVATSHistorySyncFilter{
+		StartedFrom:   &startedFrom,
+		StartedTo:     &startedTo,
+		EmployeeLogin: "admin",
+	})
+	if err != nil {
+		t.Fatalf("SyncHistoryByFilter вернул ошибку: %v", err)
+	}
+
+	covered, err := telephonyRepo.IsCallHistoryRangeCovered(
+		context.Background(),
+		telephony.ProviderMegafonVATS,
+		normalizeMegafonEmployeeLoginPointer("admin"),
+		startedFrom,
+		startedTo,
+	)
+	if err != nil {
+		t.Fatalf("не удалось проверить покрытие истории звонков: %v", err)
+	}
+	if !covered {
+		t.Fatal("ожидали покрытый диапазон истории звонков после синхронизации")
 	}
 }
 
@@ -426,6 +457,7 @@ func newMegafonVATSSyncTestEnv(
 		&user.Integration{},
 		&telephony.ProviderEmployee{},
 		&telephony.Call{},
+		&telephony.CallHistorySyncWindow{},
 		&telephony.CallEvent{},
 		&telephony.CallArtifact{},
 	); err != nil {

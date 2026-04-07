@@ -98,6 +98,21 @@ func (Call) TableName() string {
 	return "telephony_calls"
 }
 
+type CallHistorySyncWindow struct {
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	Provider      string    `json:"provider" gorm:"type:varchar(50);not null;index:idx_telephony_call_history_scope_range,priority:1"`
+	EmployeeLogin *string   `json:"employee_login,omitempty" gorm:"type:varchar(255);index:idx_telephony_call_history_scope_range,priority:2"`
+	StartedFrom   time.Time `json:"started_from" gorm:"not null;index:idx_telephony_call_history_scope_range,priority:3"`
+	StartedTo     time.Time `json:"started_to" gorm:"not null;index"`
+	SyncedAt      time.Time `json:"synced_at" gorm:"not null;index"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (CallHistorySyncWindow) TableName() string {
+	return "telephony_call_history_sync_windows"
+}
+
 type CallEvent struct {
 	ID                  uint      `json:"id" gorm:"primaryKey"`
 	TelephonyCallID     string    `json:"telephony_call_id" gorm:"type:uuid;not null;index"`

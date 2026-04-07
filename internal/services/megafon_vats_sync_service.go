@@ -183,6 +183,18 @@ func (s *megafonVATSSyncService) SyncHistoryByFilter(ctx context.Context, filter
 			synced++
 		}
 	}
+	if shouldMarkMegafonHistoryCoverage(filter) {
+		if err := s.repo.MarkCallHistoryRangeCovered(
+			ctx,
+			telephony.ProviderMegafonVATS,
+			normalizeMegafonEmployeeLoginPointer(filter.EmployeeLogin),
+			startedFrom,
+			startedTo,
+			time.Now(),
+		); err != nil && s.log != nil {
+			s.log.Warn("Мегафон ВАТС: не удалось отметить покрытие локальной истории звонков", "error", err)
+		}
+	}
 	publishTelephonyLineUpdate(ctx, s.log, s.eventBus, s.repo, s.userRepo)
 
 	return synced, nil
@@ -207,6 +219,18 @@ func sanitizeMegafonGroups(groups []string) []string {
 		return nil
 	}
 	return items
+}
+
+func shouldMarkMegafonHistoryCoverage(filter MegafonVATSHistorySyncFilter) bool {
+	return strings.TrimSpace(filter.ClientPhone) == "" && len(sanitizeMegafonGroups(filter.Groups)) == 0
+}
+
+func normalizeMegafonEmployeeLoginPointer(login string) *string {
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return nil
+	}
+	return &login
 }
 
 func (s *megafonVATSSyncService) ListCachedEmployees(ctx context.Context) ([]telephony.ProviderEmployee, error) {

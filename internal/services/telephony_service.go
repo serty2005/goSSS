@@ -373,7 +373,7 @@ func normalizeTelephonyCallFilter(filter TelephonyCallFilter, now time.Time) Tel
 func normalizeTelephonyDateRange(startedFrom *time.Time, startedTo *time.Time, now time.Time) (time.Time, time.Time) {
 	switch {
 	case startedFrom == nil && startedTo == nil:
-		return beginningOfDay(now.AddDate(0, 0, -6)), endOfDay(now)
+		return now.Add(-24 * time.Hour), now
 	case startedFrom == nil:
 		return beginningOfDay(*startedTo), *startedTo
 	case startedTo == nil:
@@ -395,25 +395,52 @@ func endOfDay(value time.Time) time.Time {
 }
 
 func (s *telephonyService) syncMegafonHistoryForCalls(ctx context.Context, employeeUserID *uint, filter TelephonyCallFilter) {
-	if s == nil || s.historySync == nil || !s.historySync.IsEnabled() {
+	if s == nil || s.telephonyRepo == nil || s.historySync == nil || !s.historySync.IsEnabled() {
+		return
+	}
+	if filter.StartedFrom == nil || filter.StartedTo == nil {
 		return
 	}
 
-	historyFilter := MegafonVATSHistorySyncFilter{
-		StartedFrom: filter.StartedFrom,
-		StartedTo:   filter.StartedTo,
-		ClientPhone: filter.ClientPhone,
-		Groups:      filter.GroupNames,
-	}
+	var employeeLogin *string
 	if employeeUserID != nil {
 		login, err := s.resolveMegafonLogin(ctx, *employeeUserID)
 		if err != nil {
 			if s.log != nil {
 				s.log.Warn("Телефония: не удалось определить логин сотрудника для backfill истории Мегафон", "user_id", *employeeUserID, "error", err)
 			}
-		} else {
-			historyFilter.EmployeeLogin = login
+			return
 		}
+		login = strings.TrimSpace(login)
+		if login == "" {
+			return
+		}
+		employeeLogin = &login
+	}
+
+	covered, err := s.telephonyRepo.IsCallHistoryRangeCovered(
+		ctx,
+		telephony.ProviderMegafonVATS,
+		employeeLogin,
+		*filter.StartedFrom,
+		*filter.StartedTo,
+	)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("Телефония: не удалось проверить локальное покрытие истории звонков", "error", err)
+		}
+		return
+	}
+	if covered {
+		return
+	}
+
+	historyFilter := MegafonVATSHistorySyncFilter{
+		StartedFrom: filter.StartedFrom,
+		StartedTo:   filter.StartedTo,
+	}
+	if employeeLogin != nil {
+		historyFilter.EmployeeLogin = *employeeLogin
 	}
 
 	if _, err := s.historySync.SyncHistoryByFilter(ctx, historyFilter); err != nil && s.log != nil {
@@ -608,6 +635,9 @@ func loadMegafonIntegratedEmployees(
 	for i := range providerEmployees {
 		login := strings.TrimSpace(providerEmployees[i].EmployeeLogin)
 		localUser, ok := usersByLogin[login]
+		if !ok {
+			continue
+		}
 		status := "offline"
 		if strings.EqualFold(strings.TrimSpace(safeTelephonyString(providerEmployees[i].Status)), "online") {
 			status = "online"
@@ -620,9 +650,7 @@ func loadMegafonIntegratedEmployees(
 			ProviderExt:  providerEmployees[i].Ext,
 			ProviderLine: providerEmployees[i].Telnum,
 		}
-		if ok {
-			item.UserID = &localUser.ID
-		}
+		item.UserID = &localUser.ID
 		items = append(items, item)
 	}
 

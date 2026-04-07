@@ -16,7 +16,7 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import dayjs, { type Dayjs } from "dayjs";
 import { telephonyApi } from "@/api/telephony";
 import { usersApi } from "@/api/users";
@@ -112,12 +112,41 @@ const formatDuration = (value?: number) => {
 };
 
 const buildDefaultTelephonyPeriod = (): [Dayjs, Dayjs] => [
-  dayjs().subtract(6, "day").startOf("day"),
-  dayjs().endOf("day"),
+  dayjs().subtract(24, "hour"),
+  dayjs(),
 ];
 
+const parseTelephonyBooleanParam = (value: string | null) =>
+  String(value || "").trim().toLowerCase() === "true";
+
+const parseTelephonyNumberParam = (value: string | null) => {
+  const parsed = Number(String(value || "").trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const parseTelephonyCSVParam = (value: string | null) =>
+  String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const parseTelephonyDateParam = (value: string | null) => {
+  const parsed = dayjs(String(value || "").trim());
+  return parsed.isValid() ? parsed : null;
+};
+
+const buildPeriodFromSearchParams = (searchParams: URLSearchParams) => {
+  const startedFrom = parseTelephonyDateParam(searchParams.get("started_from"));
+  const startedTo = parseTelephonyDateParam(searchParams.get("started_to"));
+  if (startedFrom && startedTo) {
+    return [startedFrom, startedTo] as [Dayjs, Dayjs];
+  }
+  return buildDefaultTelephonyPeriod();
+};
+
 const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
-  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [employeeUserID, setEmployeeUserID] = useState<number | undefined>();
@@ -130,6 +159,31 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   const [onlyMissed, setOnlyMissed] = useState(false);
   const [onlyWithoutTicket, setOnlyWithoutTicket] = useState(false);
   const deferredClientPhone = useDeferredValue(clientPhoneInput.trim());
+
+  useEffect(() => {
+    const nextSearchParams = new URLSearchParams(searchParamsKey);
+    setEmployeeUserID(
+      mode === "admin"
+        ? parseTelephonyNumberParam(nextSearchParams.get("employee_user_id"))
+        : undefined,
+    );
+    setClientPhoneInput(
+      String(nextSearchParams.get("client_phone") || "").trim(),
+    );
+    setStatuses(parseTelephonyCSVParam(nextSearchParams.get("status")));
+    setGroupNames(parseTelephonyCSVParam(nextSearchParams.get("group_name")));
+    setPeriod(buildPeriodFromSearchParams(nextSearchParams));
+    setOnlyMissed(
+      parseTelephonyBooleanParam(nextSearchParams.get("only_missed")),
+    );
+    setOnlyWithoutTicket(
+      parseTelephonyBooleanParam(
+        nextSearchParams.get("only_without_ticket"),
+      ),
+    );
+    setPage(1);
+    setPageSize(20);
+  }, [mode, searchParamsKey]);
 
   useEffect(() => {
     setPage(1);
@@ -149,12 +203,8 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
       client_phone: deferredClientPhone || undefined,
       status: statuses.length > 0 ? statuses : undefined,
       group_name: groupNames.length > 0 ? groupNames : undefined,
-      started_from: period?.[0]
-        ? period[0].startOf("day").toISOString()
-        : undefined,
-      started_to: period?.[1]
-        ? period[1].endOf("day").toISOString()
-        : undefined,
+      started_from: period?.[0] ? period[0].toISOString() : undefined,
+      started_to: period?.[1] ? period[1].toISOString() : undefined,
       only_missed: onlyMissed || undefined,
       only_without_ticket: onlyWithoutTicket || undefined,
       limit: pageSize,
@@ -267,9 +317,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
             <Button
               type="link"
               style={{ paddingInline: 0 }}
-              onClick={() =>
-                navigate(`/telephony/users/${record.employee_user_id}/calls`)
-              }
+              onClick={() => setEmployeeUserID(record.employee_user_id)}
             >
               {label}
             </Button>
@@ -336,7 +384,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
       },
     ];
     return baseColumns;
-  }, [mode, navigate]);
+  }, [mode]);
 
   const resetFilters = () => {
     setEmployeeUserID(undefined);

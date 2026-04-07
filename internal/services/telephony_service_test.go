@@ -121,7 +121,7 @@ func TestTelephonyServiceGetLineViewColorPriority(t *testing.T) {
 	require.Equal(t, 1, lineView.MissedOpenCount)
 }
 
-func TestTelephonyServiceGetLineViewIncludesUnboundMegafonEmployees(t *testing.T) {
+func TestTelephonyServiceGetLineViewSkipsEmployeesWithoutActiveMegafonIntegration(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
 
@@ -139,13 +139,9 @@ func TestTelephonyServiceGetLineViewIncludesUnboundMegafonEmployees(t *testing.T
 	lineView, err := env.service.GetLineView(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, lineView)
-	require.Equal(t, "green", lineView.Color)
-	require.Equal(t, 1, lineView.OnLineCount)
-	require.Len(t, lineView.Employees, 1)
-	require.Equal(t, "boris_gorbunov", lineView.Employees[0].Login)
-	require.Equal(t, "Борис Горбунов", lineView.Employees[0].Name)
-	require.Equal(t, "online", lineView.Employees[0].Status)
-	require.Nil(t, lineView.Employees[0].UserID)
+	require.Equal(t, "red", lineView.Color)
+	require.Equal(t, 0, lineView.OnLineCount)
+	require.Len(t, lineView.Employees, 0)
 }
 
 func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
@@ -288,13 +284,13 @@ func TestTelephonyServiceListCallsAdminFiltersByEmployeeUserID(t *testing.T) {
 	require.Equal(t, firstUser.ID, *items[0].Call.EmployeeUserID)
 }
 
-func TestTelephonyServiceListCallsAppliesDefaultSevenDayRange(t *testing.T) {
+func TestTelephonyServiceListCallsAppliesDefaultTwentyFourHourRange(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
 	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
 
-	oldStartedAt := time.Now().AddDate(0, 0, -10)
-	recentStartedAt := time.Now().AddDate(0, 0, -2)
+	oldStartedAt := time.Now().Add(-48 * time.Hour)
+	recentStartedAt := time.Now().Add(-12 * time.Hour)
 	oldPhone := "79990000101"
 	recentPhone := "79990000102"
 	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
@@ -325,6 +321,41 @@ func TestTelephonyServiceListCallsAppliesDefaultSevenDayRange(t *testing.T) {
 	require.Equal(t, "call-recent", items[0].Call.ExternalCallID)
 }
 
+func TestTelephonyServiceListCallsOnlyMissedReturnsOnlyMissedCalls(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+
+	now := time.Now()
+	missedStatus := "3"
+	missedPhone := "79990000991"
+	completedPhone := "79990000992"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-missed-only",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-missed-only",
+		Direction:      "incoming",
+		Status:         "missed",
+		MissedStatus:   &missedStatus,
+		ClientPhone:    &missedPhone,
+		StartedAt:      &now,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-completed-only",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-completed-only",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &completedPhone,
+		StartedAt:      &now,
+	}))
+
+	items, total, err := env.service.ListCalls(ctx, TelephonyCallFilter{OnlyMissed: true}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, items, 1)
+	require.Equal(t, "call-missed-only", items[0].Call.ExternalCallID)
+}
+
 func TestTelephonyServiceListUserCallsSyncsHistoryByRequestedDateRange(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
@@ -346,8 +377,31 @@ func TestTelephonyServiceListUserCallsSyncsHistoryByRequestedDateRange(t *testin
 	require.NotNil(t, env.historySync.lastFilter.StartedTo)
 	require.Equal(t, startedFrom, *env.historySync.lastFilter.StartedFrom)
 	require.Equal(t, startedTo, *env.historySync.lastFilter.StartedTo)
-	require.Equal(t, "+7 (999) 000-00-55", env.historySync.lastFilter.ClientPhone)
-	require.Equal(t, []string{"Техподдержка"}, env.historySync.lastFilter.Groups)
+	require.Equal(t, "", env.historySync.lastFilter.ClientPhone)
+	require.Nil(t, env.historySync.lastFilter.Groups)
+}
+
+func TestTelephonyServiceListCallsSkipsHistorySyncWhenRangeAlreadyCovered(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+
+	startedFrom := time.Date(2026, 4, 6, 0, 0, 0, 0, time.UTC)
+	startedTo := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, env.telephonyRepo.MarkCallHistoryRangeCovered(
+		ctx,
+		telephony.ProviderMegafonVATS,
+		nil,
+		startedFrom,
+		startedTo,
+		time.Now(),
+	))
+
+	_, _, err := env.service.ListCalls(ctx, TelephonyCallFilter{
+		StartedFrom: &startedFrom,
+		StartedTo:   &startedTo,
+	}, 999, []string{user.RoleAdmin})
+	require.NoError(t, err)
+	require.Equal(t, 0, env.historySync.callCount)
 }
 
 func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
@@ -364,6 +418,7 @@ func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
 		&tickets.Ticket{},
 		&telephony.ProviderEmployee{},
 		&telephony.Call{},
+		&telephony.CallHistorySyncWindow{},
 		&telephony.CallTicketLink{},
 		&telephony.PendingContext{},
 		&telephony.Contact{},
