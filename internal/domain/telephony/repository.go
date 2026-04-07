@@ -63,6 +63,7 @@ type Repository interface {
 	GetIncomingEventByID(ctx context.Context, id string) (*IncomingEvent, error)
 
 	EnsureContact(ctx context.Context, normalizedPhone string, displayPhone string) (*Contact, error)
+	UpsertContact(ctx context.Context, input ContactUpsert) (*Contact, error)
 	GetContactByID(ctx context.Context, id uint) (*Contact, error)
 	GetContactByPhone(ctx context.Context, normalizedPhone string) (*Contact, error)
 	UpsertContactCompanyLink(ctx context.Context, contactID uint, companyID string, lastSeenAt time.Time) error

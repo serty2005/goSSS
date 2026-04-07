@@ -58,7 +58,51 @@ func (h *TelephonyHandler) BindPendingContext(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	err := h.service.BindPendingContextToTicket(r.Context(), pendingID, dto.TicketID, getUserIDFromContext(r), getUserRolesFromContext(r))
+	err := h.service.BindPendingContextToTicket(
+		r.Context(),
+		pendingID,
+		dto.TicketID,
+		dto.ContactName,
+		getUserIDFromContext(r),
+		getUserRolesFromContext(r),
+	)
+	switch {
+	case err == nil:
+		response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case err == services.ErrTelephonyForbidden:
+		response.RespondWithError(w, http.StatusForbidden, err.Error())
+	case strings.Contains(strings.ToLower(err.Error()), "не найден"):
+		response.RespondWithError(w, http.StatusNotFound, err.Error())
+	default:
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+func (h *TelephonyHandler) BindCallToTicket(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "сервис телефонии недоступен")
+		return
+	}
+
+	var dto api.TelephonyBindCallDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "некорректный payload")
+		return
+	}
+	callID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if callID == "" || strings.TrimSpace(dto.TicketID) == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "id и ticket_id обязательны")
+		return
+	}
+
+	err := h.service.BindCallToTicket(
+		r.Context(),
+		callID,
+		dto.TicketID,
+		dto.ContactName,
+		getUserIDFromContext(r),
+		getUserRolesFromContext(r),
+	)
 	switch {
 	case err == nil:
 		response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -236,7 +280,7 @@ func mapPendingContextDTO(item *services.TelephonyPendingContextView) *api.Telep
 		}
 	}
 	if item.Call != nil {
-		call := services.TelephonyCallView{Call: *item.Call}
+		call := services.TelephonyCallView{Call: *item.Call, Contact: item.Contact}
 		callDTO := mapTelephonyCallDTO(call)
 		dto.Call = &callDTO
 	}
@@ -252,6 +296,16 @@ func mapTelephonyCallsDTO(items []services.TelephonyCallView) []api.TelephonyCal
 }
 
 func mapTelephonyCallDTO(item services.TelephonyCallView) api.TelephonyCallDTO {
+	var contact *api.TelephonyContactDTO
+	if item.Contact != nil {
+		contact = &api.TelephonyContactDTO{
+			ID:              item.Contact.ID,
+			PhoneNormalized: item.Contact.PhoneNormalized,
+			PhoneDisplay:    item.Contact.PhoneDisplay,
+			Name:            item.Contact.Name,
+			BitrixContactID: item.Contact.BitrixContactID,
+		}
+	}
 	return api.TelephonyCallDTO{
 		ID:              item.Call.ID,
 		ExternalCallID:  item.Call.ExternalCallID,
@@ -273,6 +327,7 @@ func mapTelephonyCallDTO(item services.TelephonyCallView) api.TelephonyCallDTO {
 		RecordingURL:    item.Call.RecordingURL,
 		HasRecording:    item.Call.HasRecording,
 		TicketID:        item.TicketID,
+		Contact:         contact,
 	}
 }
 

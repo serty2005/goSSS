@@ -82,6 +82,7 @@ func TestUnlinkFromBitrix_RemovesBindingsAndMarksDealIgnored(t *testing.T) {
 		bitrixRepo,
 		nil,
 		nil,
+		nil,
 	)
 
 	updated, err := svc.UnlinkFromBitrix(ctx, ticket.ID, admin.ID, []string{user.RoleAdmin})
@@ -241,6 +242,7 @@ func TestDelete_RemovesTicketAndLocalFiles(t *testing.T) {
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 		nil,
 		nil,
 	)

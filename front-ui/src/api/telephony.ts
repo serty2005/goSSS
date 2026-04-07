@@ -33,11 +33,23 @@ export const telephonyApi = {
     return response.data.data;
   },
 
-  bindPendingContext: async (id: string, ticketId: string) => {
+  bindPendingContext: async (id: string, ticketId: string, contactName?: string) => {
     const response = await apiClient.post<ApiResponse<{ status: string }>>(
       `/telephony/pending-context/${id}/bind-ticket`,
       {
         ticket_id: ticketId,
+        contact_name: contactName,
+      },
+    );
+    return response.data;
+  },
+
+  bindCallToTicket: async (id: string, ticketId: string, contactName?: string) => {
+    const response = await apiClient.post<ApiResponse<{ status: string }>>(
+      `/telephony/calls/${id}/bind-ticket`,
+      {
+        ticket_id: ticketId,
+        contact_name: contactName,
       },
     );
     return response.data;

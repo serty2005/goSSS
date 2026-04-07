@@ -27,7 +27,7 @@ import {
   message,
   theme as antTheme,
 } from "antd";
-import { LinkOutlined, MenuOutlined } from "@ant-design/icons";
+import { CopyOutlined, LinkOutlined, MenuOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import {
   DndContext,
@@ -61,6 +61,11 @@ import { useAuthStore } from "@/store/authStore";
 import { useTicketParamsStore } from "@/store/ticketParamsStore";
 import { SafeHtmlContent } from "@/utils/safeHtml";
 import {
+  getTelephonyContactLabel,
+  getTelephonyContactPhoneDisplay,
+  getTelephonyContactPhoneForCopy,
+} from "@/utils/telephony";
+import {
   getTicketStatusMeta,
   isClosedLikeTicketStatus,
   TICKET_ACTIVE_STATUS_VALUES,
@@ -71,6 +76,15 @@ const { Text, Paragraph } = Typography;
 const LazyNewTicketModal = React.lazy(
   () => import("@/components/tickets/NewTicketModal"),
 );
+
+const copyTicketPhone = async (phone: string) => {
+  if (!phone) {
+    message.warning("Телефон не найден");
+    return;
+  }
+  await navigator.clipboard.writeText(phone);
+  message.success("Телефон скопирован");
+};
 
 type ViewMode = "list" | "cards" | "table";
 
@@ -1967,6 +1981,34 @@ const TicketsPage: React.FC = () => {
                 Открыть страницу
               </Button>
             </Space>
+
+            <Card size="small" title="Контакт">
+              <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                <Text>
+                  {getTelephonyContactLabel(details.contact, details.contact?.phone_display) ||
+                    "Контакт не указан"}
+                </Text>
+                <Space size={8} wrap>
+                  <Text type="secondary">
+                    {getTelephonyContactPhoneDisplay(details.contact) ||
+                      "Телефон не указан"}
+                  </Text>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    disabled={!getTelephonyContactPhoneForCopy(details.contact)}
+                    onClick={() => {
+                      void copyTicketPhone(
+                        getTelephonyContactPhoneForCopy(details.contact),
+                      );
+                    }}
+                  >
+                    Копировать
+                  </Button>
+                </Space>
+              </Space>
+            </Card>
 
             <Card size="small" title="Описание">
               <SafeHtmlContent

@@ -419,6 +419,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.FRRepo,
 		repos.BitrixRepo,
 		repos.PyrusRepo,
+		repos.TelephonyRepo,
 		repos.OwnerHistoryRepo,
 	)
 	pyrusSyncService := services.NewPyrusSyncService(
@@ -461,6 +462,19 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.EventBus,
 		megafonVATSRecordingService,
 	)
+	bitrixSyncService := services.NewBitrixSyncService(
+		app.Config,
+		app.Logger.With("component", "bitrix_sync_service"),
+		clients.BitrixClient,
+		clients.RedisClient,
+		repos.TicketRepo,
+		repos.ServerRepo,
+		repos.WorkstationRepo,
+		repos.UserRepo,
+		repos.BitrixRepo,
+		repos.CompanyRepo,
+		repos.TelephonyRepo,
+	)
 	telephonyService := services.NewTelephonyService(
 		app.Logger.With("component", "telephony_service"),
 		repos.TelephonyRepo,
@@ -469,6 +483,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.UserRepo,
 		app.EventBus,
 		megafonVATSSyncService,
+		bitrixSyncService,
 	)
 	integrationSyncControl := services.NewIntegrationSyncControlService(
 		repos.PyrusRepo,
@@ -492,7 +507,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerService:              serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
 		WorkstationService:         workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo, repos.OwnerHistoryRepo),
 		FiscalService:              fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo, repos.OwnerHistoryRepo),
-		BitrixSyncService:          services.NewBitrixSyncService(app.Config, app.Logger.With("component", "bitrix_sync_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.ServerRepo, repos.WorkstationRepo, repos.UserRepo, repos.BitrixRepo, repos.CompanyRepo),
+		BitrixSyncService:          bitrixSyncService,
 		BitrixIncomingService:      services.NewBitrixIncomingService(app.Config, app.Logger.With("component", "bitrix_incoming_service"), clients.BitrixClient, clients.RedisClient, repos.TicketRepo, repos.UserRepo, repos.BitrixRepo, app.EventBus),
 		PyrusSyncService:           pyrusSyncService,
 		PyrusIncomingService:       pyrusIncomingService,

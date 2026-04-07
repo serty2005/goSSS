@@ -1,7 +1,7 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, EditOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -18,6 +18,7 @@ import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { SafeHtmlContent } from '@/utils/safeHtml';
+import { getTelephonyContactLabel, getTelephonyContactPhoneDisplay, getTelephonyContactPhoneForCopy } from '@/utils/telephony';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
@@ -40,6 +41,15 @@ const fieldHighlightStyle: React.CSSProperties = {
   transition: 'background-color 0.35s ease',
   borderRadius: 6,
   padding: '2px 6px',
+};
+
+const copyTicketPhone = async (phone: string) => {
+  if (!phone) {
+    message.warning('Телефон не найден');
+    return;
+  }
+  await navigator.clipboard.writeText(phone);
+  message.success('Телефон скопирован');
 };
 
 const historyLabel = (entry: TicketHistoryDTO) => {
@@ -1093,6 +1103,25 @@ const TicketDetailsPage: React.FC = () => {
                         <Space direction="vertical" size={0}>
                           <Text>{metadata.is_common_contract ? 'Общий контракт' : (metadata.contract_id || '-')}</Text>
                           <Text type="secondary">Тип: {contractType}</Text>
+                        </Space>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Контакт">
+                        {getTelephonyContactLabel(details.contact, details.contact?.phone_display) || '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Телефон">
+                        <Space size={8} wrap>
+                          <Text>{getTelephonyContactPhoneDisplay(details.contact) || '-'}</Text>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<CopyOutlined />}
+                            disabled={!getTelephonyContactPhoneForCopy(details.contact)}
+                            onClick={() => {
+                              void copyTicketPhone(getTelephonyContactPhoneForCopy(details.contact));
+                            }}
+                          >
+                            Копировать
+                          </Button>
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="Исполнитель">

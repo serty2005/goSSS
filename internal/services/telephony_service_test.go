@@ -18,17 +18,31 @@ import (
 )
 
 type telephonyServiceTestEnv struct {
-	service       TelephonyService
-	telephonyRepo telephony.Repository
-	ticketRepo    tickets.TicketRepository
-	userRepo      user.Repository
-	historySync   *fakeTelephonyHistorySyncService
+	service        TelephonyService
+	telephonyRepo  telephony.Repository
+	ticketRepo     tickets.TicketRepository
+	userRepo       user.Repository
+	historySync    *fakeTelephonyHistorySyncService
+	bitrixContacts *fakeBitrixContactService
 }
 
 type fakeTelephonyHistorySyncService struct {
 	enabled    bool
 	lastFilter MegafonVATSHistorySyncFilter
 	callCount  int
+}
+
+type fakeBitrixContactService struct {
+	result    *BitrixEnsureContactResult
+	err       error
+	lastInput BitrixEnsureContactInput
+	callCount int
+}
+
+func (f *fakeBitrixContactService) EnsureContactByPhone(_ context.Context, input BitrixEnsureContactInput) (*BitrixEnsureContactResult, error) {
+	f.lastInput = input
+	f.callCount++
+	return f.result, f.err
 }
 
 func (f *fakeTelephonyHistorySyncService) IsEnabled() bool {
@@ -177,7 +191,7 @@ func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 		ExpiresAt:      time.Now().Add(time.Hour),
 	}))
 
-	require.NoError(t, env.service.BindPendingContextToTicket(ctx, "pending-1", ticket.ID, operator.ID, nil))
+	require.NoError(t, env.service.BindPendingContextToTicket(ctx, "pending-1", ticket.ID, "Юрий", operator.ID, nil))
 
 	updatedTicket, err := env.ticketRepo.GetByID(ctx, ticket.ID)
 	require.NoError(t, err)
@@ -189,6 +203,8 @@ func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 	require.NotNil(t, contact)
 	require.Equal(t, clientPhone, contact.PhoneNormalized)
 	require.Equal(t, clientPhone, contact.PhoneDisplay)
+	require.NotNil(t, contact.Name)
+	require.Equal(t, "Юрий", *contact.Name)
 
 	callLinks, err := env.telephonyRepo.ListCallTicketLinks(ctx, []string{"call-local-1"})
 	require.NoError(t, err)
@@ -201,6 +217,65 @@ func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 	require.Equal(t, ticket.CompanyID, companyLinks[0].CompanyID)
 
 	pendingContext, err := env.telephonyRepo.GetPendingContextByID(ctx, "pending-1")
+	require.NoError(t, err)
+	require.NotNil(t, pendingContext)
+	require.Equal(t, telephony.PendingContextStatusBound, pendingContext.Status)
+	require.NotNil(t, pendingContext.LinkedTicketID)
+	require.Equal(t, ticket.ID, *pendingContext.LinkedTicketID)
+}
+
+func TestTelephonyServiceBindCallToTicket(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	ticket := &tickets.Ticket{
+		Subject:     "Проблема с терминалом",
+		Description: "Клиент сообщил о пропаже связи",
+		Status:      tickets.StatusNew,
+		Type:        tickets.TypeIncident,
+		CompanyID:   "company-1",
+	}
+	require.NoError(t, env.ticketRepo.Create(ctx, ticket))
+
+	clientPhone := "+79990000078"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-local-2",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-external-2",
+		Direction:      "incoming",
+		Status:         "accepted",
+		ClientPhone:    &clientPhone,
+		EmployeeUserID: &operator.ID,
+	}))
+	require.NoError(t, env.telephonyRepo.UpsertPendingContext(ctx, &telephony.PendingContext{
+		ID:             "pending-2",
+		EmployeeUserID: operator.ID,
+		ExternalCallID: "call-external-2",
+		ClientPhone:    clientPhone,
+		Status:         telephony.PendingContextStatusNew,
+		ExpiresAt:      time.Now().Add(time.Hour),
+	}))
+
+	require.NoError(t, env.service.BindCallToTicket(ctx, "call-local-2", ticket.ID, "Анна", operator.ID, nil))
+
+	updatedTicket, err := env.ticketRepo.GetByID(ctx, ticket.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedTicket)
+	require.NotNil(t, updatedTicket.ContactID)
+
+	contact, err := env.telephonyRepo.GetContactByID(ctx, *updatedTicket.ContactID)
+	require.NoError(t, err)
+	require.NotNil(t, contact)
+	require.NotNil(t, contact.Name)
+	require.Equal(t, "Анна", *contact.Name)
+
+	callLinks, err := env.telephonyRepo.ListCallTicketLinks(ctx, []string{"call-local-2"})
+	require.NoError(t, err)
+	require.Len(t, callLinks, 1)
+	require.Equal(t, ticket.ID, callLinks[0].TicketID)
+
+	pendingContext, err := env.telephonyRepo.GetPendingContextByID(ctx, "pending-2")
 	require.NoError(t, err)
 	require.NotNil(t, pendingContext)
 	require.Equal(t, telephony.PendingContextStatusBound, pendingContext.Status)
@@ -429,13 +504,15 @@ func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
 	ticketRepo := infraRepos.NewTicketRepo(db)
 	userRepo := infraRepos.NewUserRepo(db)
 	historySync := &fakeTelephonyHistorySyncService{enabled: true}
+	bitrixContacts := &fakeBitrixContactService{}
 
 	return &telephonyServiceTestEnv{
-		service:       NewTelephonyService(nil, telephonyRepo, ticketRepo, nil, userRepo, nil, historySync),
-		telephonyRepo: telephonyRepo,
-		ticketRepo:    ticketRepo,
-		userRepo:      userRepo,
-		historySync:   historySync,
+		service:        NewTelephonyService(nil, telephonyRepo, ticketRepo, nil, userRepo, nil, historySync, bitrixContacts),
+		telephonyRepo:  telephonyRepo,
+		ticketRepo:     ticketRepo,
+		userRepo:       userRepo,
+		historySync:    historySync,
+		bitrixContacts: bitrixContacts,
 	}
 }
 

@@ -347,6 +347,7 @@ export interface TelephonyCallDTO {
   recording_url?: string;
   has_recording: boolean;
   ticket_id?: string;
+  contact?: TelephonyContactDTO;
 }
 
 export interface TelephonyPendingContextDTO {
@@ -597,6 +598,7 @@ export interface TicketCommentDTO {
 export interface TicketDetailsDTO {
   metadata: TicketDTO;
   company_name?: string;
+  contact?: TelephonyContactDTO;
   comments: TicketCommentDTO[];
   history?: TicketHistoryDTO[];
   attachments?: unknown[];

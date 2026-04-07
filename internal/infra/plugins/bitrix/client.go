@@ -140,9 +140,15 @@ func NewClient(cfg *config.Config, log logger.LoggerInterface) *Client {
 	limitBurst := bitrixDefaultRateLimitBurst
 	if cfg != nil {
 		baseURL = strings.TrimRight(strings.TrimSpace(cfg.BitrixBaseURL), "/") + "/"
-		timeout = cfg.RequestTimeout
-		limitPerMinute = max(1, cfg.BitrixRateLimitPerMin)
-		limitBurst = max(1, cfg.BitrixRateLimitBurst)
+		if cfg.RequestTimeout > 0 {
+			timeout = cfg.RequestTimeout
+		}
+		if cfg.BitrixRateLimitPerMin > 0 {
+			limitPerMinute = cfg.BitrixRateLimitPerMin
+		}
+		if cfg.BitrixRateLimitBurst > 0 {
+			limitBurst = cfg.BitrixRateLimitBurst
+		}
 	}
 	rateLimitPerSecond := max(float64(limitPerMinute)/60.0, 1.0/60.0)
 

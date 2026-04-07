@@ -3,7 +3,13 @@ package dtos
 import "time"
 
 type TelephonyBindPendingContextDTO struct {
-	TicketID string `json:"ticket_id" validate:"required"`
+	TicketID    string `json:"ticket_id" validate:"required"`
+	ContactName string `json:"contact_name"`
+}
+
+type TelephonyBindCallDTO struct {
+	TicketID    string `json:"ticket_id" validate:"required"`
+	ContactName string `json:"contact_name"`
 }
 
 type TelephonyContactDTO struct {
@@ -15,26 +21,27 @@ type TelephonyContactDTO struct {
 }
 
 type TelephonyCallDTO struct {
-	ID              string     `json:"id"`
-	ExternalCallID  string     `json:"external_call_id"`
-	Direction       string     `json:"direction"`
-	Status          string     `json:"status"`
-	MissedStatus    *string    `json:"missed_status,omitempty"`
-	ClientPhone     *string    `json:"client_phone,omitempty"`
-	VATNumber       *string    `json:"vat_number,omitempty"`
-	EmployeeLogin   *string    `json:"employee_login,omitempty"`
-	EmployeeUserID  *uint      `json:"employee_user_id,omitempty"`
-	EmployeeName    string     `json:"employee_name,omitempty"`
-	EmployeeState   string     `json:"employee_state,omitempty"`
-	GroupName       *string    `json:"group_name,omitempty"`
-	StartedAt       *time.Time `json:"started_at,omitzero"`
-	AnsweredAt      *time.Time `json:"answered_at,omitzero"`
-	CompletedAt     *time.Time `json:"completed_at,omitzero"`
-	WaitSeconds     *int       `json:"wait_seconds,omitempty"`
-	DurationSeconds *int       `json:"duration_seconds,omitempty"`
-	RecordingURL    *string    `json:"recording_url,omitempty"`
-	HasRecording    bool       `json:"has_recording"`
-	TicketID        *string    `json:"ticket_id,omitempty"`
+	ID              string               `json:"id"`
+	ExternalCallID  string               `json:"external_call_id"`
+	Direction       string               `json:"direction"`
+	Status          string               `json:"status"`
+	MissedStatus    *string              `json:"missed_status,omitempty"`
+	ClientPhone     *string              `json:"client_phone,omitempty"`
+	VATNumber       *string              `json:"vat_number,omitempty"`
+	EmployeeLogin   *string              `json:"employee_login,omitempty"`
+	EmployeeUserID  *uint                `json:"employee_user_id,omitempty"`
+	EmployeeName    string               `json:"employee_name,omitempty"`
+	EmployeeState   string               `json:"employee_state,omitempty"`
+	GroupName       *string              `json:"group_name,omitempty"`
+	StartedAt       *time.Time           `json:"started_at,omitzero"`
+	AnsweredAt      *time.Time           `json:"answered_at,omitzero"`
+	CompletedAt     *time.Time           `json:"completed_at,omitzero"`
+	WaitSeconds     *int                 `json:"wait_seconds,omitempty"`
+	DurationSeconds *int                 `json:"duration_seconds,omitempty"`
+	RecordingURL    *string              `json:"recording_url,omitempty"`
+	HasRecording    bool                 `json:"has_recording"`
+	TicketID        *string              `json:"ticket_id,omitempty"`
+	Contact         *TelephonyContactDTO `json:"contact,omitempty"`
 }
 
 type TelephonyPendingContextDTO struct {
@@ -47,11 +54,11 @@ type TelephonyPendingContextDTO struct {
 }
 
 type TelephonyContactCompanyDTO struct {
-	CompanyID      string     `json:"company_id"`
-	Title          string     `json:"title"`
-	ParentTitle    string     `json:"parent_title,omitempty"`
-	LastSeenAt     time.Time  `json:"last_seen_at,omitzero"`
-	ActiveContract *bool      `json:"active_contract,omitempty"`
+	CompanyID      string    `json:"company_id"`
+	Title          string    `json:"title"`
+	ParentTitle    string    `json:"parent_title,omitempty"`
+	LastSeenAt     time.Time `json:"last_seen_at,omitzero"`
+	ActiveContract *bool     `json:"active_contract,omitempty"`
 }
 
 type TelephonyCallListResponseDTO struct {
@@ -70,8 +77,8 @@ type TelephonyLineEmployeeDTO struct {
 }
 
 type TelephonyLineDTO struct {
-	Color           string                    `json:"color"`
-	OnLineCount     int                       `json:"on_line_count"`
-	MissedOpenCount int                       `json:"missed_open_count"`
+	Color           string                     `json:"color"`
+	OnLineCount     int                        `json:"on_line_count"`
+	MissedOpenCount int                        `json:"missed_open_count"`
 	Employees       []TelephonyLineEmployeeDTO `json:"employees"`
 }

@@ -687,22 +687,62 @@ func (r *telephonyRepo) GetIncomingEventByID(ctx context.Context, id string) (*t
 }
 
 func (r *telephonyRepo) EnsureContact(ctx context.Context, normalizedPhone string, displayPhone string) (*telephony.Contact, error) {
-	normalizedPhone = strings.TrimSpace(normalizedPhone)
+	return r.UpsertContact(ctx, telephony.ContactUpsert{
+		PhoneNormalized: normalizedPhone,
+		PhoneDisplay:    displayPhone,
+	})
+}
+
+func (r *telephonyRepo) UpsertContact(ctx context.Context, input telephony.ContactUpsert) (*telephony.Contact, error) {
+	normalizedPhone := strings.TrimSpace(input.PhoneNormalized)
 	if normalizedPhone == "" {
 		return nil, nil
 	}
-	displayPhone = strings.TrimSpace(displayPhone)
+
+	displayPhone := strings.TrimSpace(input.PhoneDisplay)
 	if displayPhone == "" {
 		displayPhone = normalizedPhone
 	}
 
+	updates := map[string]any{
+		"phone_display": displayPhone,
+		"updated_at":    time.Now(),
+	}
+
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name != "" {
+			updates["name"] = &name
+		}
+	}
+
+	if input.BitrixContactID != nil {
+		bitrixContactID := strings.TrimSpace(*input.BitrixContactID)
+		if bitrixContactID != "" {
+			updates["bitrix_contact_id"] = &bitrixContactID
+		}
+	}
+
+	normalizedPhone = strings.TrimSpace(normalizedPhone)
 	item := &telephony.Contact{
 		PhoneNormalized: normalizedPhone,
 		PhoneDisplay:    displayPhone,
 	}
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name != "" {
+			item.Name = &name
+		}
+	}
+	if input.BitrixContactID != nil {
+		bitrixContactID := strings.TrimSpace(*input.BitrixContactID)
+		if bitrixContactID != "" {
+			item.BitrixContactID = &bitrixContactID
+		}
+	}
 	if err := r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "phone_normalized"}},
-		DoUpdates: clause.AssignmentColumns([]string{"phone_display", "updated_at"}),
+		DoUpdates: clause.Assignments(updates),
 	}).Create(item).Error; err != nil {
 		return nil, err
 	}

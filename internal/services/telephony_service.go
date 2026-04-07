@@ -48,6 +48,7 @@ type TelephonyContactCompanyView struct {
 
 type TelephonyCallView struct {
 	Call          telephony.Call
+	Contact       *telephony.Contact
 	EmployeeName  string
 	EmployeeState string
 	TicketID      *string
@@ -72,7 +73,8 @@ type TelephonyLineView struct {
 
 type TelephonyService interface {
 	GetPendingContextForUser(ctx context.Context, userID uint) (*TelephonyPendingContextView, error)
-	BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, actorID uint, roles []string) error
+	BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, contactName string, actorID uint, roles []string) error
+	BindCallToTicket(ctx context.Context, callID string, ticketID string, contactName string, actorID uint, roles []string) error
 	ListContactCompanies(ctx context.Context, contactID uint) ([]TelephonyContactCompanyView, error)
 	ListCalls(ctx context.Context, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
 	ListUserCalls(ctx context.Context, userID uint, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
@@ -81,13 +83,14 @@ type TelephonyService interface {
 }
 
 type telephonyService struct {
-	log           logger.LoggerInterface
-	telephonyRepo telephony.Repository
-	ticketRepo    tickets.TicketRepository
-	companyRepo   company.Repository
-	userRepo      user.Repository
-	eventBus      eventbus.EventBus
-	historySync   MegafonVATSSyncService
+	log            logger.LoggerInterface
+	telephonyRepo  telephony.Repository
+	ticketRepo     tickets.TicketRepository
+	companyRepo    company.Repository
+	userRepo       user.Repository
+	eventBus       eventbus.EventBus
+	historySync    MegafonVATSSyncService
+	bitrixContacts BitrixContactService
 }
 
 func NewTelephonyService(
@@ -98,15 +101,17 @@ func NewTelephonyService(
 	userRepo user.Repository,
 	eventBus eventbus.EventBus,
 	historySync MegafonVATSSyncService,
+	bitrixContacts BitrixContactService,
 ) TelephonyService {
 	return &telephonyService{
-		log:           log,
-		telephonyRepo: telephonyRepo,
-		ticketRepo:    ticketRepo,
-		companyRepo:   companyRepo,
-		userRepo:      userRepo,
-		eventBus:      eventBus,
-		historySync:   historySync,
+		log:            log,
+		telephonyRepo:  telephonyRepo,
+		ticketRepo:     ticketRepo,
+		companyRepo:    companyRepo,
+		userRepo:       userRepo,
+		eventBus:       eventBus,
+		historySync:    historySync,
+		bitrixContacts: bitrixContacts,
 	}
 }
 
@@ -126,7 +131,7 @@ func (s *telephonyService) GetPendingContextForUser(ctx context.Context, userID 
 		return nil, nil
 	}
 
-	contact, err := s.telephonyRepo.GetContactByPhone(ctx, strings.TrimSpace(pending.ClientPhone))
+	contact, err := s.ensurePendingContact(ctx, pending.ClientPhone, "")
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +147,7 @@ func (s *telephonyService) GetPendingContextForUser(ctx context.Context, userID 
 	}, nil
 }
 
-func (s *telephonyService) BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, actorID uint, roles []string) error {
+func (s *telephonyService) BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, contactName string, actorID uint, roles []string) error {
 	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil {
 		return nil
 	}
@@ -165,33 +170,9 @@ func (s *telephonyService) BindPendingContextToTicket(ctx context.Context, pendi
 		return s.telephonyRepo.UpdatePendingContext(ctx, pending.ID, telephony.PendingContextStatusExpired, nil, &reason)
 	}
 
-	ticket, err := s.ticketRepo.GetByID(ctx, strings.TrimSpace(ticketID))
+	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, pending.ClientPhone, contactName)
 	if err != nil {
 		return err
-	}
-	if ticket == nil {
-		return telephonyErrNotFound("ticket")
-	}
-
-	contact, err := s.telephonyRepo.EnsureContact(ctx, pending.ClientPhone, pending.ClientPhone)
-	if err != nil {
-		return err
-	}
-	if contact != nil {
-		switch {
-		case ticket.ContactID == nil:
-			ticket.ContactID = &contact.ID
-		case *ticket.ContactID != contact.ID:
-			return errors.New("тикет уже привязан к другому контакту")
-		}
-		if err = s.ticketRepo.Update(ctx, ticket); err != nil {
-			return err
-		}
-		if strings.TrimSpace(ticket.CompanyID) != "" {
-			if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
-				return err
-			}
-		}
 	}
 
 	call, err := s.telephonyRepo.GetCallByExternalID(ctx, telephony.ProviderMegafonVATS, pending.ExternalCallID)
@@ -209,6 +190,135 @@ func (s *telephonyService) BindPendingContextToTicket(ctx context.Context, pendi
 
 	reason := "тикет привязан оператором"
 	return s.telephonyRepo.UpdatePendingContext(ctx, pending.ID, telephony.PendingContextStatusBound, &ticket.ID, &reason)
+}
+
+func (s *telephonyService) BindCallToTicket(ctx context.Context, callID string, ticketID string, contactName string, actorID uint, roles []string) error {
+	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil {
+		return nil
+	}
+
+	call, err := s.telephonyRepo.GetCallByID(ctx, strings.TrimSpace(callID))
+	if err != nil {
+		return err
+	}
+	if call == nil {
+		return telephonyErrNotFound("call")
+	}
+	if !canAccessTelephonyCall(call, actorID, roles) {
+		return ErrTelephonyForbidden
+	}
+
+	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, safeTelephonyString(call.ClientPhone), contactName)
+	if err != nil {
+		return err
+	}
+	if err = s.telephonyRepo.UpsertCallTicketLink(ctx, &telephony.CallTicketLink{
+		TelephonyCallID: call.ID,
+		TicketID:        ticket.ID,
+	}); err != nil {
+		return err
+	}
+
+	pending, err := s.telephonyRepo.GetPendingContextByExternalCallID(ctx, call.ExternalCallID)
+	if err != nil {
+		return err
+	}
+	if pending == nil || strings.TrimSpace(pending.Status) == telephony.PendingContextStatusDismissed {
+		return nil
+	}
+
+	reason := "тикет привязан оператором"
+	return s.telephonyRepo.UpdatePendingContext(ctx, pending.ID, telephony.PendingContextStatusBound, &ticket.ID, &reason)
+}
+
+func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketID string, normalizedPhone string, contactName string) (*tickets.Ticket, *telephony.Contact, error) {
+	ticket, err := s.ticketRepo.GetByID(ctx, strings.TrimSpace(ticketID))
+	if err != nil {
+		return nil, nil, err
+	}
+	if ticket == nil {
+		return nil, nil, telephonyErrNotFound("ticket")
+	}
+
+	phone := strings.TrimSpace(normalizedPhone)
+	if phone == "" {
+		return ticket, nil, nil
+	}
+
+	contact, err := s.ensurePendingContact(ctx, phone, contactName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if contact == nil {
+		return ticket, nil, nil
+	}
+
+	switch {
+	case ticket.ContactID == nil:
+		ticket.ContactID = &contact.ID
+	case *ticket.ContactID != contact.ID:
+		return nil, nil, errors.New("тикет уже привязан к другому контакту")
+	}
+	if err = s.ticketRepo.Update(ctx, ticket); err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(ticket.CompanyID) != "" {
+		if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	return ticket, contact, nil
+}
+
+func (s *telephonyService) ensurePendingContact(ctx context.Context, normalizedPhone string, contactName string) (*telephony.Contact, error) {
+	if s == nil || s.telephonyRepo == nil {
+		return nil, nil
+	}
+
+	preferredName := strings.TrimSpace(contactName)
+	existing, err := s.telephonyRepo.GetContactByPhone(ctx, normalizedPhone)
+	if err != nil {
+		return nil, err
+	}
+	if preferredName == "" && existing != nil && existing.Name != nil {
+		preferredName = strings.TrimSpace(*existing.Name)
+	}
+
+	contact, err := mergeTelephonyContactWithBitrix(ctx, s.telephonyRepo, normalizedPhone, normalizedPhone, preferredName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if contact == nil {
+		contact, err = s.telephonyRepo.EnsureContact(ctx, normalizedPhone, normalizedPhone)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if s.bitrixContacts == nil || contact == nil {
+		return contact, nil
+	}
+
+	result, err := s.bitrixContacts.EnsureContactByPhone(ctx, BitrixEnsureContactInput{
+		NormalizedPhone: contact.PhoneNormalized,
+		DisplayPhone:    contact.PhoneDisplay,
+		Name:            preferredName,
+	})
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("Телефония: не удалось синхронизировать контакт с Bitrix24", "phone", normalizedPhone, "error", err)
+		}
+		return contact, nil
+	}
+
+	updated, err := mergeTelephonyContactWithBitrix(ctx, s.telephonyRepo, contact.PhoneNormalized, contact.PhoneDisplay, preferredName, result)
+	if err != nil {
+		return nil, err
+	}
+	if updated != nil {
+		return updated, nil
+	}
+	return contact, nil
 }
 
 func (s *telephonyService) ListContactCompanies(ctx context.Context, contactID uint) ([]TelephonyContactCompanyView, error) {
@@ -340,6 +450,22 @@ func (s *telephonyService) listCalls(ctx context.Context, userID *uint, filter T
 		}
 	}
 
+	contactsByPhone := make(map[string]*telephony.Contact, len(items))
+	for _, item := range items {
+		phone := strings.TrimSpace(safeTelephonyString(item.ClientPhone))
+		if phone == "" {
+			continue
+		}
+		if _, ok := contactsByPhone[phone]; ok {
+			continue
+		}
+		contact, contactErr := s.telephonyRepo.GetContactByPhone(ctx, phone)
+		if contactErr != nil {
+			return nil, 0, contactErr
+		}
+		contactsByPhone[phone] = contact
+	}
+
 	result := make([]TelephonyCallView, 0, len(items))
 	for _, item := range items {
 		view := TelephonyCallView{Call: item}
@@ -357,6 +483,9 @@ func (s *telephonyService) listCalls(ctx context.Context, userID *uint, filter T
 		}
 		if ticketID, ok := linkByCallID[item.ID]; ok {
 			view.TicketID = &ticketID
+		}
+		if phone := strings.TrimSpace(safeTelephonyString(item.ClientPhone)); phone != "" {
+			view.Contact = contactsByPhone[phone]
 		}
 		result = append(result, view)
 	}
@@ -668,6 +797,16 @@ func canAccessPendingContext(item *telephony.PendingContext, actorID uint, roles
 		return false
 	}
 	return actorID == item.EmployeeUserID || hasUserRole(roles, user.RoleAdmin)
+}
+
+func canAccessTelephonyCall(item *telephony.Call, actorID uint, roles []string) bool {
+	if item == nil {
+		return false
+	}
+	if hasUserRole(roles, user.RoleAdmin) {
+		return true
+	}
+	return item.EmployeeUserID != nil && actorID == *item.EmployeeUserID
 }
 
 func isMegafonOpenMissedCall(item telephony.Call) bool {

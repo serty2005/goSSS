@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"etalon-server/internal/domain/common"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/user"
 	"time"
 
@@ -116,11 +117,12 @@ type Ticket struct {
 
 // TicketDetails — составная структура для отображения на UI.
 type TicketDetails struct {
-	Metadata    Ticket          `json:"metadata"`
-	CompanyName string          `json:"company_name,omitempty"`
-	History     []TicketHistory `json:"history"`
-	Attachments []Attachment    `json:"attachments"`
-	Comments    []Comment       `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
+	Metadata    Ticket             `json:"metadata"`
+	CompanyName string             `json:"company_name,omitempty"`
+	Contact     *telephony.Contact `json:"contact,omitempty"`
+	History     []TicketHistory    `json:"history"`
+	Attachments []Attachment       `json:"attachments"`
+	Comments    []Comment          `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
 }
 
 // Comment представляет легаси комментарий (планируется к замене на History).

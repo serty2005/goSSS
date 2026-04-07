@@ -186,6 +186,13 @@ func (Contact) TableName() string {
 	return "contacts"
 }
 
+type ContactUpsert struct {
+	PhoneNormalized string
+	PhoneDisplay    string
+	Name            *string
+	BitrixContactID *string
+}
+
 type ContactCompanyLink struct {
 	ContactID  uint      `json:"contact_id" gorm:"primaryKey"`
 	CompanyID  string    `json:"company_id" gorm:"primaryKey;type:text"`

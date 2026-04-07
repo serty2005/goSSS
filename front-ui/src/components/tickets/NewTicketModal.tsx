@@ -1,13 +1,14 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
+import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { companiesApi } from '@/api/companies';
 import { telephonyApi } from '@/api/telephony';
 import { ticketsApi } from '@/api/tickets';
 import { usersApi } from '@/api/users';
-import type { CompanyModel, InfrastructureItem, TelephonyContactCompanyDTO } from '@/types/api';
+import type { CompanyModel, InfrastructureItem, TelephonyCallDTO, TelephonyContactCompanyDTO } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { getIikoWebAppLinkMeta, normalizeServerAddress } from '@/utils/formatters';
+import { getTelephonyContactLabel, getTelephonyContactPhoneDisplay } from '@/utils/telephony';
 import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
@@ -34,6 +35,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parent_title?: string; parent_id?: string; active_contract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; selectedLabel: string } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
+  const selectedTelephonyCallID = Form.useWatch('telephony_call_id', form) as string | undefined;
   const syncWithBitrix = Form.useWatch('sync_with_bitrix', form) as boolean | undefined;
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
@@ -44,11 +46,58 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     enabled: open,
     staleTime: 15_000,
   });
-  const pendingContactID = pendingContext?.contact?.id;
+  const { data: recentCallsResponse, isFetching: isRecentCallsLoading } = useQuery({
+    queryKey: ['telephony', 'recent-calls-for-ticket', user?.id],
+    queryFn: () => {
+      const now = new Date();
+      return telephonyApi.getUserCalls(user?.id ?? 0, {
+        started_from: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+        started_to: now.toISOString(),
+        only_without_ticket: true,
+        limit: 50,
+      });
+    },
+    enabled: open && Boolean(user?.id),
+    staleTime: 15_000,
+  });
+  const recentCalls = useMemo(() => recentCallsResponse?.items || [], [recentCallsResponse?.items]);
+  const selectableCalls = useMemo(() => {
+    const latestByPhone = new Map<string, TelephonyCallDTO>();
+    const upsertCall = (call?: TelephonyCallDTO | null) => {
+      if (!call) return;
+      const phoneKey = String(call.contact?.phone_normalized || call.client_phone || '').trim();
+      if (!phoneKey) return;
+      const existing = latestByPhone.get(phoneKey);
+      const currentRank = new Date(call.started_at || call.answered_at || call.completed_at || 0).getTime();
+      const existingRank = existing ? new Date(existing.started_at || existing.answered_at || existing.completed_at || 0).getTime() : -1;
+      if (!existing || currentRank >= existingRank) {
+        latestByPhone.set(phoneKey, call);
+      }
+    };
+
+    recentCalls.forEach((call) => upsertCall(call));
+    if (pendingContext?.call?.id) {
+      upsertCall({
+        ...pendingContext.call,
+        contact: pendingContext.contact,
+      });
+    }
+
+    return Array.from(latestByPhone.values()).sort((left, right) => {
+      const leftRank = new Date(left.started_at || left.answered_at || left.completed_at || 0).getTime();
+      const rightRank = new Date(right.started_at || right.answered_at || right.completed_at || 0).getTime();
+      return rightRank - leftRank;
+    });
+  }, [pendingContext?.call, pendingContext?.contact, recentCalls]);
+  const selectedTelephonyCall = useMemo(
+    () => selectableCalls.find((item) => item.id === selectedTelephonyCallID),
+    [selectableCalls, selectedTelephonyCallID],
+  );
+  const selectedTelephonyContactID = selectedTelephonyCall?.contact?.id;
   const { data: contactCompanies = [], isLoading: isContactCompaniesLoading } = useQuery({
-    queryKey: ['telephony', 'contact-companies', pendingContactID],
-    queryFn: () => telephonyApi.getContactCompanies(pendingContactID ?? 0),
-    enabled: open && Boolean(pendingContactID),
+    queryKey: ['telephony', 'contact-companies', selectedTelephonyContactID],
+    queryFn: () => telephonyApi.getContactCompanies(selectedTelephonyContactID ?? 0),
+    enabled: open && Boolean(selectedTelephonyContactID),
     staleTime: 30_000,
   });
 
@@ -161,8 +210,28 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
   useEffect(() => {
     if (!open) return;
-    form.setFieldValue('contact_display', pendingContext?.contact?.phone_display || pendingContext?.client_phone || undefined);
-  }, [open, pendingContext?.client_phone, pendingContext?.contact?.phone_display, form]);
+    const currentCallID = String(form.getFieldValue('telephony_call_id') || '').trim();
+    if (currentCallID) return;
+    if (pendingContext?.call?.id && selectableCalls.some((item) => item.id === pendingContext.call?.id)) {
+      form.setFieldValue('telephony_call_id', pendingContext.call.id);
+      return;
+    }
+    if (selectableCalls.length === 1) {
+      form.setFieldValue('telephony_call_id', selectableCalls[0].id);
+    }
+  }, [open, pendingContext?.call?.id, selectableCalls, form]);
+
+  useEffect(() => {
+    if (!open) return;
+    form.setFieldValue('contact_display', getTelephonyContactLabel(selectedTelephonyCall?.contact, selectedTelephonyCall?.client_phone) || undefined);
+  }, [open, selectedTelephonyCall, form]);
+
+  useEffect(() => {
+    if (!open) return;
+    const currentValue = String(form.getFieldValue('contact_name') || '').trim();
+    if (currentValue) return;
+    form.setFieldValue('contact_name', selectedTelephonyCall?.contact?.name || undefined);
+  }, [open, selectedTelephonyCall?.contact?.name, form]);
 
   useEffect(() => {
     if (syncWithBitrix === false) {
@@ -404,20 +473,42 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     window.open(targetURL, '_blank', 'noopener,noreferrer');
   };
 
-  const telephonyContactDisplay = pendingContext?.contact?.name
-    ? `${pendingContext.contact.name} (${pendingContext.contact.phone_display || pendingContext.client_phone})`
-    : (pendingContext?.contact?.phone_display || pendingContext?.client_phone || '');
-  const telephonyCallTimestamp = pendingContext?.call?.answered_at || pendingContext?.call?.started_at;
+  const telephonyCallOptions = useMemo(() => selectableCalls.map((call) => {
+    const phone = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
+    const contactName = String(call.contact?.name || '').trim();
+    const timestamp = call.started_at || call.answered_at || call.completed_at;
+    const secondaryParts = [
+      timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      call.employee_name || '',
+    ].filter(Boolean);
+
+    return {
+      value: call.id,
+      searchLabel: `${phone} ${contactName}`.trim(),
+      label: (
+        <Space direction="vertical" size={2} style={{ lineHeight: 1.2 }}>
+          <Space size={8} wrap>
+            <Text strong>{phone}</Text>
+            {contactName ? <Tag color="blue">{contactName}</Tag> : null}
+          </Space>
+          {secondaryParts.length > 0 ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {secondaryParts.join(' · ')}
+            </Text>
+          ) : null}
+        </Space>
+      ),
+    };
+  }), [selectableCalls]);
   const showTelephonySidebar = Boolean(
     selectedCompanyId
-    || pendingContext
-    || isPendingContextLoading
+    || selectedTelephonyContactID
     || contactCompanies.length > 0
     || isContactCompaniesLoading,
   );
 
   const createMutation = useMutation({
-    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number }) => {
+    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; contact_name?: string; telephony_call_id?: string }) => {
       const description = values.description.trim();
       const effectiveSyncWithBitrix = isBitrixEnabled && (canDisableBitrixSync ? values.sync_with_bitrix !== false : true);
       return ticketsApi.createTicket({
@@ -430,19 +521,20 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         bitrix_service_point_id: effectiveSyncWithBitrix ? values.bitrix_service_point_id : undefined,
       });
     },
-    onSuccess: async (response) => {
+    onSuccess: async (response, values) => {
       const createdTicketID = String(response?.data?.id || '').trim();
       let bindFailed = false;
+      const selectedCallID = String(values.telephony_call_id || '').trim();
 
-      if (pendingContext?.id && createdTicketID) {
+      if (selectedCallID && createdTicketID) {
         try {
-          await telephonyApi.bindPendingContext(pendingContext.id, createdTicketID);
+          await telephonyApi.bindCallToTicket(selectedCallID, createdTicketID, values.contact_name?.trim() || undefined);
         } catch {
           bindFailed = true;
         }
       }
 
-      if (pendingContext?.id && !bindFailed) {
+      if (selectedCallID && !bindFailed) {
         message.success('Заявка создана и привязана к звонку');
       } else if (bindFailed) {
         message.warning('Заявка создана, но привязка к звонку не выполнилась');
@@ -516,37 +608,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           {showTelephonySidebar && (
             <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
               <div style={{ maxHeight: '100%', overflowY: 'auto', paddingRight: 4 }}>
-                {(pendingContext || isPendingContextLoading) && (
-                  <Card size="small" title="Контекст звонка" style={{ marginBottom: 12 }}>
-                    {isPendingContextLoading ? (
-                      <div style={{ textAlign: 'center', padding: 16 }}>
-                        <Spin />
-                      </div>
-                    ) : pendingContext ? (
-                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                        <Alert
-                          type="info"
-                          showIcon
-                          message="Контакт подставлен из принятого звонка"
-                          description={telephonyContactDisplay || pendingContext.client_phone}
-                        />
-                        {telephonyCallTimestamp ? (
-                          <Text type="secondary">
-                            Время звонка: {new Date(telephonyCallTimestamp).toLocaleString()}
-                          </Text>
-                        ) : null}
-                        {pendingContext.call?.employee_name ? (
-                          <Text type="secondary">Оператор: {pendingContext.call.employee_name}</Text>
-                        ) : null}
-                        <Text type="secondary">
-                          Контекст активен до {new Date(pendingContext.expires_at).toLocaleString()}
-                        </Text>
-                      </Space>
-                    ) : null}
-                  </Card>
-                )}
-
-                {(pendingContext?.contact?.id || isContactCompaniesLoading) && (
+                {(selectedTelephonyContactID || isContactCompaniesLoading) && (
                   <Card size="small" title="Компании по номеру" style={{ marginBottom: 12 }}>
                     {isContactCompaniesLoading ? (
                       <div style={{ textAlign: 'center', padding: 16 }}>
@@ -666,9 +728,31 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             xl={showTelephonySidebar ? (selectedCompanyId ? 10 : 17) : 24}
             style={{ maxHeight: MODAL_BODY_MAX_HEIGHT, overflowY: 'auto' }}
           >
-            <Form.Item name="contact_display" label="Контакт">
-              <Input readOnly placeholder="Контакт будет заполнен после принятого звонка" />
-            </Form.Item>
+            <Row gutter={12}>
+              <Col xs={24} lg={8}>
+                <Form.Item name="telephony_call_id" label="Номер телефона">
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="Выберите звонок за последний час"
+                    loading={isRecentCallsLoading || isPendingContextLoading}
+                    options={telephonyCallOptions}
+                    optionFilterProp="searchLabel"
+                    notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Свободных звонков пока нет" />}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={8}>
+                <Form.Item name="contact_display" label="Контакт">
+                  <Input readOnly placeholder="Контакт будет определён по выбранному номеру" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={8}>
+                <Form.Item name="contact_name" label="Имя контакта">
+                  <Input placeholder="Уточните имя звонящего" />
+                </Form.Item>
+              </Col>
+            </Row>
 
             <Form.Item
               name="company_id"

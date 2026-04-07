@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
@@ -48,6 +49,7 @@ var bitrixInlineStaticRefRe = regexp.MustCompile(`(?is)\[IMG\].*?\[/IMG\]|\[URL=
 
 type BitrixSyncService interface {
 	IsEnabled() bool
+	EnsureContactByPhone(ctx context.Context, input BitrixEnsureContactInput) (*BitrixEnsureContactResult, error)
 	SyncTicketByID(ctx context.Context, ticketID string) error
 	SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error
 	RefreshServicePoints(ctx context.Context) (int, error)
@@ -65,17 +67,18 @@ type BitrixSyncService interface {
 }
 
 type bitrixSyncService struct {
-	cfg         *config.Config
-	log         logger.LoggerInterface
-	client      *b24.Client
-	redis       *redis.Client
-	ticketRepo  tickets.TicketRepository
-	serverRepo  server.Repository
-	wsRepo      workstation.Repository
-	history     TicketHistoryWriter
-	userRepo    user.Repository
-	repo        bitrix.Repository
-	companyRepo company.Repository
+	cfg           *config.Config
+	log           logger.LoggerInterface
+	client        *b24.Client
+	redis         *redis.Client
+	ticketRepo    tickets.TicketRepository
+	serverRepo    server.Repository
+	wsRepo        workstation.Repository
+	history       TicketHistoryWriter
+	userRepo      user.Repository
+	repo          bitrix.Repository
+	companyRepo   company.Repository
+	telephonyRepo telephony.Repository
 }
 
 func NewBitrixSyncService(
@@ -89,19 +92,21 @@ func NewBitrixSyncService(
 	userRepo user.Repository,
 	repo bitrix.Repository,
 	companyRepo company.Repository,
+	telephonyRepo telephony.Repository,
 ) BitrixSyncService {
 	return &bitrixSyncService{
-		cfg:         cfg,
-		log:         log,
-		client:      client,
-		redis:       redisClient,
-		ticketRepo:  ticketRepo,
-		serverRepo:  serverRepo,
-		wsRepo:      wsRepo,
-		history:     NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
-		userRepo:    userRepo,
-		repo:        repo,
-		companyRepo: companyRepo,
+		cfg:           cfg,
+		log:           log,
+		client:        client,
+		redis:         redisClient,
+		ticketRepo:    ticketRepo,
+		serverRepo:    serverRepo,
+		wsRepo:        wsRepo,
+		history:       NewTicketHistoryWriter(ticketRepo, log.With("component", "ticket_history_writer")),
+		userRepo:      userRepo,
+		repo:          repo,
+		companyRepo:   companyRepo,
+		telephonyRepo: telephonyRepo,
 	}
 }
 
@@ -577,6 +582,22 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		bitrixConnectionsField: connections,
 		bitrixTypeField:        mapTicketTypeToBitrixID(ticket.Type),
 		bitrixPointField:       ticket.BitrixServicePointID,
+	}
+
+	if ticket.ContactID != nil && *ticket.ContactID > 0 && s.telephonyRepo != nil {
+		contact, err := s.telephonyRepo.GetContactByID(ctx, *ticket.ContactID)
+		if err != nil {
+			return nil, err
+		}
+		if contact != nil {
+			bitrixContact, err := s.ensureBitrixContactForLocalContact(ctx, contact)
+			if err != nil {
+				return nil, err
+			}
+			if bitrixContact != nil && bitrixContact.ContactID > 0 {
+				fields["CONTACT_ID"] = bitrixContact.ContactID
+			}
+		}
 	}
 
 	if ticket.AssigneeID != nil {

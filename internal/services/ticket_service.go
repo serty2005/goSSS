@@ -15,6 +15,7 @@ import (
 	"etalon-server/internal/domain/pyrus"
 	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
@@ -110,6 +111,7 @@ type ticketServiceImpl struct {
 	frRepo           fiscal.Repository
 	bitrixRepo       bitrix.Repository
 	pyrusRepo        pyrus.Repository
+	telephonyRepo    telephony.Repository
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo
 }
 
@@ -132,6 +134,7 @@ func NewTicketService(
 	frRepo fiscal.Repository,
 	bitrixRepo bitrix.Repository,
 	pyrusRepo pyrus.Repository,
+	telephonyRepo telephony.Repository,
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo,
 ) TicketService {
 	return &ticketServiceImpl{
@@ -148,6 +151,7 @@ func NewTicketService(
 		frRepo:           frRepo,
 		bitrixRepo:       bitrixRepo,
 		pyrusRepo:        pyrusRepo,
+		telephonyRepo:    telephonyRepo,
 		ownerHistoryRepo: ownerHistoryRepo,
 	}
 }
@@ -1196,9 +1200,18 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	// Загрузка вложений
 	attachments, _ := s.ticketRepo.GetAttachments(ctx, ticketID)
 
+	var contact *telephony.Contact
+	if s.telephonyRepo != nil && ticket.ContactID != nil {
+		contact, err = s.telephonyRepo.GetContactByID(ctx, *ticket.ContactID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	details := &tickets.TicketDetails{
 		Metadata: *ticket,
 		// CompanyName: ticket.CompanyName, // Если это поле есть РІ структуре (gorm ->)
+		Contact:     contact,
 		History:     history,
 		Attachments: attachments,
 		Comments:    make([]tickets.Comment, 0),
