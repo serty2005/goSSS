@@ -57,8 +57,8 @@ func NewContractGateway(
 // Start запускает периодический цикл чтения почты и применения ежедневного отчета.
 func (g *contractGatewayImpl) Start(ctx context.Context) {
 	interval := g.cfg.ContractSyncInterval
-	if interval < time.Hour {
-		interval = time.Hour
+	if interval <= 0 {
+		interval = 12 * time.Hour
 	}
 
 	g.logger.Info(
@@ -68,8 +68,6 @@ func (g *contractGatewayImpl) Start(ctx context.Context) {
 	)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
-	g.sync(ctx)
 
 	for {
 		select {
@@ -321,11 +319,13 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 		}
 
 		if point, ok := pointsByID[mapping.BitrixServicePointID]; ok {
+			pointContractType := contractsvc.NormalizeServicePointContractType(dereferenceString(point.ContractType))
+			pointContractKnown := point.ContractOn != nil || pointContractType != ""
 			snapshot.ServicePointName = point.Name
 			snapshot.ServicePointCode = dereferenceString(point.OneCCode)
 			snapshot.ContractorID = dereferenceString(point.OneCCode)
-			snapshot.ContractType = dereferenceString(point.ContractType)
-			snapshot.Active = false
+			snapshot.ContractType = pointContractType
+			snapshot.Active = contractsvc.IsServicePointContractActive(point.ContractOn, pointContractType)
 			snapshot.StartDate = point.ContractStart
 			snapshot.EndDate = point.ContractEnd
 			snapshot.ClientOrder = dereferenceString(point.ClientOrder)
@@ -334,8 +334,10 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 				snapshot.ServicePointName = row.ServicePointName
 				snapshot.ServicePointCode = row.ServicePointCode
 				snapshot.ContractorID = row.ContractorID
-				snapshot.ContractType = row.ContractType
-				snapshot.Active = row.ContractOn
+				if !pointContractKnown {
+					snapshot.ContractType = contractsvc.NormalizeServicePointContractType(row.ContractType)
+					snapshot.Active = row.ContractOn
+				}
 				snapshot.StartDate = row.StartDate
 				snapshot.EndDate = row.EndDate
 				snapshot.ClientOrder = row.ClientOrder

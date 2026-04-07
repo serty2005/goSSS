@@ -125,6 +125,7 @@ type Config struct {
 	BitrixIncomingMaxAttempts   int
 	BitrixSuppressTTL           time.Duration
 	BitrixIntegrationUserID     int64
+	BitrixTestCompanyIDs        []int64
 
 	EnablePyrusGateway       bool
 	PyrusAPIBaseURL          string
@@ -171,15 +172,6 @@ func New() *Config {
 		bitrixIntegrationUserID = detectBitrixIntegrationUserID(bitrixBaseURL)
 	}
 
-	contractSyncHours := getEnvAsInt("CONTRACT_SYNC_INTERVAL_HOURS", 0)
-	if contractSyncHours <= 0 {
-		legacyMinutes := getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)
-		contractSyncHours = max(1, legacyMinutes/60)
-		if legacyMinutes > 0 && contractSyncHours == 0 {
-			contractSyncHours = 1
-		}
-	}
-
 	return &Config{
 		ServerPort:         getEnv("PORT", "8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
@@ -224,7 +216,7 @@ func New() *Config {
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
 		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
-		ContractSyncInterval:  time.Duration(contractSyncHours) * time.Hour,
+		ContractSyncInterval:  time.Duration(max(1, getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 720))) * time.Minute,
 		ContractIMAPHost:      strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
 		ContractIMAPPort:      getEnvAsInt("CONTRACT_IMAP_PORT", 993),
 		ContractIMAPUsername:  strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
@@ -279,6 +271,7 @@ func New() *Config {
 		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
 		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
 		BitrixIntegrationUserID:     bitrixIntegrationUserID,
+		BitrixTestCompanyIDs:        getEnvAsInt64Slice("BITRIX_TEST_COMPANY_IDS"),
 
 		EnablePyrusGateway:       getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),
 		PyrusAPIBaseURL:          normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
@@ -403,6 +396,30 @@ func getEnvAsDuration(key string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+func getEnvAsInt64Slice(key string) []int64 {
+	raw := strings.TrimSpace(getEnv(key, ""))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			continue
+		}
+		result = append(result, parsed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func normalizeAPIBaseURL(raw string) string {

@@ -1008,7 +1008,7 @@ func (s *bitrixIncomingService) createTicketFromDeal(ctx context.Context, deal *
 	if pointID > 0 {
 		ticket.BitrixServicePointID = &pointID
 		if ticket.CompanyID == "" {
-			mappedCompanyID, mapErr := s.resolveMappedCompanyIDByPoint(ctx, pointID)
+			mappedCompanyID, mapErr := s.resolveMappedCompanyIDForDeal(ctx, deal, pointID)
 			if mapErr != nil {
 				return nil, false, mapErr
 			}
@@ -1069,7 +1069,7 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 			changed = true
 		}
 		if strings.TrimSpace(ticket.CompanyID) == "" {
-			mappedCompanyID, err := s.resolveMappedCompanyIDByPoint(ctx, pointID)
+			mappedCompanyID, err := s.resolveMappedCompanyIDForDeal(ctx, deal, pointID)
 			if err != nil {
 				return err
 			}
@@ -1206,6 +1206,13 @@ func (s *bitrixIncomingService) resolveMappedCompanyIDByPoint(ctx context.Contex
 	if s.repo == nil || pointID <= 0 {
 		return "", nil
 	}
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.repo, pointID)
+	if err != nil {
+		return "", err
+	}
+	if skip {
+		return "", nil
+	}
 	mapping, err := s.repo.GetCompanyServicePointMappingByPointID(ctx, pointID)
 	if err != nil {
 		return "", err
@@ -1214,6 +1221,13 @@ func (s *bitrixIncomingService) resolveMappedCompanyIDByPoint(ctx context.Contex
 		return "", nil
 	}
 	return strings.TrimSpace(mapping.CompanyID), nil
+}
+
+func (s *bitrixIncomingService) resolveMappedCompanyIDForDeal(ctx context.Context, deal *b24.Deal, pointID int64) (string, error) {
+	if isBitrixTestCompanyID(s.cfg, bitrixDealCompanyID(deal)) {
+		return "", nil
+	}
+	return s.resolveMappedCompanyIDByPoint(ctx, pointID)
 }
 
 func (s *bitrixIncomingService) resolveEtalonUserIDByBitrixUserID(ctx context.Context, b24UserID int64) (uint, bool, error) {
@@ -1530,4 +1544,11 @@ func int64FromAny(v interface{}) int64 {
 	default:
 		return 0
 	}
+}
+
+func bitrixDealCompanyID(deal *b24.Deal) int64 {
+	if deal == nil {
+		return 0
+	}
+	return int64FromAny(deal.Raw["COMPANY_ID"])
 }

@@ -338,9 +338,15 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 	}
 	all := make([]bitrix.ServicePoint, 0, 512)
 	for _, item := range items {
+		currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
+		rawContractType := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
+		normalizedContractType := normalizeContractType(rawContractType)
 		all = append(all, bitrix.ServicePoint{
 			B24ElementID: item.ID,
 			Name:         item.Name,
+			OneCCode:     nullableStringValue(currentCode),
+			ContractOn:   contractTypeToBool(normalizedContractType),
+			ContractType: nullableStringValue(normalizedContractType),
 			RawJSON:      item.RawJSON,
 			UpdatedAt:    time.Now(),
 		})
