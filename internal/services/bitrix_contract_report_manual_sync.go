@@ -355,11 +355,12 @@ func (s *bitrixSyncService) buildContractReportExecutePlan(
 	if err != nil {
 		return nil, err
 	}
+	statesByBusinessName := groupServicePointStatesByBusinessName(statesByName)
 	mappings, err := s.repo.ListCompanyServicePointMappings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	duplicateResolution := s.buildContractReportDuplicateResolution(statesByName, mappings, false)
+	duplicateResolution := s.buildContractReportDuplicateResolution(statesByBusinessName, mappings, false)
 
 	upsertTargets := make(map[string]contractReportSyncUpsertTarget, len(options.SelectedKeys))
 	deleteTargets := make(map[string]bitrixServicePointState, len(options.SelectedKeys))
@@ -487,12 +488,13 @@ func (s *bitrixSyncService) buildContractReportSyncPlan(
 	if err != nil {
 		return nil, err
 	}
+	statesByBusinessName := groupServicePointStatesByBusinessName(statesByName)
 
 	mappings, err := s.repo.ListCompanyServicePointMappings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	duplicateResolution := s.buildContractReportDuplicateResolution(statesByName, mappings, true)
+	duplicateResolution := s.buildContractReportDuplicateResolution(statesByBusinessName, mappings, true)
 	statesByNameForMatch := duplicateResolution.StatesByName
 	statesByCode := duplicateResolution.StatesByCode
 	mappedPointIDs := duplicateResolution.MappedPointIDs
@@ -500,7 +502,7 @@ func (s *bitrixSyncService) buildContractReportSyncPlan(
 	preview := &ContractReportSyncPreview{
 		BlockedItems: make([]ContractReportSyncBlockedItem, 0, len(rows)),
 		UpsertItems:  make([]ContractReportSyncPlanItem, 0, len(rows)),
-		DeleteItems:  buildContractReportDeleteItems(statesByName, mappedPointIDs, duplicateResolution.DeleteReasonsByID),
+		DeleteItems:  buildContractReportDeleteItems(statesByBusinessName, mappedPointIDs, duplicateResolution.DeleteReasonsByID),
 	}
 	upsertTargets := make(map[string]contractReportSyncUpsertTarget, len(rows))
 
@@ -759,6 +761,25 @@ func buildContractReportDeleteItems(
 	return items
 }
 
+func groupServicePointStatesByBusinessName(statesByName map[string][]bitrixServicePointState) map[string][]bitrixServicePointState {
+	grouped := make(map[string][]bitrixServicePointState, len(statesByName))
+	for _, group := range statesByName {
+		for _, state := range group {
+			key := normalizeServicePointBusinessName(state.Name)
+			if key == "" {
+				continue
+			}
+			if slices.ContainsFunc(grouped[key], func(item bitrixServicePointState) bool {
+				return item.ID == state.ID
+			}) {
+				continue
+			}
+			grouped[key] = append(grouped[key], state)
+		}
+	}
+	return grouped
+}
+
 func (s *bitrixSyncService) buildContractReportDuplicateResolution(
 	statesByName map[string][]bitrixServicePointState,
 	mappings []bitrix.CompanyServicePointMapping,
@@ -828,6 +849,16 @@ func buildContractReportDuplicateGroupDecision(
 		return contractReportDuplicateGroupDecision{}
 	}
 
+	if keeper, ok := chooseProductDuplicateKeeper(group); ok {
+		return contractReportDuplicateGroupDecision{
+			Keeper:          keeper,
+			DeleteReasons:   buildDuplicateDeleteReasons(group, keeper.ID, "точка считается продуктовым дублем TS/Syrve и будет объединена в одну карточку"),
+			Rebinds:         buildContractReportDuplicateRebinds(group, keeper, mappingByPointID),
+			CollapseForSync: true,
+			LogMessage:      "Bitrix24 manual sync: для группы дублей выбран эталонный элемент продуктовой пары TS/Syrve",
+		}
+	}
+
 	if keeper, ok := chooseUniqueActiveContractState(group); ok {
 		return contractReportDuplicateGroupDecision{
 			Keeper:          keeper,
@@ -868,6 +899,43 @@ func buildContractReportDuplicateGroupDecision(
 		Rebinds:         buildContractReportDuplicateRebinds(group, preferred, mappingByPointID),
 		CollapseForSync: true,
 		LogMessage:      "Bitrix24 manual sync: для группы дублей выбран более заполненный элемент",
+	}
+}
+
+func chooseProductDuplicateKeeper(group []bitrixServicePointState) (bitrixServicePointState, bool) {
+	plainStates := make([]bitrixServicePointState, 0, len(group))
+	syrveStates := make([]bitrixServicePointState, 0, len(group))
+	tsStates := make([]bitrixServicePointState, 0, len(group))
+
+	for _, state := range group {
+		_, product := splitServicePointContractName(state.Name)
+		switch product {
+		case "syrve":
+			syrveStates = append(syrveStates, state)
+		case "ts":
+			tsStates = append(tsStates, state)
+		default:
+			plainStates = append(plainStates, state)
+		}
+	}
+
+	hasProductDuplicates := len(syrveStates) > 0 || len(tsStates) > 0
+	if !hasProductDuplicates {
+		return bitrixServicePointState{}, false
+	}
+	if len(plainStates) > 1 || len(syrveStates) > 1 || len(tsStates) > 1 {
+		return bitrixServicePointState{}, false
+	}
+
+	switch {
+	case len(plainStates) == 1:
+		return plainStates[0], true
+	case len(syrveStates) == 1:
+		return syrveStates[0], true
+	case len(tsStates) == 1:
+		return tsStates[0], true
+	default:
+		return bitrixServicePointState{}, false
 	}
 }
 
@@ -1007,16 +1075,17 @@ func appendEffectiveStateByCode(
 	code string,
 	state bitrixServicePointState,
 ) {
-	normalizedCode := normalizeCell(code)
-	if normalizedCode == "" {
-		return
+	for _, lookupCode := range servicePointCodeLookupKeys(code) {
+		if lookupCode == "" {
+			continue
+		}
+		if slices.ContainsFunc(statesByCode[lookupCode], func(item bitrixServicePointState) bool {
+			return item.ID == state.ID
+		}) {
+			continue
+		}
+		statesByCode[lookupCode] = append(statesByCode[lookupCode], state)
 	}
-	if slices.ContainsFunc(statesByCode[normalizedCode], func(item bitrixServicePointState) bool {
-		return item.ID == state.ID
-	}) {
-		return
-	}
-	statesByCode[normalizedCode] = append(statesByCode[normalizedCode], state)
 }
 
 func collectContractReportSelectedRebinds(

@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -38,10 +38,13 @@ import { useAuthStore } from '@/store/authStore';
 import type {
   ApiResponse,
   ContractMailImportDTO,
+  ContractSyncAutoExecutionDTO,
   ContractSyncBlockedItemDTO,
   ContractSyncExecuteResultDTO,
   ContractSyncFieldDiffDTO,
   ContractSyncQueueItemDTO,
+  ContractSyncRunDetailsDTO,
+  ContractSyncRunSummaryDTO,
   ContractSyncStateDTO,
 } from '@/types/api';
 
@@ -197,6 +200,46 @@ const importStatusTag = (status: string) => {
   if (status === 'processed') return <Tag color="green">Обработан</Tag>;
   if (status === 'failed') return <Tag color="red">Ошибка</Tag>;
   return <Tag>{status || '—'}</Tag>;
+};
+
+const importSourceTag = (source?: string) => {
+  if (source === 'id') return <Tag color="geekblue">ID</Tag>;
+  if (source === 'ru') return <Tag color="cyan">RU</Tag>;
+  return <Tag>Источник не определён</Tag>;
+};
+
+const syncRunStatusTag = (status: string) => {
+  if (status === 'success') return <Tag color="green">Успешно</Tag>;
+  if (status === 'partial') return <Tag color="gold">Частично</Tag>;
+  if (status === 'failed') return <Tag color="red">Ошибка</Tag>;
+  if (status === 'skipped') return <Tag>Пропущено</Tag>;
+  return <Tag>{status || '—'}</Tag>;
+};
+
+const syncRunModeTag = (mode: string) => {
+  if (mode === 'automatic') return <Tag color="blue">Автоматически</Tag>;
+  if (mode === 'manual') return <Tag color="purple">Вручную</Tag>;
+  return <Tag>{mode || '—'}</Tag>;
+};
+
+const buildSyncRunActorLabel = (item?: ContractSyncRunSummaryDTO | ContractSyncRunDetailsDTO | null) => {
+  if (!item) return '—';
+  if (item.actor_name) return item.actor_name;
+  return item.actor_type === 'system' ? 'Система' : 'Пользователь';
+};
+
+const buildSyncRunOptionLabel = (item: ContractSyncRunSummaryDTO) =>
+  joinCompactParts(
+    formatDateTime(item.started_at),
+    buildSyncRunActorLabel(item),
+    item.mode === 'automatic' ? 'Авто' : 'Ручной',
+    `Изменений ${item.processed}`,
+  );
+
+const buildAutoSyncModeLabel = (autoSync?: ContractSyncAutoExecutionDTO) => {
+  if (!autoSync?.enabled) return 'Автоматическое применение отключено';
+  if (autoSync.applies_deletes) return 'Автоматически применяются create, update и delete';
+  return 'Автоматически применяются только create и update';
 };
 
 const actionTag = (action: ContractSyncQueueItemDTO['action']) => {
@@ -386,6 +429,7 @@ const ServicePointsImportPage: React.FC = () => {
   const [isRefreshingContractSync, setIsRefreshingContractSync] = useState(false);
   const [lastExecutionResult, setLastExecutionResult] = useState<ContractSyncExecuteResultDTO | null>(null);
   const [queueErrorMap, setQueueErrorMap] = useState<Record<string, string[]>>({});
+  const [selectedRunID, setSelectedRunID] = useState<string>();
 
   const deferredSearch = useDeferredValue(searchValue);
   const search = useMemo(() => normalizeSearch(deferredSearch), [deferredSearch]);
@@ -396,13 +440,28 @@ const ServicePointsImportPage: React.FC = () => {
     staleTime: 30_000,
   });
 
+  const selectedRunQuery = useQuery({
+    queryKey: ['bitrix', 'contract-sync-run', selectedRunID],
+    queryFn: () => bitrixAdminApi.getContractSyncRun(selectedRunID as string),
+    enabled: Boolean(selectedRunID),
+    staleTime: 30_000,
+  });
+
   const syncState = contractSyncQuery.data?.data;
   const latestImport = syncState?.latest_import;
   const activeReportImport = syncState?.active_report_import;
-  const recentImports = syncState?.recent_imports || [];
-  const blockedItems = syncState?.blocked_items || [];
-  const baseUpsertItems = syncState?.upsert_items || [];
-  const baseDeleteItems = syncState?.delete_items || [];
+  const activeReportImports = useMemo(
+    () => syncState?.active_report_imports || (activeReportImport ? [activeReportImport] : []),
+    [activeReportImport, syncState?.active_report_imports],
+  );
+  const recentImports = useMemo(() => syncState?.recent_imports || [], [syncState?.recent_imports]);
+  const recentRuns = useMemo(() => syncState?.recent_runs || [], [syncState?.recent_runs]);
+  const autoSync = syncState?.auto_sync;
+  const blockedItems = useMemo(() => syncState?.blocked_items || [], [syncState?.blocked_items]);
+  const baseUpsertItems = useMemo(() => syncState?.upsert_items || [], [syncState?.upsert_items]);
+  const baseDeleteItems = useMemo(() => syncState?.delete_items || [], [syncState?.delete_items]);
+  const selectedRun = selectedRunQuery.data?.data;
+  const activeImportHashKey = useMemo(() => activeReportImports.map((item) => item.attachment_hash || item.id).join('|'), [activeReportImports]);
 
   const resetSyncScreenState = () => {
     setQueueItems([]);
@@ -420,7 +479,15 @@ const ServicePointsImportPage: React.FC = () => {
     setSelectedQueueKeys([]);
     setLastExecutionResult(null);
     setQueueErrorMap({});
-  }, [activeReportImport?.attachment_hash]);
+  }, [activeImportHashKey]);
+
+  useEffect(() => {
+    if (recentRuns.length === 0) {
+      setSelectedRunID(undefined);
+      return;
+    }
+    setSelectedRunID((current) => (current && recentRuns.some((item) => item.id === current) ? current : recentRuns[0].id));
+  }, [recentRuns]);
 
   const queueKeySet = useMemo(() => new Set(queueItems.map((item) => item.key)), [queueItems]);
   const upsertItems = useMemo(() => baseUpsertItems.filter((item) => !queueKeySet.has(item.key)), [baseUpsertItems, queueKeySet]);
@@ -464,7 +531,7 @@ const ServicePointsImportPage: React.FC = () => {
     setQueueErrorMap({});
   };
 
-  const refreshContractSyncState = async () => {
+  const refreshContractSyncState = useCallback(async () => {
     if (isRefreshingContractSync) return;
     setIsRefreshingContractSync(true);
     try {
@@ -478,7 +545,7 @@ const ServicePointsImportPage: React.FC = () => {
     } finally {
       setIsRefreshingContractSync(false);
     }
-  };
+  }, [isRefreshingContractSync, queryClient]);
 
   const removeQueueItemsByKeys = (keys: string[]) => {
     const keySet = new Set(keys);
@@ -563,6 +630,7 @@ const ServicePointsImportPage: React.FC = () => {
 
   const importColumns = useMemo<ColumnsType<ContractMailImportDTO>>(
     () => [
+      { title: 'Источник', dataIndex: 'source', key: 'source', width: 110, render: (value?: string) => importSourceTag(value) },
       { title: 'Статус', dataIndex: 'status', key: 'status', width: 120, render: (value: string) => importStatusTag(value) },
       { title: 'Вложение', dataIndex: 'attachment_name', key: 'attachment_name', ellipsis: true },
       { title: 'Строк', dataIndex: 'rows_count', key: 'rows_count', width: 90 },
@@ -570,6 +638,111 @@ const ServicePointsImportPage: React.FC = () => {
       { title: 'Обработано', dataIndex: 'processed_at', key: 'processed_at', width: 180, render: (value?: string) => formatDateTime(value) },
       { title: 'Хэш', dataIndex: 'attachment_hash', key: 'attachment_hash', width: 180, render: (value: string) => shortValue(value, 8) },
       { title: 'Ошибка', dataIndex: 'error_text', key: 'error_text', ellipsis: true, render: (value?: string) => value || '—' },
+    ],
+    [],
+  );
+
+  const runColumns = useMemo<ColumnsType<ContractSyncRunSummaryDTO>>(
+    () => [
+      {
+        title: 'Когда и кем',
+        key: 'started_at',
+        width: 280,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Text strong>{formatDateTime(item.started_at)}</Text>
+            <Text type="secondary">{buildSyncRunActorLabel(item)}</Text>
+          </Space>
+        ),
+      },
+      {
+        title: 'Режим',
+        key: 'mode',
+        width: 180,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            {syncRunModeTag(item.mode)}
+            {syncRunStatusTag(item.status)}
+          </Space>
+        ),
+      },
+      {
+        title: 'Документы',
+        key: 'active_imports',
+        width: 260,
+        render: (_, item) => (
+          <Space wrap size={[4, 4]}>
+            {(item.active_imports || []).length > 0
+              ? (item.active_imports || []).map((report) => (
+                <Tag key={`${item.id}-${report.attachment_hash || report.source || report.attachment_name}`}>
+                  {(report.source || '—').toUpperCase()} • {report.rows_count}
+                </Tag>
+              ))
+              : <Text type="secondary">—</Text>}
+          </Space>
+        ),
+      },
+      {
+        title: 'Итог',
+        key: 'summary',
+        width: 280,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Text>{joinCompactParts(`Обработано ${item.processed}`, `Создано ${item.created}`, `Обновлено ${item.updated}`, `Удалено ${item.deleted}`)}</Text>
+            {item.note ? <Text type="secondary" className="contract-sync-inline-text" title={item.note}>{item.note}</Text> : null}
+          </Space>
+        ),
+      },
+    ],
+    [],
+  );
+
+  const historyQueueColumns = useMemo<ColumnsType<ContractSyncQueueItemDTO>>(
+    () => [
+      {
+        title: 'Операция',
+        dataIndex: 'action',
+        key: 'action',
+        width: 160,
+        render: (value: ContractSyncQueueItemDTO['action'], item) => (
+          <Space orientation="vertical" size={4}>
+            {actionTag(value)}
+            {item.b24_element_id ? <Text type="secondary">B24 #{item.b24_element_id}</Text> : null}
+          </Space>
+        ),
+      },
+      {
+        title: 'Точка',
+        key: 'service_point_name',
+        width: 280,
+        render: (_, item) => (
+          <Space orientation="vertical" size={4}>
+            <Text strong className="contract-sync-inline-text" title={item.service_point_name || '—'}>
+              {item.service_point_name || '—'}
+            </Text>
+            <Text type="secondary" className="contract-sync-inline-text" title={buildQueueIdentitySummary(item) || '—'}>
+              {buildQueueIdentitySummary(item) || '—'}
+            </Text>
+          </Space>
+        ),
+      },
+      {
+        title: 'Изменение',
+        key: 'changes',
+        width: 360,
+        render: (_, item) => renderQueueChangeSummary(item),
+      },
+      {
+        title: 'Причина',
+        dataIndex: 'reason',
+        key: 'reason',
+        width: 260,
+        render: (value?: string) => (
+          <Text className="contract-sync-inline-text" title={value || '—'}>
+            {value || '—'}
+          </Text>
+        ),
+      },
     ],
     [],
   );
@@ -933,6 +1106,7 @@ const ServicePointsImportPage: React.FC = () => {
     queueErrorCount,
     queueFilter,
     queueItems.length,
+    refreshContractSyncState,
     queueStats.create,
     queueStats.delete,
     queueStats.update,
@@ -1252,30 +1426,127 @@ const ServicePointsImportPage: React.FC = () => {
             label: 'История и отчёт',
             children: (
               <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-                <Card className="glass-panel" title="Используемый отчёт">
-                  {activeReportImport ? (
-                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-                      {latestImport?.status === 'failed' ? (
-                        <Alert
-                          type="error"
-                          showIcon
-                          title="Последний прогон завершился ошибкой"
-                          description={latestImport.error_text || 'Подробности ошибки отсутствуют в журнале импорта.'}
-                        />
-                      ) : null}
-                      <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
-                        <Descriptions.Item label="Статус">{importStatusTag(activeReportImport.status)}</Descriptions.Item>
-                        <Descriptions.Item label="Вложение">{activeReportImport.attachment_name || '—'}</Descriptions.Item>
-                        <Descriptions.Item label="Получено">{formatDateTime(activeReportImport.received_at)}</Descriptions.Item>
-                        <Descriptions.Item label="Обработано">{formatDateTime(activeReportImport.processed_at)}</Descriptions.Item>
-                        <Descriptions.Item label="Строк">{activeReportImport.rows_count}</Descriptions.Item>
-                        <Descriptions.Item label="Хэш">{shortValue(activeReportImport.attachment_hash, 8)}</Descriptions.Item>
-                        <Descriptions.Item label="Message-ID" span={2}>{activeReportImport.message_id || '—'}</Descriptions.Item>
-                      </Descriptions>
-                    </Space>
-                  ) : (
-                    <Empty description="Нет успешно обработанного отчёта" />
+                <Card className="glass-panel" title="Активные документы и автозапуск">
+                  <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+                    {latestImport?.status === 'failed' ? (
+                      <Alert
+                        type="error"
+                        showIcon
+                        title="Последний почтовый прогон завершился ошибкой"
+                        description={latestImport.error_text || 'Подробности ошибки отсутствуют в журнале импорта.'}
+                      />
+                    ) : null}
+                    <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
+                      <Descriptions.Item label="Автоприменение">{autoSync?.enabled ? 'Включено' : 'Отключено'}</Descriptions.Item>
+                      <Descriptions.Item label="Интервал">{autoSync?.interval_minutes ? `${autoSync.interval_minutes} мин` : '—'}</Descriptions.Item>
+                      <Descriptions.Item label="Режим">{buildAutoSyncModeLabel(autoSync)}</Descriptions.Item>
+                      <Descriptions.Item label="Триггер">{autoSync?.trigger_label || '—'}</Descriptions.Item>
+                      <Descriptions.Item label="Безопасность" span={2}>{autoSync?.safety_description || '—'}</Descriptions.Item>
+                    </Descriptions>
+                    {activeReportImports.length > 0 ? (
+                      <Row gutter={[16, 16]}>
+                        {activeReportImports.map((report) => (
+                          <Col key={`${report.attachment_hash || report.id}-${report.source || 'source'}`} xs={24} md={12}>
+                            <Card size="small" title={<Space>{importSourceTag(report.source)}<span>{report.attachment_name || '—'}</span></Space>}>
+                              <Descriptions column={1} size="small" bordered>
+                                <Descriptions.Item label="Статус">{importStatusTag(report.status)}</Descriptions.Item>
+                                <Descriptions.Item label="Получено">{formatDateTime(report.received_at)}</Descriptions.Item>
+                                <Descriptions.Item label="Обработано">{formatDateTime(report.processed_at)}</Descriptions.Item>
+                                <Descriptions.Item label="Точек">{report.rows_count}</Descriptions.Item>
+                                <Descriptions.Item label="Хэш">{shortValue(report.attachment_hash, 8)}</Descriptions.Item>
+                                <Descriptions.Item label="Message-ID">{report.message_id || '—'}</Descriptions.Item>
+                              </Descriptions>
+                            </Card>
+                          </Col>
+                        ))}
+                      </Row>
+                    ) : (
+                      <Empty description="Нет успешно обработанных активных документов" />
+                    )}
+                  </Space>
+                </Card>
+
+                <Card
+                  className="glass-panel"
+                  title="Журнал применений"
+                  extra={(
+                    <Select
+                      value={selectedRunID}
+                      onChange={setSelectedRunID}
+                      style={{ minWidth: 360 }}
+                      placeholder="Выберите дату и время применения"
+                      options={recentRuns.map((item) => ({ value: item.id, label: buildSyncRunOptionLabel(item) }))}
+                    />
                   )}
+                >
+                  <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+                    {selectedRun ? (
+                      <Card size="small" title="Выбранный прогон">
+                        <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
+                          <Descriptions.Item label="Статус">{syncRunStatusTag(selectedRun.status)}</Descriptions.Item>
+                          <Descriptions.Item label="Режим">{syncRunModeTag(selectedRun.mode)}</Descriptions.Item>
+                          <Descriptions.Item label="Запущен">{formatDateTime(selectedRun.started_at)}</Descriptions.Item>
+                          <Descriptions.Item label="Завершён">{formatDateTime(selectedRun.completed_at)}</Descriptions.Item>
+                          <Descriptions.Item label="Инициатор">{buildSyncRunActorLabel(selectedRun)}</Descriptions.Item>
+                          <Descriptions.Item label="Обработано">{selectedRun.processed}</Descriptions.Item>
+                          <Descriptions.Item label="Создано">{selectedRun.created}</Descriptions.Item>
+                          <Descriptions.Item label="Обновлено">{selectedRun.updated}</Descriptions.Item>
+                          <Descriptions.Item label="Удалено">{selectedRun.deleted}</Descriptions.Item>
+                          <Descriptions.Item label="Заблокировано">{selectedRun.blocked_rows}</Descriptions.Item>
+                          <Descriptions.Item label="Документы" span={2}>
+                            <Space wrap size={[4, 4]}>
+                              {(selectedRun.active_imports || []).map((report) => (
+                                <Tag key={`${selectedRun.id}-${report.attachment_hash || report.source || report.attachment_name}`}>
+                                  {(report.source || '—').toUpperCase()} • {report.attachment_name}
+                                </Tag>
+                              ))}
+                            </Space>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Комментарий" span={2}>{selectedRun.note || '—'}</Descriptions.Item>
+                        </Descriptions>
+                      </Card>
+                    ) : selectedRunID && selectedRunQuery.isLoading ? (
+                      <Alert type="info" showIcon title="Загружаю детали выбранного прогона" />
+                    ) : (
+                      <Empty description="История применений пока пуста" />
+                    )}
+
+                    {selectedRun?.queue_items?.length ? (
+                      <Card size="small" title={`Изменения в выбранный прогон (${selectedRun.queue_items.length})`}>
+                        <Table<ContractSyncQueueItemDTO>
+                          rowKey="key"
+                          dataSource={selectedRun.queue_items}
+                          columns={historyQueueColumns}
+                          pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                          scroll={{ x: 1080 }}
+                          locale={{ emptyText: 'В выбранном прогоне не было изменений' }}
+                        />
+                      </Card>
+                    ) : null}
+
+                    {selectedRun?.errors?.length ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title="В выбранном прогоне были ошибки"
+                        description={selectedRun.errors.join(' | ')}
+                      />
+                    ) : null}
+
+                    <Table<ContractSyncRunSummaryDTO>
+                      rowKey="id"
+                      dataSource={recentRuns}
+                      columns={runColumns}
+                      loading={contractSyncQuery.isLoading}
+                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                      scroll={{ x: 980 }}
+                      locale={{ emptyText: 'История применений пуста' }}
+                      onRow={(record) => ({
+                        onClick: () => setSelectedRunID(record.id),
+                        style: { cursor: 'pointer' },
+                      })}
+                    />
+                  </Space>
                 </Card>
 
                 <Card className="glass-panel" title="История почтовых импортов" extra={<Text type="secondary">Показываются последние 20 прогонов</Text>}>
@@ -1285,7 +1556,7 @@ const ServicePointsImportPage: React.FC = () => {
                     columns={importColumns}
                     loading={contractSyncQuery.isLoading}
                     pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                    scroll={{ x: 1000 }}
+                    scroll={{ x: 1080 }}
                     locale={{ emptyText: 'История импортов пуста' }}
                   />
                 </Card>

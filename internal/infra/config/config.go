@@ -69,14 +69,16 @@ type Config struct {
 	SDeskSyncInterval  time.Duration
 	TicketStoragePath  string
 
-	EnableContractGateway bool
-	ContractSyncInterval  time.Duration
-	ContractIMAPHost      string
-	ContractIMAPPort      int
-	ContractIMAPUsername  string
-	ContractIMAPPassword  string
-	ContractIMAPMailbox   string
-	ContractZipMaxBytes   int
+	EnableContractGateway              bool
+	ContractSyncInterval               time.Duration
+	EnableContractBitrixAutoSync       bool
+	ContractBitrixAutoSyncApplyDeletes bool
+	ContractIMAPHost                   string
+	ContractIMAPPort                   int
+	ContractIMAPUsername               string
+	ContractIMAPPassword               string
+	ContractIMAPMailbox                string
+	ContractZipMaxBytes                int
 
 	CommonContractID string
 
@@ -215,14 +217,16 @@ func New() *Config {
 		SDeskSyncInterval:  time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
-		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
-		ContractSyncInterval:  time.Duration(max(1, getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 720))) * time.Minute,
-		ContractIMAPHost:      strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
-		ContractIMAPPort:      getEnvAsInt("CONTRACT_IMAP_PORT", 993),
-		ContractIMAPUsername:  strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
-		ContractIMAPPassword:  getEnv("CONTRACT_IMAP_PASSWORD", ""),
-		ContractIMAPMailbox:   strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
-		ContractZipMaxBytes:   getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
+		EnableContractGateway:              getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
+		ContractSyncInterval:               time.Duration(max(1, getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 720))) * time.Minute,
+		EnableContractBitrixAutoSync:       getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC", false),
+		ContractBitrixAutoSyncApplyDeletes: getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC_DELETES", false),
+		ContractIMAPHost:                   strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
+		ContractIMAPPort:                   getEnvAsInt("CONTRACT_IMAP_PORT", 993),
+		ContractIMAPUsername:               strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
+		ContractIMAPPassword:               getEnv("CONTRACT_IMAP_PASSWORD", ""),
+		ContractIMAPMailbox:                strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
+		ContractZipMaxBytes:                getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
 
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 

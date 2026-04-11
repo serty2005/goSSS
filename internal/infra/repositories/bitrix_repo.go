@@ -139,6 +139,9 @@ func (r *bitrixRepo) ReplaceServicePoints(ctx context.Context, points []bitrix.S
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name",
 				"address",
+				"one_c_code",
+				"one_c_contract_on",
+				"contract_type",
 				"raw_json",
 				"updated_at",
 			}),

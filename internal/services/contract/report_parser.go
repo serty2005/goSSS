@@ -27,9 +27,20 @@ const (
 	reportColumnPointName    = "точка обслуживания"
 	reportColumnServiced     = "обслуживается"
 	reportColumnFree         = "бесплатное обслуживание"
+	reportColumnServiceType  = "вид сервиса"
 	reportColumnStartDate    = "дата начала"
 	reportColumnEndDate      = "дата окончания"
 	reportColumnClientOrder  = "заказ клиента"
+
+	legacyContractReportCodePrefix = "ru"
+	idContractReportCodePrefix     = "id"
+)
+
+type contractReportFormat string
+
+const (
+	contractReportFormatLegacy contractReportFormat = "legacy"
+	contractReportFormatID     contractReportFormat = "id"
 )
 
 type ContractMailReport struct {
@@ -259,24 +270,38 @@ func parseContractReportHTML(content []byte, now time.Time) ([]ContractReportRow
 }
 
 func parseContractReportTableRows(rows [][]string, now time.Time) ([]ContractReportRow, error) {
-	headerRow, headerMap, err := detectContractReportHeader(rows)
+	headerRow, headerMap, format, err := detectContractReportHeader(rows)
 	if err != nil {
 		return nil, err
 	}
 
+	switch format {
+	case contractReportFormatLegacy:
+		return parseLegacyContractReportRows(rows, headerRow, headerMap, now)
+	case contractReportFormatID:
+		return parseIDContractReportRows(rows, headerRow, headerMap, now)
+	default:
+		return nil, errors.New("формат отчёта не поддерживается")
+	}
+}
+
+func parseLegacyContractReportRows(
+	rows [][]string,
+	headerRow int,
+	headerMap map[string]int,
+	now time.Time,
+) ([]ContractReportRow, error) {
 	parsed := make([]ContractReportRow, 0, len(rows)-headerRow-1)
 	for rowIndex := headerRow + 1; rowIndex < len(rows); rowIndex++ {
 		row := rows[rowIndex]
 		pointCode := normalizeCell(valueByColumn(row, headerMap, reportColumnPointCode))
+		contractorID := normalizeCell(valueByColumn(row, headerMap, reportColumnContractorID))
 		item := ContractReportRow{
-			ContractorID:     normalizeCell(valueByColumn(row, headerMap, reportColumnContractorID)),
-			ServicePointCode: pointCode,
+			ContractorID:     contractorID,
 			ServicePointName: normalizeCell(valueByColumn(row, headerMap, reportColumnPointName)),
 			ClientOrder:      normalizeCell(valueByColumn(row, headerMap, reportColumnClientOrder)),
 		}
-		if item.ServicePointCode == "" {
-			item.ServicePointCode = item.ContractorID
-		}
+		item.ServicePointCode = applyServicePointCodePrefix(legacyContractReportCodePrefix, cmp.Or(pointCode, contractorID))
 		if item.ContractorID == "" && item.ServicePointCode == "" && item.ServicePointName == "" {
 			continue
 		}
@@ -301,6 +326,97 @@ func parseContractReportTableRows(rows [][]string, now time.Time) ([]ContractRep
 		return nil, errors.New("в html-отчёте не найдено строк с контрактами")
 	}
 	return AggregateContractReportRows(parsed), nil
+}
+
+type groupedIDContractReportRows struct {
+	DisplayName string
+	TSRows      []ContractReportRow
+	SyrveRows   []ContractReportRow
+}
+
+func parseIDContractReportRows(
+	rows [][]string,
+	headerRow int,
+	headerMap map[string]int,
+	now time.Time,
+) ([]ContractReportRow, error) {
+	grouped := make(map[string]*groupedIDContractReportRows, len(rows)-headerRow-1)
+	order := make([]string, 0, len(rows)-headerRow-1)
+
+	for rowIndex := headerRow + 1; rowIndex < len(rows); rowIndex++ {
+		row := rows[rowIndex]
+		rawName := normalizeCell(valueByColumn(row, headerMap, reportColumnPointName))
+		baseName, product := splitIDReportServicePointName(rawName)
+		if baseName == "" || product == "" {
+			continue
+		}
+
+		pointCode := applyServicePointCodePrefix(
+			idContractReportCodePrefix,
+			normalizeCell(valueByColumn(row, headerMap, reportColumnPointCode)),
+		)
+		if pointCode == "" {
+			continue
+		}
+
+		serviced := parseContractStatus(valueByColumn(row, headerMap, reportColumnServiced))
+		item := ContractReportRow{
+			ContractorID:     pointCode,
+			ServicePointCode: pointCode,
+			ServicePointName: baseName,
+			Serviced:         serviced,
+			EndDate:          parseReportDate(valueByColumn(row, headerMap, reportColumnEndDate)),
+		}
+		item.ContractOn = resolveContractActivity(serviced, nil, item.EndDate, now)
+
+		groupKey := normalizePointName(baseName)
+		group := grouped[groupKey]
+		if group == nil {
+			group = &groupedIDContractReportRows{DisplayName: baseName}
+			grouped[groupKey] = group
+			order = append(order, groupKey)
+		}
+
+		switch product {
+		case "ts":
+			group.TSRows = append(group.TSRows, item)
+		case "syrve":
+			group.SyrveRows = append(group.SyrveRows, item)
+		}
+	}
+
+	parsed := make([]ContractReportRow, 0, len(grouped))
+	for _, key := range order {
+		group := grouped[key]
+		if group == nil {
+			continue
+		}
+		tsRow := selectPreferredContractRow(group.TSRows)
+		syrveRow := selectPreferredContractRow(group.SyrveRows)
+		if tsRow == nil && syrveRow == nil {
+			continue
+		}
+
+		contractType := detectIDReportContractType(tsRow, syrveRow)
+		result := ContractReportRow{
+			ServicePointName: group.DisplayName,
+			ServicePointCode: preferredIDReportServicePointCode(tsRow, syrveRow),
+			ContractType:     contractType,
+			ContractOn:       IsServicePointContractActive(nil, contractType),
+			EndDate:          preferredIDReportEndDate(contractType, tsRow, syrveRow),
+		}
+		result.ContractorID = result.ServicePointCode
+		result.Serviced = preferredIDReportServiced(contractType, tsRow, syrveRow)
+		if result.ServicePointName == "" || result.ServicePointCode == "" {
+			continue
+		}
+		parsed = append(parsed, result)
+	}
+
+	if len(parsed) == 0 {
+		return nil, errors.New("в отчёте не найдено строк с поддерживаемыми продуктами TS/Syrve")
+	}
+	return parsed, nil
 }
 
 // AggregateContractReportRows схлопывает повторяющиеся строки одной точки в один канонический контракт.
@@ -330,11 +446,32 @@ func AggregateContractReportRows(rows []ContractReportRow) []ContractReportRow {
 }
 
 func contractReportRowGroupKey(row ContractReportRow) string {
+	source := contractReportRowSource(row)
 	name := normalizePointName(row.ServicePointName)
 	if name != "" {
-		return name
+		return source + "|" + name
 	}
-	return normalizeCell(cmp.Or(row.ServicePointCode, row.ContractorID))
+	code := normalizeCell(cmp.Or(row.ServicePointCode, row.ContractorID))
+	if code == "" {
+		return ""
+	}
+	return source + "|" + code
+}
+
+func contractReportRowSource(row ContractReportRow) string {
+	return contractReportCodeSource(cmp.Or(row.ServicePointCode, row.ContractorID))
+}
+
+func contractReportCodeSource(code string) string {
+	normalizedCode := strings.ToLower(normalizeCell(code))
+	switch {
+	case strings.HasPrefix(normalizedCode, idContractReportCodePrefix):
+		return idContractReportCodePrefix
+	case strings.HasPrefix(normalizedCode, legacyContractReportCodePrefix):
+		return legacyContractReportCodePrefix
+	default:
+		return legacyContractReportCodePrefix
+	}
 }
 
 // compareContractRows задает приоритет выбора строки при агрегации дублей внутри отчета.
@@ -446,8 +583,8 @@ func valueByColumn(row []string, headerMap map[string]int, columnName string) st
 }
 
 // detectContractReportHeader находит строку заголовков и индексирует обязательные колонки отчета.
-func detectContractReportHeader(rows [][]string) (int, map[string]int, error) {
-	requiredColumns := []string{
+func detectContractReportHeader(rows [][]string) (int, map[string]int, contractReportFormat, error) {
+	legacyRequiredColumns := []string{
 		reportColumnContractorID,
 		reportColumnPointName,
 		reportColumnServiced,
@@ -456,6 +593,12 @@ func detectContractReportHeader(rows [][]string) (int, map[string]int, error) {
 		reportColumnEndDate,
 		reportColumnClientOrder,
 	}
+	idRequiredColumns := []string{
+		reportColumnPointCode,
+		reportColumnPointName,
+		reportColumnServiced,
+		reportColumnEndDate,
+	}
 
 	for rowIndex, row := range rows {
 		headerMap := make(map[string]int, len(row))
@@ -463,19 +606,30 @@ func detectContractReportHeader(rows [][]string) (int, map[string]int, error) {
 			headerMap[strings.ToLower(normalizeCell(cell))] = columnIndex
 		}
 
-		allPresent := true
-		for _, column := range requiredColumns {
+		allLegacyColumnsPresent := true
+		for _, column := range legacyRequiredColumns {
 			if _, exists := headerMap[column]; !exists {
-				allPresent = false
+				allLegacyColumnsPresent = false
 				break
 			}
 		}
-		if allPresent {
-			return rowIndex, headerMap, nil
+		if allLegacyColumnsPresent {
+			return rowIndex, headerMap, contractReportFormatLegacy, nil
+		}
+
+		allIDColumnsPresent := true
+		for _, column := range idRequiredColumns {
+			if _, exists := headerMap[column]; !exists {
+				allIDColumnsPresent = false
+				break
+			}
+		}
+		if allIDColumnsPresent {
+			return rowIndex, headerMap, contractReportFormatID, nil
 		}
 	}
 
-	return 0, nil, errors.New("в html-отчёте не найдены обязательные колонки")
+	return 0, nil, "", errors.New("в отчёте не найдены обязательные колонки")
 }
 
 // collectHTMLTableRows собирает все строки таблиц из HTML-документа в плоский набор ячеек.
@@ -551,6 +705,121 @@ func normalizePointName(name string) string {
 	normalized := strings.ToLower(normalizeCell(name))
 	normalized = strings.ReplaceAll(normalized, "ё", "е")
 	return normalized
+}
+
+func applyServicePointCodePrefix(prefix string, rawCode string) string {
+	code := normalizeCell(rawCode)
+	if code == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(code), strings.ToLower(prefix)) {
+		return code
+	}
+	return prefix + code
+}
+
+func splitIDReportServicePointName(name string) (string, string) {
+	normalizedName := normalizeCell(name)
+	if normalizedName == "" {
+		return "", ""
+	}
+
+	parts := strings.Fields(normalizedName)
+	if len(parts) == 0 {
+		return "", ""
+	}
+
+	suffix := normalizePointName(parts[len(parts)-1])
+	switch suffix {
+	case "ts":
+		return normalizeCell(strings.Join(parts[:len(parts)-1], " ")), "ts"
+	case "syrve", "syr", "syrv", "sy":
+		return normalizeCell(strings.Join(parts[:len(parts)-1], " ")), "syrve"
+	default:
+		return "", ""
+	}
+}
+
+func selectPreferredContractRow(rows []ContractReportRow) *ContractReportRow {
+	if len(rows) == 0 {
+		return nil
+	}
+	items := slices.Clone(rows)
+	slices.SortFunc(items, compareContractRows)
+	return &items[0]
+}
+
+func detectIDReportContractType(tsRow, syrveRow *ContractReportRow) string {
+	if tsRow != nil && tsRow.ContractOn {
+		return "TS Standart"
+	}
+	if syrveRow != nil && syrveRow.ContractOn {
+		return "TS Cloud"
+	}
+	return "Не активен"
+}
+
+func preferredIDReportServicePointCode(tsRow, syrveRow *ContractReportRow) string {
+	switch {
+	case syrveRow != nil && strings.TrimSpace(syrveRow.ServicePointCode) != "":
+		return syrveRow.ServicePointCode
+	case tsRow != nil:
+		return tsRow.ServicePointCode
+	default:
+		return ""
+	}
+}
+
+func preferredIDReportEndDate(contractType string, tsRow, syrveRow *ContractReportRow) *time.Time {
+	switch contractType {
+	case "TS Standart":
+		if tsRow != nil && tsRow.EndDate != nil {
+			return tsRow.EndDate
+		}
+		if syrveRow != nil {
+			return syrveRow.EndDate
+		}
+	case "TS Cloud":
+		if syrveRow != nil && syrveRow.EndDate != nil {
+			return syrveRow.EndDate
+		}
+		if tsRow != nil {
+			return tsRow.EndDate
+		}
+	default:
+		return latestContractEndDate(tsRow, syrveRow)
+	}
+	return nil
+}
+
+func preferredIDReportServiced(contractType string, tsRow, syrveRow *ContractReportRow) *bool {
+	switch contractType {
+	case "TS Standart":
+		if tsRow != nil {
+			return tsRow.Serviced
+		}
+	case "TS Cloud":
+		if syrveRow != nil {
+			return syrveRow.Serviced
+		}
+	default:
+		value := false
+		return &value
+	}
+	return nil
+}
+
+func latestContractEndDate(rows ...*ContractReportRow) *time.Time {
+	var latest *time.Time
+	for _, row := range rows {
+		if row == nil || row.EndDate == nil {
+			continue
+		}
+		if latest == nil || row.EndDate.After(*latest) {
+			latest = row.EndDate
+		}
+	}
+	return latest
 }
 
 // parseContractStatus разбирает типовые текстовые значения признаков из отчетов 1С.

@@ -2,6 +2,8 @@ package gateways
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -95,26 +97,33 @@ func (g *contractGatewayImpl) RefreshLatestReport(ctx context.Context) error {
 		return nil
 	}
 
-	report := reports[len(reports)-1]
+	selectedReports := selectLatestReportsBySource(reports)
+	report := buildCombinedContractMailReport(selectedReports)
 	g.logger.Info(
-		"Запущена принудительная обработка последнего почтового отчёта по контрактам",
+		"Запущена принудительная обработка актуальных почтовых отчётов по контрактам",
 		"attachment_name", report.AttachmentName,
 		"attachment_hash", report.AttachmentHash,
 		"message_id", report.MessageID,
 		"received_at", report.ReceivedAt,
 		"extracted_service_points", len(report.Rows),
+		"reports_merged", len(selectedReports),
 	)
 	if err := g.applyReport(ctx, report); err != nil {
-		g.logger.Error("Не удалось выполнить принудительный пересчёт по последнему почтовому отчёту", "attachment_name", report.AttachmentName, "error", err)
-		g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusFailed, err)
+		g.logger.Error("Не удалось выполнить принудительный пересчёт по актуальным почтовым отчётам", "attachment_name", report.AttachmentName, "error", err)
+		for _, selectedReport := range selectedReports {
+			g.storeMailImportStatus(ctx, selectedReport, contractdom.MailImportStatusFailed, err)
+		}
 		return err
 	}
 
-	g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusProcessed, nil)
+	for _, selectedReport := range selectedReports {
+		g.storeMailImportStatus(ctx, selectedReport, contractdom.MailImportStatusProcessed, nil)
+	}
 	g.logger.Info(
-		"Принудительный пересчёт контрактов по последнему почтовому отчёту завершён",
+		"Принудительный пересчёт контрактов по актуальным почтовым отчётам завершён",
 		"attachment_name", report.AttachmentName,
 		"attachment_hash", report.AttachmentHash,
+		"reports_merged", len(selectedReports),
 	)
 	return nil
 }
@@ -138,7 +147,9 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 	}
 	g.logger.Info("Получены отчёты по контрактам из почты", "reports_count", len(reports))
 
-	for _, report := range reports {
+	selectedReports := selectLatestReportsBySource(reports)
+	reportsToMark := make([]contractsvc.ContractMailReport, 0, len(selectedReports))
+	for _, report := range selectedReports {
 		if strings.TrimSpace(report.AttachmentHash) == "" {
 			continue
 		}
@@ -150,29 +161,41 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 		}
 		if existing != nil && existing.Status == contractdom.MailImportStatusProcessed {
 			g.logger.Info(
-				"Отчёт по контрактам уже обработан ранее",
+				"Актуальный отчёт по контрактам для источника уже обработан ранее",
 				"attachment_name", report.AttachmentName,
 				"attachment_hash", report.AttachmentHash,
 				"message_id", report.MessageID,
 			)
 			continue
 		}
+		reportsToMark = append(reportsToMark, report)
+	}
+	if len(reportsToMark) == 0 {
+		g.logger.Info("Актуальные отчёты по контрактам уже обработаны ранее", "sources_count", len(selectedReports))
+		return
+	}
 
-		g.logger.Info(
-			"Начата обработка почтового отчёта по контрактам",
-			"attachment_name", report.AttachmentName,
-			"attachment_hash", report.AttachmentHash,
-			"message_id", report.MessageID,
-			"extracted_service_points", len(report.Rows),
-		)
-		if err := g.applyReport(ctx, report); err != nil {
-			g.logger.Error("Не удалось применить почтовый отчёт по контрактам", "attachment_name", report.AttachmentName, "error", err)
+	combinedReport := buildCombinedContractMailReport(selectedReports)
+	g.logger.Info(
+		"Начата обработка актуального набора почтовых отчётов по контрактам",
+		"attachment_name", combinedReport.AttachmentName,
+		"attachment_hash", combinedReport.AttachmentHash,
+		"message_id", combinedReport.MessageID,
+		"extracted_service_points", len(combinedReport.Rows),
+		"reports_merged", len(selectedReports),
+	)
+	if err := g.applyReport(ctx, combinedReport); err != nil {
+		g.logger.Error("Не удалось применить актуальный набор почтовых отчётов по контрактам", "attachment_name", combinedReport.AttachmentName, "error", err)
+		for _, report := range reportsToMark {
 			g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusFailed, err)
-			continue
 		}
+		return
+	}
 
+	for _, report := range reportsToMark {
 		g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusProcessed, nil)
 	}
+	g.maybeRunAutomaticBitrixSync(ctx, combinedReport, selectedReports)
 	g.logger.Info("Цикл актуализации контрактов из почты завершён", "reports_count", len(reports))
 }
 
@@ -393,8 +416,10 @@ func buildReportRowIndexes(rows []contractsvc.ContractReportRow) (map[string]con
 	rowsByCode := make(map[string]contractsvc.ContractReportRow, len(aggregated))
 	rowsByName := make(map[string][]contractsvc.ContractReportRow, len(aggregated))
 	for _, row := range aggregated {
-		code := strings.TrimSpace(row.ServicePointCode)
-		if code != "" {
+		for _, code := range contractReportCodeLookupKeys(row.ServicePointCode) {
+			if code == "" {
+				continue
+			}
 			rowsByCode[code] = row
 		}
 		name := normalizePointName(row.ServicePointName)
@@ -470,3 +495,358 @@ func countConflictDeletionCandidates(conflicts []services.ServicePointContractCo
 }
 
 const contractMailSyncUpdatedBy = "contract_mail_sync"
+
+func contractReportCodeLookupKeys(code string) []string {
+	normalizedCode := strings.TrimSpace(code)
+	if normalizedCode == "" {
+		return nil
+	}
+
+	keys := []string{normalizedCode}
+	lowerCode := strings.ToLower(normalizedCode)
+	if stripped, ok := strings.CutPrefix(lowerCode, "ru"); ok && stripped != "" {
+		keys = append(keys, normalizedCode[len(normalizedCode)-len(stripped):])
+	}
+	return keys
+}
+
+func selectLatestReportsBySource(reports []contractsvc.ContractMailReport) []contractsvc.ContractMailReport {
+	if len(reports) == 0 {
+		return nil
+	}
+
+	latestBySource := make(map[string]contractsvc.ContractMailReport, len(reports))
+	for _, report := range reports {
+		source := contractReportSourceKey(report.Rows)
+		latestBySource[source] = report
+	}
+
+	selected := make([]contractsvc.ContractMailReport, 0, len(latestBySource))
+	for _, report := range latestBySource {
+		selected = append(selected, report)
+	}
+	slices.SortFunc(selected, compareContractMailReports)
+	return selected
+}
+
+func contractReportSourceKey(rows []contractsvc.ContractReportRow) string {
+	for _, row := range rows {
+		if source := contractReportSourceKeyByCode(row.ServicePointCode); source != "" {
+			return source
+		}
+		if source := contractReportSourceKeyByCode(row.ContractorID); source != "" {
+			return source
+		}
+	}
+	return "ru"
+}
+
+func contractReportSourceKeyByCode(code string) string {
+	normalizedCode := strings.ToLower(strings.TrimSpace(code))
+	switch {
+	case strings.HasPrefix(normalizedCode, "id"):
+		return "id"
+	case strings.HasPrefix(normalizedCode, "ru"):
+		return "ru"
+	case normalizedCode == "":
+		return ""
+	default:
+		return "ru"
+	}
+}
+
+func buildCombinedContractMailReport(reports []contractsvc.ContractMailReport) contractsvc.ContractMailReport {
+	if len(reports) == 0 {
+		return contractsvc.ContractMailReport{}
+	}
+
+	selected := slices.Clone(reports)
+	slices.SortFunc(selected, compareContractMailReports)
+
+	mergedRows := make([]contractsvc.ContractReportRow, 0, 1024)
+	hashBuilder := strings.Builder{}
+	names := make([]string, 0, len(selected))
+	for _, report := range selected {
+		mergedRows = append(mergedRows, report.Rows...)
+		if strings.TrimSpace(report.AttachmentHash) != "" {
+			hashBuilder.WriteString(report.AttachmentHash)
+			hashBuilder.WriteString("|")
+		}
+		names = append(names, strings.TrimSpace(report.AttachmentName))
+	}
+	mergedRows = contractsvc.AggregateContractReportRows(mergedRows)
+
+	latestReport := selected[len(selected)-1]
+	combinedHash := sha256.Sum256([]byte(hashBuilder.String()))
+	return contractsvc.ContractMailReport{
+		MessageID:      latestReport.MessageID,
+		Subject:        latestReport.Subject,
+		ReceivedAt:     latestReport.ReceivedAt,
+		AttachmentName: strings.Join(names, " + "),
+		AttachmentHash: hex.EncodeToString(combinedHash[:]),
+		Rows:           mergedRows,
+	}
+}
+
+func (g *contractGatewayImpl) maybeRunAutomaticBitrixSync(
+	ctx context.Context,
+	report contractsvc.ContractMailReport,
+	activeReports []contractsvc.ContractMailReport,
+) {
+	if g.cfg == nil || !g.cfg.EnableContractBitrixAutoSync || g.bitrixSync == nil {
+		return
+	}
+
+	startedAt := time.Now().UTC()
+	preview, err := g.bitrixSync.PreviewContractReportSync(ctx, report.Rows)
+	if err != nil {
+		completedAt := time.Now().UTC()
+		g.logger.Error("Автоматическая синхронизация точек по отчёту не смогла построить preview", "error", err)
+		g.storeAutomaticBitrixSyncRun(ctx, automaticBitrixSyncRunInput{
+			Status:        contractdom.ServicePointSyncRunStatusFailed,
+			ActiveReports: activeReports,
+			Preview:       nil,
+			QueueItems:    nil,
+			Result:        nil,
+			StartedAt:     startedAt,
+			CompletedAt:   &completedAt,
+			Note:          err.Error(),
+		})
+		return
+	}
+
+	selectedQueueItems, noteParts := selectAutomaticContractSyncQueueItems(preview, g.cfg.ContractBitrixAutoSyncApplyDeletes)
+	if len(selectedQueueItems) == 0 {
+		completedAt := time.Now().UTC()
+		if len(noteParts) == 0 {
+			noteParts = append(noteParts, "Автоматически применять нечего")
+		}
+		g.storeAutomaticBitrixSyncRun(ctx, automaticBitrixSyncRunInput{
+			Status:        contractdom.ServicePointSyncRunStatusSkipped,
+			ActiveReports: activeReports,
+			Preview:       preview,
+			QueueItems:    nil,
+			Result:        nil,
+			StartedAt:     startedAt,
+			CompletedAt:   &completedAt,
+			Note:          strings.Join(noteParts, ". "),
+		})
+		return
+	}
+
+	result, execErr := g.bitrixSync.ExecuteContractReportSync(ctx, report.Rows, services.ContractReportSyncExecuteOptions{
+		SelectedKeys: contractSyncQueueItemKeys(selectedQueueItems),
+		QueueItems:   selectedQueueItems,
+	})
+	completedAt := time.Now().UTC()
+	status := contractdom.ServicePointSyncRunStatusSuccess
+	note := strings.Join(noteParts, ". ")
+	if execErr != nil {
+		status = contractdom.ServicePointSyncRunStatusFailed
+		if note == "" {
+			note = execErr.Error()
+		} else {
+			note = note + ". " + execErr.Error()
+		}
+		g.logger.Error("Автоматическая синхронизация точек по отчёту завершилась ошибкой", "error", execErr)
+	} else if len(result.Errors) > 0 || len(result.ErrorDetails) > 0 {
+		status = contractdom.ServicePointSyncRunStatusPartial
+		g.logger.Warn("Автоматическая синхронизация точек по отчёту завершилась с частичными ошибками", "errors", len(result.Errors), "error_details", len(result.ErrorDetails))
+	}
+
+	g.storeAutomaticBitrixSyncRun(ctx, automaticBitrixSyncRunInput{
+		Status:        status,
+		ActiveReports: activeReports,
+		Preview:       preview,
+		QueueItems:    selectedQueueItems,
+		Result:        result,
+		StartedAt:     startedAt,
+		CompletedAt:   &completedAt,
+		Note:          note,
+	})
+}
+
+type automaticBitrixSyncRunInput struct {
+	Status        string
+	ActiveReports []contractsvc.ContractMailReport
+	Preview       *services.ContractReportSyncPreview
+	QueueItems    []services.ContractReportSyncPlanItem
+	Result        *services.ContractReportSyncExecuteResult
+	StartedAt     time.Time
+	CompletedAt   *time.Time
+	Note          string
+}
+
+func (g *contractGatewayImpl) storeAutomaticBitrixSyncRun(ctx context.Context, input automaticBitrixSyncRunInput) {
+	if g.contractRepo == nil {
+		return
+	}
+
+	activeImportsJSON, err := marshalAutomaticBitrixSyncActiveReports(input.ActiveReports)
+	if err != nil {
+		g.logger.Error("Не удалось сериализовать активные отчёты для журнала автоматической синхронизации", "error", err)
+		return
+	}
+	queueItemsJSON, err := marshalAutomaticBitrixSyncQueueItems(input.QueueItems)
+	if err != nil {
+		g.logger.Error("Не удалось сериализовать очередь для журнала автоматической синхронизации", "error", err)
+		return
+	}
+	errorsJSON, err := marshalAutomaticBitrixSyncErrors(input.Result)
+	if err != nil {
+		g.logger.Error("Не удалось сериализовать ошибки для журнала автоматической синхронизации", "error", err)
+		return
+	}
+	errorDetailsJSON, err := marshalAutomaticBitrixSyncErrorDetails(input.Result)
+	if err != nil {
+		g.logger.Error("Не удалось сериализовать детали ошибок для журнала автоматической синхронизации", "error", err)
+		return
+	}
+
+	run := &contractdom.ServicePointSyncRun{
+		Mode:          contractdom.ServicePointSyncRunModeAutomatic,
+		Status:        strings.TrimSpace(input.Status),
+		ActorType:     contractdom.ServicePointSyncRunActorSystem,
+		ActorName:     nullableString("Система"),
+		Note:          nullableString(strings.TrimSpace(input.Note)),
+		StartedAt:     input.StartedAt,
+		CompletedAt:   input.CompletedAt,
+		ActiveImports: datatypes.JSON(activeImportsJSON),
+		QueueItems:    datatypes.JSON(queueItemsJSON),
+		Errors:        datatypes.JSON(errorsJSON),
+		ErrorDetails:  datatypes.JSON(errorDetailsJSON),
+	}
+	if input.Preview != nil {
+		run.ReportRows = input.Preview.ReportRows
+		run.ToCreate = input.Preview.ToCreate
+		run.ToUpdate = input.Preview.ToUpdate
+		run.ToDelete = input.Preview.ToDelete
+		run.BlockedRows = input.Preview.BlockedRows
+	}
+	if input.Result != nil {
+		run.Processed = input.Result.Processed
+		run.Created = input.Result.Created
+		run.Updated = input.Result.Updated
+		run.Deleted = input.Result.Deleted
+	}
+	run.LastUpdatedBy = "contract_sync_auto"
+
+	if err := g.contractRepo.CreateServicePointSyncRun(ctx, run); err != nil {
+		g.logger.Error("Не удалось сохранить журнал автоматической синхронизации точек обслуживания", "error", err)
+	}
+}
+
+func selectAutomaticContractSyncQueueItems(
+	preview *services.ContractReportSyncPreview,
+	allowDeletes bool,
+) ([]services.ContractReportSyncPlanItem, []string) {
+	if preview == nil {
+		return nil, nil
+	}
+
+	noteParts := make([]string, 0, 3)
+	if preview.BlockedRows > 0 {
+		noteParts = append(noteParts, fmt.Sprintf("Заблокированных строк осталось %d", preview.BlockedRows))
+	}
+	if preview.ToDelete > 0 && !allowDeletes {
+		noteParts = append(noteParts, fmt.Sprintf("Удаления (%d) оставлены на ручное подтверждение", preview.ToDelete))
+	}
+
+	queueItems := slices.Clone(preview.UpsertItems)
+	if allowDeletes && len(preview.DeleteItems) > 0 {
+		queueItems = append(queueItems, preview.DeleteItems...)
+	}
+	return queueItems, noteParts
+}
+
+func contractSyncQueueItemKeys(items []services.ContractReportSyncPlanItem) []string {
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func marshalAutomaticBitrixSyncActiveReports(items []contractsvc.ContractMailReport) ([]byte, error) {
+	snapshots := make([]contractdom.ServicePointSyncRunImportSnapshot, 0, len(items))
+	for _, item := range items {
+		snapshots = append(snapshots, contractdom.ServicePointSyncRunImportSnapshot{
+			Source:         contractReportSourceKey(item.Rows),
+			MessageID:      strings.TrimSpace(item.MessageID),
+			AttachmentName: strings.TrimSpace(item.AttachmentName),
+			AttachmentHash: strings.TrimSpace(item.AttachmentHash),
+			ReceivedAt:     item.ReceivedAt,
+			Status:         contractdom.MailImportStatusProcessed,
+			RowsCount:      len(contractsvc.AggregateContractReportRows(item.Rows)),
+		})
+	}
+	return json.Marshal(snapshots)
+}
+
+func marshalAutomaticBitrixSyncQueueItems(items []services.ContractReportSyncPlanItem) ([]byte, error) {
+	snapshots := make([]contractdom.ServicePointSyncRunQueueItemSnapshot, 0, len(items))
+	for _, item := range items {
+		snapshots = append(snapshots, contractdom.ServicePointSyncRunQueueItemSnapshot{
+			Key:                 item.Key,
+			Action:              string(item.Action),
+			ServicePointName:    item.ServicePointName,
+			ServicePointCode:    item.ServicePointCode,
+			ContractorID:        item.ContractorID,
+			ContractorName:      item.ContractorName,
+			ContractType:        item.ContractType,
+			B24ElementID:        item.B24ElementID,
+			CurrentName:         item.CurrentName,
+			CurrentCode:         item.CurrentCode,
+			CurrentContractType: item.CurrentContractType,
+			ChangeSet:           mapAutomaticBitrixSyncFieldDiffs(item.ChangeSet),
+			MatchedPointIDs:     item.MatchedPointIDs,
+			FilledFields:        item.FilledFields,
+			IsMapped:            item.IsMapped,
+			Reason:              item.Reason,
+		})
+	}
+	return json.Marshal(snapshots)
+}
+
+func mapAutomaticBitrixSyncFieldDiffs(items []services.ContractReportSyncFieldDiff) []contractdom.ServicePointSyncRunFieldDiffSnapshot {
+	result := make([]contractdom.ServicePointSyncRunFieldDiffSnapshot, 0, len(items))
+	for _, item := range items {
+		result = append(result, contractdom.ServicePointSyncRunFieldDiffSnapshot{
+			Field:        item.Field,
+			Label:        item.Label,
+			CurrentValue: item.CurrentValue,
+			NextValue:    item.NextValue,
+		})
+	}
+	return result
+}
+
+func marshalAutomaticBitrixSyncErrors(result *services.ContractReportSyncExecuteResult) ([]byte, error) {
+	if result == nil || len(result.Errors) == 0 {
+		return json.Marshal([]string{})
+	}
+	return json.Marshal(result.Errors)
+}
+
+func marshalAutomaticBitrixSyncErrorDetails(result *services.ContractReportSyncExecuteResult) ([]byte, error) {
+	if result == nil || len(result.ErrorDetails) == 0 {
+		return json.Marshal([]contractdom.ServicePointSyncRunErrorDetailSnapshot{})
+	}
+
+	items := make([]contractdom.ServicePointSyncRunErrorDetailSnapshot, 0, len(result.ErrorDetails))
+	for _, item := range result.ErrorDetails {
+		items = append(items, contractdom.ServicePointSyncRunErrorDetailSnapshot{
+			Key:              item.Key,
+			Action:           string(item.Action),
+			ServicePointName: item.ServicePointName,
+			ServicePointCode: item.ServicePointCode,
+			B24ElementID:     item.B24ElementID,
+			Message:          item.Message,
+		})
+	}
+	return json.Marshal(items)
+}

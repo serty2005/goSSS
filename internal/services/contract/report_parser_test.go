@@ -10,10 +10,32 @@ import (
 func TestParseContractReportHTML(t *testing.T) {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "test-from-1C.html"))
-	if err != nil {
-		t.Fatalf("не удалось прочитать пример html-отчёта: %v", err)
-	}
+	content := []byte(`
+		<html><body>
+		<table>
+			<tr>
+				<th>Идентификатор контрагента</th>
+				<th>Точка обслуживания.Код</th>
+				<th>Точка обслуживания</th>
+				<th>Обслуживается</th>
+				<th>Бесплатное обслуживание</th>
+				<th>Дата начала</th>
+				<th>Дата окончания</th>
+				<th>Заказ клиента</th>
+			</tr>
+			<tr>
+				<td>36860ee6-880b-11f0-a430-8e166aa88cae</td>
+				<td>12345</td>
+				<td>Кафе на Рябиновой</td>
+				<td>Да</td>
+				<td>Да</td>
+				<td>01.03.2026</td>
+				<td>31.12.2026</td>
+				<td>Заказ-1</td>
+			</tr>
+		</table>
+		</body></html>
+	`)
 
 	rows, err := parseContractReportHTML(content, time.Date(2026, time.March, 12, 12, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -41,6 +63,74 @@ func TestParseContractReportHTML(t *testing.T) {
 	}
 	if !foundCloud {
 		t.Fatal("не найдена контрольная строка 'Кафе на Рябиновой'")
+	}
+}
+
+func TestParseContractReportSpreadsheet_IDFormat(t *testing.T) {
+	t.Helper()
+
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "Для Александра Маслова (XLS)2.xls"))
+	if err != nil {
+		t.Fatalf("не удалось прочитать пример xls-отчёта: %v", err)
+	}
+
+	rows, err := parseContractReportSpreadsheet(
+		"Для Александра Маслова (XLS)2.xls",
+		content,
+		time.Date(2026, time.April, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("не удалось разобрать xls-отчёт нового формата: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("ожидали непустой набор строк нового отчёта")
+	}
+
+	rowByName := make(map[string]ContractReportRow, len(rows))
+	for _, row := range rows {
+		rowByName[row.ServicePointName] = row
+	}
+
+	hedonist, ok := rowByName["Hedonist"]
+	if !ok {
+		t.Fatal("не найдена агрегированная строка Hedonist")
+	}
+	if hedonist.ServicePointCode != "id000000054" {
+		t.Fatalf("ожидали код Syrve для Hedonist, получили %q", hedonist.ServicePointCode)
+	}
+	if hedonist.ContractType != "TS Standart" {
+		t.Fatalf("ожидали тип TS Standart для Hedonist, получили %q", hedonist.ContractType)
+	}
+	if !hedonist.ContractOn {
+		t.Fatal("ожидали активный контракт для Hedonist")
+	}
+
+	harvey, ok := rowByName["Harvey Bar"]
+	if !ok {
+		t.Fatal("не найдена агрегированная строка Harvey Bar")
+	}
+	if harvey.ServicePointCode != "id000000031" {
+		t.Fatalf("ожидали код Syrve для Harvey Bar, получили %q", harvey.ServicePointCode)
+	}
+	if harvey.ContractType != "Не активен" {
+		t.Fatalf("ожидали неактивный контракт для Harvey Bar, получили %q", harvey.ContractType)
+	}
+	if harvey.ContractOn {
+		t.Fatal("ожидали неактивный контракт для Harvey Bar")
+	}
+
+	frangi, ok := rowByName["FRANGI.Br & Coffee"]
+	if !ok {
+		t.Fatal("не найдена агрегированная строка FRANGI.Br & Coffee")
+	}
+	if frangi.ServicePointCode != "id000000265" {
+		t.Fatalf("ожидали код Syrve для FRANGI.Br & Coffee, получили %q", frangi.ServicePointCode)
+	}
+	if frangi.ContractType != "TS Cloud" {
+		t.Fatalf("ожидали тип TS Cloud для FRANGI.Br & Coffee, получили %q", frangi.ContractType)
+	}
+	if !frangi.ContractOn {
+		t.Fatal("ожидали активный контракт TS Cloud для FRANGI.Br & Coffee")
 	}
 }
 
@@ -116,5 +206,28 @@ func TestAggregateContractReportRows_PrefersServicedDuplicateByName(t *testing.T
 	}
 	if !rows[0].ContractOn {
 		t.Fatal("ожидали активный контракт у выбранной строки")
+	}
+}
+
+func TestAggregateContractReportRows_DoesNotMergeDifferentSourcesWithSameName(t *testing.T) {
+	rows := AggregateContractReportRows([]ContractReportRow{
+		{
+			ContractorID:     "ru000111",
+			ServicePointCode: "ru000111",
+			ServicePointName: "Общая точка",
+			ContractType:     "TS Standart",
+			ContractOn:       true,
+		},
+		{
+			ContractorID:     "id000111",
+			ServicePointCode: "id000111",
+			ServicePointName: "Общая точка",
+			ContractType:     "TS Cloud",
+			ContractOn:       true,
+		},
+	})
+
+	if len(rows) != 2 {
+		t.Fatalf("ожидали две независимые строки из разных источников, получили %d", len(rows))
 	}
 }

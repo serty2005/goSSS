@@ -5,6 +5,7 @@ import {
   BitrixUsersRefreshDTO,
   ContractSyncQueueItemDTO,
   ContractSyncExecuteResultDTO,
+  ContractSyncRunDetailsDTO,
   ContractSyncStateDTO,
   ServicePointImportPreviewDTO,
   ServicePointSyncApplyResultDTO,
@@ -31,6 +32,11 @@ export const bitrixAdminApi = {
 
   refreshContractSyncState: async () => {
     const response = await apiClient.post<ApiResponse<ContractSyncStateDTO>>('/bitrix/service-points/contract-sync/refresh');
+    return response.data;
+  },
+
+  getContractSyncRun: async (runID: string) => {
+    const response = await apiClient.get<ApiResponse<ContractSyncRunDetailsDTO>>(`/bitrix/service-points/contract-sync/runs/${runID}`);
     return response.data;
   },
 

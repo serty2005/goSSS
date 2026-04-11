@@ -48,6 +48,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&fiscal.FiscalRegister{},
 		&contract.Contract{},
 		&contract.MailImport{},
+		&contract.ServicePointSyncRun{},
 		&contract.ServicePointSyncConflict{},
 		&models.AgentFile{},
 		&models.ReconciliationTask{},

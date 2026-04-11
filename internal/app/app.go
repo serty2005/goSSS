@@ -585,7 +585,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus, repos.PyrusRepo)
-	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway)
+	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway, repos.UserRepo, app.Config)
 	app.PyrusHandler = handlers.NewPyrusHandler(srvs.PyrusSyncService)
 	app.MegafonVATSHandler = handlers.NewMegafonVATSHandler(srvs.MegafonVATSSyncService)
 	app.TelephonyHandler = handlers.NewTelephonyHandler(srvs.TelephonyService)

@@ -482,6 +482,7 @@ export interface ServicePointSyncApplyResultDTO {
 
 export interface ContractMailImportDTO {
   id: string;
+  source?: string;
   message_id: string;
   attachment_name: string;
   attachment_hash: string;
@@ -531,10 +532,51 @@ export interface ContractSyncBlockedItemDTO {
   matched_point_ids?: number[];
 }
 
+export interface ContractSyncRunSummaryDTO {
+  id: string;
+  status: string;
+  mode: string;
+  actor_type: string;
+  actor_user_id?: number;
+  actor_name?: string;
+  note?: string;
+  started_at: string;
+  completed_at?: string;
+  report_rows: number;
+  to_create: number;
+  to_update: number;
+  to_delete: number;
+  blocked_rows: number;
+  processed: number;
+  created: number;
+  updated: number;
+  deleted: number;
+  active_imports?: ContractMailImportDTO[];
+}
+
+export interface ContractSyncRunDetailsDTO extends ContractSyncRunSummaryDTO {
+  queue_items?: ContractSyncQueueItemDTO[];
+  errors?: string[];
+  error_details?: ContractSyncExecuteErrorDTO[];
+}
+
+export interface ContractSyncAutoExecutionDTO {
+  enabled: boolean;
+  interval_minutes: number;
+  applies_creates: boolean;
+  applies_updates: boolean;
+  applies_deletes: boolean;
+  trigger_label?: string;
+  safety_description?: string;
+}
+
 export interface ContractSyncStateDTO {
   latest_import?: ContractMailImportDTO;
   active_report_import?: ContractMailImportDTO;
+  active_report_imports?: ContractMailImportDTO[];
   recent_imports: ContractMailImportDTO[];
+  recent_runs?: ContractSyncRunSummaryDTO[];
+  auto_sync?: ContractSyncAutoExecutionDTO;
   report_rows: number;
   to_create: number;
   to_update: number;

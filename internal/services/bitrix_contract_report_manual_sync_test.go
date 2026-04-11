@@ -1697,6 +1697,119 @@ func TestExecuteContractReportSync_UsesBatchForMassDeletes(t *testing.T) {
 	}
 }
 
+func TestPreviewContractReportSync_CollapsesProductDuplicatesIntoSingleBusinessPoint(t *testing.T) {
+	ctx := t.Context()
+	svc := &bitrixSyncService{
+		cfg: &config.Config{
+			EnableBitrixGateway:         true,
+			RequestTimeout:              2 * time.Second,
+			BitrixServicePointsIBlockID: 101,
+			BitrixRateLimitPerMin:       120,
+			BitrixRateLimitBurst:        50,
+		},
+		log:  logger.New("", "test", "error", true),
+		repo: repositories.NewBitrixRepo(mustOpenSyncTestDB(t, &bitrix.ServicePoint{}, &bitrix.CompanyServicePointMapping{})),
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		defer r.Body.Close()
+
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/lists.get.iblock.type.id.json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": "lists"})
+		case strings.HasSuffix(r.URL.Path, "/lists.field.get.json"):
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			fieldID, _ := body["FIELD_ID"].(string)
+			switch fieldID {
+			case bitrixServicePointOneCCodeProperty:
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{fieldID: map[string]any{"MULTIPLE": "N"}}})
+			case bitrixServicePointContractProperty:
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"result": map[string]any{
+						fieldID: map[string]any{
+							"MULTIPLE": "N",
+							"DISPLAY_VALUES_FORM": map[string]any{
+								"10": "Не активен",
+								"20": "TS Cloud",
+								"30": "TS Standart",
+							},
+						},
+					},
+				})
+			default:
+				http.Error(w, "unexpected field", http.StatusBadRequest)
+			}
+		case strings.HasSuffix(r.URL.Path, "/lists.element.get.json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": []map[string]any{
+					{
+						"ID":           "2101",
+						"NAME":         "Harvey Bar TS",
+						"PROPERTY_681": map[string]any{"1": "000000034"},
+						"PROPERTY_361": map[string]any{"2": "Не активен"},
+					},
+					{
+						"ID":           "2102",
+						"NAME":         "Harvey Bar Syrve",
+						"PROPERTY_681": map[string]any{"3": "000000031"},
+						"PROPERTY_361": map[string]any{"4": "Не активен"},
+					},
+				},
+				"total": 2,
+			})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	svc.cfg.BitrixBaseURL = server.URL + "/rest/457/secret"
+	svc.client = b24.NewClient(svc.cfg, logger.New("", "test", "error", true))
+
+	row := contractsvc.ContractReportRow{
+		ContractorID:     "id000000031",
+		ServicePointCode: "id000000031",
+		ServicePointName: "Harvey Bar",
+		ContractType:     "Не активен",
+	}
+	preview, err := svc.PreviewContractReportSync(ctx, []contractsvc.ContractReportRow{row})
+	if err != nil {
+		t.Fatalf("PreviewContractReportSync завершился ошибкой: %v", err)
+	}
+	if preview.BlockedRows != 0 {
+		t.Fatalf("продуктовые дубли TS/Syrve не должны блокировать строку, получено blocked=%d", preview.BlockedRows)
+	}
+	if preview.ToUpdate != 1 || len(preview.UpsertItems) != 1 {
+		t.Fatalf("ожидалось одно обновление оставшейся точки, получено to_update=%d items=%d", preview.ToUpdate, len(preview.UpsertItems))
+	}
+	if preview.UpsertItems[0].B24ElementID == nil || *preview.UpsertItems[0].B24ElementID != 2102 {
+		t.Fatalf("ожидалось обновление Syrve-точки 2102, получено %#v", preview.UpsertItems[0].B24ElementID)
+	}
+	if preview.UpsertItems[0].ServicePointName != "Harvey Bar" {
+		t.Fatalf("ожидалось новое имя без продуктового суффикса, получено %q", preview.UpsertItems[0].ServicePointName)
+	}
+	if preview.UpsertItems[0].ServicePointCode != "id000000031" {
+		t.Fatalf("ожидался префиксированный Syrve-код, получено %q", preview.UpsertItems[0].ServicePointCode)
+	}
+	if len(preview.DeleteItems) != 1 {
+		t.Fatalf("ожидался один продуктовый дубль на удаление, получено %d", len(preview.DeleteItems))
+	}
+	if preview.DeleteItems[0].B24ElementID == nil || *preview.DeleteItems[0].B24ElementID != 2101 {
+		t.Fatalf("ожидалось удаление TS-дубля 2101, получено %#v", preview.DeleteItems[0].B24ElementID)
+	}
+	if !strings.Contains(preview.DeleteItems[0].Reason, "продуктовым дублем") {
+		t.Fatalf("ожидалась причина про продуктовый дубль, получено %q", preview.DeleteItems[0].Reason)
+	}
+}
+
 func mustOpenSyncTestDB(t *testing.T, models ...any) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.NewReplacer("/", "_", "\\", "_", " ", "_").Replace(t.Name()))
