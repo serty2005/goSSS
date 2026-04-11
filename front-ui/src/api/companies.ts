@@ -58,4 +58,11 @@ export const companiesApi = {
     const response = await apiClient.put<ApiResponse<{ status: string }>>('/companies/bitrix-service-point-mappings', payload);
     return response.data;
   },
+
+  syncBitrixContract: async (companyId: string) => {
+    const response = await apiClient.post<ApiResponse<{ status: string }>>('/companies/bitrix-service-point-mappings/sync-contract', {
+      company_id: companyId,
+    });
+    return response.data;
+  },
 };

@@ -23,6 +23,7 @@ import (
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
+	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"io"
@@ -113,6 +114,7 @@ type ticketServiceImpl struct {
 	pyrusRepo        pyrus.Repository
 	telephonyRepo    telephony.Repository
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo
+	contractService  contract.Service
 }
 
 var ErrReporterNotFound = errors.New("пользователь-автор не найден")
@@ -136,6 +138,7 @@ func NewTicketService(
 	pyrusRepo pyrus.Repository,
 	telephonyRepo telephony.Repository,
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo,
+	contractService contract.Service,
 ) TicketService {
 	return &ticketServiceImpl{
 		logger:           logger,
@@ -153,6 +156,7 @@ func NewTicketService(
 		pyrusRepo:        pyrusRepo,
 		telephonyRepo:    telephonyRepo,
 		ownerHistoryRepo: ownerHistoryRepo,
+		contractService:  contractService,
 	}
 }
 
@@ -222,6 +226,19 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if err != nil {
 		return nil, err
 	}
+	mappedBitrixServicePointID, err := s.resolveMappedBitrixServicePointID(ctx, dto.CompanyID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", err)
+	}
+	contractSyncPointID := dto.BitrixServicePointID
+	if !isValidBitrixServicePointID(contractSyncPointID) {
+		contractSyncPointID = mappedBitrixServicePointID
+	}
+	if syncedCompany, err := s.syncCompanyContractFromBitrixPoint(ctx, dto.CompanyID, contractSyncPointID); err != nil {
+		return nil, fmt.Errorf("не удалось синхронизировать контракт компании по точке Bitrix24: %w", err)
+	} else if syncedCompany != nil {
+		ownerCompany = syncedCompany
+	}
 
 	syncWithBitrix := true
 	if dto.SyncWithBitrix != nil {
@@ -234,13 +251,10 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		syncWithBitrix = false
 	}
 	resolvedBitrixServicePointID := dto.BitrixServicePointID
-	if syncWithBitrix && (resolvedBitrixServicePointID == nil || *resolvedBitrixServicePointID <= 0) {
-		resolvedBitrixServicePointID, err = s.resolveMappedBitrixServicePointID(ctx, dto.CompanyID)
-		if err != nil {
-			return nil, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", err)
-		}
+	if syncWithBitrix && !isValidBitrixServicePointID(resolvedBitrixServicePointID) {
+		resolvedBitrixServicePointID = mappedBitrixServicePointID
 	}
-	if syncWithBitrix && (resolvedBitrixServicePointID == nil || *resolvedBitrixServicePointID <= 0) {
+	if syncWithBitrix && !isValidBitrixServicePointID(resolvedBitrixServicePointID) {
 		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 	}
 	ticket := &tickets.Ticket{
@@ -2163,6 +2177,44 @@ func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, compan
 		return nil, nil
 	}
 	return &contractID, nil
+}
+
+func (s *ticketServiceImpl) syncCompanyContractFromBitrixPoint(ctx context.Context, companyID string, bitrixServicePointID *int64) (*company.Company, error) {
+	if s.contractService == nil || s.bitrixRepo == nil || !isValidBitrixServicePointID(bitrixServicePointID) {
+		return nil, nil
+	}
+
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	if err != nil {
+		return nil, err
+	}
+	if skip {
+		return nil, nil
+	}
+
+	point, err := s.bitrixRepo.GetServicePointByID(ctx, *bitrixServicePointID)
+	if err != nil {
+		return nil, err
+	}
+	if point == nil {
+		return nil, fmt.Errorf("точка обслуживания Bitrix24 не найдена")
+	}
+
+	snapshot := contractsvc.BuildDailySnapshotFromBitrixServicePoint(companyID, *point)
+	snapshot.SourceHash = buildBitrixPointContractSourceHash(*point)
+	if err := s.contractService.SyncDailySnapshots(ctx, []contract.DailyCompanyContractSnapshot{snapshot}); err != nil {
+		return nil, err
+	}
+
+	return s.companyRepo.GetByID(ctx, companyID)
+}
+
+func isValidBitrixServicePointID(value *int64) bool {
+	return value != nil && *value > 0
+}
+
+func buildBitrixPointContractSourceHash(point bitrix.ServicePoint) string {
+	return fmt.Sprintf("bitrix-service-point:%d:%d", point.B24ElementID, point.UpdatedAt.UTC().UnixNano())
 }
 
 func (s *ticketServiceImpl) resolveMappedBitrixServicePointID(ctx context.Context, companyID string) (*int64, error) {

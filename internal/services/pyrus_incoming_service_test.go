@@ -110,6 +110,7 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		pyrusRepo,
 		nil,
 		nil,
+		nil,
 	)
 	pyrusClient := pyrusplugin.NewClient(cfg, log)
 	pyrusSync := NewPyrusSyncService(cfg, log, pyrusClient, nil, ticketRepo, userRepo, pyrusRepo)

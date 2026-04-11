@@ -405,6 +405,27 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.TelephonyRepo,
 		clients.TelephonyRecordingStore,
 	)
+	contractService := contractSvc.NewService(
+		app.Logger.With("component", "contract_service"),
+		transactor,
+		repos.ContractRepo,
+		repos.CompanyRepo,
+		repos.LinkRepo,
+		repos.ServerRepo,
+		repos.WorkstationRepo,
+		repos.FRRepo,
+	)
+	companyService := companySvc.NewService(
+		app.Logger.With("component", "company_service"),
+		transactor,
+		repos.CompanyRepo,
+		repos.ServerRepo,
+		repos.WorkstationRepo,
+		repos.FRRepo,
+		repos.LinkRepo,
+		repos.BitrixRepo,
+		contractService,
+	)
 
 	ticketService := services.NewTicketService(
 		app.Logger.With("component", "ticket_service"),
@@ -421,6 +442,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		repos.PyrusRepo,
 		repos.TelephonyRepo,
 		repos.OwnerHistoryRepo,
+		contractService,
 	)
 	pyrusSyncService := services.NewPyrusSyncService(
 		app.Config,
@@ -503,8 +525,8 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerActionsService:       services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),
 		EntityMatcherService:       services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:              ticketService,
-		CompanyService:             companySvc.NewService(app.Logger.With("component", "company_service"), transactor, repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.BitrixRepo),
-		ContractService:            contractSvc.NewService(app.Logger.With("component", "contract_service"), transactor, repos.ContractRepo, repos.CompanyRepo, repos.LinkRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
+		CompanyService:             companyService,
+		ContractService:            contractService,
 		ServerService:              serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
 		WorkstationService:         workstationSvc.NewService(app.Logger.With("component", "workstation_service"), transactor, repos.WorkstationRepo, repos.OwnerHistoryRepo),
 		FiscalService:              fiscalSvc.NewService(app.Logger.With("component", "fiscal_service"), transactor, repos.FRRepo, repos.OwnerHistoryRepo),

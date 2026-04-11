@@ -7,10 +7,14 @@ import (
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
+	dbpkg "etalon-server/internal/infra/db"
+	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/infra/repositories"
+	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
 
 	"github.com/glebarez/sqlite"
@@ -87,6 +91,7 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	dto := api.TicketCreateInternalDTO{
@@ -106,6 +111,124 @@ func TestCreateInternal_AutoSetBitrixServicePointFromMapping(t *testing.T) {
 	}
 	if item.BitrixDealTitle != "" {
 		t.Fatalf("ожидали пустой заголовок сделки Bitrix24 до входящего хука, получили %q", item.BitrixDealTitle)
+	}
+}
+
+func TestCreateInternal_SyncsCompanyContractFromMappedBitrixPoint(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(
+		&user.User{},
+		&user.Role{},
+		&user.Integration{},
+		&company.Company{},
+		&contract.Contract{},
+		&models.CompanyContract{},
+		&tickets.Ticket{},
+		&tickets.TicketHistory{},
+		&bitrix.ServicePoint{},
+		&bitrix.CompanyServicePointMapping{},
+	); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	userRepo := repositories.NewUserRepo(db)
+	companyRepo := repositories.NewCompanyRepo(db)
+	contractRepo := repositories.NewContractRepo(db)
+	ticketRepo := repositories.NewTicketRepo(db)
+	bitrixRepo := repositories.NewBitrixRepo(db)
+
+	author := &user.User{Username: "author_contract_sync", PasswordHash: "hash", FullName: "Автор"}
+	assignee := &user.User{Username: "assignee_contract_sync", PasswordHash: "hash", FullName: "Исполнитель"}
+	if err := userRepo.Create(context.Background(), author); err != nil {
+		t.Fatalf("не удалось создать автора: %v", err)
+	}
+	if err := userRepo.Create(context.Background(), assignee); err != nil {
+		t.Fatalf("не удалось создать исполнителя: %v", err)
+	}
+
+	title := "Компания с синхронизацией договора"
+	activeContract := true
+	comp := &company.Company{
+		Title:          &title,
+		ActiveContract: &activeContract,
+	}
+	if err := companyRepo.Create(context.Background(), comp); err != nil {
+		t.Fatalf("не удалось создать компанию: %v", err)
+	}
+
+	oneCCode := "RU-777"
+	contractType := "TS Cloud"
+	contractOn := true
+	if err := db.Create(&bitrix.ServicePoint{
+		B24ElementID: 777,
+		Name:         "B24 Точка 777",
+		OneCCode:     &oneCCode,
+		ContractType: &contractType,
+		ContractOn:   &contractOn,
+	}).Error; err != nil {
+		t.Fatalf("не удалось создать точку B24: %v", err)
+	}
+	if err := bitrixRepo.UpsertCompanyServicePointMapping(context.Background(), &bitrix.CompanyServicePointMapping{
+		CompanyID:            comp.ID,
+		BitrixServicePointID: 777,
+	}); err != nil {
+		t.Fatalf("не удалось создать mapping: %v", err)
+	}
+
+	domainContractSvc := contractsvc.NewService(
+		logger.New("", "test", "error", true),
+		dbpkg.NewGormTransactor(db),
+		contractRepo,
+		companyRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	svc := NewTicketService(
+		nil,
+		ticketRepo,
+		userRepo,
+		companyRepo,
+		contractRepo,
+		nil,
+		&config.Config{CommonContractID: "common-contract", EnableBitrixGateway: true},
+		nil,
+		nil,
+		nil,
+		bitrixRepo,
+		nil,
+		nil,
+		nil,
+		domainContractSvc,
+	)
+
+	dto := api.TicketCreateInternalDTO{
+		Subject:     "Тест синхронизации договора",
+		Description: "Описание",
+		Type:        tickets.TypeIncident,
+		CompanyID:   comp.ID,
+		AssigneeID:  &assignee.ID,
+	}
+
+	item, err := svc.CreateInternal(context.Background(), dto, author.ID)
+	if err != nil {
+		t.Fatalf("не удалось создать тикет: %v", err)
+	}
+	if item.ContractID == nil || *item.ContractID == "" {
+		t.Fatalf("ожидали, что тикет получит контракт после синхронизации компании")
+	}
+
+	refreshedCompany, err := companyRepo.GetByID(context.Background(), comp.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать компанию: %v", err)
+	}
+	if refreshedCompany.ContractType == nil || *refreshedCompany.ContractType != "TS Cloud" {
+		t.Fatalf("ожидали тип контракта TS Cloud у компании, получили %v", refreshedCompany.ContractType)
 	}
 }
 
@@ -187,6 +310,7 @@ func TestChangeCompany_SavesBitrixCompanyServicePointMapping(t *testing.T) {
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -280,6 +404,7 @@ func TestUpdateBitrixFields_SavesBitrixCompanyServicePointMapping(t *testing.T) 
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	pointID := int64(888)
@@ -358,6 +483,7 @@ func TestCreateInternal_DoesNotSaveBitrixCompanyServicePointMappingForTemporaryS
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -474,6 +600,7 @@ func TestUpdateBitrixFields_DoesNotSaveBitrixCompanyServicePointMappingForTempor
 		nil,
 		nil,
 		bitrixRepo,
+		nil,
 		nil,
 		nil,
 		nil,

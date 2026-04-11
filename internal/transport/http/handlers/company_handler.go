@@ -198,6 +198,31 @@ func (h *CompanyHandler) ClearBitrixMapping(w http.ResponseWriter, r *http.Reque
 	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+func (h *CompanyHandler) SyncBitrixContract(w http.ResponseWriter, r *http.Request) {
+	var payload syncCompanyBitrixContractRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	companyID := strings.TrimSpace(payload.CompanyID)
+	if companyID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "company_id is required")
+		return
+	}
+
+	if err := h.service.SyncBitrixContract(r.Context(), companyID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var dto api.CompanyCreateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -348,6 +373,10 @@ type companyResponseDTO struct {
 type updateCompanyBitrixMappingRequest struct {
 	CompanyID            *string `json:"company_id"`
 	BitrixServicePointID *int64  `json:"bitrix_service_point_id"`
+}
+
+type syncCompanyBitrixContractRequest struct {
+	CompanyID string `json:"company_id"`
 }
 
 type companyBitrixMappingDTO struct {

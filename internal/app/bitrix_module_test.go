@@ -143,3 +143,7 @@ func (bitrixModuleCompanyServiceStub) GetBitrixMappingByCompanyID(context.Contex
 func (bitrixModuleCompanyServiceStub) UpdateBitrixMapping(context.Context, *string, *int64) error {
 	return nil
 }
+
+func (bitrixModuleCompanyServiceStub) SyncBitrixContract(context.Context, string) error {
+	return nil
+}

@@ -22,4 +22,5 @@ type Service interface {
 	ListBitrixMappings(ctx context.Context, term string, limit, offset int) ([]BitrixMappingRow, error)
 	GetBitrixMappingByCompanyID(ctx context.Context, companyID string) (*BitrixMappingRow, error)
 	UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error
+	SyncBitrixContract(ctx context.Context, companyID string) error
 }

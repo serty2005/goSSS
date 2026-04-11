@@ -342,16 +342,10 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 		}
 
 		if point, ok := pointsByID[mapping.BitrixServicePointID]; ok {
+			snapshot = contractsvc.BuildDailySnapshotFromBitrixServicePoint(mapping.CompanyID, point)
+			snapshot.SourceHash = sourceHash
 			pointContractType := contractsvc.NormalizeServicePointContractType(dereferenceString(point.ContractType))
 			pointContractKnown := point.ContractOn != nil || pointContractType != ""
-			snapshot.ServicePointName = point.Name
-			snapshot.ServicePointCode = dereferenceString(point.OneCCode)
-			snapshot.ContractorID = dereferenceString(point.OneCCode)
-			snapshot.ContractType = pointContractType
-			snapshot.Active = contractsvc.IsServicePointContractActive(point.ContractOn, pointContractType)
-			snapshot.StartDate = point.ContractStart
-			snapshot.EndDate = point.ContractEnd
-			snapshot.ClientOrder = dereferenceString(point.ClientOrder)
 
 			if row, matched := matchReportRowToPoint(point, rowsByCode, rowsByName); matched {
 				snapshot.ServicePointName = row.ServicePointName
@@ -422,7 +416,7 @@ func buildReportRowIndexes(rows []contractsvc.ContractReportRow) (map[string]con
 			}
 			rowsByCode[code] = row
 		}
-		name := normalizePointName(row.ServicePointName)
+		name := contractsvc.NormalizeServicePointName(row.ServicePointName)
 		if name != "" {
 			rowsByName[name] = append(rowsByName[name], row)
 		}
@@ -441,18 +435,12 @@ func matchReportRowToPoint(
 		}
 	}
 
-	matches := rowsByName[normalizePointName(point.Name)]
+	matches := rowsByName[contractsvc.NormalizeServicePointName(point.Name)]
 	if len(matches) == 1 {
 		return matches[0], true
 	}
 
 	return contractsvc.ContractReportRow{}, false
-}
-
-func normalizePointName(name string) string {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	normalized = strings.ReplaceAll(normalized, "ё", "е")
-	return strings.Join(strings.Fields(normalized), " ")
 }
 
 // nullableString возвращает nil для пустых строк перед сохранением в БД.

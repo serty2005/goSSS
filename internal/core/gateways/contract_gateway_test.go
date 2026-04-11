@@ -143,6 +143,61 @@ func TestContractGateway_BuildDailySnapshots_MatchesLegacyPointByUnprefixedCode(
 	}
 }
 
+func TestContractGateway_BuildDailySnapshots_MatchesPointByNormalizedName(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(gatewayTestSQLiteDSN(t)), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(&bitrix.ServicePoint{}, &bitrix.CompanyServicePointMapping{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := context.Background()
+	bitrixRepo := repositories.NewBitrixRepo(db)
+
+	if err := db.Create(&bitrix.ServicePoint{
+		B24ElementID: 503,
+		Name:         `  Кафе  "Уют"  `,
+	}).Error; err != nil {
+		t.Fatalf("не удалось создать точку Bitrix24: %v", err)
+	}
+	if err := bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
+		CompanyID:            "company-3",
+		BitrixServicePointID: 503,
+	}); err != nil {
+		t.Fatalf("не удалось создать mapping: %v", err)
+	}
+
+	gateway := &contractGatewayImpl{bitrixRepo: bitrixRepo}
+	rows := []contractsvc.ContractReportRow{
+		{
+			ContractorID:     "contractor-3",
+			ServicePointCode: "",
+			ServicePointName: "кафе уют",
+			ContractType:     "TS Cloud",
+			ContractOn:       true,
+		},
+	}
+
+	snapshots, stats, err := gateway.buildDailySnapshots(ctx, "hash-3", rows)
+	if err != nil {
+		t.Fatalf("buildDailySnapshots завершился ошибкой: %v", err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("ожидали один снимок, получили %d", len(snapshots))
+	}
+	if stats.MatchedRows != 1 {
+		t.Fatalf("ожидали матчинг по нормализованному имени, получили %d", stats.MatchedRows)
+	}
+	if snapshots[0].ServicePointName != "кафе уют" {
+		t.Fatalf("ожидали имя точки из строки отчёта, получили %q", snapshots[0].ServicePointName)
+	}
+	if snapshots[0].ContractType != "TS Cloud" {
+		t.Fatalf("ожидали контракт TS Cloud, получили %q", snapshots[0].ContractType)
+	}
+}
+
 func gatewayTestSQLiteDSN(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf(

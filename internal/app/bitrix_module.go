@@ -71,6 +71,7 @@ func (m *bitrixModule) registerCompanyRoutes(r chi.Router, companyHandler *handl
 	}
 	r.Get("/bitrix-service-point-mappings", companyHandler.ListBitrixMappings)
 	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/bitrix-service-point-mappings", companyHandler.UpdateBitrixMapping)
+	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/bitrix-service-point-mappings/sync-contract", companyHandler.SyncBitrixContract)
 	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/bitrix-service-point-mappings", companyHandler.ClearBitrixMapping)
 }
 

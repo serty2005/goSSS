@@ -2,14 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, List, message, Select, Space, Spin, Table, Tag, Tabs, Tooltip, Typography } from 'antd';
-import { BankOutlined, CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
+import { BankOutlined, CheckOutlined, CloseOutlined, SwapOutlined, SyncOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
 import { CompanyBitrixMappingRowDTO, CompanyModel } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
-import { cancelDraft, createInitialDraft, isDraftDirty, MappingDraft, toggleDirection } from './companyBitrixMappingState';
+import { cancelDraft, createInitialDraft, formatMappedServicePointLabel, isDraftDirty, MappingDraft, toggleDirection } from './companyBitrixMappingState';
 
 const { Title, Text } = Typography;
 
@@ -26,6 +26,7 @@ const CompaniesListPage: React.FC = () => {
   const [companyLookupTerm, setCompanyLookupTerm] = useState('');
   const [servicePointLookupTerm, setServicePointLookupTerm] = useState('');
   const [drafts, setDrafts] = useState<Record<string, MappingDraft>>({});
+  const [syncingCompanyID, setSyncingCompanyID] = useState<string | null>(null);
   const companiesLimit = 20;
   const companiesLoadMoreRef = useRef<HTMLDivElement | null>(null);
 
@@ -118,6 +119,19 @@ const CompaniesListPage: React.FC = () => {
     },
   });
 
+  const syncContractMutation = useMutation({
+    mutationFn: (companyId: string) => companiesApi.syncBitrixContract(companyId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
+      queryClient.invalidateQueries({ queryKey: ['companies', 'list'] });
+      message.success('Контракт компании синхронизирован из точки Bitrix24');
+    },
+    onError: (error: any) => {
+      const apiMessage = error?.response?.data?.error?.error;
+      message.error(apiMessage || 'Не удалось синхронизировать контракт компании');
+    },
+  });
+
   const applyDraft = async (row: CompanyBitrixMappingRowDTO) => {
     const draft = drafts[row.company_id];
     if (!draft) return;
@@ -134,6 +148,15 @@ const CompaniesListPage: React.FC = () => {
       company_id: draft.companyId,
       bitrix_service_point_id: draft.pointId,
     });
+  };
+
+  const syncContractForRow = async (row: CompanyBitrixMappingRowDTO) => {
+    setSyncingCompanyID(row.company_id);
+    try {
+      await syncContractMutation.mutateAsync(row.company_id);
+    } finally {
+      setSyncingCompanyID(null);
+    }
   };
 
   const mappings = mappingsData?.data || [];
@@ -238,13 +261,22 @@ const CompaniesListPage: React.FC = () => {
       render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
         const draft = drafts[row.company_id];
         const isCompanyToPoint = draft?.direction !== 'point_to_company';
+        const mappedPointLabel = formatMappedServicePointLabel({
+          bitrix_service_point_id: draft?.pointId,
+          bitrix_service_point_name: row.bitrix_service_point_name,
+          bitrix_service_point_code: row.bitrix_service_point_code,
+          bitrix_service_point_enabled: row.bitrix_service_point_enabled,
+        });
         if (isCompanyToPoint) {
+          const fallbackOptions = draft?.pointId && !servicePointOptions.some((option) => option.value === draft.pointId)
+            ? [{ value: draft.pointId, label: mappedPointLabel }, ...servicePointOptions]
+            : servicePointOptions;
           return (
             <Select
               allowClear
               showSearch
               value={draft?.pointId}
-              options={servicePointOptions}
+              options={fallbackOptions}
               onSearch={setServicePointLookupTerm}
               onChange={(value) => {
                 setDrafts((prev) => ({
@@ -267,39 +299,55 @@ const CompaniesListPage: React.FC = () => {
         }
 
         const item = servicePointOptions.find((option) => option.value === draft.pointId);
-        return <Text>{item?.label || `ID: ${draft.pointId}`}</Text>;
+        return <Text>{item?.label || mappedPointLabel}</Text>;
       },
     },
     {
       title: 'Действия',
       key: 'actions',
-      width: 110,
+      width: 180,
       render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
         const draft = drafts[row.company_id];
-        if (!draft || !isDraftDirty(draft)) {
+        if (!draft) {
           return null;
         }
+        const dirty = isDraftDirty(draft);
+        const hasSavedMapping = Boolean(draft.originalPointId && draft.originalCompanyId === row.company_id);
         return (
           <Space>
-            <Tooltip title="Применить">
-              <Button
-                type="primary"
-                icon={<CheckOutlined />}
-                loading={updateMutation.isPending}
-                onClick={() => void applyDraft(row)}
-              />
-            </Tooltip>
-            <Tooltip title="Отмена">
-              <Button
-                icon={<CloseOutlined />}
-                onClick={() => {
-                  setDrafts((prev) => ({
-                    ...prev,
-                    [row.company_id]: cancelDraft(prev[row.company_id]),
-                  }));
-                }}
-              />
-            </Tooltip>
+            {hasSavedMapping && (
+              <Tooltip title={dirty ? 'Сначала сохраните или отмените изменения сопоставления' : 'Синхронизировать контракт компании из точки Bitrix24'}>
+                <Button
+                  icon={<SyncOutlined />}
+                  disabled={dirty}
+                  loading={syncContractMutation.isPending && syncingCompanyID === row.company_id}
+                  onClick={() => void syncContractForRow(row)}
+                />
+              </Tooltip>
+            )}
+            {dirty && (
+              <Tooltip title="Применить">
+                <Button
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  loading={updateMutation.isPending}
+                  onClick={() => void applyDraft(row)}
+                />
+              </Tooltip>
+            )}
+            {dirty && (
+              <Tooltip title="Отмена">
+                <Button
+                  icon={<CloseOutlined />}
+                  onClick={() => {
+                    setDrafts((prev) => ({
+                      ...prev,
+                      [row.company_id]: cancelDraft(prev[row.company_id]),
+                    }));
+                  }}
+                />
+              </Tooltip>
+            )}
           </Space>
         );
       },
