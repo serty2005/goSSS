@@ -9,6 +9,7 @@ import (
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
@@ -47,6 +48,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&fiscal.FiscalRegister{},
 		&contract.Contract{},
 		&contract.MailImport{},
+		&contract.ServicePointSyncRun{},
 		&contract.ServicePointSyncConflict{},
 		&models.AgentFile{},
 		&models.ReconciliationTask{},
@@ -73,6 +75,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&models.Material{},
 		&models.MaterialLink{},
 		&models.ExternalSystemLink{},
+		&models.AppLocalization{},
 		&models.EquipmentStatusLog{},
 		&bitrix.DealLink{},
 		&bitrix.CommentLink{},
@@ -82,6 +85,16 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&bitrix.UserCache{},
 		&bitrix.CompanyServicePointMapping{},
 		&bitrix.IncomingEvent{},
+		&telephony.ProviderEmployee{},
+		&telephony.IncomingEvent{},
+		&telephony.Call{},
+		&telephony.CallHistorySyncWindow{},
+		&telephony.CallEvent{},
+		&telephony.CallArtifact{},
+		&telephony.CallTicketLink{},
+		&telephony.PendingContext{},
+		&telephony.Contact{},
+		&telephony.ContactCompanyLink{},
 		&pyrus.TicketLink{},
 		&pyrus.CommentLink{},
 		&pyrus.FileLink{},

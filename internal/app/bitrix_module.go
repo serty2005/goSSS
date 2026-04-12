@@ -69,8 +69,9 @@ func (m *bitrixModule) registerCompanyRoutes(r chi.Router, companyHandler *handl
 	if !m.Enabled() || companyHandler == nil {
 		return
 	}
-	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/bitrix-service-point-mappings", companyHandler.ListBitrixMappings)
+	r.Get("/bitrix-service-point-mappings", companyHandler.ListBitrixMappings)
 	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/bitrix-service-point-mappings", companyHandler.UpdateBitrixMapping)
+	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/bitrix-service-point-mappings/sync-contract", companyHandler.SyncBitrixContract)
 	r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/bitrix-service-point-mappings", companyHandler.ClearBitrixMapping)
 }
 
@@ -81,6 +82,7 @@ func (m *bitrixModule) registerProtectedRoutes(r chi.Router) {
 	r.Route("/bitrix", func(r chi.Router) {
 		r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/service-points", m.bitrixHandler.ListServicePoints)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/service-points/contract-sync/state", m.bitrixHandler.GetContractSyncState)
+		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/service-points/contract-sync/runs/{runID}", m.bitrixHandler.GetContractSyncRun)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/contract-sync/refresh", m.bitrixHandler.RefreshContractSyncState)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/service-points/contract-sync/execute", m.bitrixHandler.ExecuteContractSync)
 		r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/users/suggest", m.bitrixHandler.SuggestUser)

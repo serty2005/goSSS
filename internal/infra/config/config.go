@@ -13,6 +13,29 @@ import (
 	"github.com/joho/godotenv"
 )
 
+type S3Config struct {
+	Endpoint  string
+	Region    string
+	AccessKey string
+	SecretKey string
+}
+
+type AgentAdapterCatalogConfig struct {
+	Enabled        bool
+	Bucket         string
+	PublicBaseURL  string
+	CatalogKey     string
+	SyncInterval   time.Duration
+	DefaultChannel string
+}
+
+type MegafonVATSRecordingsConfig struct {
+	Enabled       bool
+	Bucket        string
+	PublicBaseURL string
+	RetentionDays int
+}
+
 // Config хранит всю конфигурацию приложения.
 type Config struct {
 	ServerPort         string
@@ -32,16 +55,8 @@ type Config struct {
 	AdminPassword    string
 	AdminFullName    string
 
-	AgentAdapterS3Enabled      bool
-	AgentAdapterS3Endpoint     string
-	AgentAdapterS3Region       string
-	AgentAdapterS3Bucket       string
-	AgentAdapterS3AccessKey    string
-	AgentAdapterS3SecretKey    string
-	AgentAdapterPublicBaseURL  string
-	AgentAdapterCatalogKey     string
-	AgentAdapterSyncInterval   time.Duration
-	AgentAdapterDefaultChannel string
+	S3                  S3Config
+	AgentAdapterCatalog AgentAdapterCatalogConfig
 
 	ServiceDeskBaseURL string
 	ServiceDeskKey     string
@@ -54,14 +69,16 @@ type Config struct {
 	SDeskSyncInterval  time.Duration
 	TicketStoragePath  string
 
-	EnableContractGateway bool
-	ContractSyncInterval  time.Duration
-	ContractIMAPHost      string
-	ContractIMAPPort      int
-	ContractIMAPUsername  string
-	ContractIMAPPassword  string
-	ContractIMAPMailbox   string
-	ContractZipMaxBytes   int
+	EnableContractGateway              bool
+	ContractSyncInterval               time.Duration
+	EnableContractBitrixAutoSync       bool
+	ContractBitrixAutoSyncApplyDeletes bool
+	ContractIMAPHost                   string
+	ContractIMAPPort                   int
+	ContractIMAPUsername               string
+	ContractIMAPPassword               string
+	ContractIMAPMailbox                string
+	ContractZipMaxBytes                int
 
 	CommonContractID string
 
@@ -110,6 +127,7 @@ type Config struct {
 	BitrixIncomingMaxAttempts   int
 	BitrixSuppressTTL           time.Duration
 	BitrixIntegrationUserID     int64
+	BitrixTestCompanyIDs        []int64
 
 	EnablePyrusGateway       bool
 	PyrusAPIBaseURL          string
@@ -125,6 +143,19 @@ type Config struct {
 	PyrusIncomingRetryMax    time.Duration
 	PyrusIncomingMaxAttempts int
 	PyrusSuppressTTL         time.Duration
+
+	EnableMegafonVATS              bool
+	MegafonVATSBaseURL             string
+	MegafonVATSAPIKey              string
+	MegafonVATSCRMToken            string
+	MegafonVATSSyncInterval        time.Duration
+	MegafonVATSEventsStreamName    string
+	MegafonVATSEventsConsumerGroup string
+	MegafonVATSIncomingParallelism int
+	MegafonVATSIncomingMaxAttempts int
+	MegafonVATSRetryBase           time.Duration
+	MegafonVATSRetryMax            time.Duration
+	MegafonVATSRecordings          MegafonVATSRecordingsConfig
 
 	RedisAddr     string
 	RedisPassword string
@@ -143,15 +174,6 @@ func New() *Config {
 		bitrixIntegrationUserID = detectBitrixIntegrationUserID(bitrixBaseURL)
 	}
 
-	contractSyncHours := getEnvAsInt("CONTRACT_SYNC_INTERVAL_HOURS", 0)
-	if contractSyncHours <= 0 {
-		legacyMinutes := getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 30)
-		contractSyncHours = max(1, legacyMinutes/60)
-		if legacyMinutes > 0 && contractSyncHours == 0 {
-			contractSyncHours = 1
-		}
-	}
-
 	return &Config{
 		ServerPort:         getEnv("PORT", "8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/etalon_db?sslmode=disable"),
@@ -161,24 +183,28 @@ func New() *Config {
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
-		AgentAPIKey:                getEnv("AGENT_API_KEY", ""),
-		BrandName:                  getEnv("BRAND_NAME", "MyHoreca_Xenion"),
-		SeederKey:                  getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
-		JWTSecret:                  getEnv("JWT_SECRET", "mhrcadmin994525"),
-		JWTExpirationMin:           getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
-		AdminUsername:              getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword:              getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
-		AdminFullName:              getEnv("ADMIN_FULLNAME", "Главный"),
-		AgentAdapterS3Enabled:      getEnvAsBool("AGENT_ADAPTER_S3_ENABLED", false),
-		AgentAdapterS3Endpoint:     strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_ENDPOINT", "")),
-		AgentAdapterS3Region:       strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_REGION", "us-east-1")),
-		AgentAdapterS3Bucket:       strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_BUCKET", "agents")),
-		AgentAdapterS3AccessKey:    strings.TrimSpace(getEnv("AGENT_ADAPTER_S3_ACCESS_KEY", "")),
-		AgentAdapterS3SecretKey:    getEnv("AGENT_ADAPTER_S3_SECRET_KEY", ""),
-		AgentAdapterPublicBaseURL:  strings.TrimRight(strings.TrimSpace(getEnv("AGENT_ADAPTER_PUBLIC_BASE_URL", "")), "/"),
-		AgentAdapterCatalogKey:     strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_KEY", "catalog/index.json")),
-		AgentAdapterSyncInterval:   time.Duration(max(1, getEnvAsInt("AGENT_ADAPTER_SYNC_INTERVAL_MIN", 5))) * time.Minute,
-		AgentAdapterDefaultChannel: strings.ToLower(strings.TrimSpace(getEnv("AGENT_ADAPTER_DEFAULT_CHANNEL", "stable"))),
+		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
+		BrandName:        getEnv("BRAND_NAME", "MyHoreca_Xenion"),
+		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
+		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
+		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
+		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
+		S3: S3Config{
+			Endpoint:  strings.TrimSpace(getEnv("S3_ENDPOINT", "")),
+			Region:    strings.TrimSpace(getEnv("S3_REGION", "us-east-1")),
+			AccessKey: strings.TrimSpace(getEnv("S3_ACCESS_KEY", "")),
+			SecretKey: getEnv("S3_SECRET_KEY", ""),
+		},
+		AgentAdapterCatalog: AgentAdapterCatalogConfig{
+			Enabled:        getEnvAsBool("AGENT_ADAPTER_CATALOG_ENABLED", false),
+			Bucket:         strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_BUCKET", "agents")),
+			PublicBaseURL:  strings.TrimRight(strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL", "")), "/"),
+			CatalogKey:     strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_KEY", "catalog/index.json")),
+			SyncInterval:   time.Duration(max(1, getEnvAsInt("AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN", 5))) * time.Minute,
+			DefaultChannel: strings.ToLower(strings.TrimSpace(getEnv("AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL", "stable"))),
+		},
 
 		ServiceDeskBaseURL: getEnv("BASE_URL", "https://servicedesk.example.com"),
 		ServiceDeskKey:     getEnv("SDKEY", ""),
@@ -191,14 +217,16 @@ func New() *Config {
 		SDeskSyncInterval:  time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
-		EnableContractGateway: getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
-		ContractSyncInterval:  time.Duration(contractSyncHours) * time.Hour,
-		ContractIMAPHost:      strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
-		ContractIMAPPort:      getEnvAsInt("CONTRACT_IMAP_PORT", 993),
-		ContractIMAPUsername:  strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
-		ContractIMAPPassword:  getEnv("CONTRACT_IMAP_PASSWORD", ""),
-		ContractIMAPMailbox:   strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
-		ContractZipMaxBytes:   getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
+		EnableContractGateway:              getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
+		ContractSyncInterval:               time.Duration(max(1, getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 720))) * time.Minute,
+		EnableContractBitrixAutoSync:       getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC", false),
+		ContractBitrixAutoSyncApplyDeletes: getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC_DELETES", false),
+		ContractIMAPHost:                   strings.TrimSpace(getEnv("CONTRACT_IMAP_HOST", "")),
+		ContractIMAPPort:                   getEnvAsInt("CONTRACT_IMAP_PORT", 993),
+		ContractIMAPUsername:               strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
+		ContractIMAPPassword:               getEnv("CONTRACT_IMAP_PASSWORD", ""),
+		ContractIMAPMailbox:                strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
+		ContractZipMaxBytes:                getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
 
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 
@@ -247,6 +275,7 @@ func New() *Config {
 		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
 		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
 		BitrixIntegrationUserID:     bitrixIntegrationUserID,
+		BitrixTestCompanyIDs:        getEnvAsInt64Slice("BITRIX_TEST_COMPANY_IDS"),
 
 		EnablePyrusGateway:       getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),
 		PyrusAPIBaseURL:          normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
@@ -262,6 +291,24 @@ func New() *Config {
 		PyrusIncomingRetryMax:    time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
 		PyrusIncomingMaxAttempts: getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
 		PyrusSuppressTTL:         time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
+
+		EnableMegafonVATS:              getEnvAsBool("ENABLE_MEGAFON_VATS", false),
+		MegafonVATSBaseURL:             normalizeAPIBaseURL(getEnv("MEGAFON_VATS_BASE_URL", "")),
+		MegafonVATSAPIKey:              strings.TrimSpace(getEnv("MEGAFON_VATS_API_KEY", "")),
+		MegafonVATSCRMToken:            strings.TrimSpace(getEnv("MEGAFON_VATS_CRM_TOKEN", "")),
+		MegafonVATSSyncInterval:        getEnvAsDuration("MEGAFON_VATS_SYNC_INTERVAL", 5*time.Minute),
+		MegafonVATSEventsStreamName:    strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_STREAM_NAME", "megafon_vats:events")),
+		MegafonVATSEventsConsumerGroup: strings.TrimSpace(getEnv("MEGAFON_VATS_EVENTS_CONSUMER_GROUP", "megafon-vats-workers")),
+		MegafonVATSIncomingParallelism: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_PARALLELISM", 4)),
+		MegafonVATSIncomingMaxAttempts: max(1, getEnvAsInt("MEGAFON_VATS_INCOMING_MAX_ATTEMPTS", 10)),
+		MegafonVATSRetryBase:           time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_BASE_MS", 500))) * time.Millisecond,
+		MegafonVATSRetryMax:            time.Duration(max(1, getEnvAsInt("MEGAFON_VATS_RETRY_MAX_MS", 30000))) * time.Millisecond,
+		MegafonVATSRecordings: MegafonVATSRecordingsConfig{
+			Enabled:       getEnvAsBool("MEGAFON_VATS_RECORDINGS_ENABLED", false),
+			Bucket:        strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_BUCKET", "telephony-recordings")),
+			PublicBaseURL: strings.TrimRight(strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_PUBLIC_BASE_URL", "")), "/"),
+			RetentionDays: max(1, getEnvAsInt("MEGAFON_VATS_RECORDINGS_RETENTION_DAYS", 7)),
+		},
 
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
@@ -344,6 +391,39 @@ func getEnvAsBool(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func getEnvAsDuration(key string, fallback time.Duration) time.Duration {
+	if valueStr := strings.TrimSpace(getEnv(key, "")); valueStr != "" {
+		if value, err := time.ParseDuration(valueStr); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
+
+func getEnvAsInt64Slice(key string) []int64 {
+	raw := strings.TrimSpace(getEnv(key, ""))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			continue
+		}
+		result = append(result, parsed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func normalizeAPIBaseURL(raw string) string {

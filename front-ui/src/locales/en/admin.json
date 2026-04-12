@@ -1,0 +1,41 @@
+{
+  "translations": {
+    "title": "Translations",
+    "subtitle": "Global interface translations and languages for all users.",
+    "language": "Language",
+    "value": "Translation",
+    "valuePlaceholder": "Enter translated text",
+    "saved": "Translation saved",
+    "saveError": "Failed to save translation",
+    "delete": "Delete override",
+    "deleted": "Override deleted",
+    "deleteError": "Failed to delete override",
+    "search": "Search",
+    "searchPlaceholder": "Enter visible text or a key",
+    "empty": "No translations found.",
+    "loadingMore": "Showing {{loaded}} of {{total}} translations. Scroll down to load more.",
+    "help": "Changes are saved globally. New languages become available to everyone, and users switch to them in their profile.",
+    "addLanguage": "Add language",
+    "addLanguageTitle": "New language",
+    "languageCode": "Language code",
+    "languageCodePlaceholder": "For example: de",
+    "languageLabel": "Label",
+    "languageLabelPlaceholder": "For example: German",
+    "languageNativeLabel": "Native label",
+    "languageNativeLabelPlaceholder": "For example: Deutsch",
+    "languageCreated": "Language added",
+    "createLanguageError": "Failed to add language",
+    "validation": {
+      "valueRequired": "Enter translated text",
+      "codeRequired": "Enter language code",
+      "labelRequired": "Enter language label",
+      "languageExists": "This language already exists"
+    },
+    "table": {
+      "key": "Key",
+      "source": "Visible text",
+      "translation": "New translation",
+      "actions": "Actions"
+    }
+  }
+}

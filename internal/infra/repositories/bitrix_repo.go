@@ -139,6 +139,9 @@ func (r *bitrixRepo) ReplaceServicePoints(ctx context.Context, points []bitrix.S
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name",
 				"address",
+				"one_c_code",
+				"one_c_contract_on",
+				"contract_type",
 				"raw_json",
 				"updated_at",
 			}),
@@ -280,10 +283,21 @@ func (r *bitrixRepo) UpsertCompanyServicePointMapping(ctx context.Context, item 
 	if item == nil {
 		return nil
 	}
-	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "company_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"bitrix_service_point_id", "updated_at"}),
-	}).Create(item).Error
+	item.CompanyID = strings.TrimSpace(item.CompanyID)
+	if item.CompanyID == "" || item.BitrixServicePointID <= 0 {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.
+			Where("bitrix_service_point_id = ? AND company_id <> ?", item.BitrixServicePointID, item.CompanyID).
+			Delete(&bitrix.CompanyServicePointMapping{}).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "company_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"bitrix_service_point_id", "updated_at"}),
+		}).Create(item).Error
+	})
 }
 
 func (r *bitrixRepo) ListCompanyServicePointMappings(ctx context.Context) ([]bitrix.CompanyServicePointMapping, error) {

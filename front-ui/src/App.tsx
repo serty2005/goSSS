@@ -3,9 +3,12 @@ import { App as AntdApp, ConfigProvider, Spin, message } from 'antd';
 import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+import { translationsApi } from '@/api/translations';
+import { syncCustomTranslationResources } from '@/i18n/customTranslations';
 import { useAppLocale } from '@/i18n/useAppLocale';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
+import { useLocalizationStore } from '@/store/localizationStore';
 import { getThemeConfig, getThemeCssVariables, resolveThemePalette } from '@/theme/themeConfig';
 import { paletteFromProfileConfig } from '@/theme/profileConfig';
 import { SSEProvider } from '@/features/realtime/SSEProvider';
@@ -17,6 +20,7 @@ const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const TasksPage = lazy(() => import('@/pages/TasksPage'));
 const TicketsPage = lazy(() => import('@/pages/TicketsPage'));
 const TicketDetailsPage = lazy(() => import('@/pages/TicketDetailsPage'));
+const TelephonyUserCallsPage = lazy(() => import('@/pages/telephony/TelephonyUserCallsPage'));
 const CompanyPage = lazy(() => import('@/pages/companies/CompanyPage'));
 const CompaniesListPage = lazy(() => import('@/pages/companies/CompaniesListPage'));
 const AcceptancePage = lazy(() => import('@/pages/candidates/AcceptancePage'));
@@ -29,6 +33,8 @@ const ServersPage = lazy(() => import('@/pages/equipment/ServersPage'));
 const WorkstationsPage = lazy(() => import('@/pages/equipment/WorkstationsPage'));
 const FiscalsPage = lazy(() => import('@/pages/equipment/FiscalsPage'));
 const UsersAdminPage = lazy(() => import('@/pages/admin/UsersAdminPage'));
+const AdminTranslationsPage = lazy(() => import('@/pages/admin/AdminTranslationsPage'));
+const AdminTelephonyPage = lazy(() => import('@/pages/admin/AdminTelephonyPage'));
 const AdminSynchronizationsPage = lazy(() => import('@/pages/admin/AdminSynchronizationsPage'));
 const ServicePointsImportPage = lazy(() => import('@/pages/admin/ServicePointsImportPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
@@ -83,8 +89,12 @@ const SupportOrAdminRoute = ({ children }: { children: React.ReactNode }) => {
 
 const App: React.FC = () => {
   const { antdLocale } = useAppLocale();
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const themeMode = useUiStore((state) => state.themeMode);
   const profileConfig = useAuthStore((state) => state.user?.profile_config);
+  const localizationCatalog = useLocalizationStore((state) => state.catalog);
+  const setLocalizationCatalog = useLocalizationStore((state) => state.setCatalog);
+  const resetLocalizationCatalog = useLocalizationStore((state) => state.resetCatalog);
   const paletteByMode = paletteFromProfileConfig(profileConfig, themeMode);
   const resolvedPalette = resolveThemePalette(themeMode, paletteByMode);
   const getInlineMessageContainer = useCallback(() => resolveInlineMessageHost(), []);
@@ -100,6 +110,35 @@ const App: React.FC = () => {
       root.style.setProperty(name, value);
     });
   }, [themeMode, paletteByMode]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      resetLocalizationCatalog();
+      return;
+    }
+
+    let cancelled = false;
+
+    void translationsApi.getCatalog()
+      .then((response) => {
+        if (!cancelled) {
+          setLocalizationCatalog((response as any)?.data || null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          resetLocalizationCatalog();
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, resetLocalizationCatalog, setLocalizationCatalog]);
+
+  useEffect(() => {
+    syncCustomTranslationResources(localizationCatalog);
+  }, [localizationCatalog]);
 
   useEffect(() => {
     message.config({
@@ -147,6 +186,14 @@ const App: React.FC = () => {
                     />
                     <Route path="tickets" element={<TicketsPage />} />
                     <Route path="tickets/:id" element={<TicketDetailsPage />} />
+                    <Route
+                      path="telephony/users/:id/calls"
+                      element={(
+                        <SupportOrAdminRoute>
+                          <TelephonyUserCallsPage />
+                        </SupportOrAdminRoute>
+                      )}
+                    />
                     <Route path="profile" element={<ProfilePage />} />
 
                     <Route path="companies" element={<CompaniesListPage />} />
@@ -226,10 +273,26 @@ const App: React.FC = () => {
                       )}
                     />
                     <Route
+                      path="admin/translations"
+                      element={(
+                        <AdminRoute>
+                          <AdminTranslationsPage />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
                       path="admin/synchronizations"
                       element={(
                         <AdminRoute>
                           <AdminSynchronizationsPage />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="admin/telephony"
+                      element={(
+                        <AdminRoute>
+                          <AdminTelephonyPage />
                         </AdminRoute>
                       )}
                     />

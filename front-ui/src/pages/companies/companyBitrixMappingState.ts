@@ -13,6 +13,13 @@ export interface MappingRowSource {
   bitrix_service_point_id?: number;
 }
 
+export interface MappedServicePointSource {
+  bitrix_service_point_id?: number;
+  bitrix_service_point_name?: string;
+  bitrix_service_point_code?: string;
+  bitrix_service_point_enabled?: boolean;
+}
+
 export const createInitialDraft = (row: MappingRowSource): MappingDraft => ({
   direction: 'company_to_point',
   originalCompanyId: row.company_id || undefined,
@@ -40,3 +47,26 @@ export const cancelDraft = (draft: MappingDraft): MappingDraft => ({
   companyId: draft.originalCompanyId,
   pointId: draft.originalPointId,
 });
+
+export const formatMappedServicePointLabel = (source: MappedServicePointSource): string => {
+  const parts: string[] = [];
+  const name = source.bitrix_service_point_name?.trim();
+  const code = source.bitrix_service_point_code?.trim();
+
+  if (name) {
+    parts.push(name);
+  }
+  if (code) {
+    parts.push(`код 1С: ${code}`);
+  }
+  if (typeof source.bitrix_service_point_enabled === 'boolean') {
+    parts.push(`контракт: ${source.bitrix_service_point_enabled ? 'активен' : 'нет'}`);
+  }
+  if (parts.length > 0) {
+    return parts.join(' · ');
+  }
+  if (source.bitrix_service_point_id) {
+    return `ID: ${source.bitrix_service_point_id}`;
+  }
+  return 'Точка B24 не выбрана';
+};

@@ -95,6 +95,9 @@ const (
 	// Подписчики: UI через WebSocket для обновления в реальном времени.
 	// Payload: ID тикета.
 	TicketUpdated = "ticket.updated"
+	// TelephonyLineUpdated — событие обновления агрегированного состояния линии телефонии.
+	// Payload: TelephonyLineUpdatedPayload.
+	TelephonyLineUpdated = "telephony.line.updated"
 	// AgentObservationUpdated — событие обновления наблюдения агента для UI-ленты.
 	// Публикуется после успешного применения наблюдения от агента.
 	AgentObservationUpdated = "agent.observation.updated"
@@ -153,6 +156,26 @@ type TicketUpdatedPayload struct {
 	OccurredAt      time.Time `json:"occurred_at"`
 	RecipientUserID *uint     `json:"recipient_user_id,omitempty"`
 	ActorUserID     *uint     `json:"actor_user_id,omitempty"`
+}
+
+// TelephonyLineEmployeePayload описывает сотрудника в агрегированном состоянии линии.
+type TelephonyLineEmployeePayload struct {
+	UserID       *uint   `json:"user_id,omitempty"`
+	Login        string  `json:"login"`
+	Name         string  `json:"name"`
+	Status       string  `json:"status"`
+	Provider     string  `json:"provider"`
+	ProviderExt  *string `json:"provider_ext,omitempty"`
+	ProviderLine *string `json:"provider_line,omitempty"`
+}
+
+// TelephonyLineUpdatedPayload описывает текущее агрегированное состояние линии телефонии.
+type TelephonyLineUpdatedPayload struct {
+	Color             string                        `json:"color"`
+	OnLineCount       int                           `json:"on_line_count"`
+	MissedOpenCount   int                           `json:"missed_open_count"`
+	Employees         []TelephonyLineEmployeePayload `json:"employees"`
+	OccurredAt        time.Time                     `json:"occurred_at,omitzero"`
 }
 
 // AgentObservationUpdatedPayload описывает актуальное состояние агента для UI-ленты наблюдений.

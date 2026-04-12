@@ -24,6 +24,9 @@ type Repository interface {
 	GetMailImportByAttachmentHash(ctx context.Context, attachmentHash string) (*MailImport, error)
 	ListMailImports(ctx context.Context, limit int) ([]MailImport, error)
 	UpsertMailImport(ctx context.Context, item *MailImport) error
+	CreateServicePointSyncRun(ctx context.Context, item *ServicePointSyncRun) error
+	ListServicePointSyncRuns(ctx context.Context, limit int) ([]ServicePointSyncRun, error)
+	GetServicePointSyncRunByID(ctx context.Context, id string) (*ServicePointSyncRun, error)
 	ListServicePointSyncConflicts(ctx context.Context) ([]ServicePointSyncConflict, error)
 	ReplaceServicePointSyncConflicts(ctx context.Context, conflicts []ServicePointSyncConflict) error
 }

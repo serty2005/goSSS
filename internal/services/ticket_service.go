@@ -15,6 +15,7 @@ import (
 	"etalon-server/internal/domain/pyrus"
 	domainrepos "etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
@@ -22,6 +23,7 @@ import (
 	"etalon-server/internal/infra/external"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
+	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
 	"io"
@@ -110,7 +112,9 @@ type ticketServiceImpl struct {
 	frRepo           fiscal.Repository
 	bitrixRepo       bitrix.Repository
 	pyrusRepo        pyrus.Repository
+	telephonyRepo    telephony.Repository
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo
+	contractService  contract.Service
 }
 
 var ErrReporterNotFound = errors.New("пользователь-автор не найден")
@@ -132,7 +136,9 @@ func NewTicketService(
 	frRepo fiscal.Repository,
 	bitrixRepo bitrix.Repository,
 	pyrusRepo pyrus.Repository,
+	telephonyRepo telephony.Repository,
 	ownerHistoryRepo domainrepos.OwnerHistoryRepo,
+	contractService contract.Service,
 ) TicketService {
 	return &ticketServiceImpl{
 		logger:           logger,
@@ -148,7 +154,9 @@ func NewTicketService(
 		frRepo:           frRepo,
 		bitrixRepo:       bitrixRepo,
 		pyrusRepo:        pyrusRepo,
+		telephonyRepo:    telephonyRepo,
 		ownerHistoryRepo: ownerHistoryRepo,
+		contractService:  contractService,
 	}
 }
 
@@ -218,6 +226,19 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if err != nil {
 		return nil, err
 	}
+	mappedBitrixServicePointID, err := s.resolveMappedBitrixServicePointID(ctx, dto.CompanyID)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", err)
+	}
+	contractSyncPointID := dto.BitrixServicePointID
+	if !isValidBitrixServicePointID(contractSyncPointID) {
+		contractSyncPointID = mappedBitrixServicePointID
+	}
+	if syncedCompany, err := s.syncCompanyContractFromBitrixPoint(ctx, dto.CompanyID, contractSyncPointID); err != nil {
+		return nil, fmt.Errorf("не удалось синхронизировать контракт компании по точке Bitrix24: %w", err)
+	} else if syncedCompany != nil {
+		ownerCompany = syncedCompany
+	}
 
 	syncWithBitrix := true
 	if dto.SyncWithBitrix != nil {
@@ -230,17 +251,10 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		syncWithBitrix = false
 	}
 	resolvedBitrixServicePointID := dto.BitrixServicePointID
-	if syncWithBitrix && (resolvedBitrixServicePointID == nil || *resolvedBitrixServicePointID <= 0) {
-		mapping, mappingErr := s.bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, dto.CompanyID)
-		if mappingErr != nil {
-			return nil, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", mappingErr)
-		}
-		if mapping != nil && mapping.BitrixServicePointID > 0 {
-			mappedID := mapping.BitrixServicePointID
-			resolvedBitrixServicePointID = &mappedID
-		}
+	if syncWithBitrix && !isValidBitrixServicePointID(resolvedBitrixServicePointID) {
+		resolvedBitrixServicePointID = mappedBitrixServicePointID
 	}
-	if syncWithBitrix && resolvedBitrixServicePointID == nil {
+	if syncWithBitrix && !isValidBitrixServicePointID(resolvedBitrixServicePointID) {
 		return nil, fmt.Errorf("не выбрана точка обслуживания Bitrix24")
 	}
 	ticket := &tickets.Ticket{
@@ -278,14 +292,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 	if err := s.ticketRepo.Create(ctx, ticket); err != nil {
 		return nil, err
 	}
-	if syncWithBitrix && ticket.BitrixServicePointID != nil && *ticket.BitrixServicePointID > 0 {
-		if err := s.bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
-			CompanyID:            ticket.CompanyID,
-			BitrixServicePointID: *ticket.BitrixServicePointID,
-		}); err != nil {
-			s.logger.Error("Не удалось обновить сопоставление компании с точкой Bitrix24", "company_id", ticket.CompanyID, "bitrix_service_point_id", *ticket.BitrixServicePointID, "error", err)
-		}
-	}
+	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
 
 	// Запись РІ историю
 	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, "", tickets.StatusNew, nil)
@@ -574,14 +581,7 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
-	if ticket.BitrixServicePointID != nil && *ticket.BitrixServicePointID > 0 {
-		if err := s.bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
-			CompanyID:            ticket.CompanyID,
-			BitrixServicePointID: *ticket.BitrixServicePointID,
-		}); err != nil {
-			s.logger.Error("Не удалось обновить сопоставление компании с точкой Bitrix24", "company_id", ticket.CompanyID, "bitrix_service_point_id", *ticket.BitrixServicePointID, "error", err)
-		}
-	}
+	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
 
 	s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldCompany, tickets.HistorySourceUI, oldCompanyName, newCompanyName, nil)
 	ticket.CompanyName = newCompanyName
@@ -627,14 +627,7 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(ticket.CompanyID) != "" && ticket.BitrixServicePointID != nil && *ticket.BitrixServicePointID > 0 {
-		if err := s.bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
-			CompanyID:            ticket.CompanyID,
-			BitrixServicePointID: *ticket.BitrixServicePointID,
-		}); err != nil {
-			s.logger.Error("Не удалось обновить сопоставление компании с точкой Bitrix24", "company_id", ticket.CompanyID, "bitrix_service_point_id", *ticket.BitrixServicePointID, "error", err)
-		}
-	}
+	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
 
 	if oldPoint != nextPoint {
 		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_service_point_id", tickets.HistorySourceUI, oldPoint, nextPoint, nil)
@@ -1196,12 +1189,78 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 	// Загрузка вложений
 	attachments, _ := s.ticketRepo.GetAttachments(ctx, ticketID)
 
+	var contact *telephony.Contact
+	if s.telephonyRepo != nil && ticket.ContactID != nil {
+		contact, err = s.telephonyRepo.GetContactByID(ctx, *ticket.ContactID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	details := &tickets.TicketDetails{
 		Metadata: *ticket,
 		// CompanyName: ticket.CompanyName, // Если это поле есть РІ структуре (gorm ->)
+		Contact:     contact,
+		Calls:       make([]tickets.TicketCall, 0),
 		History:     history,
 		Attachments: attachments,
 		Comments:    make([]tickets.Comment, 0),
+	}
+
+	if s.telephonyRepo != nil {
+		callItems, callErr := s.telephonyRepo.ListCallsByTicketID(ctx, ticketID)
+		if callErr != nil {
+			return nil, callErr
+		}
+		if len(callItems) > 0 {
+			employees, employeeErr := loadMegafonIntegratedEmployees(ctx, s.telephonyRepo, s.userRepo)
+			if employeeErr != nil {
+				return nil, employeeErr
+			}
+			employeesByLogin := make(map[string]TelephonyLineEmployeeView, len(employees))
+			employeesByUserID := make(map[uint]TelephonyLineEmployeeView, len(employees))
+			for _, item := range employees {
+				employeesByLogin[item.Login] = item
+				if item.UserID != nil {
+					employeesByUserID[*item.UserID] = item
+				}
+			}
+
+			contactsByPhone := make(map[string]*telephony.Contact, len(callItems))
+			details.Calls = make([]tickets.TicketCall, 0, len(callItems))
+			for _, callItem := range callItems {
+				var callContact *telephony.Contact
+				if phone := strings.TrimSpace(safeTelephonyString(callItem.ClientPhone)); phone != "" {
+					if cached, ok := contactsByPhone[phone]; ok {
+						callContact = cached
+					} else {
+						callContact, callErr = s.telephonyRepo.GetContactByPhone(ctx, phone)
+						if callErr != nil {
+							return nil, callErr
+						}
+						contactsByPhone[phone] = callContact
+					}
+				}
+
+				callView := tickets.TicketCall{
+					Call:    callItem,
+					Contact: callContact,
+				}
+				if callItem.EmployeeUserID != nil {
+					if employee, ok := employeesByUserID[*callItem.EmployeeUserID]; ok {
+						callView.EmployeeName = employee.Name
+						callView.EmployeeState = employee.Status
+					}
+				}
+				if callView.EmployeeName == "" && callItem.EmployeeLogin != nil {
+					if employee, ok := employeesByLogin[strings.TrimSpace(*callItem.EmployeeLogin)]; ok {
+						callView.EmployeeName = employee.Name
+						callView.EmployeeState = employee.Status
+					}
+				}
+				details.Calls = append(details.Calls, callView)
+			}
+		}
 	}
 
 	// Комментарии из локальной БД (офлайн/сидер)
@@ -2118,6 +2177,112 @@ func (s *ticketServiceImpl) resolveCompanyContractID(ctx context.Context, compan
 		return nil, nil
 	}
 	return &contractID, nil
+}
+
+func (s *ticketServiceImpl) syncCompanyContractFromBitrixPoint(ctx context.Context, companyID string, bitrixServicePointID *int64) (*company.Company, error) {
+	if s.contractService == nil || s.bitrixRepo == nil || !isValidBitrixServicePointID(bitrixServicePointID) {
+		return nil, nil
+	}
+
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	if err != nil {
+		return nil, err
+	}
+	if skip {
+		return nil, nil
+	}
+
+	point, err := s.bitrixRepo.GetServicePointByID(ctx, *bitrixServicePointID)
+	if err != nil {
+		return nil, err
+	}
+	if point == nil {
+		return nil, fmt.Errorf("точка обслуживания Bitrix24 не найдена")
+	}
+
+	snapshot := contractsvc.BuildDailySnapshotFromBitrixServicePoint(companyID, *point)
+	snapshot.SourceHash = buildBitrixPointContractSourceHash(*point)
+	if err := s.contractService.SyncDailySnapshots(ctx, []contract.DailyCompanyContractSnapshot{snapshot}); err != nil {
+		return nil, err
+	}
+
+	return s.companyRepo.GetByID(ctx, companyID)
+}
+
+func isValidBitrixServicePointID(value *int64) bool {
+	return value != nil && *value > 0
+}
+
+func buildBitrixPointContractSourceHash(point bitrix.ServicePoint) string {
+	return fmt.Sprintf("bitrix-service-point:%d:%d", point.B24ElementID, point.UpdatedAt.UTC().UnixNano())
+}
+
+func (s *ticketServiceImpl) resolveMappedBitrixServicePointID(ctx context.Context, companyID string) (*int64, error) {
+	if s.bitrixRepo == nil {
+		return nil, nil
+	}
+	companyID = strings.TrimSpace(companyID)
+	if companyID == "" {
+		return nil, nil
+	}
+	mapping, err := s.bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if mapping == nil || mapping.BitrixServicePointID <= 0 {
+		return nil, nil
+	}
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, mapping.BitrixServicePointID)
+	if err != nil {
+		return nil, err
+	}
+	if skip {
+		return nil, nil
+	}
+	mappedID := mapping.BitrixServicePointID
+	return &mappedID, nil
+}
+
+func (s *ticketServiceImpl) persistBitrixCompanyServicePointMapping(ctx context.Context, companyID string, bitrixServicePointID *int64) {
+	if s.bitrixRepo == nil || bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
+		return
+	}
+	companyID = strings.TrimSpace(companyID)
+	if companyID == "" {
+		return
+	}
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	if err != nil {
+		s.logger.Error("Не удалось проверить правила сохранения сопоставления точки Bitrix24", "company_id", companyID, "bitrix_service_point_id", *bitrixServicePointID, "error", err)
+		return
+	}
+	if skip {
+		s.clearBitrixCompanyServicePointMapping(ctx, companyID, *bitrixServicePointID)
+		return
+	}
+	if err := s.bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
+		CompanyID:            companyID,
+		BitrixServicePointID: *bitrixServicePointID,
+	}); err != nil {
+		s.logger.Error("Не удалось обновить сопоставление компании с точкой Bitrix24", "company_id", companyID, "bitrix_service_point_id", *bitrixServicePointID, "error", err)
+	}
+}
+
+func (s *ticketServiceImpl) clearBitrixCompanyServicePointMapping(ctx context.Context, companyID string, bitrixServicePointID int64) {
+	if s.bitrixRepo == nil {
+		return
+	}
+	companyID = strings.TrimSpace(companyID)
+	if companyID != "" {
+		if err := s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(ctx, companyID); err != nil {
+			s.logger.Error("Не удалось очистить сопоставление компании с точкой Bitrix24", "company_id", companyID, "bitrix_service_point_id", bitrixServicePointID, "error", err)
+		}
+	}
+	if bitrixServicePointID > 0 {
+		if err := s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(ctx, bitrixServicePointID); err != nil {
+			s.logger.Error("Не удалось очистить сопоставление тестовой точки Bitrix24", "bitrix_service_point_id", bitrixServicePointID, "error", err)
+		}
+	}
 }
 
 func normalizePyrusTicketStatus(rawStatus string) string {

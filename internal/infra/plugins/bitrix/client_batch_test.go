@@ -261,3 +261,24 @@ func buildBitrixUsersPayload(startID int, count int) []map[string]interface{} {
 	}
 	return items
 }
+
+func TestNewClient_ZeroConfigRateLimitsDoNotOverrideDefaults(t *testing.T) {
+	cfg := &config.Config{
+		BitrixBaseURL: serverURLPlaceholder(),
+	}
+	client := NewClient(cfg, logger.New("", "test", "error", true))
+
+	if client.rateLimitBurst != bitrixDefaultRateLimitBurst {
+		t.Fatalf("ожидали burst по умолчанию %d, получили %d", bitrixDefaultRateLimitBurst, client.rateLimitBurst)
+	}
+	if client.rateLimitPerSecond != float64(bitrixDefaultRateLimitPerMin)/60.0 {
+		t.Fatalf("ожидали rate по умолчанию %v, получили %v", float64(bitrixDefaultRateLimitPerMin)/60.0, client.rateLimitPerSecond)
+	}
+	if client.httpClient == nil || client.httpClient.Timeout != 15*time.Second {
+		t.Fatalf("ожидали timeout по умолчанию 15s, получили %#v", client.httpClient)
+	}
+}
+
+func serverURLPlaceholder() string {
+	return "https://example.bitrix24.ru/rest/1/key"
+}

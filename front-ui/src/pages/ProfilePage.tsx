@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { profileApi } from '@/api/profile';
+import { telephonyApi } from '@/api/telephony';
 import type { AppLocaleCode } from '@/i18n/localeTypes';
 import { useAppLocale } from '@/i18n/useAppLocale';
 import { useAuthStore } from '@/store/authStore';
@@ -36,6 +37,7 @@ type CredentialsForm = {
   integrations?: Array<{
     integration_type?: string;
     external_id?: string;
+    is_enabled?: boolean;
     is_locked?: boolean;
     is_verified?: boolean;
     verified_name?: string;
@@ -44,6 +46,7 @@ type CredentialsForm = {
 
 const integrationOptions = [
   { value: 'bitrix24', label: 'Bitrix24' },
+  { value: 'megafon_vats', label: 'Мегафон' },
   { value: 'pyrus', label: 'Pyrus' },
   { value: 'naumen', label: 'Naumen' },
   { value: 'telegram', label: 'Telegram' },
@@ -58,6 +61,7 @@ const ProfilePage: React.FC = () => {
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const isPyrusEnabled = user?.pyrus_enabled === true;
   const [form] = Form.useForm<CredentialsForm>();
+  const watchedIntegrations = Form.useWatch('integrations', form);
   const availableIntegrationOptions = useMemo(() => integrationOptions.filter((item) => {
     if (item.value === 'bitrix24') {
       return isBitrixEnabled;
@@ -81,6 +85,25 @@ const ProfilePage: React.FC = () => {
     queryKey: ['profile-me'],
     queryFn: () => profileApi.getMyProfile(),
   });
+  const hasMegafonIntegration = useMemo(
+    () => (watchedIntegrations || []).some((item) => String(item.integration_type || '').trim().toLowerCase() === 'megafon_vats'),
+    [watchedIntegrations],
+  );
+  const hasMegafonIntegrationOnServer = useMemo(
+    () => (user?.integrations || []).some((item) => String(item.integration_type || '').trim().toLowerCase() === 'megafon_vats'),
+    [user?.integrations],
+  );
+  const megafonSuggestionQuery = useQuery({
+    queryKey: ['profile-megafon-suggestion', user?.first_name, user?.last_name],
+    queryFn: () => telephonyApi.suggestMegafonUser({
+      first_name: user?.first_name || '',
+      last_name: user?.last_name || '',
+      full_name: [user?.first_name, user?.last_name].filter(Boolean).join(' '),
+    }),
+    enabled: Boolean(user?.first_name && user?.last_name) && !hasMegafonIntegrationOnServer,
+    staleTime: 60_000,
+  });
+  const megafonSuggestion = megafonSuggestionQuery.data?.data?.suggestion || null;
 
   useEffect(() => {
     const dtoUser = profileQuery.data?.data;
@@ -102,12 +125,13 @@ const ProfilePage: React.FC = () => {
         return true;
       })
       .map((item) => ({
-      integration_type: item.integration_type,
-      external_id: item.external_id,
-      is_locked: item.is_locked,
-      is_verified: item.is_verified,
-      verified_name: item.verified_name,
-    }));
+        integration_type: item.integration_type,
+        external_id: item.external_id,
+        is_enabled: item.is_enabled,
+        is_locked: item.is_locked,
+        is_verified: item.is_verified,
+        verified_name: item.verified_name,
+      }));
   }, [isBitrixEnabled, isPyrusEnabled, user?.integrations]);
 
   const notificationsConfig = useMemo(() => {
@@ -164,7 +188,7 @@ const ProfilePage: React.FC = () => {
   });
 
   const updateIntegrationsMutation = useMutation({
-    mutationFn: (payload: { integrations: Array<{ integration_type: string; external_id: string }> }) => profileApi.updateIntegrations(payload),
+    mutationFn: (payload: { integrations: Array<{ integration_type: string; external_id: string; is_enabled?: boolean }> }) => profileApi.updateIntegrations(payload),
   });
 
   const updateConfigMutation = useMutation({
@@ -220,6 +244,7 @@ const ProfilePage: React.FC = () => {
       .map((item) => ({
         integration_type: String(item.integration_type || '').trim().toLowerCase(),
         external_id: String(item.external_id || '').trim(),
+        is_enabled: item.is_enabled !== false,
       }))
       .filter((item) => item.integration_type && item.external_id);
     const hiddenIntegrations = (user.integrations || [])
@@ -235,6 +260,7 @@ const ProfilePage: React.FC = () => {
       .map((item) => ({
         integration_type: item.integration_type,
         external_id: item.external_id,
+        is_enabled: item.is_enabled,
       }));
     const nextIntegrationsPayload = [...normalizedIntegrations, ...hiddenIntegrations];
 
@@ -248,10 +274,10 @@ const ProfilePage: React.FC = () => {
         }
         return true;
       })
-      .map((item) => `${item.integration_type}:${item.external_id}`)
+      .map((item) => `${item.integration_type}:${item.external_id}:${item.is_enabled ? '1' : '0'}`)
       .sort();
     const nextIntegrations = nextIntegrationsPayload
-      .map((item) => `${item.integration_type}:${item.external_id}`)
+      .map((item) => `${item.integration_type}:${item.external_id}:${item.is_enabled !== false ? '1' : '0'}`)
       .sort();
     const integrationsChanged = currentIntegrations.join('|') !== nextIntegrations.join('|');
 
@@ -331,7 +357,7 @@ const ProfilePage: React.FC = () => {
               id: index + 1,
               integration_type: item.integration_type,
               external_id: item.external_id,
-              is_enabled: true,
+              is_enabled: item.is_enabled !== false,
               is_verified: false,
             })),
           };
@@ -422,6 +448,30 @@ const ProfilePage: React.FC = () => {
         </Card>
       )}
 
+      {!hasMegafonIntegration && megafonSuggestion ? (
+        <Card className="glass-panel">
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space direction="vertical" size={0}>
+              <Text strong>Найден сотрудник в Мегафон. Подключить?</Text>
+              <Text type="secondary">{megafonSuggestion.name} (логин: {megafonSuggestion.login})</Text>
+            </Space>
+            <Button
+              onClick={() => {
+                const nextIntegrations = [...(form.getFieldValue('integrations') || [])];
+                nextIntegrations.push({
+                  integration_type: 'megafon_vats',
+                  external_id: megafonSuggestion.login,
+                  is_enabled: true,
+                });
+                form.setFieldsValue({ integrations: nextIntegrations });
+              }}
+            >
+              Подставить
+            </Button>
+          </Space>
+        </Card>
+      ) : null}
+
       <Card className="glass-panel" loading={profileQuery.isLoading}>
         <Form<CredentialsForm>
           form={form}
@@ -490,6 +540,15 @@ const ProfilePage: React.FC = () => {
                               disabled={Boolean(form.getFieldValue(['integrations', field.name, 'is_locked']))}
                             />
                           </Form.Item>
+                          <Form.Item
+                            name={[field.name, 'is_enabled']}
+                            label="Активна"
+                            valuePropName="checked"
+                            initialValue={true}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Switch checkedChildren="Да" unCheckedChildren="Нет" />
+                          </Form.Item>
                           <Button
                             danger
                             onClick={() => remove(field.name)}
@@ -499,7 +558,7 @@ const ProfilePage: React.FC = () => {
                           </Button>
                         </Space>
                       ))}
-                      <Button onClick={() => add({ integration_type: undefined, external_id: '' })}>Добавить интеграцию</Button>
+                      <Button onClick={() => add({ integration_type: undefined, external_id: '', is_enabled: true })}>Добавить интеграцию</Button>
                     </Space>
                   )}
                 </Form.List>

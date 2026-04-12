@@ -1,4 +1,5 @@
 import type { TicketStatus } from '@/types/api';
+import i18n from '@/i18n/i18n';
 
 export type TicketStatusMeta = {
   label: string;
@@ -6,7 +7,7 @@ export type TicketStatusMeta = {
 };
 
 const UNKNOWN_STATUS_META: TicketStatusMeta = {
-  label: 'Неизвестно',
+  label: '',
   color: 'default',
 };
 
@@ -40,9 +41,7 @@ export const TICKET_ACTIVE_STATUS_VALUES: TicketStatus[] = [
   'new',
   'in_progress',
   'pending',
-  'deferred',
   'onsite',
-  'to_manager',
 ];
 
 export const TICKET_CLOSED_LIKE_STATUS_VALUES: TicketStatus[] = [
@@ -57,7 +56,19 @@ export const isClosedLikeTicketStatus = (status?: string) =>
 
 export const getTicketStatusMeta = (status?: string): TicketStatusMeta => {
   if (!status) {
-    return UNKNOWN_STATUS_META;
+    return {
+      ...UNKNOWN_STATUS_META,
+      label: i18n.t('tickets:fallback.unknown'),
+    };
   }
-  return TICKET_STATUS_META[status as TicketStatus] || { label: status, color: UNKNOWN_STATUS_META.color };
+  const meta = TICKET_STATUS_META[status as TicketStatus];
+  if (!meta) {
+    return { label: status, color: UNKNOWN_STATUS_META.color };
+  }
+  return {
+    ...meta,
+    label: i18n.t(`layout:headerSearch.ticket.statusOptions.${status}`, {
+      defaultValue: meta.label,
+    }),
+  };
 };

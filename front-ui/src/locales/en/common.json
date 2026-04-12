@@ -1,0 +1,19 @@
+{
+  "actions": {
+    "save": "Save",
+    "update": "Update",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "close": "Close",
+    "search": "Search",
+    "refresh": "Refresh",
+    "reset": "Reset"
+  },
+  "states": {
+    "loading": "Loading",
+    "system": "system"
+  },
+  "errors": {
+    "withDetails": "{{message}} Details: {{details}}"
+  }
+}

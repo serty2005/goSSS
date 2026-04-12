@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"etalon-server/internal/domain/common"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/user"
 	"time"
 
@@ -91,6 +92,7 @@ type Ticket struct {
 	// `->` означает, что поле только для чтения (не будет создана колонка в таблице tickets).
 	CompanyName string  `json:"company_name,omitempty" gorm:"->"`
 	ContractID  *string `json:"contract_id,omitempty" gorm:"type:text"`
+	ContactID   *uint   `json:"contact_id,omitempty" gorm:"index"`
 	// Признак тикета по общему контракту (вычисляется, не хранится в БД).
 	IsCommonContract bool `json:"is_common_contract,omitempty" gorm:"-"`
 
@@ -115,11 +117,20 @@ type Ticket struct {
 
 // TicketDetails — составная структура для отображения на UI.
 type TicketDetails struct {
-	Metadata    Ticket          `json:"metadata"`
-	CompanyName string          `json:"company_name,omitempty"`
-	History     []TicketHistory `json:"history"`
-	Attachments []Attachment    `json:"attachments"`
-	Comments    []Comment       `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
+	Metadata    Ticket             `json:"metadata"`
+	CompanyName string             `json:"company_name,omitempty"`
+	Contact     *telephony.Contact `json:"contact,omitempty"`
+	Calls       []TicketCall       `json:"calls,omitempty"`
+	History     []TicketHistory    `json:"history"`
+	Attachments []Attachment       `json:"attachments"`
+	Comments    []Comment          `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
+}
+
+type TicketCall struct {
+	Call          telephony.Call     `json:"call"`
+	Contact       *telephony.Contact `json:"contact,omitempty"`
+	EmployeeName  string             `json:"employee_name,omitempty"`
+	EmployeeState string             `json:"employee_state,omitempty"`
 }
 
 // Comment представляет легаси комментарий (планируется к замене на History).

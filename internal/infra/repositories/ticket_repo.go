@@ -8,6 +8,7 @@ import (
 
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 
 	"github.com/google/uuid"
@@ -248,6 +249,9 @@ func (r *ticketRepo) applyFilters(query *gorm.DB, filter tickets.TicketFilter) *
 	}
 	if len(filter.CompanyIDs) > 0 {
 		query = query.Where("company_id IN ?", filter.CompanyIDs)
+	}
+	if filter.ContactID != nil && *filter.ContactID > 0 {
+		query = query.Where("contact_id = ?", *filter.ContactID)
 	}
 	if filter.AssetID != nil {
 		query = query.Where("asset_id = ?", *filter.AssetID)
@@ -614,9 +618,16 @@ func (r *ticketRepo) GetCompanyFilters(ctx context.Context, filter tickets.Ticke
 }
 
 func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error) {
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	days7Start := now.AddDate(0, 0, -7)
+	days30Start := now.AddDate(0, 0, -30)
+	calls24hStart := now.Add(-24 * time.Hour)
+
 	stats := &tickets.DashboardStats{
-		ResolvedByAssignee: make([]tickets.ResolvedByAssigneeStat, 0),
-		ServerStatuses:     make([]tickets.ServerStatusStat, 0),
+		ResolvedByAssignee:  make([]tickets.ResolvedByAssigneeStat, 0),
+		AcceptedCallsByUser: make([]tickets.AcceptedCallsByEmployeeStat, 0),
+		ServerStatuses:      make([]tickets.ServerStatusStat, 0),
 	}
 
 	if err := r.db.WithContext(ctx).Model(&tickets.Ticket{}).Count(&stats.TotalTickets).Error; err != nil {
@@ -626,8 +637,17 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 	if err := r.db.WithContext(ctx).
 		Model(&server.Server{}).
 		Where("last_polled_at IS NOT NULL").
-		Where("last_polled_at >= ?", time.Now().Add(-24*time.Hour)).
+		Where("last_polled_at >= ?", calls24hStart).
 		Count(&stats.PolledServers24h).Error; err != nil {
+		return nil, err
+	}
+
+	if err := r.db.WithContext(ctx).
+		Model(&telephony.Call{}).
+		Where("employee_user_id IS NOT NULL").
+		Where("answered_at IS NOT NULL").
+		Where("answered_at >= ?", calls24hStart).
+		Count(&stats.AcceptedCalls24h).Error; err != nil {
 		return nil, err
 	}
 
@@ -638,10 +658,49 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 		Select(strings.Join([]string{
 			ticketUserAlias + ".id AS user_id",
 			resolvedUserNameExpr + " AS user_name",
+			"COUNT(DISTINCT CASE WHEN resolved_history.created_at >= ? THEN t.id END) AS today_count",
+			"COUNT(DISTINCT CASE WHEN resolved_history.created_at >= ? THEN t.id END) AS days_7_count",
+			"COUNT(DISTINCT CASE WHEN resolved_history.created_at >= ? THEN t.id END) AS days_30_count",
+		}, ", "), todayStart, days7Start, days30Start).
+		Joins("JOIN "+ticketUserTableName+" AS "+ticketUserAlias+" ON "+ticketUserAlias+".id = t.assignee_id").
+		Joins(
+			"LEFT JOIN ticket_histories AS resolved_history ON resolved_history.ticket_id = t.id AND resolved_history.field = ? AND resolved_history.new_value = ?",
+			tickets.HistoryFieldStatus,
+			tickets.StatusResolved,
+		).
+		Where("t.status IN ?", []string{tickets.StatusResolved, tickets.StatusClosed}).
+		Where("resolved_history.created_at IS NOT NULL").
+		Where("resolved_history.created_at >= ?", days30Start).
+		Where("t.assignee_id IS NOT NULL").
+		Group(strings.Join([]string{
+			ticketUserAlias + ".id",
+			ticketUserAlias + ".full_name",
+			ticketUserAlias + ".first_name",
+			ticketUserAlias + ".last_name",
+			ticketUserAlias + ".username",
+		}, ", ")).
+		Order("days_30_count DESC").
+		Order("days_7_count DESC").
+		Order("today_count DESC").
+		Order("user_name ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	stats.ResolvedByAssignee = rows
+
+	callRows := make([]tickets.AcceptedCallsByEmployeeStat, 0)
+	if err := r.db.WithContext(ctx).
+		Model(&telephony.Call{}).
+		Table("telephony_calls AS tc").
+		Select(strings.Join([]string{
+			ticketUserAlias + ".id AS user_id",
+			resolvedUserNameExpr + " AS user_name",
 			"COUNT(*) AS count",
 		}, ", ")).
-		Joins("JOIN "+ticketUserTableName+" AS "+ticketUserAlias+" ON "+ticketUserAlias+".id = t.assignee_id").
-		Where("t.status IN ?", []string{tickets.StatusResolved, tickets.StatusClosed}).
+		Joins("JOIN "+ticketUserTableName+" AS "+ticketUserAlias+" ON "+ticketUserAlias+".id = tc.employee_user_id").
+		Where("tc.employee_user_id IS NOT NULL").
+		Where("tc.answered_at IS NOT NULL").
+		Where("tc.answered_at >= ?", calls24hStart).
 		Group(strings.Join([]string{
 			ticketUserAlias + ".id",
 			ticketUserAlias + ".full_name",
@@ -651,10 +710,10 @@ func (r *ticketRepo) GetDashboardStats(ctx context.Context) (*tickets.DashboardS
 		}, ", ")).
 		Order("count DESC").
 		Order("user_name ASC").
-		Scan(&rows).Error; err != nil {
+		Scan(&callRows).Error; err != nil {
 		return nil, err
 	}
-	stats.ResolvedByAssignee = rows
+	stats.AcceptedCallsByUser = callRows
 
 	serverStatusRows := make([]tickets.ServerStatusStat, 0)
 	if err := r.db.WithContext(ctx).

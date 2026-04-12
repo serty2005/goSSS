@@ -84,8 +84,9 @@ func (s *serviceImpl) SyncDailySnapshots(ctx context.Context, snapshots []contra
 
 // upsertDailySnapshot создает или обновляет управляемый почтовым воркером контракт конкретной компании.
 func (s *serviceImpl) upsertDailySnapshot(ctx context.Context, contractID string, snapshot contract.DailyCompanyContractSnapshot) error {
+	snapshot.ContractType = NormalizeServicePointContractType(snapshot.ContractType)
 	state := "inactive"
-	if snapshot.Active {
+	if snapshot.Active || IsServicePointContractActive(nil, snapshot.ContractType) {
 		state = "active"
 	}
 

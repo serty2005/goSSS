@@ -180,6 +180,36 @@ func (r *contractRepo) ListMailImports(ctx context.Context, limit int) ([]contra
 	return items, err
 }
 
+func (r *contractRepo) CreateServicePointSyncRun(ctx context.Context, item *contract.ServicePointSyncRun) error {
+	if item == nil {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).Create(item).Error
+}
+
+func (r *contractRepo) ListServicePointSyncRuns(ctx context.Context, limit int) ([]contract.ServicePointSyncRun, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	items := make([]contract.ServicePointSyncRun, 0, limit)
+	err := r.getDB(ctx).WithContext(ctx).
+		Order("started_at DESC").
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+func (r *contractRepo) GetServicePointSyncRunByID(ctx context.Context, id string) (*contract.ServicePointSyncRun, error) {
+	var item contract.ServicePointSyncRun
+	err := r.getDB(ctx).WithContext(ctx).Where("id = ?", id).First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &item, err
+}
+
 func (r *contractRepo) ListServicePointSyncConflicts(ctx context.Context) ([]contract.ServicePointSyncConflict, error) {
 	items := make([]contract.ServicePointSyncConflict, 0, 32)
 	err := r.getDB(ctx).WithContext(ctx).

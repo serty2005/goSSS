@@ -419,6 +419,85 @@ body {
   white-space: nowrap;
 }
 
+.global-search-launcher {
+  width: 100%;
+}
+
+.global-search-launcher--collapsed.ant-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 12px;
+  background: var(--app-bg-container);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.global-search-launcher--expanded {
+  width: 100%;
+}
+
+.global-search-launcher__input.ant-input-affix-wrapper {
+  min-height: 46px;
+  border-radius: 14px;
+  padding-inline: 12px;
+  background: linear-gradient(135deg, rgba(22, 119, 255, 0.08), rgba(22, 119, 255, 0.02));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.global-search-launcher__input.ant-input-affix-wrapper:hover,
+.global-search-launcher__input.ant-input-affix-wrapper-focused {
+  border-color: var(--app-color-primary);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.14);
+  transform: translateY(-1px);
+}
+
+.global-search-popover-root {
+  --ant-popover-box-shadow: none;
+}
+
+.global-search-popover-root .ant-popover-inner {
+  padding: 0;
+  border-radius: 20px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.global-search-popover-root .ant-popover-inner-content {
+  padding: 0;
+}
+
+.global-search-popover {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 20px;
+  padding: 18px;
+  background: var(--app-bg-container);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.2);
+}
+
+.global-search-popover--expanded {
+  width: min(1040px, calc(100vw - 360px));
+}
+
+.global-search-popover--collapsed {
+  width: min(920px, calc(100vw - 140px));
+}
+
+.global-search-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.global-search-popover__results {
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .ticket-overview-connection-grid,
 .ticket-overview-equipment-grid {
   display: grid;
@@ -528,6 +607,15 @@ body {
 @media (max-width: 992px) {
   .app-main-header {
     padding-inline: 12px !important;
+  }
+
+  .global-search-popover {
+    padding: 14px;
+  }
+
+  .global-search-popover--expanded,
+  .global-search-popover--collapsed {
+    width: min(92vw, 92vw);
   }
 }
 

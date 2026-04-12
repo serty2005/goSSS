@@ -176,15 +176,15 @@ Workflow не вшивает конкретную команду сборки а
 
 Для production нужно настроить:
 
-- `AGENT_ADAPTER_S3_ENABLED=true`
-- `AGENT_ADAPTER_S3_ENDPOINT=http://minio:9000`
-- `AGENT_ADAPTER_S3_BUCKET=agents`
-- `AGENT_ADAPTER_S3_ACCESS_KEY`
-- `AGENT_ADAPTER_S3_SECRET_KEY`
-- `AGENT_ADAPTER_PUBLIC_BASE_URL=https://etalon.serty.top/agents`
+- `S3_ENDPOINT=http://minio:9000`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `AGENT_ADAPTER_CATALOG_ENABLED=true`
+- `AGENT_ADAPTER_CATALOG_BUCKET=agents`
+- `AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL=https://etalon.serty.top/agents`
 - `AGENT_ADAPTER_CATALOG_KEY=catalog/index.json`
-- `AGENT_ADAPTER_SYNC_INTERVAL_MIN`
-- `AGENT_ADAPTER_DEFAULT_CHANNEL=stable`
+- `AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN`
+- `AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL=stable`
 
 Итоговая схема lifecycle:
 

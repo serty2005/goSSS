@@ -133,7 +133,7 @@ Legacy-поле `adapter_manifests` остаётся только как fallbac
 
 Сервер синхронизирует release catalog из S3:
 
-- периодически по `AGENT_ADAPTER_SYNC_INTERVAL_MIN`
+- периодически по `AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN`
 - вручную через `POST /agent-diagnostics/adapters/refresh`
 
 Во время синхронизации:

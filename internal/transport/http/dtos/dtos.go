@@ -674,6 +674,27 @@ type PyrusUserSuggestionDTO struct {
 	Email       string `json:"email,omitempty"`
 }
 
+type MegafonVATSEmployeeDTO struct {
+	Login      string     `json:"login"`
+	Name       string     `json:"name"`
+	Ext        string     `json:"ext,omitempty"`
+	Telnum     string     `json:"telnum,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type MegafonVATSEmployeesRefreshDTO struct {
+	Status    string                   `json:"status"`
+	Count     int                      `json:"count"`
+	Employees []MegafonVATSEmployeeDTO `json:"employees"`
+}
+
+type MegafonVATSUserSuggestionDTO struct {
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
 type BitrixDirectoryUserDTO struct {
 	B24UserID  int64      `json:"b24_user_id"`
 	Name       string     `json:"name"`
@@ -786,6 +807,18 @@ type DeletedUserRestoreCandidateDTO struct {
 
 type ProfileConfigUpdateDTO struct {
 	ProfileConfig map[string]interface{} `json:"profile_config"`
+}
+
+type GlobalTranslationLocaleDTO struct {
+	Code        string `json:"code"`
+	Label       string `json:"label"`
+	NativeLabel string `json:"native_label"`
+	IsBuiltin   bool   `json:"is_builtin"`
+}
+
+type GlobalTranslationsDTO struct {
+	Locales   []GlobalTranslationLocaleDTO          `json:"locales"`
+	Overrides map[string]map[string]map[string]string `json:"overrides"`
 }
 
 // --- DTO для UI-ориентированного поиска ---

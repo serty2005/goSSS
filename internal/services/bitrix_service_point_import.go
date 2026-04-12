@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -836,6 +837,50 @@ func normalizePointName(name string) string {
 		}
 	}, normalized)
 	return normalizeCell(normalized)
+}
+
+func splitServicePointContractName(name string) (string, string) {
+	normalizedName := normalizeCell(name)
+	if normalizedName == "" {
+		return "", ""
+	}
+
+	parts := strings.Fields(normalizedName)
+	if len(parts) == 0 {
+		return "", ""
+	}
+
+	suffix := normalizePointName(parts[len(parts)-1])
+	switch suffix {
+	case "ts":
+		return normalizeCell(strings.Join(parts[:len(parts)-1], " ")), "ts"
+	case "syrve", "syr", "syrv", "sy":
+		return normalizeCell(strings.Join(parts[:len(parts)-1], " ")), "syrve"
+	default:
+		return normalizedName, ""
+	}
+}
+
+func normalizeServicePointBusinessName(name string) string {
+	baseName, _ := splitServicePointContractName(name)
+	return normalizePointName(baseName)
+}
+
+func servicePointCodeLookupKeys(code string) []string {
+	normalizedCode := normalizeCell(code)
+	if normalizedCode == "" {
+		return nil
+	}
+
+	keys := []string{normalizedCode}
+	lowerCode := strings.ToLower(normalizedCode)
+	if stripped, ok := strings.CutPrefix(lowerCode, "ru"); ok && stripped != "" {
+		keys = append(keys, normalizedCode[len(normalizedCode)-len(stripped):])
+	}
+	if !strings.HasPrefix(lowerCode, "ru") && !strings.HasPrefix(lowerCode, "id") {
+		keys = append(keys, "ru"+normalizedCode)
+	}
+	return slices.Compact(keys)
 }
 
 func parseContractStatus(raw string) *bool {

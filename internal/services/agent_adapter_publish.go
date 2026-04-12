@@ -41,8 +41,8 @@ func NewAgentAdapterPublisher(
 	return &agentAdapterPublisher{
 		logger:        log,
 		store:         store,
-		catalogKey:    normalizeObjectKey(cfg.AgentAdapterCatalogKey),
-		publicBaseURL: normalizePublicBaseURL(cfg.AgentAdapterPublicBaseURL),
+		catalogKey:    normalizeObjectKey(cfg.AgentAdapterCatalog.CatalogKey),
+		publicBaseURL: normalizePublicBaseURL(cfg.AgentAdapterCatalog.PublicBaseURL),
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -59,7 +59,7 @@ func (p *agentAdapterPublisher) Publish(ctx context.Context, req AgentAdapterPub
 		return AgentAdapterPublishResult{}, err
 	}
 	if p.publicBaseURL == "" {
-		return AgentAdapterPublishResult{}, errors.New("AGENT_ADAPTER_PUBLIC_BASE_URL обязателен для публикации релиза")
+		return AgentAdapterPublishResult{}, errors.New("AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL обязателен для публикации релиза")
 	}
 
 	fileInfo, err := os.Stat(req.FilePath)

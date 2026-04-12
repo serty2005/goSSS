@@ -2,27 +2,39 @@ import dayjs from 'dayjs';
 import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/authStore';
+import { useLocalizationStore } from '@/store/localizationStore';
 import type { AppLocaleCode } from './localeTypes';
 import {
   DEFAULT_APP_LOCALE,
+  buildSupportedLocaleList,
+  builtInSupportedLocaleList,
   getBrowserLocale,
   getStoredAppLocale,
   getSupportedLocale,
   getUrlAppLocale,
   persistAppLocale,
-  resolveAppLocaleCode,
-  supportedLocaleList,
+  resolveAppLocaleCodeFromList,
 } from './supportedLocales';
 
 export const useAppLocale = () => {
   const profileLocale = useAuthStore((state) => state.user?.profile_config?.interface?.locale);
+  const localizationCatalog = useLocalizationStore((state) => state.catalog);
   const { i18n } = useTranslation();
   const urlLocale = useMemo(() => getUrlAppLocale(), []);
   const storedLocale = useMemo(() => getStoredAppLocale(), []);
   const browserLocale = useMemo(() => getBrowserLocale(), []);
+  const supportedLocales = useMemo(
+    () => buildSupportedLocaleList((localizationCatalog?.locales || []).filter((item) => item.is_builtin !== true)),
+    [localizationCatalog],
+  );
+  const availableLocaleCodes = useMemo(
+    () => supportedLocales.map((item) => item.code),
+    [supportedLocales],
+  );
 
   const locale = useMemo(
-    () => resolveAppLocaleCode(
+    () => resolveAppLocaleCodeFromList(
+      availableLocaleCodes,
       urlLocale,
       profileLocale,
       storedLocale,
@@ -30,7 +42,7 @@ export const useAppLocale = () => {
       browserLocale,
       DEFAULT_APP_LOCALE,
     ),
-    [browserLocale, i18n.resolvedLanguage, profileLocale, storedLocale, urlLocale],
+    [availableLocaleCodes, browserLocale, i18n.resolvedLanguage, profileLocale, storedLocale, urlLocale],
   );
 
   const localeDefinition = useMemo(() => getSupportedLocale(locale), [locale]);
@@ -62,7 +74,8 @@ export const useAppLocale = () => {
     locale,
     antdLocale: localeDefinition.antdLocale,
     dayjsLocale: localeDefinition.dayjsLocale,
-    supportedLocales: supportedLocaleList,
+    supportedLocales,
+    builtInSupportedLocales: builtInSupportedLocaleList,
     setLocale,
   };
 };

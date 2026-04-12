@@ -111,11 +111,13 @@ func TestAgentAdapterCatalogSync_СинхронизируетФикстуруИ�
 		logger.New("", "test", "error", true),
 		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "valid")},
 		&config.Config{
-			AgentAdapterS3Enabled:      true,
-			AgentAdapterCatalogKey:     "catalog/index.json",
-			AgentAdapterDefaultChannel: "stable",
-			AgentAdapterPublicBaseURL:  "https://etalon.serty.top/agents",
-			AgentAdapterSyncInterval:   time.Minute,
+			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
+				Enabled:        true,
+				CatalogKey:     "catalog/index.json",
+				DefaultChannel: "stable",
+				PublicBaseURL:  "https://etalon.serty.top/agents",
+				SyncInterval:   time.Minute,
+			},
 		},
 	)
 
@@ -148,11 +150,13 @@ func TestAgentAdapterCatalogSync_ResolveSelectedAdapterManifestsИспользу
 		logger.New("", "test", "error", true),
 		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "valid")},
 		&config.Config{
-			AgentAdapterS3Enabled:      true,
-			AgentAdapterCatalogKey:     "catalog/index.json",
-			AgentAdapterDefaultChannel: "stable",
-			AgentAdapterPublicBaseURL:  "https://etalon.serty.top/agents",
-			AgentAdapterSyncInterval:   time.Minute,
+			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
+				Enabled:        true,
+				CatalogKey:     "catalog/index.json",
+				DefaultChannel: "stable",
+				PublicBaseURL:  "https://etalon.serty.top/agents",
+				SyncInterval:   time.Minute,
+			},
 		},
 	)
 	_, err := service.Refresh(ctx)
@@ -185,11 +189,13 @@ func TestAgentAdapterCatalogSync_ПропускаетНеполныйRelease(t *
 		logger.New("", "test", "error", true),
 		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "incomplete")},
 		&config.Config{
-			AgentAdapterS3Enabled:      true,
-			AgentAdapterCatalogKey:     "catalog/index.json",
-			AgentAdapterDefaultChannel: "stable",
-			AgentAdapterPublicBaseURL:  "https://etalon.serty.top/agents",
-			AgentAdapterSyncInterval:   time.Minute,
+			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
+				Enabled:        true,
+				CatalogKey:     "catalog/index.json",
+				DefaultChannel: "stable",
+				PublicBaseURL:  "https://etalon.serty.top/agents",
+				SyncInterval:   time.Minute,
+			},
 		},
 	)
 
@@ -223,11 +229,13 @@ func TestAgentAdapterCatalogSync_БитыйCatalogIndexНеЗатираетТе�
 		logger.New("", "test", "error", true),
 		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "broken-index")},
 		&config.Config{
-			AgentAdapterS3Enabled:      true,
-			AgentAdapterCatalogKey:     "catalog/index.json",
-			AgentAdapterDefaultChannel: "stable",
-			AgentAdapterPublicBaseURL:  "https://etalon.serty.top/agents",
-			AgentAdapterSyncInterval:   time.Minute,
+			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
+				Enabled:        true,
+				CatalogKey:     "catalog/index.json",
+				DefaultChannel: "stable",
+				PublicBaseURL:  "https://etalon.serty.top/agents",
+				SyncInterval:   time.Minute,
+			},
 		},
 	)
 
@@ -247,8 +255,10 @@ func TestAgentAdapterPublisher_ПубликуетРелизИГенерируе�
 		logger.New("", "test", "error", true),
 		store,
 		&config.Config{
-			AgentAdapterCatalogKey:    "catalog/index.json",
-			AgentAdapterPublicBaseURL: "https://etalon.serty.top/agents",
+			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
+				CatalogKey:    "catalog/index.json",
+				PublicBaseURL: "https://etalon.serty.top/agents",
+			},
 		},
 	)
 

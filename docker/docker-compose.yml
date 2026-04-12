@@ -10,6 +10,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -24,6 +26,8 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -57,7 +61,7 @@ services:
       - .env
     entrypoint: ["/bin/sh", "-ec"]
     command:
-      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_S3_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_S3_BUCKET}"'
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; if [ -n "${MEGAFON_VATS_RECORDINGS_BUCKET}" ]; then mc mb --ignore-existing "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; mc anonymous set download "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; fi'
     depends_on:
       - minio
     networks:

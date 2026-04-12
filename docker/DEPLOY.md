@@ -2,7 +2,8 @@
 
 ## 1. Что теперь поднимается в production
 
-Для текущего production-стэка с внешним `traefik` используйте `docker/docker-compose.2403.yml`.
+Для production используйте актуальный compose-файл вашего окружения.
+Ниже в примерах он передаётся через `COMPOSE_FILE`.
 
 Он поднимает:
 
@@ -52,15 +53,16 @@ cp .env.prod.example .env
 - `MINIO_CONSOLE_DOMAIN=minio.<domain>`
 - `MINIO_BROWSER_REDIRECT_URL=https://minio.<domain>/`
 - `REDIS_ADDR=redis:6379`
-- `AGENT_ADAPTER_S3_ENABLED=true`
-- `AGENT_ADAPTER_S3_ENDPOINT=http://minio:9000`
-- `AGENT_ADAPTER_S3_BUCKET=agents`
-- `AGENT_ADAPTER_S3_ACCESS_KEY`
-- `AGENT_ADAPTER_S3_SECRET_KEY`
-- `AGENT_ADAPTER_PUBLIC_BASE_URL=https://<domain>/agents`
+- `S3_ENDPOINT=http://minio:9000`
+- `S3_REGION=us-east-1`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `AGENT_ADAPTER_CATALOG_ENABLED=true`
+- `AGENT_ADAPTER_CATALOG_BUCKET=agents`
+- `AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL=https://<domain>/agents`
 - `AGENT_ADAPTER_CATALOG_KEY=catalog/index.json`
-- `AGENT_ADAPTER_SYNC_INTERVAL_MIN`
-- `AGENT_ADAPTER_DEFAULT_CHANNEL=stable`
+- `AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN`
+- `AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL=stable`
 
 Для MinIO-контейнеров в production не используйте `latest`.
 В шаблоне по умолчанию зафиксированы CPU-совместимые теги `*-cpuv1`, потому что на старых `amd64`-хостах `minio/mc:latest` может завершаться с ошибкой `Fatal glibc error: CPU does not support x86-64-v2`.
@@ -71,9 +73,9 @@ cp .env.prod.example .env
 
 Важно:
 
-- в production `AGENT_ADAPTER_S3_ACCESS_KEY` и `AGENT_ADAPTER_S3_SECRET_KEY` обычно совпадают с `MINIO_ROOT_USER` и `MINIO_ROOT_PASSWORD`, если не заведён отдельный MinIO-пользователь;
+- в production `S3_ACCESS_KEY` и `S3_SECRET_KEY` обычно совпадают с `MINIO_ROOT_USER` и `MINIO_ROOT_PASSWORD`, если не заведён отдельный MinIO-пользователь;
 - demo-seed каталога применяется только когда S3-контур отключён и таблицы релизов пустые;
-- `AGENT_ADAPTER_PUBLIC_BASE_URL` должен указывать именно на публичный `/agents/`, а не на внутренний `http://minio:9000`.
+- `AGENT_ADAPTER_CATALOG_PUBLIC_BASE_URL` должен указывать именно на публичный `/agents/`, а не на внутренний `http://minio:9000`.
 - `MINIO_CONSOLE_DOMAIN` должен резолвиться на тот же production ingress, что и основной домен;
 - `MINIO_BROWSER_REDIRECT_URL` должен совпадать с внешним admin URL консоли и заканчиваться `/`, например `https://minio.sd.myhoreca.io/`.
 
@@ -93,8 +95,8 @@ docker compose --env-file .env -f docker-compose.build.yml push
 
 ```bash
 cd docker
-docker compose --env-file .env -f docker-compose.2403.yml pull
-docker compose --env-file .env -f docker-compose.2403.yml up -d
+docker compose --env-file .env -f <production-compose.yml> pull
+docker compose --env-file .env -f <production-compose.yml> up -d
 ```
 
 После старта:
@@ -105,15 +107,97 @@ docker compose --env-file .env -f docker-compose.2403.yml up -d
 - heartbeat дальше работает только с БД и не зависит от live-S3 на каждый запрос.
 - `minio-init` больше не зависит от bind-mounted файла `./docs/minio-init.sh`, поэтому запуск не ломается, если production compose лежит не рядом с директорией `docs`.
 
+## 4.1. Backup БД перед релизом
+
+Перед каждым большим релизом снимайте snapshot текущей PostgreSQL-базы.
+
+Скрипт создаёт:
+
+- `postgres.dump`
+- `env.snapshot`
+- `compose.snapshot.yml`
+- `metadata.txt`
+
+Пример:
+
+```bash
+bash docker/backup_postgres.sh
+```
+
+Для production удобно явно передавать файлы:
+
+```bash
+ENV_FILE=docker/.env \
+COMPOSE_FILE=docker/<production-compose.yml> \
+BACKUP_ROOT=./tmp/db_backups \
+bash docker/backup_postgres.sh
+```
+
+Если нужен читаемый идентификатор релиза:
+
+```bash
+ENV_FILE=docker/.env \
+COMPOSE_FILE=docker/<production-compose.yml> \
+BACKUP_NAME=before-release-1.6.0 \
+bash docker/backup_postgres.sh
+```
+
+Рекомендация:
+
+- хранить backup вне docker volume и не внутри контейнера;
+- после создания копировать каталог backup на отдельный диск или хост;
+- не выкатывать релиз, пока backup не создан и не проверен по размеру файла.
+
+## 4.2. Restore БД при форс-мажоре
+
+Если после релиза требуется быстрый откат по данным:
+
+```bash
+ENV_FILE=docker/.env \
+COMPOSE_FILE=docker/<production-compose.yml> \
+STOP_APP_SERVICES=true \
+START_APP_SERVICES=false \
+bash docker/restore_postgres.sh ./tmp/db_backups/before-release-1.6.0/postgres.dump
+```
+
+Скрипт:
+
+- поднимает контейнер `db`, если он ещё не запущен;
+- при необходимости останавливает `server frontend`;
+- завершает активные подключения к целевой БД;
+- пересоздаёт базу;
+- заливает backup обратно.
+
+Если нужно автоматически поднять приложение после restore:
+
+```bash
+ENV_FILE=docker/.env \
+COMPOSE_FILE=docker/<production-compose.yml> \
+START_APP_SERVICES=true \
+bash docker/restore_postgres.sh ./tmp/db_backups/before-release-1.6.0/postgres.dump
+```
+
+Для полного отката на предыдущую рабочую версию используйте не только `postgres.dump`, но и:
+
+- `env.snapshot`
+- `compose.snapshot.yml`
+
+Практический порядок rollback:
+
+1. Остановить или откатить образы приложения на предыдущие теги.
+2. При необходимости вернуть старый `.env` из `env.snapshot`.
+3. Выполнить restore БД.
+4. Поднять стек снова.
+
 ## 5. Reverse proxy для `/agents` и консоли MinIO
 
-Для production с `docker-compose.2403.yml` отдельный `agents-proxy` не нужен.
+Для production с Traefik отдельный `agents-proxy` не нужен.
 
 Используется текущий `traefik`:
 
 - маршрут `/agents` проксирует публичную раздачу бинарников и каталогов из bucket `agents`;
 - отдельный host `minio.<domain>` открывает встроенную консоль MinIO;
-- `AGENT_ADAPTER_S3_ENDPOINT` при этом остаётся внутренним `http://minio:9000`.
+- `S3_ENDPOINT` при этом остаётся внутренним `http://minio:9000`.
 
 Важно:
 
@@ -156,7 +240,7 @@ CLI делает атомарную последовательность:
 
 ## 7. Ручной refresh после publish/promote
 
-Фоновый sync работает по `AGENT_ADAPTER_SYNC_INTERVAL_MIN`, но сервер также умеет ручной refresh:
+Фоновый sync работает по `AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN`, но сервер также умеет ручной refresh:
 
 ```text
 POST /api/agent-diagnostics/adapters/refresh

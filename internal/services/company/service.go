@@ -6,6 +6,7 @@ import (
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
+	contractdom "etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/interfaces"
 	"etalon-server/internal/domain/repositories"
@@ -13,6 +14,7 @@ import (
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
+	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/validators"
 	"fmt"
@@ -29,6 +31,7 @@ type serviceImpl struct {
 	frRepo          fiscal.Repository
 	linkRepo        repositories.LinkRepo
 	bitrixRepo      bitrix.Repository
+	contractSvc     contractdom.Service
 }
 
 // NewService создает сервис с зависимостями от репозиториев оборудования.
@@ -41,6 +44,7 @@ func NewService(
 	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
 	bitrixRepo bitrix.Repository,
+	contractSvc contractdom.Service,
 ) company.Service {
 	return &serviceImpl{
 		logger:          logger,
@@ -51,6 +55,7 @@ func NewService(
 		frRepo:          frRepo,
 		linkRepo:        linkRepo,
 		bitrixRepo:      bitrixRepo,
+		contractSvc:     contractSvc,
 	}
 }
 
@@ -458,4 +463,46 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 			return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
 		}
 	})
+}
+
+func (s *serviceImpl) SyncBitrixContract(ctx context.Context, companyID string) error {
+	if s.bitrixRepo == nil {
+		return fmt.Errorf("репозиторий Bitrix24 не настроен")
+	}
+	if s.contractSvc == nil {
+		return fmt.Errorf("сервис контрактов не настроен")
+	}
+
+	normalizedCompanyID := strings.TrimSpace(companyID)
+	if normalizedCompanyID == "" {
+		return fmt.Errorf("не передан идентификатор компании")
+	}
+
+	if _, err := s.companyRepo.GetByID(ctx, normalizedCompanyID); err != nil {
+		return err
+	}
+
+	mapping, err := s.bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, normalizedCompanyID)
+	if err != nil {
+		return err
+	}
+	if mapping == nil || mapping.BitrixServicePointID <= 0 {
+		return fmt.Errorf("для компании не настроено сопоставление с точкой Bitrix24")
+	}
+
+	point, err := s.bitrixRepo.GetServicePointByID(ctx, mapping.BitrixServicePointID)
+	if err != nil {
+		return err
+	}
+	if point == nil {
+		return fmt.Errorf("сопоставленная точка Bitrix24 не найдена")
+	}
+
+	snapshot := contractsvc.BuildDailySnapshotFromBitrixServicePoint(normalizedCompanyID, *point)
+	snapshot.SourceHash = buildBitrixPointContractSourceHash(*point)
+	return s.contractSvc.SyncDailySnapshots(ctx, []contractdom.DailyCompanyContractSnapshot{snapshot})
+}
+
+func buildBitrixPointContractSourceHash(point bitrix.ServicePoint) string {
+	return fmt.Sprintf("bitrix-service-point:%d:%d", point.B24ElementID, point.UpdatedAt.UTC().UnixNano())
 }

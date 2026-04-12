@@ -3,8 +3,11 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/gateways"
 	contractdom "etalon-server/internal/domain/contract"
+	userdom "etalon-server/internal/domain/user"
+	"etalon-server/internal/infra/config"
 	contractsvc "etalon-server/internal/services/contract"
 	api "etalon-server/internal/transport/http/dtos"
 	"fmt"
@@ -12,30 +15,43 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/response"
 
 	"github.com/go-chi/chi/v5"
+	"gorm.io/datatypes"
 )
 
 type BitrixHandler struct {
 	service      services.BitrixSyncService
 	contractRepo contractdom.Repository
 	contractSync gateways.ContractGateway
+	userRepo     userdom.Repository
+	cfg          *config.Config
 }
 
-func NewBitrixHandler(service services.BitrixSyncService, contractRepo contractdom.Repository, contractSync gateways.ContractGateway) *BitrixHandler {
+func NewBitrixHandler(
+	service services.BitrixSyncService,
+	contractRepo contractdom.Repository,
+	contractSync gateways.ContractGateway,
+	userRepo userdom.Repository,
+	cfg *config.Config,
+) *BitrixHandler {
 	return &BitrixHandler{
 		service:      service,
 		contractRepo: contractRepo,
 		contractSync: contractSync,
+		userRepo:     userRepo,
+		cfg:          cfg,
 	}
 }
 
 func (h *BitrixHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/service-points", h.ListServicePoints)
 	r.Get("/service-points/contract-sync/state", h.GetContractSyncState)
+	r.Get("/service-points/contract-sync/runs/{runID}", h.GetContractSyncRun)
 	r.Post("/service-points/contract-sync/refresh", h.RefreshContractSyncState)
 	r.Post("/service-points/contract-sync/execute", h.ExecuteContractSync)
 	r.Post("/service-points/refresh", h.RefreshServicePoints)
@@ -93,6 +109,36 @@ func (h *BitrixHandler) GetContractSyncState(w http.ResponseWriter, r *http.Requ
 	response.RespondWithJSON(w, http.StatusOK, payload)
 }
 
+func (h *BitrixHandler) GetContractSyncRun(w http.ResponseWriter, r *http.Request) {
+	if h.contractRepo == nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "репозиторий контрактов не инициализирован")
+		return
+	}
+
+	runID := strings.TrimSpace(chi.URLParam(r, "runID"))
+	if runID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "не передан идентификатор прогона")
+		return
+	}
+
+	run, err := h.contractRepo.GetServicePointSyncRunByID(r.Context(), runID)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if run == nil {
+		response.RespondWithError(w, http.StatusNotFound, "прогон синхронизации не найден")
+		return
+	}
+
+	payload, err := mapContractSyncRunDetails(*run)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, payload)
+}
+
 func (h *BitrixHandler) RefreshContractSyncState(w http.ResponseWriter, r *http.Request) {
 	if h.contractSync == nil {
 		response.RespondWithError(w, http.StatusInternalServerError, "воркер контрактной синхронизации не инициализирован")
@@ -125,26 +171,20 @@ func (h *BitrixHandler) buildContractSyncState(ctx context.Context) (api.Contrac
 	if err != nil {
 		return api.ContractSyncStateDTO{}, err
 	}
+	runs, err := h.contractRepo.ListServicePointSyncRuns(ctx, 20)
+	if err != nil {
+		return api.ContractSyncStateDTO{}, err
+	}
 
 	items := make([]api.ContractMailImportDTO, 0, len(imports))
 	for _, item := range imports {
-		items = append(items, api.ContractMailImportDTO{
-			ID:             item.ID,
-			MessageID:      item.MessageID,
-			AttachmentName: item.AttachmentName,
-			AttachmentHash: item.AttachmentHash,
-			ReceivedAt:     item.ReceivedAt,
-			Status:         item.Status,
-			ErrorText:      item.ErrorText,
-			ProcessedAt:    item.ProcessedAt,
-			RowsCount:      countMailImportRows(item.ReportRows),
-			CreatedAt:      item.CreatedAt,
-			UpdatedAt:      item.UpdatedAt,
-		})
+		items = append(items, mapMailImportToDTO(item))
 	}
 
 	payload := api.ContractSyncStateDTO{
 		RecentImports: items,
+		RecentRuns:    mapContractSyncRunSummaries(runs),
+		AutoSync:      h.buildContractSyncAutoExecutionDTO(),
 		UpsertItems:   make([]api.ContractSyncQueueItemDTO, 0),
 		DeleteItems:   make([]api.ContractSyncQueueItemDTO, 0),
 	}
@@ -153,14 +193,12 @@ func (h *BitrixHandler) buildContractSyncState(ctx context.Context) (api.Contrac
 	}
 	_ = conflicts
 
-	activeImport := findActiveReportImport(imports)
-	if activeImport == nil {
-		return payload, nil
-	}
-
-	rows, err := decodeContractReportRows(activeImport.ReportRows)
+	activeImports, rows, err := findActiveReportImports(imports)
 	if err != nil {
 		return api.ContractSyncStateDTO{}, err
+	}
+	if len(activeImports) == 0 {
+		return payload, nil
 	}
 
 	preview, err := h.service.PreviewContractReportSync(ctx, rows)
@@ -168,7 +206,8 @@ func (h *BitrixHandler) buildContractSyncState(ctx context.Context) (api.Contrac
 		return api.ContractSyncStateDTO{}, err
 	}
 
-	activeImportDTO := mapMailImportToDTO(*activeImport)
+	payload.ActiveReportImports = mapMailImportsToDTO(activeImports)
+	activeImportDTO := mapMailImportToDTO(activeImports[0])
 	payload.ActiveReportImport = &activeImportDTO
 	payload.ReportRows = preview.ReportRows
 	payload.ToCreate = preview.ToCreate
@@ -192,15 +231,19 @@ func (h *BitrixHandler) ExecuteContractSync(w http.ResponseWriter, r *http.Reque
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	activeImport := findActiveReportImport(imports)
-	if activeImport == nil {
+	activeImports, rows, err := findActiveReportImports(imports)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(activeImports) == 0 {
 		response.RespondWithError(w, http.StatusBadRequest, "нет успешно обработанного отчёта для синхронизации")
 		return
 	}
 
-	rows, err := decodeContractReportRows(activeImport.ReportRows)
-	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+	preview, previewErr := h.service.PreviewContractReportSync(r.Context(), rows)
+	if previewErr != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, previewErr.Error())
 		return
 	}
 
@@ -210,11 +253,45 @@ func (h *BitrixHandler) ExecuteContractSync(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	startedAt := time.Now().UTC()
 	result, err := h.service.ExecuteContractReportSync(r.Context(), rows, payload)
+	completedAt := time.Now().UTC()
+	actor := h.resolveContractSyncRunActor(r)
 	if err != nil {
+		h.storeContractSyncRun(
+			r.Context(),
+			buildContractSyncRunStoreInput(
+				contractdom.ServicePointSyncRunModeManual,
+				contractdom.ServicePointSyncRunStatusFailed,
+				activeImports,
+				filterSelectedContractSyncQueueItems(payload.SelectedKeys, payload.QueueItems),
+				preview,
+				nil,
+				actor,
+				startedAt,
+				&completedAt,
+				err.Error(),
+			),
+		)
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	h.storeContractSyncRun(
+		r.Context(),
+		buildContractSyncRunStoreInput(
+			contractdom.ServicePointSyncRunModeManual,
+			contractSyncRunStatusFromResult(result),
+			activeImports,
+			filterSelectedContractSyncQueueItems(payload.SelectedKeys, payload.QueueItems),
+			preview,
+			result,
+			actor,
+			startedAt,
+			&completedAt,
+			"",
+		),
+	)
 
 	response.RespondWithJSON(w, http.StatusOK, api.ContractSyncExecuteResultDTO{
 		Processed:    result.Processed,
@@ -456,6 +533,7 @@ func uniqueSelectedKeys(values []string) []string {
 func mapMailImportToDTO(item contractdom.MailImport) api.ContractMailImportDTO {
 	return api.ContractMailImportDTO{
 		ID:             item.ID,
+		Source:         mailImportSourceKey(item),
 		MessageID:      item.MessageID,
 		AttachmentName: item.AttachmentName,
 		AttachmentHash: item.AttachmentHash,
@@ -469,7 +547,17 @@ func mapMailImportToDTO(item contractdom.MailImport) api.ContractMailImportDTO {
 	}
 }
 
-func findActiveReportImport(items []contractdom.MailImport) *contractdom.MailImport {
+func mapMailImportsToDTO(items []contractdom.MailImport) []api.ContractMailImportDTO {
+	result := make([]api.ContractMailImportDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, mapMailImportToDTO(item))
+	}
+	return result
+}
+
+func findActiveReportImports(items []contractdom.MailImport) ([]contractdom.MailImport, []contractsvc.ContractReportRow, error) {
+	activeImports := make([]contractdom.MailImport, 0, 2)
+	seenSources := make(map[string]struct{}, 2)
 	for i := range items {
 		if items[i].Status != contractdom.MailImportStatusProcessed {
 			continue
@@ -477,9 +565,32 @@ func findActiveReportImport(items []contractdom.MailImport) *contractdom.MailImp
 		if len(items[i].ReportRows) == 0 {
 			continue
 		}
-		return &items[i]
+
+		rows, err := decodeContractReportRows(items[i].ReportRows)
+		if err != nil {
+			return nil, nil, err
+		}
+		source := reportImportSourceKey(rows)
+		if _, exists := seenSources[source]; exists {
+			continue
+		}
+		seenSources[source] = struct{}{}
+		activeImports = append(activeImports, items[i])
 	}
-	return nil
+	if len(activeImports) == 0 {
+		return nil, nil, nil
+	}
+
+	mergedRows := make([]contractsvc.ContractReportRow, 0, 1024)
+	for _, item := range activeImports {
+		rows, err := decodeContractReportRows(item.ReportRows)
+		if err != nil {
+			return nil, nil, err
+		}
+		mergedRows = append(mergedRows, rows...)
+	}
+	mergedRows = contractsvc.AggregateContractReportRows(mergedRows)
+	return activeImports, mergedRows, nil
 }
 
 func decodeContractReportRows(raw []byte) ([]contractsvc.ContractReportRow, error) {
@@ -499,6 +610,32 @@ func countMailImportRows(raw []byte) int {
 		return 0
 	}
 	return len(rows)
+}
+
+func reportImportSourceKey(rows []contractsvc.ContractReportRow) string {
+	for _, row := range rows {
+		if source := reportImportSourceKeyByCode(row.ServicePointCode); source != "" {
+			return source
+		}
+		if source := reportImportSourceKeyByCode(row.ContractorID); source != "" {
+			return source
+		}
+	}
+	return "ru"
+}
+
+func reportImportSourceKeyByCode(code string) string {
+	normalizedCode := strings.ToLower(strings.TrimSpace(code))
+	switch {
+	case strings.HasPrefix(normalizedCode, "id"):
+		return "id"
+	case strings.HasPrefix(normalizedCode, "ru"):
+		return "ru"
+	case normalizedCode == "":
+		return ""
+	default:
+		return "ru"
+	}
 }
 
 func mapContractSyncQueueItems(items []services.ContractReportSyncPlanItem) []api.ContractSyncQueueItemDTO {
@@ -569,6 +706,487 @@ func mapContractSyncExecuteErrors(items []services.ContractReportSyncErrorDetail
 		})
 	}
 	return result
+}
+
+type contractSyncRunActor struct {
+	ActorType   string
+	ActorUserID *uint
+	ActorName   *string
+}
+
+type contractSyncRunStoreInput struct {
+	Mode          string
+	Status        string
+	Actor         contractSyncRunActor
+	StartedAt     time.Time
+	CompletedAt   *time.Time
+	Note          *string
+	ActiveImports []contractdom.MailImport
+	Preview       *services.ContractReportSyncPreview
+	QueueItems    []services.ContractReportSyncPlanItem
+	Result        *services.ContractReportSyncExecuteResult
+}
+
+func (h *BitrixHandler) buildContractSyncAutoExecutionDTO() *api.ContractSyncAutoExecutionDTO {
+	if h.cfg == nil {
+		return nil
+	}
+	return &api.ContractSyncAutoExecutionDTO{
+		Enabled:           h.cfg.EnableContractBitrixAutoSync,
+		IntervalMinutes:   int(h.cfg.ContractSyncInterval / time.Minute),
+		AppliesCreates:    true,
+		AppliesUpdates:    true,
+		AppliesDeletes:    h.cfg.ContractBitrixAutoSyncApplyDeletes,
+		TriggerLabel:      "После планового почтового прогона",
+		SafetyDescription: "Автоматический режим применяет create/update. Удаления и спорные строки можно оставить только на ручное подтверждение.",
+	}
+}
+
+func (h *BitrixHandler) resolveContractSyncRunActor(r *http.Request) contractSyncRunActor {
+	actor := contractSyncRunActor{
+		ActorType: contractdom.ServicePointSyncRunActorSystem,
+		ActorName: nullableStringPtr("Система"),
+	}
+	if r == nil {
+		return actor
+	}
+
+	rawUserID, ok := r.Context().Value(contextkeys.UserIDContextKey).(string)
+	if !ok || strings.TrimSpace(rawUserID) == "" {
+		return actor
+	}
+
+	parsedUserID, err := strconv.ParseUint(strings.TrimSpace(rawUserID), 10, 32)
+	if err != nil || parsedUserID == 0 {
+		return actor
+	}
+
+	userID := uint(parsedUserID)
+	actor.ActorType = contractdom.ServicePointSyncRunActorUser
+	actor.ActorUserID = &userID
+	if h.userRepo == nil {
+		actor.ActorName = nullableStringPtr(fmt.Sprintf("Пользователь #%d", userID))
+		return actor
+	}
+
+	userItem, err := h.userRepo.GetByID(r.Context(), userID)
+	if err != nil || userItem == nil {
+		actor.ActorName = nullableStringPtr(fmt.Sprintf("Пользователь #%d", userID))
+		return actor
+	}
+
+	name := strings.TrimSpace(userItem.FullName)
+	if name == "" {
+		name = strings.TrimSpace(userItem.Username)
+	}
+	if name == "" {
+		name = fmt.Sprintf("Пользователь #%d", userID)
+	}
+	actor.ActorName = nullableStringPtr(name)
+	return actor
+}
+
+func buildContractSyncRunStoreInput(
+	mode string,
+	status string,
+	activeImports []contractdom.MailImport,
+	queueItems []services.ContractReportSyncPlanItem,
+	preview *services.ContractReportSyncPreview,
+	result *services.ContractReportSyncExecuteResult,
+	actor contractSyncRunActor,
+	startedAt time.Time,
+	completedAt *time.Time,
+	note string,
+) contractSyncRunStoreInput {
+	return contractSyncRunStoreInput{
+		Mode:          mode,
+		Status:        status,
+		Actor:         actor,
+		StartedAt:     startedAt,
+		CompletedAt:   completedAt,
+		Note:          nullableStringPtr(note),
+		ActiveImports: activeImports,
+		Preview:       preview,
+		QueueItems:    queueItems,
+		Result:        result,
+	}
+}
+
+func (h *BitrixHandler) storeContractSyncRun(ctx context.Context, input contractSyncRunStoreInput) {
+	if h.contractRepo == nil {
+		return
+	}
+
+	activeImportsJSON, err := marshalContractSyncRunActiveImports(input.ActiveImports)
+	if err != nil {
+		return
+	}
+	queueItemsJSON, err := marshalContractSyncRunQueueItems(input.QueueItems)
+	if err != nil {
+		return
+	}
+	errorsJSON, err := marshalContractSyncRunErrors(input.Result)
+	if err != nil {
+		return
+	}
+	errorDetailsJSON, err := marshalContractSyncRunErrorDetails(input.Result)
+	if err != nil {
+		return
+	}
+
+	run := &contractdom.ServicePointSyncRun{
+		Mode:          strings.TrimSpace(input.Mode),
+		Status:        strings.TrimSpace(input.Status),
+		ActorType:     strings.TrimSpace(input.Actor.ActorType),
+		ActorUserID:   input.Actor.ActorUserID,
+		ActorName:     input.Actor.ActorName,
+		Note:          input.Note,
+		StartedAt:     input.StartedAt,
+		CompletedAt:   input.CompletedAt,
+		ActiveImports: datatypes.JSON(activeImportsJSON),
+		QueueItems:    datatypes.JSON(queueItemsJSON),
+		Errors:        datatypes.JSON(errorsJSON),
+		ErrorDetails:  datatypes.JSON(errorDetailsJSON),
+	}
+	if input.Preview != nil {
+		run.ReportRows = input.Preview.ReportRows
+		run.ToCreate = input.Preview.ToCreate
+		run.ToUpdate = input.Preview.ToUpdate
+		run.ToDelete = input.Preview.ToDelete
+		run.BlockedRows = input.Preview.BlockedRows
+	}
+	if input.Result != nil {
+		run.Processed = input.Result.Processed
+		run.Created = input.Result.Created
+		run.Updated = input.Result.Updated
+		run.Deleted = input.Result.Deleted
+	}
+	run.LastUpdatedBy = contractSyncRunUpdatedBy(input)
+
+	_ = h.contractRepo.CreateServicePointSyncRun(ctx, run)
+}
+
+func contractSyncRunUpdatedBy(input contractSyncRunStoreInput) string {
+	if strings.TrimSpace(input.Mode) == contractdom.ServicePointSyncRunModeAutomatic {
+		return "contract_sync_auto"
+	}
+	if input.Actor.ActorUserID != nil && *input.Actor.ActorUserID > 0 {
+		return fmt.Sprintf("user:%d", *input.Actor.ActorUserID)
+	}
+	return "contract_sync_manual"
+}
+
+func contractSyncRunStatusFromResult(result *services.ContractReportSyncExecuteResult) string {
+	if result == nil {
+		return contractdom.ServicePointSyncRunStatusFailed
+	}
+	if len(result.Errors) > 0 || len(result.ErrorDetails) > 0 {
+		return contractdom.ServicePointSyncRunStatusPartial
+	}
+	return contractdom.ServicePointSyncRunStatusSuccess
+}
+
+func filterSelectedContractSyncQueueItems(
+	selectedKeys []string,
+	items []services.ContractReportSyncPlanItem,
+) []services.ContractReportSyncPlanItem {
+	keySet := make(map[string]struct{}, len(selectedKeys))
+	for _, key := range selectedKeys {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		keySet[trimmedKey] = struct{}{}
+	}
+	if len(keySet) == 0 {
+		return nil
+	}
+
+	filtered := make([]services.ContractReportSyncPlanItem, 0, len(items))
+	for _, item := range items {
+		if _, ok := keySet[item.Key]; ok {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func mapContractSyncRunSummaries(items []contractdom.ServicePointSyncRun) []api.ContractSyncRunSummaryDTO {
+	result := make([]api.ContractSyncRunSummaryDTO, 0, len(items))
+	for _, item := range items {
+		summary, err := mapContractSyncRunSummary(item)
+		if err != nil {
+			continue
+		}
+		result = append(result, summary)
+	}
+	return result
+}
+
+func mapContractSyncRunSummary(item contractdom.ServicePointSyncRun) (api.ContractSyncRunSummaryDTO, error) {
+	imports, err := decodeContractSyncRunImports(item.ActiveImports)
+	if err != nil {
+		return api.ContractSyncRunSummaryDTO{}, err
+	}
+	return api.ContractSyncRunSummaryDTO{
+		ID:            item.ID,
+		Status:        item.Status,
+		Mode:          item.Mode,
+		ActorType:     item.ActorType,
+		ActorUserID:   item.ActorUserID,
+		ActorName:     strings.TrimSpace(dereferenceString(item.ActorName)),
+		Note:          strings.TrimSpace(dereferenceString(item.Note)),
+		StartedAt:     item.StartedAt,
+		CompletedAt:   item.CompletedAt,
+		ReportRows:    item.ReportRows,
+		ToCreate:      item.ToCreate,
+		ToUpdate:      item.ToUpdate,
+		ToDelete:      item.ToDelete,
+		BlockedRows:   item.BlockedRows,
+		Processed:     item.Processed,
+		Created:       item.Created,
+		Updated:       item.Updated,
+		Deleted:       item.Deleted,
+		ActiveImports: imports,
+	}, nil
+}
+
+func mapContractSyncRunDetails(item contractdom.ServicePointSyncRun) (api.ContractSyncRunDetailsDTO, error) {
+	summary, err := mapContractSyncRunSummary(item)
+	if err != nil {
+		return api.ContractSyncRunDetailsDTO{}, err
+	}
+
+	queueItems, err := decodeContractSyncRunQueueItems(item.QueueItems)
+	if err != nil {
+		return api.ContractSyncRunDetailsDTO{}, err
+	}
+	errors, err := decodeContractSyncRunErrors(item.Errors)
+	if err != nil {
+		return api.ContractSyncRunDetailsDTO{}, err
+	}
+	errorDetails, err := decodeContractSyncRunErrorDetails(item.ErrorDetails)
+	if err != nil {
+		return api.ContractSyncRunDetailsDTO{}, err
+	}
+
+	return api.ContractSyncRunDetailsDTO{
+		ContractSyncRunSummaryDTO: summary,
+		QueueItems:                queueItems,
+		Errors:                    errors,
+		ErrorDetails:              errorDetails,
+	}, nil
+}
+
+func mailImportSourceKey(item contractdom.MailImport) string {
+	rows, err := decodeContractReportRows(item.ReportRows)
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+	return reportImportSourceKey(rows)
+}
+
+func marshalContractSyncRunActiveImports(items []contractdom.MailImport) ([]byte, error) {
+	snapshots := make([]contractdom.ServicePointSyncRunImportSnapshot, 0, len(items))
+	for _, item := range items {
+		snapshots = append(snapshots, contractdom.ServicePointSyncRunImportSnapshot{
+			ID:             item.ID,
+			Source:         mailImportSourceKey(item),
+			MessageID:      item.MessageID,
+			AttachmentName: item.AttachmentName,
+			AttachmentHash: item.AttachmentHash,
+			ReceivedAt:     item.ReceivedAt,
+			ProcessedAt:    item.ProcessedAt,
+			Status:         item.Status,
+			RowsCount:      countMailImportRows(item.ReportRows),
+		})
+	}
+	return json.Marshal(snapshots)
+}
+
+func marshalContractSyncRunQueueItems(items []services.ContractReportSyncPlanItem) ([]byte, error) {
+	snapshots := make([]contractdom.ServicePointSyncRunQueueItemSnapshot, 0, len(items))
+	for _, item := range items {
+		snapshots = append(snapshots, contractdom.ServicePointSyncRunQueueItemSnapshot{
+			Key:                 item.Key,
+			Action:              string(item.Action),
+			ServicePointName:    item.ServicePointName,
+			ServicePointCode:    item.ServicePointCode,
+			ContractorID:        item.ContractorID,
+			ContractorName:      item.ContractorName,
+			ContractType:        item.ContractType,
+			B24ElementID:        item.B24ElementID,
+			CurrentName:         item.CurrentName,
+			CurrentCode:         item.CurrentCode,
+			CurrentContractType: item.CurrentContractType,
+			ChangeSet:           mapContractSyncRunFieldDiffSnapshots(item.ChangeSet),
+			MatchedPointIDs:     item.MatchedPointIDs,
+			FilledFields:        item.FilledFields,
+			IsMapped:            item.IsMapped,
+			Reason:              item.Reason,
+		})
+	}
+	return json.Marshal(snapshots)
+}
+
+func mapContractSyncRunFieldDiffSnapshots(items []services.ContractReportSyncFieldDiff) []contractdom.ServicePointSyncRunFieldDiffSnapshot {
+	result := make([]contractdom.ServicePointSyncRunFieldDiffSnapshot, 0, len(items))
+	for _, item := range items {
+		result = append(result, contractdom.ServicePointSyncRunFieldDiffSnapshot{
+			Field:        item.Field,
+			Label:        item.Label,
+			CurrentValue: item.CurrentValue,
+			NextValue:    item.NextValue,
+		})
+	}
+	return result
+}
+
+func marshalContractSyncRunErrors(result *services.ContractReportSyncExecuteResult) ([]byte, error) {
+	if result == nil || len(result.Errors) == 0 {
+		return json.Marshal([]string{})
+	}
+	return json.Marshal(result.Errors)
+}
+
+func marshalContractSyncRunErrorDetails(result *services.ContractReportSyncExecuteResult) ([]byte, error) {
+	if result == nil || len(result.ErrorDetails) == 0 {
+		return json.Marshal([]contractdom.ServicePointSyncRunErrorDetailSnapshot{})
+	}
+
+	items := make([]contractdom.ServicePointSyncRunErrorDetailSnapshot, 0, len(result.ErrorDetails))
+	for _, item := range result.ErrorDetails {
+		items = append(items, contractdom.ServicePointSyncRunErrorDetailSnapshot{
+			Key:              item.Key,
+			Action:           string(item.Action),
+			ServicePointName: item.ServicePointName,
+			ServicePointCode: item.ServicePointCode,
+			B24ElementID:     item.B24ElementID,
+			Message:          item.Message,
+		})
+	}
+	return json.Marshal(items)
+}
+
+func decodeContractSyncRunImports(raw []byte) ([]api.ContractMailImportDTO, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	items := make([]contractdom.ServicePointSyncRunImportSnapshot, 0)
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+
+	result := make([]api.ContractMailImportDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractMailImportDTO{
+			ID:             item.ID,
+			Source:         item.Source,
+			MessageID:      item.MessageID,
+			AttachmentName: item.AttachmentName,
+			AttachmentHash: item.AttachmentHash,
+			ReceivedAt:     item.ReceivedAt,
+			Status:         item.Status,
+			ProcessedAt:    item.ProcessedAt,
+			RowsCount:      item.RowsCount,
+		})
+	}
+	return result, nil
+}
+
+func decodeContractSyncRunQueueItems(raw []byte) ([]api.ContractSyncQueueItemDTO, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	items := make([]contractdom.ServicePointSyncRunQueueItemSnapshot, 0)
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+
+	result := make([]api.ContractSyncQueueItemDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncQueueItemDTO{
+			Key:                 item.Key,
+			Action:              item.Action,
+			ServicePointName:    item.ServicePointName,
+			ServicePointCode:    item.ServicePointCode,
+			ContractorID:        item.ContractorID,
+			ContractorName:      item.ContractorName,
+			ContractType:        item.ContractType,
+			B24ElementID:        item.B24ElementID,
+			CurrentName:         item.CurrentName,
+			CurrentCode:         item.CurrentCode,
+			CurrentContractType: item.CurrentContractType,
+			ChangeSet:           mapContractSyncRunFieldDiffsToDTO(item.ChangeSet),
+			MatchedPointIDs:     item.MatchedPointIDs,
+			FilledFields:        item.FilledFields,
+			IsMapped:            item.IsMapped,
+			Reason:              item.Reason,
+		})
+	}
+	return result, nil
+}
+
+func mapContractSyncRunFieldDiffsToDTO(items []contractdom.ServicePointSyncRunFieldDiffSnapshot) []api.ContractSyncFieldDiffDTO {
+	result := make([]api.ContractSyncFieldDiffDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncFieldDiffDTO{
+			Field:        item.Field,
+			Label:        item.Label,
+			CurrentValue: item.CurrentValue,
+			NextValue:    item.NextValue,
+		})
+	}
+	return result
+}
+
+func decodeContractSyncRunErrors(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	items := make([]string, 0)
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func decodeContractSyncRunErrorDetails(raw []byte) ([]api.ContractSyncExecuteErrorDTO, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	items := make([]contractdom.ServicePointSyncRunErrorDetailSnapshot, 0)
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+
+	result := make([]api.ContractSyncExecuteErrorDTO, 0, len(items))
+	for _, item := range items {
+		result = append(result, api.ContractSyncExecuteErrorDTO{
+			Key:              item.Key,
+			Action:           item.Action,
+			ServicePointName: item.ServicePointName,
+			ServicePointCode: item.ServicePointCode,
+			B24ElementID:     item.B24ElementID,
+			Message:          item.Message,
+		})
+	}
+	return result, nil
+}
+
+func nullableStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func dereferenceString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 type contractConflictDetails struct {

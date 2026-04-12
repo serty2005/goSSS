@@ -80,7 +80,7 @@ func MigrateLegacyPublishedAgentAdapters(db *gorm.DB) error {
 // EnsureDefaultAgentAdapterCatalog подготавливает demo-каталог для локальной разработки,
 // если S3 source of truth отключён и в новой release/channel-модели ещё нет записей.
 func EnsureDefaultAgentAdapterCatalog(cfg *config.Config, db *gorm.DB) error {
-	if cfg != nil && cfg.AgentAdapterS3Enabled {
+	if cfg != nil && cfg.AgentAdapterCatalog.Enabled {
 		return nil
 	}
 

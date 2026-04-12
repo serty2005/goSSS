@@ -6,6 +6,7 @@ import (
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/pyrus"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
@@ -22,26 +23,29 @@ import (
 )
 
 type UserHandler struct {
-	userRepo     user.Repository
-	bitrixRepo   bitrix.Repository
-	pyrusRepo    pyrus.Repository
-	pyrusService services.PyrusSyncService
-	cfg          *config.Config
+	userRepo      user.Repository
+	bitrixRepo    bitrix.Repository
+	pyrusRepo     pyrus.Repository
+	telephonyRepo telephony.Repository
+	pyrusService  services.PyrusSyncService
+	cfg           *config.Config
 }
 
 func NewUserHandler(
 	userRepo user.Repository,
 	bitrixRepo bitrix.Repository,
 	pyrusRepo pyrus.Repository,
+	telephonyRepo telephony.Repository,
 	pyrusService services.PyrusSyncService,
 	cfg *config.Config,
 ) *UserHandler {
 	return &UserHandler{
-		userRepo:     userRepo,
-		bitrixRepo:   bitrixRepo,
-		pyrusRepo:    pyrusRepo,
-		pyrusService: pyrusService,
-		cfg:          cfg,
+		userRepo:      userRepo,
+		bitrixRepo:    bitrixRepo,
+		pyrusRepo:     pyrusRepo,
+		telephonyRepo: telephonyRepo,
+		pyrusService:  pyrusService,
+		cfg:           cfg,
 	}
 }
 
@@ -227,6 +231,7 @@ func (h *UserHandler) UpdateMyIntegrations(w http.ResponseWriter, r *http.Reques
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить интеграции")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), currentUserID, u.Integrations, normalized)
 	u.Integrations = normalized
 	h.persistVerifiedExternalMaps(r.Context(), u)
 
@@ -437,7 +442,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать пользователя")
 		return
 	}
-
+	h.syncMegafonBindingsForUser(r.Context(), newUser.ID, nil, newUser.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), newUser)
 
 	response.RespondWithJSON(w, http.StatusCreated, h.toUserDTO(r.Context(), *newUser))
@@ -545,6 +550,7 @@ func (h *UserHandler) RestoreDeletedUser(w http.ResponseWriter, r *http.Request)
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось восстановить пользователя")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), deletedUser.ID, nil, deletedUser.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), deletedUser)
 
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *deletedUser))
@@ -634,6 +640,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		u.ScheduleType = schedule
 	}
 	u.FullName = buildFullName(u.FirstName, u.LastName)
+	prevIntegrations := append([]user.Integration(nil), u.Integrations...)
 
 	if dto.Integrations != nil {
 		normalizedIntegrations, normalizeErr := h.normalizeRequestedIntegrations(r.Context(), u, dto.Integrations, false)
@@ -693,6 +700,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось обновить пользователя")
 		return
 	}
+	h.syncMegafonBindingsForUser(r.Context(), u.ID, prevIntegrations, u.Integrations)
 	h.persistVerifiedExternalMaps(r.Context(), u)
 
 	response.RespondWithJSON(w, http.StatusOK, h.toUserDTO(r.Context(), *u))
@@ -944,6 +952,17 @@ func (h *UserHandler) verifyPyrusIntegration(ctx context.Context, u *user.User, 
 	return services.VerifyPyrusUserMatch(u, externalID, members)
 }
 
+func (h *UserHandler) verifyMegafonIntegration(ctx context.Context, externalID string) (bool, string) {
+	if h.telephonyRepo == nil {
+		return false, ""
+	}
+	item, err := h.telephonyRepo.GetProviderEmployee(ctx, telephony.ProviderMegafonVATS, externalID)
+	if err != nil || item == nil {
+		return false, ""
+	}
+	return true, strings.TrimSpace(item.EmployeeName)
+}
+
 func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integration *user.Integration) {
 	if integration == nil {
 		return
@@ -970,6 +989,11 @@ func (h *UserHandler) enrichIntegration(ctx context.Context, u *user.User, integ
 		}
 		if verifiedEmail != "" && (u.Email == nil || strings.TrimSpace(*u.Email) == "") {
 			u.Email = normalizeOptionalString(&verifiedEmail)
+		}
+	case user.ExternalTypeMegafon:
+		integration.IsVerified, integration.VerifiedName = h.verifyMegafonIntegration(ctx, integration.ExternalID)
+		if integration.IsVerified {
+			integration.IsLocked = true
 		}
 	default:
 		integration.IsLocked = false
@@ -1502,6 +1526,49 @@ func normalizeOptionalString(value *string) *string {
 	return &trimmed
 }
 
+func (h *UserHandler) syncMegafonBindingsForUser(
+	ctx context.Context,
+	userID uint,
+	previous []user.Integration,
+	next []user.Integration,
+) {
+	if h == nil || h.telephonyRepo == nil || userID == 0 {
+		return
+	}
+
+	actions := make(map[string]*uint)
+	for _, integration := range previous {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeMegafon {
+			continue
+		}
+		login := strings.TrimSpace(integration.ExternalID)
+		if login == "" {
+			continue
+		}
+		actions[login] = nil
+	}
+	for _, integration := range next {
+		if strings.TrimSpace(strings.ToLower(integration.IntegrationType)) != user.ExternalTypeMegafon {
+			continue
+		}
+		login := strings.TrimSpace(integration.ExternalID)
+		if login == "" {
+			continue
+		}
+		if integration.IsEnabled {
+			actions[login] = &userID
+			continue
+		}
+		actions[login] = nil
+	}
+
+	for login, targetUserID := range actions {
+		if err := h.telephonyRepo.SyncCallEmployeeUser(ctx, telephony.ProviderMegafonVATS, login, targetUserID); err != nil {
+			continue
+		}
+	}
+}
+
 func roleDescription(role string) string {
 	switch role {
 	case user.RoleAdmin:
@@ -1563,6 +1630,8 @@ func validateExternalFields(rawType, rawID *string) (*string, *string, error) {
 			return nil, nil, fmt.Errorf("для Bitrix24 ID должен быть числом")
 		case user.ExternalTypePyrus:
 			return nil, nil, fmt.Errorf("для Pyrus ID должен быть числом")
+		case user.ExternalTypeMegafon:
+			return nil, nil, fmt.Errorf("для Мегафон ВАТС нужно указать логин сотрудника")
 		default:
 			return nil, nil, fmt.Errorf("некорректный ID внешней системы")
 		}

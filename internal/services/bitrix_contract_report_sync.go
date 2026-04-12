@@ -199,11 +199,12 @@ func buildStatesByCode(statesByName map[string][]bitrixServicePointState) map[st
 	statesByCode := make(map[string][]bitrixServicePointState)
 	for _, items := range statesByName {
 		for _, item := range items {
-			code := normalizeCell(item.CurrentCode)
-			if code == "" {
-				continue
+			for _, code := range servicePointCodeLookupKeys(item.CurrentCode) {
+				if code == "" {
+					continue
+				}
+				statesByCode[code] = append(statesByCode[code], item)
 			}
-			statesByCode[code] = append(statesByCode[code], item)
 		}
 	}
 	return statesByCode

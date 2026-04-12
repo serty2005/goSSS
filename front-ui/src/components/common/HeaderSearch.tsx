@@ -81,10 +81,6 @@ const HeaderSearch: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
-  const currentTerm = searchParams.get('term') || '';
-  const showInactive = ['1', 'true', 'yes', 'on'].includes((searchParams.get('show_inactive') || '').toLowerCase());
-  const [searchTerm, setSearchTerm] = useState(currentTerm);
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const isBitrixEnabled = user?.bitrix_enabled === true;
@@ -111,36 +107,6 @@ const HeaderSearch: React.FC = () => {
     })),
     [t],
   );
-
-  useEffect(() => {
-    setSearchTerm(currentTerm);
-  }, [currentTerm]);
-
-  const onGlobalSearch = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const params = new URLSearchParams();
-    params.set('term', trimmed);
-    if (showInactive) {
-      params.set('show_inactive', '1');
-    }
-    navigate(`/search?${params.toString()}`);
-  };
-
-  const onToggleShowInactive = (nextValue: boolean) => {
-    const params = new URLSearchParams(searchParams);
-    if (nextValue) {
-      params.set('show_inactive', '1');
-    } else {
-      params.delete('show_inactive');
-    }
-    if (currentTerm || searchTerm) {
-      params.set('term', (searchTerm || currentTerm).trim());
-      navigate(`/search?${params.toString()}`);
-    } else if (location.pathname.startsWith('/search')) {
-      navigate(`/search?${params.toString()}`);
-    }
-  };
 
   const isTicketsPage = location.pathname.startsWith('/tickets');
   const isTicketsListPage = location.pathname === '/tickets';
@@ -701,6 +667,10 @@ const HeaderSearch: React.FC = () => {
   };
 
   if (isTicketsPage) {
+    const isBulkAssignMode =
+      isTicketsListPage
+      && archiveMode !== 'archive'
+      && selectedTicketIDs.length > 0;
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
     const filterContent = (
       <Space direction="vertical" size="small" style={{ width: 420, maxWidth: 'min(420px, calc(100vw - 40px))' }}>
@@ -874,21 +844,31 @@ const HeaderSearch: React.FC = () => {
       </Space>
     );
 
+    if (isBulkAssignMode) {
+      return (
+        <Select
+          placeholder={t('layout:headerSearch.ticket.bulkAssign', {
+            count: selectedTicketIDs.length,
+          })}
+          options={assigneeOptions}
+          loading={!assigneesRes || bulkAssignMutation.isPending}
+          style={{ width: isCompact ? 220 : 280, maxWidth: '100%' }}
+          onChange={(value) => {
+            const next = Number(value);
+            if (!next || selectedTicketIDs.length === 0) {
+              return;
+            }
+            bulkAssignMutation.mutate({
+              ids: selectedTicketIDs,
+              assigneeID: next,
+            });
+          }}
+        />
+      );
+    }
+
     return (
       <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
-        {selectedTicketIDs.length >= 1 && archiveMode !== 'archive' && (
-          <Select
-            placeholder={t('layout:headerSearch.ticket.bulkAssign', { count: selectedTicketIDs.length })}
-            options={assigneeOptions}
-            loading={!assigneesRes || bulkAssignMutation.isPending}
-            style={{ width: isCompact ? 190 : 230 }}
-            onChange={(value) => {
-              const next = Number(value);
-              if (!next || selectedTicketIDs.length === 0) return;
-              bulkAssignMutation.mutate({ ids: selectedTicketIDs, assigneeID: next });
-            }}
-          />
-        )}
         {!isHeaderNarrow && (
           <Segmented
             className="ticket-header-inline-archive"
@@ -1014,23 +994,7 @@ const HeaderSearch: React.FC = () => {
   }
 
 
-  return (
-    <Space size="small">
-      <Input.Search
-        placeholder={t('layout:headerSearch.global.placeholder')}
-        allowClear
-        value={searchTerm}
-        onChange={(event) => setSearchTerm(event.target.value)}
-        onSearch={onGlobalSearch}
-        style={{ width: 360 }}
-        className="header-search-input"
-      />
-      <Space size={6}>
-        <Switch size="small" checked={showInactive} onChange={onToggleShowInactive} />
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>{t('layout:headerSearch.global.toggleWithoutContract')}</span>
-      </Space>
-    </Space>
-  );
+  return null;
 };
 
 export default HeaderSearch;
