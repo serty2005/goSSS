@@ -46,7 +46,7 @@ const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const login = useAuthStore((state) => state.login);
-  const { locale, supportedLocales } = useAppLocale();
+  const { locale, builtInSupportedLocales } = useAppLocale();
 
   const onFinish = async (values: LoginFormValues) => {
     setLoading(true);
@@ -114,7 +114,7 @@ const LoginPage: React.FC = () => {
         <Space direction="vertical" size={10} style={{ width: '100%', alignItems: 'center' }}>
           <Typography.Text type="secondary">{t('auth:login.locale.label')}</Typography.Text>
           <Space size={12}>
-            {supportedLocales.map((supportedLocale) => {
+            {builtInSupportedLocales.map((supportedLocale) => {
               const isActive = supportedLocale.code === locale;
               return (
                 <form

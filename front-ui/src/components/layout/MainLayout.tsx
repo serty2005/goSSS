@@ -73,10 +73,10 @@ type TicketNotificationItem = {
 };
 
 const colorLabelKeys: Record<EditableColorKey, string> = {
-  primary: "layout.theme.colorPrimary",
-  bgLayout: "layout.theme.colorBgLayout",
-  bgContainer: "layout.theme.colorBgContainer",
-  borderColor: "layout.theme.colorBorder",
+  primary: "theme.colorPrimary",
+  bgLayout: "theme.colorBgLayout",
+  bgContainer: "theme.colorBgContainer",
+  borderColor: "theme.colorBorder",
 };
 
 const palettePresets: Array<{
@@ -93,7 +93,7 @@ const palettePresets: Array<{
 }> = [
   {
     key: "classic",
-    labelKey: "layout.theme.presetClassic",
+    labelKey: "theme.presetClassic",
     light: {
       primary: "#1677ff",
       bgLayout: "#f0f2f5",
@@ -109,7 +109,7 @@ const palettePresets: Array<{
   },
   {
     key: "mint",
-    labelKey: "layout.theme.presetMint",
+    labelKey: "theme.presetMint",
     light: {
       primary: "#13c2c2",
       bgLayout: "#eefaf9",
@@ -125,7 +125,7 @@ const palettePresets: Array<{
   },
   {
     key: "amber",
-    labelKey: "layout.theme.presetAmber",
+    labelKey: "theme.presetAmber",
     light: {
       primary: "#faad14",
       bgLayout: "#fff8e6",
@@ -141,7 +141,7 @@ const palettePresets: Array<{
   },
   {
     key: "graphite",
-    labelKey: "layout.theme.presetGraphite",
+    labelKey: "theme.presetGraphite",
     light: {
       primary: "#595959",
       bgLayout: "#f5f5f5",
@@ -459,6 +459,9 @@ const MainLayout: React.FC = () => {
     if (location.pathname.startsWith("/admin/telephony")) {
       return "/admin/telephony";
     }
+    if (location.pathname.startsWith("/admin/translations")) {
+      return "/admin/translations";
+    }
     if (location.pathname.startsWith("/admin/synchronizations")) {
       return "/admin/synchronizations";
     }
@@ -555,8 +558,12 @@ const MainLayout: React.FC = () => {
       children: [
         { key: "/admin/users", label: t("layout:menu.users") },
         {
+          key: "/admin/translations",
+          label: t("layout:menu.translations"),
+        },
+        {
           key: "/admin/telephony",
-          label: t("layout:menu.telephony", { defaultValue: "Телефония" }),
+          label: t("layout:menu.telephony"),
         },
         {
           key: "/admin/synchronizations",

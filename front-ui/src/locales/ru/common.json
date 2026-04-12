@@ -1,0 +1,19 @@
+{
+  "actions": {
+    "save": "Сохранить",
+    "update": "Обновить",
+    "delete": "Удалить",
+    "cancel": "Отмена",
+    "close": "Закрыть",
+    "search": "Поиск",
+    "refresh": "Обновить",
+    "reset": "Сбросить"
+  },
+  "states": {
+    "loading": "Загрузка",
+    "system": "система"
+  },
+  "errors": {
+    "withDetails": "{{message}} Детали: {{details}}"
+  }
+}

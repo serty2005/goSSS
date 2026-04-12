@@ -1,0 +1,135 @@
+{
+  "menu": {
+    "search": "Поиск",
+    "tickets": "Тикеты",
+    "companies": "Компании",
+    "acceptance": "Принятие на АО",
+    "networkAcceptance": "Принятие в сеть",
+    "equipment": "Оборудование",
+    "servers": "Серверы",
+    "workstations": "Рабочие станции",
+    "fiscals": "ФР",
+    "agents": "Агенты",
+    "agentObservations": "Наблюдения агентов",
+    "admin": "Администрирование",
+    "settings": "Настройки",
+    "users": "Пользователи",
+    "translations": "Переводы",
+    "telephony": "Телефония",
+    "synchronizations": "Синхронизации",
+    "issues": "Проблемы",
+    "companyContractsReport": "Отчеты: Компании и контракты"
+  },
+  "userMenu": {
+    "profile": "Профиль",
+    "logout": "Выйти"
+  },
+  "theme": {
+    "title": "Оформление",
+    "light": "День",
+    "dark": "Ночь",
+    "presets": "Пресеты",
+    "presetClassic": "Классика",
+    "presetMint": "Мята",
+    "presetAmber": "Янтарь",
+    "presetGraphite": "Графит",
+    "colorPrimary": "Акцент",
+    "colorBgLayout": "Фон страницы",
+    "colorBgContainer": "Фон форм",
+    "colorBorder": "Границы",
+    "colorSwatchTitle": "{{label}}: {{value}}"
+  },
+  "locale": {
+    "label": "Язык",
+    "saveError": "Не удалось сохранить настройки языка"
+  },
+  "notifications": {
+    "ticketEvent": "Событие по тикету",
+    "ticketTag": "Тикет {{ticketID}}",
+    "dismiss": "Закрыть уведомление",
+    "themeSaveError": "Не удалось сохранить цветовые настройки"
+  },
+  "headerSearch": {
+    "global": {
+      "placeholder": "Поиск по IP, серийному номеру, имени...",
+      "toggleWithoutContract": "Без контракта"
+    },
+    "sectionPlaceholders": {
+      "companies": "Поиск компаний: название, адрес, юр. название",
+      "servers": "Поиск серверов: id, ip, название",
+      "workstations": "Поиск станций: id, название",
+      "fiscals": "Поиск ФР: id, модель, РНМ",
+      "agents": "Поиск агентов: hostname, uuid, владелец",
+      "default": "Поиск..."
+    },
+    "agentObservations": {
+      "filtersPlaceholder": "Фильтры: agent:<uuid>, ws:<id>, fr:<id>",
+      "pauseList": "Пауза списка",
+      "resetFilters": "Сбросить фильтры"
+    },
+    "ticket": {
+      "listMode": "Режим списка",
+      "savedFilter": "Сохранённый фильтр",
+      "statuses": "Статусы",
+      "activeOnly": "Активные",
+      "assignees": "Сотрудники",
+      "mineOnly": "Мои",
+      "company": "Компания",
+      "presetName": "Имя фильтра",
+      "searchPlaceholder": "Поиск по заявкам...",
+      "resetFilters": "Сбросить фильтры",
+      "newTicket": "Новая заявка",
+      "openFilters": "Открыть фильтры заявок",
+      "bulkAssign": "Исполнитель ({{count}})",
+      "bulkAssignSuccess": "Исполнитель назначен",
+      "bulkAssignError": "Не удалось выполнить массовое назначение",
+      "presetNameRequired": "Введите имя фильтра",
+      "presetSaved": "Фильтр сохранён",
+      "presetUpdated": "Фильтр обновлён",
+      "presetSaveError": "Не удалось сохранить фильтр",
+      "presetDeleted": "Фильтр удалён",
+      "presetDeleteError": "Не удалось удалить фильтр",
+      "assigneeFallback": "ID {{id}}",
+      "modes": {
+        "active": "В работе",
+        "archive": "Архив"
+      },
+      "views": {
+        "list": "Список",
+        "cards": "Карточки",
+        "table": "Таблица"
+      },
+      "tableColumns": {
+        "selection": "Выбор",
+        "number": "Номер",
+        "status": "Статус",
+        "company_display": "Компания",
+        "assignee_display": "Исполнитель",
+        "reporter_display": "Автор",
+        "subject": "Описание",
+        "bitrix_deal_title": "Заголовок Bitrix24",
+        "last_comment": "Последний комментарий",
+        "created_at": "Создано",
+        "last_activity": "Обновлено",
+        "sync_with_bitrix": "B24"
+      },
+      "statusOptions": {
+        "new": "Новая",
+        "in_progress": "В работе",
+        "pending": "Ожидание",
+        "deferred": "Отложено",
+        "onsite": "На выезд",
+        "to_manager": "Передать менеджеру",
+        "resolved": "Решена",
+        "spam": "Спам",
+        "execution": "Реализация",
+        "closed": "Закрыта"
+      }
+    }
+  },
+  "accessibility": {
+    "toggleSidebar": "Переключить боковую панель",
+    "openThemeSettings": "Открыть настройки оформления",
+    "selectLanguage": "Выбрать язык интерфейса"
+  }
+}

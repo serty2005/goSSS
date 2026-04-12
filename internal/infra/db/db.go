@@ -75,6 +75,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&models.Material{},
 		&models.MaterialLink{},
 		&models.ExternalSystemLink{},
+		&models.AppLocalization{},
 		&models.EquipmentStatusLog{},
 		&bitrix.DealLink{},
 		&bitrix.CommentLink{},

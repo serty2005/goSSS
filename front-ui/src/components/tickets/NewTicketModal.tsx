@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { companiesApi } from '@/api/companies';
 import { telephonyApi } from '@/api/telephony';
 import { ticketsApi } from '@/api/tickets';
@@ -28,6 +29,7 @@ const RESOLVED_OR_CLOSED_TICKET_STATUSES = ['resolved', 'closed'];
 const MODAL_BODY_MAX_HEIGHT = 'calc(100vh - 240px)';
 
 const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreated }) => {
+  const { t } = useTranslation(['common', 'tickets']);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
@@ -343,7 +345,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       (data.rn_kkt as string) ||
       (data.unique_id as string) ||
       (data.uuid as string) ||
-      'Оборудование'
+      t('tickets:fallback.equipment')
     );
   };
 
@@ -370,7 +372,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       ...(item.entity_type === 'Server'
         ? [
           ...(iikoWebMeta ? [{ label: iikoWebMeta.label, value: iikoWebMeta.url, isLink: true }] : []),
-          { label: 'Партнёрский портал', value: data.partners_link as string | undefined, isLink: true },
+          {
+            label: t('tickets:newTicket.connections.partnerPortal'),
+            value: data.partners_link as string | undefined,
+            isLink: true,
+          },
         ]
         : []),
     ];
@@ -386,7 +392,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         if (!connections || connections.length === 0) return null;
         return {
           key: `parent-${(item.data as { uuid?: string })?.uuid || resolveEquipmentTitle(item)}`,
-          title: `${resolveEquipmentTitle(item)} (родительская компания)`,
+          title: `${resolveEquipmentTitle(item)} (${t('tickets:newTicket.connections.parentCompanySuffix')})`,
           entityPath: `/servers/${(item.data as { uuid?: string })?.uuid || ''}`,
           connections,
         };
@@ -418,7 +424,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       entityPath: string;
     }>;
     return [...parentServerGroups, ...ownGroups];
-  }, [infrastructure, parentInfrastructure]);
+  }, [infrastructure, parentInfrastructure, t]);
 
   const { data: assigneesResponse, isLoading: isAssigneesLoading } = useQuery({
     queryKey: ['users-assignees'],
@@ -469,7 +475,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   };
 
   const telephonyCallOptions = useMemo(() => selectableCalls.map((call) => {
-    const phone = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
+    const phone = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || t('tickets:newTicket.fallback.phoneUndefined');
     const contactName = String(call.contact?.name || '').trim();
     const timestamp = call.started_at || call.answered_at || call.completed_at;
     const secondaryParts = [
@@ -494,7 +500,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         </Space>
       ),
     };
-  }), [selectableCalls]);
+  }), [selectableCalls, t]);
   const showTelephonySidebar = Boolean(
     selectedCompanyId
     || selectedTelephonyContactID
@@ -530,11 +536,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       }
 
       if (selectedCallID && !bindFailed) {
-        message.success('Заявка создана и привязана к звонку');
+        message.success(t('tickets:newTicket.messages.createdAndLinked'));
       } else if (bindFailed) {
-        message.warning('Заявка создана, но привязка к звонку не выполнилась');
+        message.warning(t('tickets:newTicket.messages.createdLinkWarning'));
       } else {
-        message.success('Заявка создана');
+        message.success(t('tickets:newTicket.messages.created'));
       }
 
       form.resetFields();
@@ -546,7 +552,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       queryClient.invalidateQueries({ queryKey: ['telephony'] });
     },
     onError: () => {
-      message.error('Не удалось создать заявку');
+      message.error(t('tickets:newTicket.messages.createError'));
     },
   });
 
@@ -562,7 +568,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       open={open}
       onCancel={handleCancel}
       confirmLoading={createMutation.isPending}
-      title="Новая заявка"
+      title={t('tickets:newTicket.modal.title')}
       destroyOnHidden
       width={showTelephonySidebar ? 980 : 640}
       styles={{
@@ -573,9 +579,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       }}
       footer={(
         <Row justify="space-between">
-          <Button onClick={() => form.submit()} loading={createMutation.isPending}>Тоже создать</Button>
+          <Button onClick={() => form.submit()} loading={createMutation.isPending}>
+            {t('tickets:newTicket.actions.createAnother')}
+          </Button>
           <Button type="primary" onClick={() => form.submit()} loading={createMutation.isPending}>
-            Создать
+            {t('tickets:newTicket.actions.create')}
           </Button>
         </Row>
       )}
@@ -588,10 +596,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           const is_active = selectedCompanyMeta?.active_contract === true;
           if (!is_active) {
             Modal.confirm({
-              title: 'Контракт неактивен',
-              content: 'Данный тикет будет платным. Продолжить?',
-              okText: 'Ок',
-              cancelText: 'Отмена',
+              title: t('tickets:newTicket.confirm.inactiveContractTitle'),
+              content: t('tickets:newTicket.confirm.inactiveContractContent'),
+              okText: t('tickets:newTicket.actions.confirmInactiveContract'),
+              cancelText: t('common:actions.cancel'),
               onOk: () => createMutation.mutate(values),
             });
             return;
@@ -604,13 +612,20 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
               <div style={{ maxHeight: '100%', overflowY: 'auto', paddingRight: 4 }}>
                 {(selectedTelephonyContactID || isContactCompaniesLoading) && (
-                  <Card size="small" title="Компании по номеру" style={{ marginBottom: 12 }}>
+                  <Card
+                    size="small"
+                    title={t('tickets:newTicket.telephony.companiesByPhone')}
+                    style={{ marginBottom: 12 }}
+                  >
                     {isContactCompaniesLoading ? (
                       <div style={{ textAlign: 'center', padding: 16 }}>
                         <Spin />
                       </div>
                     ) : contactCompanies.length === 0 ? (
-                      <Empty description="История по номеру пока не найдена" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      <Empty
+                        description={t('tickets:newTicket.telephony.historyNotFound')}
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
                     ) : (
                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
                         {contactCompanies.map((item: TelephonyContactCompanyDTO) => (
@@ -629,10 +644,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                 type={selectedCompanyId === item.company_id ? undefined : 'secondary'}
                                 style={{ fontSize: 12, color: selectedCompanyId === item.company_id ? '#fff' : undefined }}
                               >
-                                Последняя связь: {new Date(item.last_seen_at).toLocaleString()}
+                                {t('tickets:newTicket.telephony.lastSeen', {
+                                  value: new Date(item.last_seen_at).toLocaleString(),
+                                })}
                               </Text>
                               <Tag color={item.active_contract === false ? 'default' : 'success'} style={{ marginInlineEnd: 0 }}>
-                                {item.active_contract === false ? 'Контракт завершён' : 'Контракт активен'}
+                                {item.active_contract === false
+                                  ? t('tickets:newTicket.telephony.contractEnded')
+                                  : t('tickets:newTicket.telephony.contractActive')}
                               </Tag>
                             </Space>
                           </Button>
@@ -644,13 +663,17 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
                 {selectedCompanyId && (
                   <>
-                    <Card size="small" title="Активные тикеты компании" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title={t('tickets:newTicket.telephony.activeCompanyTickets')}
+                      style={{ marginBottom: 12 }}
+                    >
                       {isActiveTicketsLoading ? (
                         <div style={{ textAlign: 'center', padding: 16 }}>
                           <Spin />
                         </div>
                       ) : activeTickets.length === 0 ? (
-                        <Empty description="Активных тикетов нет" />
+                        <Empty description={t('tickets:newTicket.telephony.noActiveTickets')} />
                       ) : (
                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                           {activeTickets.map((ticket) => {
@@ -670,9 +693,13 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                     <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
                                   </Space>
                                   <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }} ellipsis={{ rows: 4 }}>
-                                    {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                                    {normalizeTicketPreview(ticket.subject || ticket.description) || t('tickets:fallback.noDescription')}
                                   </Paragraph>
-                                  <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                                  <Text type="secondary">
+                                    {t('tickets:newTicket.telephony.updatedAt', {
+                                      value: ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-',
+                                    })}
+                                  </Text>
                                 </Space>
                               </Card>
                             );
@@ -682,7 +709,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     </Card>
 
                     {!isResolvedOrClosedTicketsLoading && resolvedOrClosedTickets.length > 0 && (
-                      <Card size="small" title="Последние 10 тикетов">
+                      <Card size="small" title={t('tickets:newTicket.telephony.recentTickets')}>
                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                           {resolvedOrClosedTickets.map((ticket) => {
                             const statusMeta = getTicketStatusMeta(ticket.status);
@@ -701,9 +728,13 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                     <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
                                   </Space>
                                   <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }} ellipsis={{ rows: 4 }}>
-                                    {normalizeTicketPreview(ticket.subject || ticket.description) || 'Без описания'}
+                                    {normalizeTicketPreview(ticket.subject || ticket.description) || t('tickets:fallback.noDescription')}
                                   </Paragraph>
-                                  <Text type="secondary">Обновлено: {ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-'}</Text>
+                                  <Text type="secondary">
+                                    {t('tickets:newTicket.telephony.updatedAt', {
+                                      value: ticket.last_activity ? new Date(ticket.last_activity).toLocaleString() : '-',
+                                    })}
+                                  </Text>
                                 </Space>
                               </Card>
                             );
@@ -725,33 +756,44 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           >
             <Row gutter={12}>
               <Col xs={24} lg={8}>
-                <Form.Item name="telephony_call_id" label="Номер телефона">
+                <Form.Item
+                  name="telephony_call_id"
+                  label={t('tickets:newTicket.telephony.phoneField')}
+                >
                   <Select
                     allowClear
                     showSearch
-                    placeholder="Выберите звонок за последний час"
+                    placeholder={t('tickets:newTicket.telephony.phonePlaceholder')}
                     loading={isRecentCallsLoading || isPendingContextLoading}
                     options={telephonyCallOptions}
                     optionFilterProp="searchLabel"
-                    notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Свободных звонков пока нет" />}
+                    notFoundContent={(
+                      <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={t('tickets:newTicket.telephony.noFreeCalls')}
+                      />
+                    )}
                   />
                 </Form.Item>
               </Col>
               <Col xs={24} lg={8}>
-                <Form.Item name="contact_name" label="Имя контакта">
-                  <Input placeholder="Уточните имя звонящего" />
+                <Form.Item
+                  name="contact_name"
+                  label={t('tickets:newTicket.telephony.contactNameField')}
+                >
+                  <Input placeholder={t('tickets:newTicket.telephony.contactNamePlaceholder')} />
                 </Form.Item>
               </Col>
             </Row>
 
             <Form.Item
               name="company_id"
-              label="Компания"
-              rules={[{ required: true, message: 'Выберите компанию' }]}
+              label={t('tickets:newTicket.form.company')}
+              rules={[{ required: true, message: t('tickets:newTicket.form.companyRequired') }]}
             >
               <Select
                 showSearch
-                placeholder="Введите название компании"
+                placeholder={t('tickets:newTicket.form.companyPlaceholder')}
                 onSearch={(value) => {
                   setCompanySearch(value);
                 }}
@@ -775,21 +817,28 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             {selectedCompanyMeta && (
               <div style={{ marginTop: -6, marginBottom: 12 }}>
                 <Tag color={selectedCompanyMeta.active_contract ? 'success' : 'default'}>
-                  {selectedCompanyMeta.active_contract ? 'Активен' : 'Завершён'}
+                  {selectedCompanyMeta.active_contract
+                    ? t('tickets:newTicket.form.companyStatusActive')
+                    : t('tickets:newTicket.form.companyStatusEnded')}
                 </Tag>
                 {selectedCompanyMeta.address && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                    Адрес: {selectedCompanyMeta.address}
+                    {t('tickets:newTicket.form.address', { value: selectedCompanyMeta.address })}
                   </Text>
                 )}
                 {selectedCompanyMeta.additional && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                    Доп. информация: {selectedCompanyMeta.additional}
+                    {t('tickets:newTicket.form.additionalInfo', {
+                      value: selectedCompanyMeta.additional,
+                    })}
                   </Text>
                 )}
                 {selectedCompanyMeta.parent_title && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                    Сеть компаний: {selectedCompanyMeta.parent_title} / {selectedCompanyMeta.title || selectedCompanyId}
+                    {t('tickets:newTicket.form.companyNetwork', {
+                      parent: selectedCompanyMeta.parent_title,
+                      child: selectedCompanyMeta.title || selectedCompanyId,
+                    })}
                   </Text>
                 )}
               </div>
@@ -797,28 +846,28 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
             <Form.Item
               name="type"
-              label="Тип заявки"
-              rules={[{ required: true, message: 'Выберите тип заявки' }]}
+              label={t('tickets:newTicket.form.type')}
+              rules={[{ required: true, message: t('tickets:newTicket.form.typeRequired') }]}
             >
               <Select
                 options={[
-                  { value: 'incident', label: 'Инцидент' },
-                  { value: 'consultation', label: 'Консультация' },
-                  { value: 'cto', label: 'ЦТО' },
-                  { value: 'acceptance_ao', label: 'Принятие на АО' },
-                  { value: 'paid_works', label: 'Платные работы' },
+                  { value: 'incident', label: t('tickets:newTicket.types.incident') },
+                  { value: 'consultation', label: t('tickets:newTicket.types.consultation') },
+                  { value: 'cto', label: t('tickets:newTicket.types.cto') },
+                  { value: 'acceptance_ao', label: t('tickets:newTicket.types.acceptance_ao') },
+                  { value: 'paid_works', label: t('tickets:newTicket.types.paid_works') },
                 ]}
               />
             </Form.Item>
 
             <Form.Item
               name="assignee_id"
-              label="Исполнитель"
-              rules={[{ required: true, message: 'Выберите исполнителя' }]}
+              label={t('tickets:newTicket.form.assignee')}
+              rules={[{ required: true, message: t('tickets:newTicket.form.assigneeRequired') }]}
             >
               <Select
                 showSearch
-                placeholder="Выберите исполнителя"
+                placeholder={t('tickets:newTicket.form.assigneePlaceholder')}
                 loading={isAssigneesLoading}
                 optionFilterProp="label"
                 options={assigneeOptions}
@@ -830,22 +879,22 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 <Form.Item
                   name="sync_with_bitrix"
                   valuePropName="checked"
-                  tooltip={canDisableBitrixSync ? undefined : 'Только администратор может отключить синхронизацию'}
+                  tooltip={canDisableBitrixSync ? undefined : t('tickets:newTicket.bitrix.syncDisabledTooltip')}
                 >
                   <Checkbox disabled={!canDisableBitrixSync}>
-                    Синхронизировать с B24
+                    {t('tickets:newTicket.bitrix.syncWithB24')}
                   </Checkbox>
                 </Form.Item>
 
                 <Form.Item
                   name="bitrix_service_point_id"
-                  label="Точка обслуживания (Bitrix24)"
+                  label={t('tickets:newTicket.bitrix.servicePoint')}
                   rules={[
                     {
                       validator: (_, value) => {
                         if (syncWithBitrix === false) return Promise.resolve();
                         if (value === undefined || value === null || value === '') {
-                          return Promise.reject(new Error('Выберите точку обслуживания Bitrix24'));
+                          return Promise.reject(new Error(t('tickets:newTicket.bitrix.servicePointRequired')));
                         }
                         return Promise.resolve();
                       },
@@ -854,7 +903,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 >
                   <Select
                     showSearch
-                    placeholder="Выберите точку обслуживания"
+                    placeholder={t('tickets:newTicket.bitrix.servicePointPlaceholder')}
                     loading={isBitrixPointsLoading || isCompanyBitrixMappingLoading}
                     optionFilterProp="label"
                     options={bitrixPointsOptions}
@@ -866,22 +915,26 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
             <Form.Item
               name="description"
-              label="Описание"
-              rules={[{ required: true, message: 'Введите описание' }]}
+              label={t('tickets:newTicket.form.description')}
+              rules={[{ required: true, message: t('tickets:newTicket.form.descriptionRequired') }]}
             >
-              <Input.TextArea rows={4} placeholder="Опишите проблему или запрос" />
+              <Input.TextArea rows={4} placeholder={t('tickets:newTicket.form.descriptionPlaceholder')} />
             </Form.Item>
           </Col>
 
           {selectedCompanyId && (
             <Col xs={24} md={8} xl={7} style={{ maxHeight: MODAL_BODY_MAX_HEIGHT }}>
-              <Card size="small" title="Подключения" bodyStyle={{ maxHeight: `calc(${MODAL_BODY_MAX_HEIGHT} - 56px)`, overflowY: 'auto' }}>
+              <Card
+                size="small"
+                title={t('tickets:newTicket.connections.title')}
+                bodyStyle={{ maxHeight: `calc(${MODAL_BODY_MAX_HEIGHT} - 56px)`, overflowY: 'auto' }}
+              >
                 {isInfrastructureLoading || isParentInfrastructureLoading ? (
                   <div style={{ textAlign: 'center', padding: 16 }}>
                     <Spin />
                   </div>
                 ) : connectionsGroups.length === 0 ? (
-                  <Empty description="Подключения не найдены" />
+                  <Empty description={t('tickets:newTicket.connections.empty')} />
                 ) : (
                   <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                     {connectionsGroups.map((group) => (

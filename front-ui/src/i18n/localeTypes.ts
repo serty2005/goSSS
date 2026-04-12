@@ -1,6 +1,6 @@
 import type enUS from 'antd/locale/en_US';
 
-export type AppLocaleCode = 'en' | 'ru';
+export type AppLocaleCode = string;
 
 export type AntdLocaleDefinition = typeof enUS;
 

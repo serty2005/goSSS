@@ -701,6 +701,10 @@ const HeaderSearch: React.FC = () => {
   };
 
   if (isTicketsPage) {
+    const isBulkAssignMode =
+      isTicketsListPage
+      && archiveMode !== 'archive'
+      && selectedTicketIDs.length > 0;
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
     const filterContent = (
       <Space direction="vertical" size="small" style={{ width: 420, maxWidth: 'min(420px, calc(100vw - 40px))' }}>
@@ -874,21 +878,31 @@ const HeaderSearch: React.FC = () => {
       </Space>
     );
 
+    if (isBulkAssignMode) {
+      return (
+        <Select
+          placeholder={t('layout:headerSearch.ticket.bulkAssign', {
+            count: selectedTicketIDs.length,
+          })}
+          options={assigneeOptions}
+          loading={!assigneesRes || bulkAssignMutation.isPending}
+          style={{ width: isCompact ? 220 : 280, maxWidth: '100%' }}
+          onChange={(value) => {
+            const next = Number(value);
+            if (!next || selectedTicketIDs.length === 0) {
+              return;
+            }
+            bulkAssignMutation.mutate({
+              ids: selectedTicketIDs,
+              assigneeID: next,
+            });
+          }}
+        />
+      );
+    }
+
     return (
       <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
-        {selectedTicketIDs.length >= 1 && archiveMode !== 'archive' && (
-          <Select
-            placeholder={t('layout:headerSearch.ticket.bulkAssign', { count: selectedTicketIDs.length })}
-            options={assigneeOptions}
-            loading={!assigneesRes || bulkAssignMutation.isPending}
-            style={{ width: isCompact ? 190 : 230 }}
-            onChange={(value) => {
-              const next = Number(value);
-              if (!next || selectedTicketIDs.length === 0) return;
-              bulkAssignMutation.mutate({ ids: selectedTicketIDs, assigneeID: next });
-            }}
-          />
-        )}
         {!isHeaderNarrow && (
           <Segmented
             className="ticket-header-inline-archive"

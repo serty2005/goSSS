@@ -1,0 +1,164 @@
+{
+  "messages": {
+    "phoneNotFound": "Телефон не найден",
+    "phoneCopied": "Телефон скопирован",
+    "statusUpdated": "Статус обновлён",
+    "statusUpdateError": "Не удалось обновить статус",
+    "commentAdded": "Комментарий добавлен",
+    "commentAddError": "Не удалось добавить комментарий",
+    "commentUpdated": "Комментарий обновлён",
+    "commentUpdateError": "Не удалось обновить комментарий",
+    "commentDeleted": "Комментарий удалён",
+    "commentDeleteError": "Не удалось удалить комментарий",
+    "subscriptionEnabled": "Подписка на тикет включена",
+    "subscriptionDisabled": "Подписка на тикет отключена",
+    "subscriptionError": "Не удалось изменить подписку на тикет"
+  },
+  "fallback": {
+    "noDescription": "Без описания",
+    "unknown": "Неизвестно",
+    "equipment": "Оборудование",
+    "employee": "Сотрудник",
+    "companyNotSpecified": "Компания не указана",
+    "unassigned": "Не назначен",
+    "contactNotSpecified": "Контакт не указан",
+    "phoneNotSpecified": "Телефон не указан",
+    "noConnections": "Подключений нет",
+    "noComments": "Нет комментариев",
+    "noContactDescription": "<span>Нет описания</span>"
+  },
+  "labels": {
+    "paid": "Платный",
+    "private": "Приватный",
+    "privateXenionOnly": "Приватный (Только в Xenion)",
+    "showing": "Показано: {{visible}} из {{total}}",
+    "created": "Создано",
+    "updated": "Обновлено",
+    "assignee": "Исполнитель: {{name}}"
+  },
+  "sourceLabels": {
+    "ui": "UI",
+    "bitrix": "Bitrix24",
+    "servicedesk": "ServiceDesk",
+    "system": "System"
+  },
+  "deferred": {
+    "until": "Отложено до {{value}}",
+    "setTime": "установить время",
+    "untilShort": "до {{value}}"
+  },
+  "externalLinks": {
+    "openBitrix": "Открыть сделку в Bitrix24",
+    "openPyrus": "Открыть задачу в Pyrus"
+  },
+  "cards": {
+    "contact": "Контакт",
+    "description": "Описание",
+    "result": "Результат",
+    "connections": "Подключения",
+    "comments": "Комментарии"
+  },
+  "actions": {
+    "send": "Отправить",
+    "copy": "Копировать",
+    "openPage": "Открыть страницу",
+    "returnToWork": "Вернуть в работу",
+    "subscribe": "Подписаться на тикет",
+    "unsubscribe": "Отписаться",
+    "edit": "Редактировать",
+    "save": "Сохранить",
+    "delete": "Удалить",
+    "deferTicket": "Отложить заявку",
+    "completeTicket": "Завершить заявку"
+  },
+  "placeholders": {
+    "addComment": "Добавьте комментарий",
+    "editComment": "Измените комментарий",
+    "selectDateTime": "Выберите дату и время",
+    "resolutionComment": "Опишите итог выполнения заявки"
+  },
+  "titles": {
+    "quickPreview": "Быстрый просмотр",
+    "quickPreviewTicket": "Быстрый просмотр заявки",
+    "deleteComment": "Удалить комментарий?",
+    "deferTicket": "Отложить заявку",
+    "completeTicket": "Завершение заявки"
+  },
+  "newTicket": {
+    "messages": {
+      "createdAndLinked": "Заявка создана и привязана к звонку",
+      "createdLinkWarning": "Заявка создана, но привязка к звонку не выполнилась",
+      "created": "Заявка создана",
+      "createError": "Не удалось создать заявку"
+    },
+    "modal": {
+      "title": "Новая заявка"
+    },
+    "actions": {
+      "createAnother": "Тоже создать",
+      "create": "Создать",
+      "confirmInactiveContract": "Ок"
+    },
+    "confirm": {
+      "inactiveContractTitle": "Контракт неактивен",
+      "inactiveContractContent": "Данный тикет будет платным. Продолжить?"
+    },
+    "telephony": {
+      "companiesByPhone": "Компании по номеру",
+      "historyNotFound": "История по номеру пока не найдена",
+      "lastSeen": "Последняя связь: {{value}}",
+      "contractEnded": "Контракт завершён",
+      "contractActive": "Контракт активен",
+      "activeCompanyTickets": "Активные тикеты компании",
+      "noActiveTickets": "Активных тикетов нет",
+      "recentTickets": "Последние 10 тикетов",
+      "updatedAt": "Обновлено: {{value}}",
+      "phoneField": "Номер телефона",
+      "phonePlaceholder": "Выберите звонок за последний час",
+      "noFreeCalls": "Свободных звонков пока нет",
+      "contactNameField": "Имя контакта",
+      "contactNamePlaceholder": "Уточните имя звонящего"
+    },
+    "form": {
+      "company": "Компания",
+      "companyRequired": "Выберите компанию",
+      "companyPlaceholder": "Введите название компании",
+      "companyStatusActive": "Активен",
+      "companyStatusEnded": "Завершён",
+      "address": "Адрес: {{value}}",
+      "additionalInfo": "Доп. информация: {{value}}",
+      "companyNetwork": "Сеть компаний: {{parent}} / {{child}}",
+      "type": "Тип заявки",
+      "typeRequired": "Выберите тип заявки",
+      "assignee": "Исполнитель",
+      "assigneeRequired": "Выберите исполнителя",
+      "assigneePlaceholder": "Выберите исполнителя",
+      "description": "Описание",
+      "descriptionRequired": "Введите описание",
+      "descriptionPlaceholder": "Опишите проблему или запрос"
+    },
+    "types": {
+      "incident": "Инцидент",
+      "consultation": "Консультация",
+      "cto": "ЦТО",
+      "acceptance_ao": "Принятие на АО",
+      "paid_works": "Платные работы"
+    },
+    "bitrix": {
+      "syncDisabledTooltip": "Только администратор может отключить синхронизацию",
+      "syncWithB24": "Синхронизировать с B24",
+      "servicePoint": "Точка обслуживания (Bitrix24)",
+      "servicePointRequired": "Выберите точку обслуживания Bitrix24",
+      "servicePointPlaceholder": "Выберите точку обслуживания"
+    },
+    "connections": {
+      "title": "Подключения",
+      "empty": "Подключения не найдены",
+      "parentCompanySuffix": "родительская компания",
+      "partnerPortal": "Партнёрский портал"
+    },
+    "fallback": {
+      "phoneUndefined": "Номер не определён"
+    }
+  }
+}

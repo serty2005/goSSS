@@ -1,5 +1,6 @@
 *.json
 !agent/agent-config.json
+!front-ui/src/locales/**/*.json
 .env
 publisher.env
 *.log

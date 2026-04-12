@@ -1,0 +1,164 @@
+{
+  "messages": {
+    "phoneNotFound": "Phone number not found",
+    "phoneCopied": "Phone number copied",
+    "statusUpdated": "Status updated",
+    "statusUpdateError": "Failed to update status",
+    "commentAdded": "Comment added",
+    "commentAddError": "Failed to add comment",
+    "commentUpdated": "Comment updated",
+    "commentUpdateError": "Failed to update comment",
+    "commentDeleted": "Comment deleted",
+    "commentDeleteError": "Failed to delete comment",
+    "subscriptionEnabled": "Ticket subscription enabled",
+    "subscriptionDisabled": "Ticket subscription disabled",
+    "subscriptionError": "Failed to update ticket subscription"
+  },
+  "fallback": {
+    "noDescription": "No description",
+    "unknown": "Unknown",
+    "equipment": "Equipment",
+    "employee": "Employee",
+    "companyNotSpecified": "Company not specified",
+    "unassigned": "Unassigned",
+    "contactNotSpecified": "Contact not specified",
+    "phoneNotSpecified": "Phone number not specified",
+    "noConnections": "No connections",
+    "noComments": "No comments",
+    "noContactDescription": "<span>No description</span>"
+  },
+  "labels": {
+    "paid": "Paid",
+    "private": "Private",
+    "privateXenionOnly": "Private (Xenion only)",
+    "showing": "Showing: {{visible}} of {{total}}",
+    "created": "Created",
+    "updated": "Updated",
+    "assignee": "Assignee: {{name}}"
+  },
+  "sourceLabels": {
+    "ui": "UI",
+    "bitrix": "Bitrix24",
+    "servicedesk": "ServiceDesk",
+    "system": "System"
+  },
+  "deferred": {
+    "until": "Deferred until {{value}}",
+    "setTime": "set time",
+    "untilShort": "until {{value}}"
+  },
+  "externalLinks": {
+    "openBitrix": "Open deal in Bitrix24",
+    "openPyrus": "Open task in Pyrus"
+  },
+  "cards": {
+    "contact": "Contact",
+    "description": "Description",
+    "result": "Result",
+    "connections": "Connections",
+    "comments": "Comments"
+  },
+  "actions": {
+    "send": "Send",
+    "copy": "Copy",
+    "openPage": "Open page",
+    "returnToWork": "Return to work",
+    "subscribe": "Subscribe to ticket",
+    "unsubscribe": "Unsubscribe",
+    "edit": "Edit",
+    "save": "Save",
+    "delete": "Delete",
+    "deferTicket": "Defer ticket",
+    "completeTicket": "Complete ticket"
+  },
+  "placeholders": {
+    "addComment": "Add a comment",
+    "editComment": "Edit the comment",
+    "selectDateTime": "Select date and time",
+    "resolutionComment": "Describe the resolution result"
+  },
+  "titles": {
+    "quickPreview": "Quick preview",
+    "quickPreviewTicket": "Quick ticket preview",
+    "deleteComment": "Delete comment?",
+    "deferTicket": "Defer ticket",
+    "completeTicket": "Ticket completion"
+  },
+  "newTicket": {
+    "messages": {
+      "createdAndLinked": "Ticket created and linked to the call",
+      "createdLinkWarning": "Ticket created, but the call was not linked",
+      "created": "Ticket created",
+      "createError": "Failed to create ticket"
+    },
+    "modal": {
+      "title": "New ticket"
+    },
+    "actions": {
+      "createAnother": "Also create",
+      "create": "Create",
+      "confirmInactiveContract": "Continue"
+    },
+    "confirm": {
+      "inactiveContractTitle": "Contract is inactive",
+      "inactiveContractContent": "This ticket will be paid. Continue?"
+    },
+    "telephony": {
+      "companiesByPhone": "Companies by phone",
+      "historyNotFound": "No phone history found yet",
+      "lastSeen": "Last contact: {{value}}",
+      "contractEnded": "Contract ended",
+      "contractActive": "Contract active",
+      "activeCompanyTickets": "Active company tickets",
+      "noActiveTickets": "No active tickets",
+      "recentTickets": "Last 10 tickets",
+      "updatedAt": "Updated: {{value}}",
+      "phoneField": "Phone number",
+      "phonePlaceholder": "Select a call from the last hour",
+      "noFreeCalls": "No free calls yet",
+      "contactNameField": "Contact name",
+      "contactNamePlaceholder": "Clarify the caller name"
+    },
+    "form": {
+      "company": "Company",
+      "companyRequired": "Select a company",
+      "companyPlaceholder": "Enter company name",
+      "companyStatusActive": "Active",
+      "companyStatusEnded": "Ended",
+      "address": "Address: {{value}}",
+      "additionalInfo": "Additional info: {{value}}",
+      "companyNetwork": "Company network: {{parent}} / {{child}}",
+      "type": "Ticket type",
+      "typeRequired": "Select a ticket type",
+      "assignee": "Assignee",
+      "assigneeRequired": "Select an assignee",
+      "assigneePlaceholder": "Select an assignee",
+      "description": "Description",
+      "descriptionRequired": "Enter description",
+      "descriptionPlaceholder": "Describe the issue or request"
+    },
+    "types": {
+      "incident": "Incident",
+      "consultation": "Consultation",
+      "cto": "CTO",
+      "acceptance_ao": "Acceptance to AO",
+      "paid_works": "Paid works"
+    },
+    "bitrix": {
+      "syncDisabledTooltip": "Only an administrator can disable synchronization",
+      "syncWithB24": "Synchronize with B24",
+      "servicePoint": "Service point (Bitrix24)",
+      "servicePointRequired": "Select a Bitrix24 service point",
+      "servicePointPlaceholder": "Select a service point"
+    },
+    "connections": {
+      "title": "Connections",
+      "empty": "Connections not found",
+      "parentCompanySuffix": "parent company",
+      "partnerPortal": "Partner portal"
+    },
+    "fallback": {
+      "phoneUndefined": "Number is not defined"
+    }
+  }
+}

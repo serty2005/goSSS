@@ -116,6 +116,7 @@ type Application struct {
 	EntityDeletionHandler     *handlers.EntityDeletionHandler
 	IntegrationSyncHandler    *handlers.IntegrationSyncHandler
 	MaterialHandler           *handlers.MaterialHandler
+	TranslationsHandler       *handlers.TranslationsHandler
 
 	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
 }
@@ -623,6 +624,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.IntegrationSyncHandler = handlers.NewIntegrationSyncHandler(srvs.IntegrationSyncControl)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
+	app.TranslationsHandler = handlers.NewTranslationsHandler(app.DB)
 }
 
 func setupIntegrationModules(app *Application, srvs Services) {
@@ -829,6 +831,11 @@ func (a *Application) setupRouter() *chi.Mux {
 			}
 			r.Get("/config", a.UserHandler.GetMyProfileConfig)
 			r.Patch("/config", a.UserHandler.UpdateMyProfileConfig)
+		})
+
+		r.Route("/translations", func(r chi.Router) {
+			r.Get("/", a.TranslationsHandler.GetCatalog)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Patch("/", a.TranslationsHandler.UpdateCatalog)
 		})
 
 		r.Route("/users", func(r chi.Router) {

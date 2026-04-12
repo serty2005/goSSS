@@ -1,0 +1,135 @@
+{
+  "menu": {
+    "search": "Search",
+    "tickets": "Tickets",
+    "companies": "Companies",
+    "acceptance": "Acceptance to AO",
+    "networkAcceptance": "Network acceptance",
+    "equipment": "Equipment",
+    "servers": "Servers",
+    "workstations": "Workstations",
+    "fiscals": "Fiscal registers",
+    "agents": "Agents",
+    "agentObservations": "Agent observations",
+    "admin": "Administration",
+    "settings": "Settings",
+    "users": "Users",
+    "translations": "Translations",
+    "telephony": "Telephony",
+    "synchronizations": "Synchronizations",
+    "issues": "Issues",
+    "companyContractsReport": "Reports: companies and contracts"
+  },
+  "userMenu": {
+    "profile": "Profile",
+    "logout": "Log out"
+  },
+  "theme": {
+    "title": "Appearance",
+    "light": "Day",
+    "dark": "Night",
+    "presets": "Presets",
+    "presetClassic": "Classic",
+    "presetMint": "Mint",
+    "presetAmber": "Amber",
+    "presetGraphite": "Graphite",
+    "colorPrimary": "Accent",
+    "colorBgLayout": "Page background",
+    "colorBgContainer": "Panel background",
+    "colorBorder": "Borders",
+    "colorSwatchTitle": "{{label}}: {{value}}"
+  },
+  "locale": {
+    "label": "Language",
+    "saveError": "Failed to save language settings"
+  },
+  "notifications": {
+    "ticketEvent": "Ticket event",
+    "ticketTag": "Ticket {{ticketID}}",
+    "dismiss": "Dismiss notification",
+    "themeSaveError": "Failed to save theme settings"
+  },
+  "headerSearch": {
+    "global": {
+      "placeholder": "Search by IP, serial, name...",
+      "toggleWithoutContract": "Without contract"
+    },
+    "sectionPlaceholders": {
+      "companies": "Search companies: name, address, legal name",
+      "servers": "Search servers: id, IP, name",
+      "workstations": "Search workstations: id, name",
+      "fiscals": "Search fiscal registers: id, model, registration number",
+      "agents": "Search agents: hostname, UUID, owner",
+      "default": "Search..."
+    },
+    "agentObservations": {
+      "filtersPlaceholder": "Filters: agent:<uuid>, ws:<id>, fr:<id>",
+      "pauseList": "Pause list",
+      "resetFilters": "Reset filters"
+    },
+    "ticket": {
+      "listMode": "View mode",
+      "savedFilter": "Saved filter",
+      "statuses": "Statuses",
+      "activeOnly": "Active only",
+      "assignees": "Assignees",
+      "mineOnly": "Mine",
+      "company": "Company",
+      "presetName": "Filter name",
+      "searchPlaceholder": "Search tickets...",
+      "resetFilters": "Reset filters",
+      "newTicket": "New ticket",
+      "openFilters": "Open ticket filters",
+      "bulkAssign": "Assignee ({{count}})",
+      "bulkAssignSuccess": "Assignee updated",
+      "bulkAssignError": "Failed to assign tickets in bulk",
+      "presetNameRequired": "Enter filter name",
+      "presetSaved": "Filter saved",
+      "presetUpdated": "Filter updated",
+      "presetSaveError": "Failed to save filter",
+      "presetDeleted": "Filter deleted",
+      "presetDeleteError": "Failed to delete filter",
+      "assigneeFallback": "ID {{id}}",
+      "modes": {
+        "active": "Active",
+        "archive": "Archive"
+      },
+      "views": {
+        "list": "List",
+        "cards": "Cards",
+        "table": "Table"
+      },
+      "tableColumns": {
+        "selection": "Selection",
+        "number": "Number",
+        "status": "Status",
+        "company_display": "Company",
+        "assignee_display": "Assignee",
+        "reporter_display": "Reporter",
+        "subject": "Subject",
+        "bitrix_deal_title": "Bitrix24 title",
+        "last_comment": "Last comment",
+        "created_at": "Created",
+        "last_activity": "Updated",
+        "sync_with_bitrix": "B24"
+      },
+      "statusOptions": {
+        "new": "New",
+        "in_progress": "In progress",
+        "pending": "Pending",
+        "deferred": "Deferred",
+        "onsite": "Onsite",
+        "to_manager": "To manager",
+        "resolved": "Resolved",
+        "spam": "Spam",
+        "execution": "Implementation",
+        "closed": "Closed"
+      }
+    }
+  },
+  "accessibility": {
+    "toggleSidebar": "Toggle sidebar",
+    "openThemeSettings": "Open appearance settings",
+    "selectLanguage": "Select interface language"
+  }
+}

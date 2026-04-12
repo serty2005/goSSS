@@ -809,6 +809,18 @@ type ProfileConfigUpdateDTO struct {
 	ProfileConfig map[string]interface{} `json:"profile_config"`
 }
 
+type GlobalTranslationLocaleDTO struct {
+	Code        string `json:"code"`
+	Label       string `json:"label"`
+	NativeLabel string `json:"native_label"`
+	IsBuiltin   bool   `json:"is_builtin"`
+}
+
+type GlobalTranslationsDTO struct {
+	Locales   []GlobalTranslationLocaleDTO          `json:"locales"`
+	Overrides map[string]map[string]map[string]string `json:"overrides"`
+}
+
 // --- DTO для UI-ориентированного поиска ---
 
 // FinalSearchResponseDTO - корневой объект для нового ответа поиска.

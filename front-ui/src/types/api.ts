@@ -770,6 +770,18 @@ export interface UserInterfaceConfigDTO {
   };
 }
 
+export interface GlobalTranslationLocaleDTO {
+  code: string;
+  label: string;
+  native_label: string;
+  is_builtin: boolean;
+}
+
+export interface GlobalTranslationsDTO {
+  locales: GlobalTranslationLocaleDTO[];
+  overrides: Record<string, Record<string, Record<string, string>>>;
+}
+
 export interface UserProfileConfigDTO {
   interface?: UserInterfaceConfigDTO;
   notifications?: {

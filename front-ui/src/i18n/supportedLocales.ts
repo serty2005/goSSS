@@ -2,6 +2,7 @@ import enUS from 'antd/locale/en_US';
 import ruRU from 'antd/locale/ru_RU';
 import 'dayjs/locale/en';
 import 'dayjs/locale/ru';
+import type { GlobalTranslationLocaleDTO } from '@/types/api';
 import type { AppLocaleCode, SupportedLocaleDefinition } from './localeTypes';
 
 export const DEFAULT_APP_LOCALE: AppLocaleCode = 'en';
@@ -33,54 +34,127 @@ const localeRegistry: Record<AppLocaleCode, SupportedLocaleDefinition> = {
 
 export const supportedLocales = localeRegistry;
 export const supportedLocaleList = Object.values(localeRegistry);
+export const builtInSupportedLocaleList = supportedLocaleList;
 
 const normalizeLocaleCandidate = (value: string | null | undefined): string => {
   return String(value || '')
     .trim()
     .toLowerCase()
-    .replace('_', '-')
-    .split('-')[0];
+    .replace('_', '-');
+};
+
+const resolveLocaleFromList = (
+  candidate: string | null | undefined,
+  availableLocaleCodes: string[],
+): string => {
+  const normalizedCandidate = normalizeLocaleCandidate(candidate);
+  if (!normalizedCandidate) {
+    return '';
+  }
+
+  const availableByCode = new Map(
+    availableLocaleCodes.map((code) => [normalizeLocaleCandidate(code), code]),
+  );
+
+  if (availableByCode.has(normalizedCandidate)) {
+    return String(availableByCode.get(normalizedCandidate) || '');
+  }
+
+  const baseCandidate = normalizedCandidate.split('-')[0];
+  return String(availableByCode.get(baseCandidate) || '');
 };
 
 export const isSupportedLocale = (value: unknown): value is AppLocaleCode => {
-  const normalized = normalizeLocaleCandidate(typeof value === 'string' ? value : '');
-  return normalized === 'en' || normalized === 'ru';
+  return Boolean(resolveLocaleFromList(typeof value === 'string' ? value : '', Object.keys(localeRegistry)));
 };
 
 export const resolveAppLocaleCode = (...candidates: Array<string | null | undefined>): AppLocaleCode => {
+  return resolveAppLocaleCodeFromList(Object.keys(localeRegistry), ...candidates);
+};
+
+export const resolveAppLocaleCodeFromList = (
+  availableLocaleCodes: string[],
+  ...candidates: Array<string | null | undefined>
+): AppLocaleCode => {
   for (const candidate of candidates) {
-    const normalized = normalizeLocaleCandidate(candidate);
-    if (isSupportedLocale(normalized)) {
-      return normalized;
+    const resolved = resolveLocaleFromList(candidate, availableLocaleCodes);
+    if (resolved) {
+      return resolved;
     }
   }
   return DEFAULT_APP_LOCALE;
 };
 
-export const getSupportedLocale = (locale: string | null | undefined): SupportedLocaleDefinition => {
-  return localeRegistry[resolveAppLocaleCode(locale)];
+const createCustomLocaleDefinition = (
+  code: string,
+  label?: string,
+  nativeLabel?: string,
+): SupportedLocaleDefinition => ({
+  code,
+  label: label || code.toUpperCase(),
+  nativeLabel: nativeLabel || label || code.toUpperCase(),
+  antdLocale: enUS,
+  dayjsLocale: 'en',
+  intlLocale: code,
+  enabled: true,
+  isDefault: false,
+});
+
+export const buildSupportedLocaleList = (
+  customLocales: GlobalTranslationLocaleDTO[] = [],
+): SupportedLocaleDefinition[] => {
+  const result = [...supportedLocaleList];
+  const existingCodes = new Set(result.map((item) => item.code));
+
+  customLocales.forEach((locale) => {
+    const code = normalizeLocaleCandidate(locale.code);
+    if (!code || existingCodes.has(code)) {
+      return;
+    }
+
+    result.push(
+      createCustomLocaleDefinition(
+        code,
+        String(locale.label || '').trim(),
+        String(locale.native_label || '').trim(),
+      ),
+    );
+    existingCodes.add(code);
+  });
+
+  return result;
 };
 
-export const getStoredAppLocale = (): AppLocaleCode | null => {
+export const getSupportedLocale = (locale: string | null | undefined): SupportedLocaleDefinition => {
+  const resolved = resolveLocaleFromList(locale, Object.keys(localeRegistry));
+  if (resolved) {
+    return localeRegistry[resolved];
+  }
+
+  const customCode = normalizeLocaleCandidate(locale);
+  return customCode
+    ? createCustomLocaleDefinition(customCode)
+    : localeRegistry[DEFAULT_APP_LOCALE];
+};
+
+export const getStoredAppLocale = (): string | null => {
   if (typeof window === 'undefined') {
     return null;
   }
   try {
-    const stored = window.localStorage.getItem(APP_LOCALE_STORAGE_KEY);
-    return stored && isSupportedLocale(stored) ? stored : null;
+    return window.localStorage.getItem(APP_LOCALE_STORAGE_KEY);
   } catch {
     return null;
   }
 };
 
-export const getUrlAppLocale = (): AppLocaleCode | null => {
+export const getUrlAppLocale = (): string | null => {
   if (typeof window === 'undefined') {
     return null;
   }
   try {
     const params = new URLSearchParams(window.location.search);
-    const locale = params.get('locale');
-    return locale && isSupportedLocale(locale) ? resolveAppLocaleCode(locale) : null;
+    return params.get('locale');
   } catch {
     return null;
   }

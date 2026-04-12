@@ -1,0 +1,41 @@
+{
+  "translations": {
+    "title": "Переводы",
+    "subtitle": "Глобальные переводы и языки интерфейса для всех пользователей.",
+    "language": "Язык",
+    "value": "Перевод",
+    "valuePlaceholder": "Введите переведённый текст",
+    "saved": "Перевод сохранён",
+    "saveError": "Не удалось сохранить перевод",
+    "delete": "Удалить переопределение",
+    "deleted": "Переопределение удалено",
+    "deleteError": "Не удалось удалить переопределение",
+    "search": "Поиск",
+    "searchPlaceholder": "Введите текст из интерфейса или ключ",
+    "empty": "Переводы не найдены.",
+    "loadingMore": "Показано {{loaded}} из {{total}} переводов. Прокрутите ниже, чтобы подгрузить ещё.",
+    "help": "Изменения сохраняются глобально. Новые языки будут доступны всем, а переключение на них выполняется в профиле пользователя.",
+    "addLanguage": "Добавить язык",
+    "addLanguageTitle": "Новый язык",
+    "languageCode": "Код языка",
+    "languageCodePlaceholder": "Например: de",
+    "languageLabel": "Название",
+    "languageLabelPlaceholder": "Например: German",
+    "languageNativeLabel": "Название на родном языке",
+    "languageNativeLabelPlaceholder": "Например: Deutsch",
+    "languageCreated": "Язык добавлен",
+    "createLanguageError": "Не удалось добавить язык",
+    "validation": {
+      "valueRequired": "Введите текст перевода",
+      "codeRequired": "Введите код языка",
+      "labelRequired": "Введите название языка",
+      "languageExists": "Такой язык уже существует"
+    },
+    "table": {
+      "key": "Ключ",
+      "source": "Текст в интерфейсе",
+      "translation": "Новый перевод",
+      "actions": "Действия"
+    }
+  }
+}

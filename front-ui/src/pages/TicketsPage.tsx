@@ -45,6 +45,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Resizable } from "react-resizable";
+import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import { ticketsApi } from "@/api/tickets";
@@ -71,6 +72,7 @@ import {
   TICKET_ACTIVE_STATUS_VALUES,
   TICKET_STATUS_OPTIONS,
 } from "@/constants/ticketStatus";
+import i18n from "@/i18n/i18n";
 
 const { Text, Paragraph } = Typography;
 const LazyNewTicketModal = React.lazy(
@@ -79,11 +81,11 @@ const LazyNewTicketModal = React.lazy(
 
 const copyTicketPhone = async (phone: string) => {
   if (!phone) {
-    message.warning("Телефон не найден");
+    message.warning(i18n.t("tickets:messages.phoneNotFound"));
     return;
   }
   await navigator.clipboard.writeText(phone);
-  message.success("Телефон скопирован");
+  message.success(i18n.t("tickets:messages.phoneCopied"));
 };
 
 type ViewMode = "list" | "cards" | "table";
@@ -129,15 +131,15 @@ const normalizeDescriptionMultiline = (value?: string) => {
 
 const resolveTicketSubjectFromDescription = (value?: string) => {
   const normalized = normalizeDescription(value);
-  return normalized || "Без описания";
+  return normalized || i18n.t("tickets:fallback.noDescription");
 };
 
 const resolveTicketCreatedSourceLabel = (source?: string) => {
-  if (source === "ui") return "UI";
-  if (source === "bitrix") return "Bitrix24";
-  if (source === "servicedesk") return "ServiceDesk";
-  if (source === "system") return "System";
-  return "Неизвестно";
+  if (source === "ui") return i18n.t("tickets:sourceLabels.ui");
+  if (source === "bitrix") return i18n.t("tickets:sourceLabels.bitrix");
+  if (source === "servicedesk") return i18n.t("tickets:sourceLabels.servicedesk");
+  if (source === "system") return i18n.t("tickets:sourceLabels.system");
+  return i18n.t("tickets:fallback.unknown");
 };
 
 const DATE_STAMP_MIN_WIDTH = "10ch";
@@ -185,7 +187,9 @@ const formatDeferredDateTime = (value?: string) => {
 
 const formatDeferredTooltip = (value?: string) => {
   const formatted = formatDeferredDateTime(value);
-  return formatted ? `Отложено до ${formatted}` : "";
+  return formatted
+    ? i18n.t("tickets:deferred.until", { value: formatted })
+    : "";
 };
 
 const TicketDateStamp: React.FC<{ label: string; value?: string }> = ({
@@ -249,7 +253,7 @@ const ExternalLinksBadges: React.FC<{
       <ExternalLinkBadge
         label="B24"
         href={bitrixURL}
-        title="Открыть сделку в Bitrix24"
+        title={i18n.t("tickets:externalLinks.openBitrix")}
         color="success"
         compact={compact}
         onClick={onClick}
@@ -257,7 +261,7 @@ const ExternalLinksBadges: React.FC<{
       <ExternalLinkBadge
         label="Pyrus"
         href={pyrusURL}
-        title="Открыть задачу в Pyrus"
+        title={i18n.t("tickets:externalLinks.openPyrus")}
         color="geekblue"
         compact={compact}
         onClick={onClick}
@@ -381,6 +385,7 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({
 };
 
 const TicketsPage: React.FC = () => {
+  const { t } = useTranslation(["common", "layout", "tickets"]);
   const { token } = antTheme.useToken();
   const { setHeaderAddon, setHeaderAddonPlacement } = useLayoutHeader();
   const searchParamsRaw = useTicketParamsStore((state) => state.ticketParams);
@@ -674,7 +679,7 @@ const TicketsPage: React.FC = () => {
           dataRow.device_name ||
           dataRow.server_name ||
           dataRow.uuid ||
-          "Оборудование";
+          t("tickets:fallback.equipment");
         const entityID = String(dataRow.uuid || "").trim();
         const entityPath =
           item.entity_type === "Server"
@@ -704,7 +709,7 @@ const TicketsPage: React.FC = () => {
       rows: Array<{ label: string; value?: string }>;
       entityPath: string;
     }>;
-  }, [infrastructure]);
+  }, [infrastructure, t]);
 
   const comments = useMemo(() => {
     const sorted = [...(details?.comments || [])].sort((a, b) => {
@@ -714,13 +719,13 @@ const TicketsPage: React.FC = () => {
     });
     return sorted.map((item) => ({
       id: item.uuid,
-      author: item.author_name || "Сотрудник",
+      author: item.author_name || t("tickets:fallback.employee"),
       authorRaw: item.author_name || "",
       date: dayjs(item.creation_date).format("DD.MM.YYYY HH:mm"),
       text: item.text,
       isPrivate: item.is_private ?? false,
     }));
-  }, [commentsNewFirst, details?.comments]);
+  }, [commentsNewFirst, details?.comments, t]);
 
   const changeStatusMutation = useMutation({
     mutationFn: async (payload: {
@@ -736,14 +741,14 @@ const TicketsPage: React.FC = () => {
         payload.deferredUntil,
       ),
     onSuccess: () => {
-      message.success("Статус обновлён");
+      message.success(t("tickets:messages.statusUpdated"));
       setPendingStatus(null);
       setStatusComment("");
       setPendingDeferredAt("");
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error("Не удалось обновить статус"),
+    onError: () => message.error(t("tickets:messages.statusUpdateError")),
   });
 
   const addCommentMutation = useMutation({
@@ -753,13 +758,13 @@ const TicketsPage: React.FC = () => {
       isPrivate: boolean;
     }) => ticketsApi.addComment(payload.id, payload.comment, payload.isPrivate),
     onSuccess: () => {
-      message.success("Комментарий добавлен");
+      message.success(t("tickets:messages.commentAdded"));
       setCommentDraft("");
       setCommentIsPrivate(false);
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error("Не удалось добавить комментарий"),
+    onError: () => message.error(t("tickets:messages.commentAddError")),
   });
 
   const updateCommentMutation = useMutation({
@@ -774,26 +779,26 @@ const TicketsPage: React.FC = () => {
         payload.comment,
       ),
     onSuccess: () => {
-      message.success("Комментарий обновлён");
+      message.success(t("tickets:messages.commentUpdated"));
       setEditingCommentID("");
       setEditingCommentDraft("");
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error("Не удалось обновить комментарий"),
+    onError: () => message.error(t("tickets:messages.commentUpdateError")),
   });
 
   const deleteCommentMutation = useMutation({
     mutationFn: async (payload: { id: string; commentUUID: string }) =>
       ticketsApi.deleteComment(payload.id, payload.commentUUID),
     onSuccess: () => {
-      message.success("Комментарий удалён");
+      message.success(t("tickets:messages.commentDeleted"));
       setEditingCommentID("");
       setEditingCommentDraft("");
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error("Не удалось удалить комментарий"),
+    onError: () => message.error(t("tickets:messages.commentDeleteError")),
   });
 
   const updateProfileConfigMutation = useMutation({
@@ -937,17 +942,22 @@ const TicketsPage: React.FC = () => {
         ...ticket,
         subject: resolveTicketSubjectFromDescription(ticket.description),
         subject_multiline:
-          normalizeDescriptionMultiline(ticket.description) || "Без описания",
+          normalizeDescriptionMultiline(ticket.description) ||
+          t("tickets:fallback.noDescription"),
         company_display:
-          ticket.company_name || ticket.company_id || "Компания не указана",
+          ticket.company_name ||
+          ticket.company_id ||
+          t("tickets:fallback.companyNotSpecified"),
         last_comment_display: normalizeDescription(ticket.last_comment),
         last_comment_multiline: normalizeDescriptionMultiline(
           ticket.last_comment,
         ),
-        assignee_display: ticket.assignee?.full_name || "Не назначен",
-        reporter_display: ticket.reporter_name || "Сотрудник",
+        assignee_display:
+          ticket.assignee?.full_name || t("tickets:fallback.unassigned"),
+        reporter_display:
+          ticket.reporter_name || t("tickets:fallback.employee"),
       })),
-    [visibleTickets],
+    [t, visibleTickets],
   );
   const tableData = useMemo(() => {
     if (!tableSort) {
@@ -987,11 +997,13 @@ const TicketsPage: React.FC = () => {
   const tableColumnsBase: ColumnsType<TableRow> = useMemo(
     () => [
       {
-        title: "Номер",
+        title: t("layout:headerSearch.ticket.tableColumns.number"),
         dataIndex: "number",
         key: "number",
         width: 90,
-        minWidth: estimateHeaderMinWidth("Номер"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.number"),
+        ),
         render: (val: number, row) => (
           <Link
             to={`/tickets/${row.id}`}
@@ -1002,11 +1014,13 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: "Статус",
+        title: t("layout:headerSearch.ticket.tableColumns.status"),
         dataIndex: "status",
         key: "status",
         width: 140,
-        minWidth: estimateHeaderMinWidth("Статус"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.status"),
+        ),
         render: (value: TicketStatus, row) => {
           const meta = getTicketStatusMeta(value);
           const deferredTitle =
@@ -1021,17 +1035,21 @@ const TicketsPage: React.FC = () => {
               ) : (
                 statusTag
               )}
-              {row.is_common_contract && <Tag color="gold">Платный</Tag>}
+              {row.is_common_contract && (
+                <Tag color="gold">{t("tickets:labels.paid")}</Tag>
+              )}
             </Space>
           );
         },
       },
       {
-        title: "Компания",
+        title: t("layout:headerSearch.ticket.tableColumns.company_display"),
         dataIndex: "company_display",
         key: "company_display",
         width: 220,
-        minWidth: estimateHeaderMinWidth("Компания"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.company_display"),
+        ),
         ellipsis: true,
         render: (value: string) => (
           <Text ellipsis style={{ width: "100%", display: "block" }}>
@@ -1040,27 +1058,33 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: "Исполнитель",
+        title: t("layout:headerSearch.ticket.tableColumns.assignee_display"),
         dataIndex: "assignee_display",
         key: "assignee_display",
         width: 170,
-        minWidth: estimateHeaderMinWidth("Исполнитель"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.assignee_display"),
+        ),
         ellipsis: true,
       },
       {
-        title: "Автор",
+        title: t("layout:headerSearch.ticket.tableColumns.reporter_display"),
         dataIndex: "reporter_display",
         key: "reporter_display",
         width: 180,
-        minWidth: estimateHeaderMinWidth("Автор"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.reporter_display"),
+        ),
         ellipsis: true,
       },
       {
-        title: "Описание",
+        title: t("layout:headerSearch.ticket.tableColumns.subject"),
         dataIndex: "subject_multiline",
         key: "subject",
         width: 260,
-        minWidth: estimateHeaderMinWidth("Описание"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.subject"),
+        ),
         render: (value: string) => (
           <div className="tickets-table-multiline-cell" title={value}>
             {value}
@@ -1068,20 +1092,24 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: "Заголовок Bitrix24",
+        title: t("layout:headerSearch.ticket.tableColumns.bitrix_deal_title"),
         dataIndex: "bitrix_deal_title",
         key: "bitrix_deal_title",
         width: 240,
-        minWidth: estimateHeaderMinWidth("Заголовок Bitrix24"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.bitrix_deal_title"),
+        ),
         ellipsis: true,
         render: (value?: string) => value || "-",
       },
       {
-        title: "Последний комментарий",
+        title: t("layout:headerSearch.ticket.tableColumns.last_comment"),
         dataIndex: "last_comment_multiline",
         key: "last_comment",
         width: 260,
-        minWidth: estimateHeaderMinWidth("Последний комментарий"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.last_comment"),
+        ),
         render: (value: string) => (
           <div
             className="tickets-table-multiline-cell tickets-table-multiline-cell-secondary"
@@ -1092,11 +1120,13 @@ const TicketsPage: React.FC = () => {
         ),
       },
       {
-        title: "Создано",
+        title: t("layout:headerSearch.ticket.tableColumns.created_at"),
         dataIndex: "created_at",
         key: "created_at",
         width: 110,
-        minWidth: estimateHeaderMinWidth("Создано"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.created_at"),
+        ),
         render: (value?: string) => {
           const stamp = formatDateStamp(value);
           return (
@@ -1112,11 +1142,13 @@ const TicketsPage: React.FC = () => {
         },
       },
       {
-        title: "Обновлено",
+        title: t("layout:headerSearch.ticket.tableColumns.last_activity"),
         dataIndex: "last_activity",
         key: "last_activity",
         width: 110,
-        minWidth: estimateHeaderMinWidth("Обновлено"),
+        minWidth: estimateHeaderMinWidth(
+          t("layout:headerSearch.ticket.tableColumns.last_activity"),
+        ),
         render: (value: string) => {
           const stamp = formatDateStamp(value);
           return (
@@ -1147,7 +1179,7 @@ const TicketsPage: React.FC = () => {
         ),
       },
     ],
-    [],
+    [t],
   );
 
   const [tableColumnsState, setTableColumnsState] =
@@ -1345,13 +1377,13 @@ const TicketsPage: React.FC = () => {
     );
     const sortableLabel =
       columnKey === "number"
-        ? "Номер"
+        ? t("layout:headerSearch.ticket.tableColumns.number")
         : columnKey === "assignee_display"
-          ? "Исполнитель"
+          ? t("layout:headerSearch.ticket.tableColumns.assignee_display")
           : columnKey === "created_at"
-            ? "Создано"
+            ? t("layout:headerSearch.ticket.tableColumns.created_at")
             : columnKey === "last_activity"
-              ? "Обновлено"
+              ? t("layout:headerSearch.ticket.tableColumns.last_activity")
               : null;
     return {
       ...col,
@@ -1451,11 +1483,13 @@ const TicketsPage: React.FC = () => {
     try {
       await updateProfileConfigMutation.mutateAsync(nextConfig as any);
       message.success(
-        exists ? "Подписка на тикет отключена" : "Подписка на тикет включена",
+        exists
+          ? t("tickets:messages.subscriptionDisabled")
+          : t("tickets:messages.subscriptionEnabled"),
       );
     } catch {
       setUser(user);
-      message.error("Не удалось изменить подписку на тикет");
+      message.error(t("tickets:messages.subscriptionError"));
     }
   };
 
@@ -1482,7 +1516,7 @@ const TicketsPage: React.FC = () => {
       <SmartTicketEditor
         value={commentDraft}
         onChange={setCommentDraft}
-        placeholder="Добавьте комментарий"
+        placeholder={t("tickets:placeholders.addComment")}
         mentions={mentionOptions}
         onImageUpload={uploadInlineImage}
         onFileUpload={uploadInlineFile}
@@ -1502,7 +1536,7 @@ const TicketsPage: React.FC = () => {
           checked={commentIsPrivate}
           onChange={(event) => setCommentIsPrivate(event.target.checked)}
         />
-        Приватный (Только в Xenion)
+        {t("tickets:labels.privateXenionOnly")}
       </label>
       <Button
         type="primary"
@@ -1517,7 +1551,7 @@ const TicketsPage: React.FC = () => {
           });
         }}
       >
-        Отправить
+        {t("tickets:actions.send")}
       </Button>
     </Space>
   );
@@ -1570,7 +1604,7 @@ const TicketsPage: React.FC = () => {
                           <Tag color={meta.color}>{meta.label}</Tag>
                         )}
                         {item.is_common_contract && (
-                          <Tag color="gold">Платный</Tag>
+                          <Tag color="gold">{t("tickets:labels.paid")}</Tag>
                         )}
                         <ExternalLinksBadges
                           bitrixURL={
@@ -1600,18 +1634,18 @@ const TicketsPage: React.FC = () => {
                       className="ticket-list-side"
                     >
                       <Text className="ticket-assignee-linklike">
-                        {item.assignee?.full_name || "Не назначен"}
+                        {item.assignee?.full_name || t("tickets:fallback.unassigned")}
                       </Text>
                       <Text type="secondary">
-                        {item.reporter_name || "Сотрудник"} •{" "}
+                        {item.reporter_name || t("tickets:fallback.employee")} •{" "}
                         {resolveTicketCreatedSourceLabel(item.created_source)}
                       </Text>
                       <TicketDateStamp
-                        label="Создано"
+                        label={t("tickets:labels.created")}
                         value={item.created_at}
                       />
                       <TicketDateStamp
-                        label="Обновлено"
+                        label={t("tickets:labels.updated")}
                         value={item.last_activity}
                       />
                     </Space>
@@ -1695,7 +1729,7 @@ const TicketsPage: React.FC = () => {
                               <Tag color={meta.color}>{meta.label}</Tag>
                             )}
                             {item.is_common_contract && (
-                              <Tag color="gold">Платный</Tag>
+                              <Tag color="gold">{t("tickets:labels.paid")}</Tag>
                             )}
                           </Space>
                           <div className="ticket-card-assignee-right">
@@ -1707,13 +1741,13 @@ const TicketsPage: React.FC = () => {
                             >
                               <a
                                 className="ticket-assignee-linklike"
-                                onClick={(event) => {
+                              onClick={(event) => {
                                   event.preventDefault();
                                   event.stopPropagation();
                                   applyAssigneeFilter(item.assignee?.id);
                                 }}
                               >
-                                {item.assignee?.full_name || "Не назначен"}
+                                {item.assignee?.full_name || t("tickets:fallback.unassigned")}
                               </a>
                             </Popover>
                           </div>
@@ -1744,7 +1778,7 @@ const TicketsPage: React.FC = () => {
                         {resolveTicketSubjectFromDescription(item.description)}
                       </Paragraph>
                       <Text type="secondary">
-                        {item.reporter_name || "Сотрудник"} •{" "}
+                        {item.reporter_name || t("tickets:fallback.employee")} •{" "}
                         {resolveTicketCreatedSourceLabel(item.created_source)}
                       </Text>
                       {item.last_comment && (
@@ -1765,11 +1799,11 @@ const TicketsPage: React.FC = () => {
                         wrap
                       >
                         <TicketDateStamp
-                          label="Создано"
+                          label={t("tickets:labels.created")}
                           value={item.created_at}
                         />
                         <TicketDateStamp
-                          label="Обновлено"
+                          label={t("tickets:labels.updated")}
                           value={item.last_activity}
                         />
                       </Space>
@@ -1835,7 +1869,10 @@ const TicketsPage: React.FC = () => {
           )}
           {!hasNextPage && visibleTickets.length > 0 && (
             <Text type="secondary">
-              Показано: {visibleTickets.length} из {total}
+              {t("tickets:labels.showing", {
+                visible: visibleTickets.length,
+                total,
+              })}
             </Text>
           )}
         </div>
@@ -1856,7 +1893,9 @@ const TicketsPage: React.FC = () => {
                 gap: 8,
               }}
             >
-              <span>Быстрый просмотр #{metadata.number}</span>
+              <span>
+                {t("tickets:titles.quickPreview")} #{metadata.number}
+              </span>
               {metadata.company_id ? (
                 <Link
                   to={`/companies/${metadata.company_id}`}
@@ -1870,7 +1909,7 @@ const TicketsPage: React.FC = () => {
               <span />
             </div>
           ) : (
-            "Быстрый просмотр заявки"
+            t("tickets:titles.quickPreviewTicket")
           )
         }
         placement="right"
@@ -1895,14 +1934,19 @@ const TicketsPage: React.FC = () => {
                     });
                   }}
                 >
-                  Вернуть в работу
+                  {t("tickets:actions.returnToWork")}
                 </Button>
               ) : (
                 <Select
                   value={metadata.status}
                   options={TICKET_STATUS_OPTIONS.filter(
                     (item) => item.value !== "closed",
-                  ).map((item) => ({ value: item.value, label: item.label }))}
+                  ).map((item) => ({
+                    value: item.value,
+                    label: t(
+                      `layout:headerSearch.ticket.statusOptions.${item.value}`,
+                    ),
+                  }))}
                   style={{ width: 220 }}
                   onChange={(nextStatus: TicketStatus) => {
                     if (!selectedTicketId || nextStatus === metadata.status) {
@@ -1958,18 +2002,24 @@ const TicketsPage: React.FC = () => {
                     }}
                   >
                     {metadata.deferred_until
-                      ? `до ${formatDeferredDateTime(metadata.deferred_until)}`
-                      : "установить время"}
+                      ? t("tickets:deferred.untilShort", {
+                          value: formatDeferredDateTime(metadata.deferred_until),
+                        })
+                      : t("tickets:deferred.setTime")}
                   </Button>
                 </Space>
               )}
               <Text type="secondary">
-                Исполнитель: {metadata.assignee?.full_name || "Не назначен"}
+                {t("tickets:labels.assignee", {
+                  name:
+                    metadata.assignee?.full_name ||
+                    t("tickets:fallback.unassigned"),
+                })}
               </Text>
               <Button onClick={() => void toggleTicketSubscription()}>
                 {ticketSubscriptions.includes(String(metadata.id))
-                  ? "Отписаться"
-                  : "Подписаться на тикет"}
+                  ? t("tickets:actions.unsubscribe")
+                  : t("tickets:actions.subscribe")}
               </Button>
               <Button
                 onClick={() => {
@@ -1978,20 +2028,20 @@ const TicketsPage: React.FC = () => {
                   closeQuickModal();
                 }}
               >
-                Открыть страницу
+                {t("tickets:actions.openPage")}
               </Button>
             </Space>
 
-            <Card size="small" title="Контакт">
+            <Card size="small" title={t("tickets:cards.contact")}>
               <Space direction="vertical" size={6} style={{ width: "100%" }}>
                 <Text>
                   {getTelephonyContactLabel(details.contact, details.contact?.phone_display) ||
-                    "Контакт не указан"}
+                    t("tickets:fallback.contactNotSpecified")}
                 </Text>
                 <Space size={8} wrap>
                   <Text type="secondary">
                     {getTelephonyContactPhoneDisplay(details.contact) ||
-                      "Телефон не указан"}
+                      t("tickets:fallback.phoneNotSpecified")}
                   </Text>
                   <Button
                     type="text"
@@ -2004,22 +2054,25 @@ const TicketsPage: React.FC = () => {
                       );
                     }}
                   >
-                    Копировать
+                    {t("tickets:actions.copy")}
                   </Button>
                 </Space>
               </Space>
             </Card>
 
-            <Card size="small" title="Описание">
+            <Card size="small" title={t("tickets:cards.description")}>
               <SafeHtmlContent
-                html={metadata.description || "<span>Нет описания</span>"}
+                html={
+                  metadata.description ||
+                  t("tickets:fallback.noContactDescription")
+                }
                 style={{ whiteSpace: "pre-wrap" }}
               />
             </Card>
 
             {isClosedLikeTicketStatus(metadata.status) &&
               Boolean((metadata.result || "").trim()) && (
-                <Card size="small" title="Результат">
+                <Card size="small" title={t("tickets:cards.result")}>
                   <SafeHtmlContent
                     html={metadata.result || ""}
                     style={{ whiteSpace: "pre-wrap" }}
@@ -2027,13 +2080,13 @@ const TicketsPage: React.FC = () => {
                 </Card>
               )}
 
-            <Card size="small" title="Подключения">
+            <Card size="small" title={t("tickets:cards.connections")}>
               {isInfraLoading ? (
                 <div style={{ textAlign: "center", padding: 12 }}>
                   <Spin />
                 </div>
               ) : connections.length === 0 ? (
-                <Text type="secondary">Подключений нет</Text>
+                <Text type="secondary">{t("tickets:fallback.noConnections")}</Text>
               ) : (
                 <List
                   dataSource={connections}
@@ -2084,7 +2137,7 @@ const TicketsPage: React.FC = () => {
               )}
             </Card>
 
-            <Card size="small" title="Комментарии">
+            <Card size="small" title={t("tickets:cards.comments")}>
               {commentsNewFirst && commentComposer}
               {comments.length > 0 && (
                 <List
@@ -2109,7 +2162,7 @@ const TicketsPage: React.FC = () => {
                           </Text>
                           <Space size={8}>
                             {item.isPrivate && (
-                              <Tag color="orange">Приватный</Tag>
+                              <Tag color="orange">{t("tickets:labels.private")}</Tag>
                             )}
                             {canManageComment(item.authorRaw) && (
                               <Button
@@ -2120,14 +2173,14 @@ const TicketsPage: React.FC = () => {
                                   setEditingCommentDraft(item.text || "");
                                 }}
                               >
-                                Редактировать
+                                {t("tickets:actions.edit")}
                               </Button>
                             )}
                             {canDeleteComment(item.authorRaw) && (
                               <Popconfirm
-                                title="Удалить комментарий?"
-                                okText="Удалить"
-                                cancelText="Отмена"
+                                title={t("tickets:titles.deleteComment")}
+                                okText={t("common:actions.delete")}
+                                cancelText={t("common:actions.cancel")}
                                 onConfirm={() => {
                                   if (!selectedTicketId) return;
                                   deleteCommentMutation.mutate({
@@ -2142,7 +2195,7 @@ const TicketsPage: React.FC = () => {
                                   danger
                                   loading={deleteCommentMutation.isPending}
                                 >
-                                  Удалить
+                                  {t("tickets:actions.delete")}
                                 </Button>
                               </Popconfirm>
                             )}
@@ -2157,7 +2210,7 @@ const TicketsPage: React.FC = () => {
                             <SmartTicketEditor
                               value={editingCommentDraft}
                               onChange={setEditingCommentDraft}
-                              placeholder="Измените комментарий"
+                              placeholder={t("tickets:placeholders.editComment")}
                               mentions={mentionOptions}
                               onImageUpload={uploadInlineImage}
                               onFileUpload={uploadInlineFile}
@@ -2180,7 +2233,7 @@ const TicketsPage: React.FC = () => {
                                   });
                                 }}
                               >
-                                Сохранить
+                                {t("tickets:actions.save")}
                               </Button>
                               <Button
                                 onClick={() => {
@@ -2188,7 +2241,7 @@ const TicketsPage: React.FC = () => {
                                   setEditingCommentDraft("");
                                 }}
                               >
-                                Отмена
+                                {t("common:actions.cancel")}
                               </Button>
                             </Space>
                           </Space>
@@ -2218,7 +2271,9 @@ const TicketsPage: React.FC = () => {
         }}
         width={420}
         title={
-          pendingStatus === "deferred" ? "Отложить заявку" : "Завершение заявки"
+          pendingStatus === "deferred"
+            ? t("tickets:titles.deferTicket")
+            : t("tickets:titles.completeTicket")
         }
         placement="right"
       >
@@ -2232,14 +2287,14 @@ const TicketsPage: React.FC = () => {
               onChange={(value) =>
                 setPendingDeferredAt(value ? value.toISOString() : "")
               }
-              placeholder="Выберите дату и время"
+              placeholder={t("tickets:placeholders.selectDateTime")}
             />
           ) : (
             <Input.TextArea
               rows={4}
               value={statusComment}
               onChange={(event) => setStatusComment(event.target.value)}
-              placeholder="Опишите итог выполнения заявки"
+              placeholder={t("tickets:placeholders.resolutionComment")}
             />
           )}
           <Button
@@ -2269,7 +2324,9 @@ const TicketsPage: React.FC = () => {
               });
             }}
           >
-            {pendingStatus === "deferred" ? "Отложить" : "Завершить заявку"}
+            {pendingStatus === "deferred"
+              ? t("tickets:actions.deferTicket")
+              : t("tickets:actions.completeTicket")}
           </Button>
         </Space>
       </Drawer>
