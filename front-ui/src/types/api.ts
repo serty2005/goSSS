@@ -658,6 +658,14 @@ export interface TicketAttachmentDTO {
 export interface DashboardResolvedByAssigneeDTO {
   user_id: number;
   user_name: string;
+  today_count: number;
+  days_7_count: number;
+  days_30_count: number;
+}
+
+export interface DashboardAcceptedCallsByEmployeeDTO {
+  user_id: number;
+  user_name: string;
   count: number;
 }
 
@@ -668,9 +676,11 @@ export interface DashboardServerStatusDTO {
 
 export interface DashboardStatsDTO {
   resolved_by_assignee: DashboardResolvedByAssigneeDTO[];
+  accepted_calls_by_employee: DashboardAcceptedCallsByEmployeeDTO[];
   server_statuses: DashboardServerStatusDTO[];
   total_tickets: number;
   polled_servers_24h: number;
+  accepted_calls_24h: number;
 }
 
 export interface TicketListParams {

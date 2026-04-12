@@ -52,7 +52,11 @@
   "headerSearch": {
     "global": {
       "placeholder": "Search by IP, serial, name...",
-      "toggleWithoutContract": "Without contract"
+      "openButton": "Open global search",
+      "closeButton": "Close global search",
+      "overlayTitle": "Global search",
+      "resultsTitle": "Results: {{term}}",
+      "pageHint": "Find a company, server, workstation or fiscal register from any section"
     },
     "sectionPlaceholders": {
       "companies": "Search companies: name, address, legal name",

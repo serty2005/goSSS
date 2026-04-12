@@ -1,13 +1,49 @@
 import React from 'react';
+import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Col, Empty, Row, Space, Spin, Statistic, Table, Typography } from 'antd';
+import { Button, Card, Col, Empty, Row, Space, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ticketsApi } from '@/api/tickets';
-import { DashboardResolvedByAssigneeDTO, DashboardServerStatusDTO } from '@/types/api';
+import {
+  DashboardAcceptedCallsByEmployeeDTO,
+  DashboardResolvedByAssigneeDTO,
+  DashboardServerStatusDTO,
+} from '@/types/api';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
 
 const { Title, Text } = Typography;
+
+type TicketPeriodKey = 'today' | 'days_7' | 'days_30';
+
+const buildTicketPeriodRange = (period: TicketPeriodKey) => {
+  const now = dayjs();
+  switch (period) {
+    case 'today':
+      return {
+        from: now.startOf('day'),
+        to: now.endOf('day'),
+      };
+    case 'days_7':
+      return {
+        from: now.subtract(6, 'day').startOf('day'),
+        to: now.endOf('day'),
+      };
+    default:
+      return {
+        from: now.subtract(29, 'day').startOf('day'),
+        to: now.endOf('day'),
+      };
+  }
+};
+
+const buildCallsPeriodRange = () => {
+  const now = dayjs();
+  return {
+    from: now.subtract(24, 'hour'),
+    to: now,
+  };
+};
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -24,28 +60,126 @@ const Dashboard: React.FC = () => {
 
   const stats = data?.data;
   const resolved = stats?.resolved_by_assignee || [];
+  const acceptedCalls = stats?.accepted_calls_by_employee || [];
   const serverStatuses = stats?.server_statuses || [];
 
-  const openResolvedByAssignee = (row: DashboardResolvedByAssigneeDTO) => {
+  const openResolvedByAssignee = (
+    row: DashboardResolvedByAssigneeDTO,
+    period: TicketPeriodKey,
+  ) => {
     const userID = Number(row.user_id || 0);
-    if (!userID) return;
+    if (!userID) {
+      return;
+    }
+
+    const periodRange = buildTicketPeriodRange(period);
     const params = new URLSearchParams();
     params.set('assignee_ids', String(userID));
     params.set('status', 'resolved,closed');
-    params.set('archive_mode', 'active');
+    params.set('archive_mode', 'all');
+    params.set('closed_from', periodRange.from.toISOString());
+    params.set('closed_to', periodRange.to.toISOString());
+
     setTicketParams(params.toString());
     navigate('/tickets');
   };
 
+  const openCallsByEmployee = (row: DashboardAcceptedCallsByEmployeeDTO) => {
+    const userID = Number(row.user_id || 0);
+    if (!userID) {
+      return;
+    }
+
+    const periodRange = buildCallsPeriodRange();
+    const params = new URLSearchParams();
+    params.set('started_from', periodRange.from.toISOString());
+    params.set('started_to', periodRange.to.toISOString());
+    navigate(`/telephony/users/${userID}/calls?${params.toString()}`);
+  };
+
   const openServersByStatus = (row: DashboardServerStatusDTO) => {
     const status = String(row.status || '').trim();
-    if (!status) return;
+    if (!status) {
+      return;
+    }
     navigate(`/servers?status=${encodeURIComponent(status)}`);
+  };
+
+  const renderTicketCount = (
+    value: number,
+    row: DashboardResolvedByAssigneeDTO,
+    period: TicketPeriodKey,
+  ) => {
+    if (!value) {
+      return <Text type="secondary">0</Text>;
+    }
+
+    return (
+      <Button
+        type="link"
+        size="small"
+        style={{ paddingInline: 0 }}
+        onClick={() => openResolvedByAssignee(row, period)}
+      >
+        {value}
+      </Button>
+    );
+  };
+
+  const renderAcceptedCallsCount = (
+    value: number,
+    row: DashboardAcceptedCallsByEmployeeDTO,
+  ) => {
+    if (!value) {
+      return <Text type="secondary">0</Text>;
+    }
+
+    return (
+      <Button
+        type="link"
+        size="small"
+        style={{ paddingInline: 0 }}
+        onClick={() => openCallsByEmployee(row)}
+      >
+        {value}
+      </Button>
+    );
   };
 
   const resolvedColumns: ColumnsType<DashboardResolvedByAssigneeDTO> = [
     { title: 'Сотрудник', dataIndex: 'user_name', key: 'user_name' },
-    { title: 'Решено заявок', dataIndex: 'count', key: 'count', width: 180 },
+    {
+      title: 'Сегодня',
+      dataIndex: 'today_count',
+      key: 'today_count',
+      width: 120,
+      render: (value: number, row) => renderTicketCount(value, row, 'today'),
+    },
+    {
+      title: '7 дней',
+      dataIndex: 'days_7_count',
+      key: 'days_7_count',
+      width: 120,
+      render: (value: number, row) => renderTicketCount(value, row, 'days_7'),
+    },
+    {
+      title: '30 дней',
+      dataIndex: 'days_30_count',
+      key: 'days_30_count',
+      width: 120,
+      render: (value: number, row) => renderTicketCount(value, row, 'days_30'),
+    },
+  ];
+
+  const acceptedCallsColumns: ColumnsType<DashboardAcceptedCallsByEmployeeDTO> = [
+    { title: 'Сотрудник', dataIndex: 'user_name', key: 'user_name' },
+    {
+      title: 'Принято за 24 часа',
+      dataIndex: 'count',
+      key: 'count',
+      width: 170,
+      render: (value: number, row) => renderAcceptedCallsCount(value, row),
+    },
   ];
 
   const serverColumns: ColumnsType<DashboardServerStatusDTO> = [
@@ -57,7 +191,7 @@ const Dashboard: React.FC = () => {
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Title level={2} style={{ margin: 0 }}>Обзор системы</Title>
 
-      <Row gutter={16}>
+      <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
           <Card>
             <Statistic title="Всего тикетов" value={stats?.total_tickets || 0} />
@@ -65,18 +199,18 @@ const Dashboard: React.FC = () => {
         </Col>
         <Col xs={24} md={8}>
           <Card>
-            <Statistic title="Опросы серверов за 24 часа" value={stats?.polled_servers_24h || 0} />
+            <Statistic title="Принято звонков за 24 часа" value={stats?.accepted_calls_24h || 0} />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card>
-            <Statistic title="Сотрудников в статистике" value={resolved.length} />
+            <Statistic title="Опросы серверов за 24 часа" value={stats?.polled_servers_24h || 0} />
           </Card>
         </Col>
       </Row>
 
-      <Row gutter={16} align="stretch">
-        <Col xs={24} lg={12}>
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={24} xl={14}>
           <Card title="Решённые заявки по сотрудникам" className="glass-panel">
             {resolved.length === 0 ? (
               <Empty description="Пока нет данных по решённым заявкам" />
@@ -87,16 +221,30 @@ const Dashboard: React.FC = () => {
                 rowKey={(row) => `${row.user_id}`}
                 pagination={false}
                 size="small"
-                onRow={(record) => ({
-                  onClick: () => openResolvedByAssignee(record),
-                  style: { cursor: 'pointer' },
-                })}
               />
             )}
           </Card>
         </Col>
 
-        <Col xs={24} lg={12}>
+        <Col xs={24} xl={10}>
+          <Card title="Принятые звонки по сотрудникам" className="glass-panel">
+            {acceptedCalls.length === 0 ? (
+              <Empty description="Пока нет данных по принятым звонкам" />
+            ) : (
+              <Table
+                dataSource={acceptedCalls}
+                columns={acceptedCallsColumns}
+                rowKey={(row) => `${row.user_id}`}
+                pagination={false}
+                size="small"
+              />
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24}>
           <Card title="Статусы серверов" className="glass-panel">
             {serverStatuses.length === 0 ? (
               <Empty description="Пока нет данных по статусам серверов" />

@@ -6,6 +6,14 @@ import (
 )
 
 type ResolvedByAssigneeStat struct {
+	UserID      uint   `json:"user_id"`
+	UserName    string `json:"user_name"`
+	TodayCount  int64  `json:"today_count"`
+	Days7Count  int64  `json:"days_7_count" gorm:"column:days_7_count"`
+	Days30Count int64  `json:"days_30_count" gorm:"column:days_30_count"`
+}
+
+type AcceptedCallsByEmployeeStat struct {
 	UserID   uint   `json:"user_id"`
 	UserName string `json:"user_name"`
 	Count    int64  `json:"count"`
@@ -17,10 +25,12 @@ type ServerStatusStat struct {
 }
 
 type DashboardStats struct {
-	ResolvedByAssignee []ResolvedByAssigneeStat `json:"resolved_by_assignee"`
-	ServerStatuses     []ServerStatusStat       `json:"server_statuses"`
-	TotalTickets       int64                    `json:"total_tickets"`
-	PolledServers24h   int64                    `json:"polled_servers_24h"`
+	ResolvedByAssignee  []ResolvedByAssigneeStat      `json:"resolved_by_assignee"`
+	AcceptedCallsByUser []AcceptedCallsByEmployeeStat `json:"accepted_calls_by_employee"`
+	ServerStatuses      []ServerStatusStat            `json:"server_statuses"`
+	TotalTickets        int64                         `json:"total_tickets"`
+	PolledServers24h    int64                         `json:"polled_servers_24h"`
+	AcceptedCalls24h    int64                         `json:"accepted_calls_24h"`
 }
 
 // TicketFilter содержит параметры для поиска заявок.

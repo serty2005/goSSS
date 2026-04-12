@@ -17,7 +17,6 @@ import {
 } from "antd";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import {
-  SearchOutlined,
   CustomerServiceOutlined,
   BankOutlined,
   DesktopOutlined,
@@ -33,6 +32,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import HeaderSearch from "@/components/common/HeaderSearch";
+import GlobalSearchLauncher from "@/components/search/GlobalSearchLauncher";
 import { formatLocaleDateTime } from "@/i18n/formatters";
 import { useAppLocale } from "@/i18n/useAppLocale";
 import { useUiStore } from "@/store/uiStore";
@@ -530,7 +530,6 @@ const MainLayout: React.FC = () => {
   }
 
   const menuItems = [
-    { key: "/", icon: <SearchOutlined />, label: t("layout:menu.search") },
     {
       key: "/tickets",
       icon: <CustomerServiceOutlined />,
@@ -745,29 +744,17 @@ const MainLayout: React.FC = () => {
       >
         <div
           style={{
-            height: 64,
+            minHeight: 64,
             margin: 16,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
           }}
         >
-          <div
-            style={{
-              width: sidebarCollapsed ? 32 : "100%",
-              height: 32,
-              background: token.colorPrimary,
-              borderRadius: 6,
-              opacity: 0.8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: token.colorTextLightSolid,
-              fontWeight: "bold",
-            }}
-          >
-            {sidebarCollapsed ? "XD" : "MyHoreca XenionDesk"}
-          </div>
+          <GlobalSearchLauncher
+            collapsed={sidebarCollapsed}
+            sidebarWidth={sidebarCollapsed ? 80 : 250}
+          />
         </div>
         <Menu
           mode="inline"

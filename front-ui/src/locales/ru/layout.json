@@ -52,7 +52,11 @@
   "headerSearch": {
     "global": {
       "placeholder": "Поиск по IP, серийному номеру, имени...",
-      "toggleWithoutContract": "Без контракта"
+      "openButton": "Открыть глобальный поиск",
+      "closeButton": "Закрыть глобальный поиск",
+      "overlayTitle": "Глобальный поиск",
+      "resultsTitle": "Результаты: {{term}}",
+      "pageHint": "Ищите компанию, сервер, рабочую станцию или ФР из любого раздела"
     },
     "sectionPlaceholders": {
       "companies": "Поиск компаний: название, адрес, юр. название",
