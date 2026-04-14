@@ -67,11 +67,20 @@ type CandidateRecalculationResult struct {
 	CandidatesClosed  int `json:"candidates_closed"`
 }
 
+type ActualObservationReconciliationResult struct {
+	AgentsChecked          int                          `json:"agents_checked"`
+	AgentUUIDBackfilled    int                          `json:"agent_uuid_backfilled"`
+	ObservationsSuperseded int                          `json:"observations_superseded"`
+	Errors                 int                          `json:"errors"`
+	CandidateRecalculation CandidateRecalculationResult `json:"candidate_recalculation"`
+}
+
 type AgentObservationService interface {
 	ApplyObservation(ctx context.Context, source string, data *api.AgentDataDTO) (*models.AgentObservation, error)
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
 	RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
+	ReconcileActualAgentObservations(ctx context.Context) (*ActualObservationReconciliationResult, error)
 }
 
 type agentObservationStorage interface {
@@ -79,6 +88,7 @@ type agentObservationStorage interface {
 	ApproveCandidate(ctx context.Context, in infrarepos.CandidateApproveInput) (*models.Candidate, error)
 	RejectCandidate(ctx context.Context, in infrarepos.CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*infrarepos.CandidateRecalculationResult, error)
+	ReconcileActualAgentObservations(ctx context.Context) (*infrarepos.ActualObservationReconciliationResult, error)
 }
 
 type agentObservationServiceImpl struct {
@@ -227,6 +237,33 @@ func (s *agentObservationServiceImpl) RecalculateCandidates(ctx context.Context)
 		IgnoredStale:      res.IgnoredStale,
 		Errors:            res.Errors,
 		CandidatesClosed:  res.CandidatesClosed,
+	}, nil
+}
+
+func (s *agentObservationServiceImpl) ReconcileActualAgentObservations(ctx context.Context) (*ActualObservationReconciliationResult, error) {
+	res, err := s.storage.ReconcileActualAgentObservations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return &ActualObservationReconciliationResult{}, nil
+	}
+	return &ActualObservationReconciliationResult{
+		AgentsChecked:          res.AgentsChecked,
+		AgentUUIDBackfilled:    res.AgentUUIDBackfilled,
+		ObservationsSuperseded: res.ObservationsSuperseded,
+		Errors:                 res.Errors,
+		CandidateRecalculation: CandidateRecalculationResult{
+			CandidatesTotal:   res.CandidateRecalculation.CandidatesTotal,
+			ObservationsTotal: res.CandidateRecalculation.ObservationsTotal,
+			Reprocessed:       res.CandidateRecalculation.Reprocessed,
+			Applied:           res.CandidateRecalculation.Applied,
+			Staged:            res.CandidateRecalculation.Staged,
+			Ignored:           res.CandidateRecalculation.Ignored,
+			IgnoredStale:      res.CandidateRecalculation.IgnoredStale,
+			Errors:            res.CandidateRecalculation.Errors,
+			CandidatesClosed:  res.CandidateRecalculation.CandidatesClosed,
+		},
 	}, nil
 }
 

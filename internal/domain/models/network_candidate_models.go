@@ -18,11 +18,13 @@ const (
 	NetworkCandidateStatusApproved  = "APPROVED"
 	NetworkCandidateStatusRejected  = "REJECTED"
 	NetworkCandidateStatusCancelled = "CANCELLED"
+	NetworkCandidateStatusSuperseded = "SUPERSEDED"
 )
 
 const (
 	NetworkCandidateGroupStatusActive      = "ACTIVE"
 	NetworkCandidateGroupStatusTransferred = "TRANSFERRED"
+	NetworkCandidateGroupStatusSuperseded  = "SUPERSEDED"
 )
 
 const (
@@ -65,6 +67,7 @@ type NetworkCandidate struct {
 	ServerKey    *string `gorm:"type:text;index" json:"server_key"`
 	ServerCRMID  *string `gorm:"column:server_crm_id;type:text;index" json:"server_crm_id"`
 	ServerURL    *string `gorm:"type:text" json:"server_url"`
+	DeactivationReason *string `gorm:"type:text" json:"deactivation_reason"`
 	// ConflictInfo содержит описание конфликта владельцев.
 	// Заполняется когда РС найдена у одной дочерней компании, а ФР у другой.
 	ConflictInfo *string `gorm:"type:text" json:"conflict_info"`
@@ -77,12 +80,13 @@ type NetworkCandidate struct {
 }
 
 type NetworkCandidateGroup struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	CandidateID   uint      `gorm:"index;not null" json:"candidate_id"`
-	ObservationID uint      `gorm:"index:idx_network_candidate_observation,priority:1;not null" json:"observation_id"`
-	Status        string    `gorm:"type:varchar(32);index;not null" json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	CandidateID        uint      `gorm:"index;not null" json:"candidate_id"`
+	ObservationID      uint      `gorm:"index:idx_network_candidate_observation,priority:1;not null" json:"observation_id"`
+	Status             string    `gorm:"type:varchar(32);index;not null" json:"status"`
+	DeactivationReason *string   `gorm:"type:text" json:"deactivation_reason"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type NetworkCandidateWSStaging struct {

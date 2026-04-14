@@ -105,6 +105,7 @@ func (h *CandidateHandler) Get(w http.ResponseWriter, r *http.Request) {
 		"server_url":          candidate.ServerURL,
 		"existing_server_id":  candidate.ExistingServerID,
 		"status":              candidate.Status,
+		"deactivation_reason": candidate.DeactivationReason,
 		"ticket_id":           candidate.TicketID,
 		"approved_company_id": candidate.ApprovedCompanyID,
 		"approved_server_id":  candidate.ApprovedServerID,
@@ -139,9 +140,10 @@ func (h *CandidateHandler) GetObservations(w http.ResponseWriter, r *http.Reques
 	items := make([]map[string]interface{}, 0, len(observations))
 	for _, item := range observations {
 		items = append(items, map[string]interface{}{
-			"observation_id": item.ID,
-			"observed_at":    item.ObservedAt,
-			"payload_json":   item.PayloadJSON,
+			"observation_id":  item.ID,
+			"observation_uid": item.ObservationUID,
+			"observed_at":     item.ObservedAt,
+			"payload_json":    item.PayloadJSON,
 		})
 	}
 

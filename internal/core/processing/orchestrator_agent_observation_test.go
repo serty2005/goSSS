@@ -46,6 +46,10 @@ func (s *stubObservationService) RecalculateCandidates(_ context.Context) (*serv
 	return &services.CandidateRecalculationResult{}, nil
 }
 
+func (s *stubObservationService) ReconcileActualAgentObservations(_ context.Context) (*services.ActualObservationReconciliationResult, error) {
+	return &services.ActualObservationReconciliationResult{}, nil
+}
+
 type stubProcessingEngine struct{}
 
 func (s *stubProcessingEngine) ProcessAgentData(_ context.Context, _ string, _ *api.AgentDataDTO) *ProcessingResult {

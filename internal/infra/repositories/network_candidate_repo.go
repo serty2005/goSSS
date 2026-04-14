@@ -89,6 +89,9 @@ func (r *networkCandidateRepo) Approve(ctx context.Context, in domainrepos.Netwo
 		if err := tx.Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
 			return err
 		}
+		if out.Status == models.NetworkCandidateStatusSuperseded {
+			return fmt.Errorf("network-кандидат со статусом %s больше не актуален", out.Status)
+		}
 		childID, err := r.ensureChildCompany(tx, out.HubCompanyID, in)
 		if err != nil {
 			return err
@@ -141,18 +144,28 @@ func (r *networkCandidateRepo) RemoveGroup(ctx context.Context, candidateID, gro
 		if err := tx.Where("id = ?", candidateID).First(&sourceCandidate).Error; err != nil {
 			return err
 		}
+		if sourceCandidate.Status == models.NetworkCandidateStatusSuperseded {
+			return fmt.Errorf("network-кандидат со статусом %s больше не актуален", sourceCandidate.Status)
+		}
 		var sourceGroup models.NetworkCandidateGroup
 		if err := tx.Where("id = ? AND candidate_id = ?", groupID, candidateID).First(&sourceGroup).Error; err != nil {
 			return err
 		}
+		if sourceGroup.Status != models.NetworkCandidateGroupStatusActive {
+			return fmt.Errorf("группа со статусом %s недоступна для переноса", sourceGroup.Status)
+		}
 
 		newCandidate = models.NetworkCandidate{
-			Status:       models.NetworkCandidateStatusNew,
-			HubCompanyID: sourceCandidate.HubCompanyID,
-			ServerID:     sourceCandidate.ServerID,
-			ServerKey:    sourceCandidate.ServerKey,
-			ServerCRMID:  sourceCandidate.ServerCRMID,
-			ServerURL:    sourceCandidate.ServerURL,
+			Status:             models.NetworkCandidateStatusNew,
+			HubCompanyID:       sourceCandidate.HubCompanyID,
+			ServerID:           sourceCandidate.ServerID,
+			ServerKey:          sourceCandidate.ServerKey,
+			ServerCRMID:        sourceCandidate.ServerCRMID,
+			ServerURL:          sourceCandidate.ServerURL,
+			DeactivationReason: nil,
+			ConflictInfo:       sourceCandidate.ConflictInfo,
+			WSOwnerCandidate:   sourceCandidate.WSOwnerCandidate,
+			FROwnerCandidate:   sourceCandidate.FROwnerCandidate,
 		}
 		if err := tx.Create(&newCandidate).Error; err != nil {
 			return err

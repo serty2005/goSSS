@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/domain/user"
@@ -8,10 +9,15 @@ import (
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/transport/http/response"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -68,39 +74,104 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
-// DebugHTTPIOMiddleware логирует входящие/исходящие HTTP-данные на уровне debug.
-// Логи записываются только если в конфигурации включен debug-уровень логгера.
-func DebugHTTPIOMiddleware() func(http.Handler) http.Handler {
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) ReadFrom(src io.Reader) (int64, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	if readerFrom, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		n, err := readerFrom.ReadFrom(src)
+		r.bytes += int(n)
+		return n, err
+	}
+	return io.Copy(r, src)
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := r.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+// RequestLoggingMiddleware пишет один итоговый access-log на каждый HTTP-запрос.
+func RequestLoggingMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := GetLogger(r.Context())
 			startedAt := time.Now()
 			rec := &statusRecorder{ResponseWriter: w}
 
-			log.Debug("HTTP входящий запрос",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"query", r.URL.RawQuery,
-				"remote_addr", r.RemoteAddr,
-				"user_agent", r.UserAgent(),
-				"content_length", r.ContentLength,
-			)
-
 			next.ServeHTTP(rec, r)
 
-			duration := time.Since(startedAt)
 			status := rec.status
 			if status == 0 {
 				status = http.StatusOK
 			}
 
-			log.Debug("HTTP исходящий ответ",
+			args := []any{
+				"event", "http_access",
 				"method", r.Method,
 				"path", r.URL.Path,
+				"route", routePattern(r),
+				"query", sanitizeQuery(r.URL.RawQuery),
 				"status", status,
 				"response_bytes", rec.bytes,
-				"duration_ms", duration.Milliseconds(),
-			)
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"remote_ip", r.RemoteAddr,
+				"user_agent", r.UserAgent(),
+				"content_length", r.ContentLength,
+			}
+
+			switch {
+			case status >= http.StatusInternalServerError:
+				log.Error("HTTP запрос завершён", args...)
+			case status >= http.StatusBadRequest:
+				log.Warn("HTTP запрос завершён", args...)
+			default:
+				log.Info("HTTP запрос завершён", args...)
+			}
+		})
+	}
+}
+
+// Recoverer перехватывает панику и пишет её в JSON-лог.
+func Recoverer() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					log := GetLogger(r.Context())
+					log.Error("Паника в HTTP-обработчике",
+						"event", "http_panic",
+						"method", r.Method,
+						"path", r.URL.Path,
+						"route", routePattern(r),
+						"query", sanitizeQuery(r.URL.RawQuery),
+						"panic", fmt.Sprint(recovered),
+						"stacktrace", string(debug.Stack()),
+					)
+
+					if rec, ok := w.(*statusRecorder); ok && rec.status != 0 {
+						return
+					}
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}()
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }
@@ -111,6 +182,46 @@ func GetLogger(ctx context.Context) logger.LoggerInterface {
 		return l
 	}
 	return logger.NewSlogLogger("", "fallback", "error", true)
+}
+
+func routePattern(r *http.Request) string {
+	rctx := chi.RouteContext(r.Context())
+	if rctx == nil {
+		return ""
+	}
+	pattern := rctx.RoutePattern()
+	if pattern != "" {
+		return pattern
+	}
+	return strings.Join(rctx.RoutePatterns, "")
+}
+
+func sanitizeQuery(rawQuery string) string {
+	if strings.TrimSpace(rawQuery) == "" {
+		return ""
+	}
+
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return ""
+	}
+
+	for key := range values {
+		if isSensitiveQueryKey(key) {
+			values[key] = []string{"[REDACTED]"}
+		}
+	}
+
+	return values.Encode()
+}
+
+func isSensitiveQueryKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "token", "access_token", "refresh_token", "authorization", "password", "secret", "api_key", "apikey", "key":
+		return true
+	default:
+		return false
+	}
 }
 
 // JwtAuthMiddleware проверяет JWT токен и сохраняет данные пользователя в контексте.

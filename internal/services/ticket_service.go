@@ -409,7 +409,8 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	oldStatus := ticket.Status
-	if oldStatus == status {
+	isReturnFromArchive := ticket.IsArchived && status == tickets.StatusInProgress
+	if oldStatus == status && !isReturnFromArchive {
 		return ticket, nil // Статус не изменился
 	}
 
@@ -442,7 +443,7 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	ticket.Status = status
 	ticket.DeferredUntil = nextDeferredUntil
 	ticket.DeferredByID = nextDeferredByID
-	if ticket.IsArchived && status == tickets.StatusInProgress {
+	if isReturnFromArchive {
 		ticket.IsArchived = false
 		ticket.ArchivedAt = nil
 	}
@@ -450,8 +451,10 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 
-	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
+	if oldStatus != status {
+		// Запись в историю
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
+	}
 
 	// Отчёт о смене статуса сохраняем как обычный комментарий в тикете.
 	if comment != "" {

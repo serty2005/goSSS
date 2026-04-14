@@ -67,7 +67,7 @@ func (r *candidateRepo) ListObservations(ctx context.Context, candidateID uint, 
 	}
 
 	err := query.
-		Select("id", "observed_at", "payload_json").
+		Select("id", "observation_uid", "observed_at", "payload_json").
 		Order("observed_at desc, id desc").
 		Find(&items).Error
 	return items, err

@@ -320,16 +320,24 @@ func (r *ticketRepo) ArchiveStale(ctx context.Context, threshold time.Duration) 
 	if threshold <= 0 {
 		threshold = 14 * 24 * time.Hour
 	}
-	before := time.Now().Add(-threshold)
+	now := time.Now()
+	before := now.Add(-threshold)
 	updates := map[string]interface{}{
 		"is_archived":      true,
-		"archived_at":      time.Now(),
+		"archived_at":      now,
 		"sync_with_bitrix": false,
 	}
 	result := r.db.WithContext(ctx).
 		Model(&tickets.Ticket{}).
 		Where("is_archived = ?", false).
-		Where("updated_at <= ?", before).
+		Where("status = ?", tickets.StatusClosed).
+		Where(`(
+			SELECT MAX(th.created_at)
+			FROM ticket_histories th
+			WHERE th.ticket_id = tickets.id
+				AND th.field = ?
+				AND th.new_value = ?
+		) <= ?`, tickets.HistoryFieldStatus, tickets.StatusClosed, before).
 		Updates(updates)
 	if result.Error != nil {
 		return 0, result.Error
