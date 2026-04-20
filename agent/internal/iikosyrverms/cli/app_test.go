@@ -22,6 +22,26 @@ func (s *stubScanner) Scan(context.Context) (domain.ScanReport, error) {
 	return s.report, s.err
 }
 
+func (s *stubScanner) Collect(ctx context.Context) (domain.ScanReport, error) {
+	return s.Scan(ctx)
+}
+
+func (s *stubScanner) ReadFrontConfig(ctx context.Context) (domain.ScanReport, error) {
+	return s.Scan(ctx)
+}
+
+func (s *stubScanner) SoftShutdownFront(context.Context) (domain.ShutdownResult, error) {
+	return domain.ShutdownResult{}, nil
+}
+
+func (s *stubScanner) InspectAutorun(context.Context) (domain.AutorunInspectionResult, error) {
+	return domain.AutorunInspectionResult{}, nil
+}
+
+func (s *stubScanner) EnsureAutorun(context.Context, contract.AutorunEnsurePayload) (domain.AutorunEnsureResult, error) {
+	return domain.AutorunEnsureResult{}, nil
+}
+
 func TestAppRunIgnoresPayloadPaths(t *testing.T) {
 	t.Parallel()
 
@@ -57,8 +77,18 @@ func TestAppRunIgnoresPayloadPaths(t *testing.T) {
 			Candidates:          []domain.Candidate{candidate},
 			SoftwareType:        domain.SoftwareTypeIiko,
 			RMSURL:              "https://demo.iiko.local/resto/",
+			CRMID:               "1740537",
 			SourceFile:          candidate.ActivityPath,
-			DetectionReason:     "Выбран самый свежий путь активности",
+			PluginsRoot:         `C:\Program Files\iiko\iikoRMS\Front.Net\Plugins`,
+			Plugins: []domain.PluginInfo{
+				{
+					Name:       "Transport",
+					APIVersion: "V9Preview7",
+					Version:    "9.7.20",
+					Directory:  "Resto.Front.Api.Transport.V9Preview7",
+				},
+			},
+			DetectionReason: "Выбран самый свежий путь активности",
 		},
 	}
 

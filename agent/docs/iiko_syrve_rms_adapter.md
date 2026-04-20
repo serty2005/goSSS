@@ -14,21 +14,29 @@
 
 ## Текущий scope
 
-На первой версии адаптер поддерживает:
+На текущей версии адаптер поддерживает:
 
 - определение активного типа ПО `iiko` или `syrve`;
 - поиск только по стабильным внутренним путям под `%AppData%` и fallback-путям пользователей;
 - выбор активного пути по детерминированному правилу свежести;
 - извлечение `RMS URL` из `config.xml`;
-- задачу `task_type = "collect"` без входных путей;
-- компактный `result` с полями `rms_url` и `software_type`.
+- чтение полного снимка `config.xml` в плоский список настроек;
+- чтение `CRMid` из `cash-server.log` для `iiko`;
+- локальный inventory установленных плагинов `iikoFront`;
+- задачу `task_type = "collect"` с расширенным результатом;
+- задачи `soft_shutdown_front`, `inspect_autorun`, `ensure_autorun`, `read_front_config`.
 
 Пока не входят в scope:
 
 - динамическая конфигурация путей через `payload`;
 - ручной ввод пути оператором;
-- дополнительные типы задач кроме `collect`;
 - дополнительные источники RMS вне известных `config.xml`.
+
+Ограничения текущей итерации:
+
+- полная функциональность `collect` реализована для `iiko`;
+- для `syrve` сейчас гарантируется discovery `config.xml` и `RMS URL`;
+- `CRMid` и локальный scan плагинов для `syrve` пока возвращаются как частичный результат.
 
 ## Идентичность адаптера
 
@@ -120,7 +128,13 @@
     "inventory",
     "run-task",
     "collect",
-    "detect-rms"
+    "detect-rms",
+    "read-crm-id",
+    "list-plugins",
+    "soft-shutdown-front",
+    "inspect-autorun",
+    "ensure-autorun",
+    "read-front-config"
   ]
 }
 ```
@@ -167,11 +181,35 @@
 
 ## Команда run
 
-Сейчас поддерживается только `task_type = "collect"`.
+Сейчас адаптер поддерживает следующие `task_type`:
+
+- `collect`
+- `soft_shutdown_front`
+- `inspect_autorun`
+- `ensure_autorun`
+- `read_front_config`
 
 ### Вход
 
-`payload` может быть пустым или содержать служебные поля, но пути адаптер игнорирует полностью.
+Для `collect`, `soft_shutdown_front`, `inspect_autorun` и `read_front_config` `payload` может быть пустым.
+
+Для `ensure_autorun` ожидается payload вида:
+
+```json
+{
+  "method": "startup_user",
+  "software_type": "iiko",
+  "arguments": "",
+  "task_name": "",
+  "shortcut_name": ""
+}
+```
+
+Поддержанные методы:
+
+- `startup_user`
+- `startup_common`
+- `scheduler`
 
 Пример минимального запроса:
 
@@ -186,32 +224,125 @@
 
 ### Выход
 
-Адаптер всегда возвращает компактный `result`:
+Для `collect` адаптер возвращает:
 
-- `rms_url`
 - `software_type`
+- `rms_url`
+- `crm_id`
+- `plugins`
 
-Дополнительно в `details` может возвращать:
+Для `soft_shutdown_front` адаптер возвращает:
+
+- `software_type`
+- `process_name`
+- `matched_pids`
+- `windows_closed`
+- `close_sent`
+
+Для `inspect_autorun` адаптер возвращает:
+
+- `software_type`
+- `entries`
+
+Для `ensure_autorun` адаптер возвращает:
+
+- `software_type`
+- `method`
+- `created`
+- `updated`
+- `path`
+- `task_name`
+
+Для `read_front_config` адаптер возвращает:
+
+- `software_type`
+- `source_file`
+- `settings`
+
+В `details` дополнительно могут возвращаться:
 
 - `active_path`
 - `matched_candidates`
 - `source_file`
 - `detection_reason`
+- `cash_server_log`
+- `front_executable`
+- `plugins_root`
+- `front_installation`
+- `config_snapshot`
 
 Пример успешного ответа:
 
 ```json
 {
   "status": "success",
-  "message": "RMS URL успешно определён",
+  "message": "Сбор данных завершён успешно",
   "result": {
+    "software_type": "iiko",
     "rms_url": "https://demo.iiko.local/resto/",
-    "software_type": "iiko"
+    "crm_id": "1740537",
+    "plugins": [
+      {
+        "name": "Transport",
+        "api_version": "V9Preview7",
+        "version": "9.7.20",
+        "directory": "Resto.Front.Api.Transport.V9Preview7"
+      }
+    ]
   },
   "details": {
     "active_path": "C:\\Users\\demo\\AppData\\Roaming\\iiko\\cashserver\\config.xml",
-    "source_file": "C:\\Users\\demo\\AppData\\Roaming\\iiko\\cashserver\\config.xml"
+    "source_file": "C:\\Users\\demo\\AppData\\Roaming\\iiko\\cashserver\\config.xml",
+    "cash_server_log": "C:\\Users\\demo\\AppData\\Roaming\\iiko\\cashserver\\cash-server.log",
+    "plugins_root": "C:\\Program Files\\iiko\\iikoRMS\\Front.Net\\Plugins"
   }
+}
+```
+
+Пример `soft_shutdown_front`:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "run-soft-stop-1",
+  "task_type": "soft_shutdown_front",
+  "payload": {}
+}
+```
+
+Пример `inspect_autorun`:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "run-autorun-inspect-1",
+  "task_type": "inspect_autorun",
+  "payload": {}
+}
+```
+
+Пример `ensure_autorun`:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "run-autorun-ensure-1",
+  "task_type": "ensure_autorun",
+  "payload": {
+    "method": "startup_user",
+    "software_type": "iiko"
+  }
+}
+```
+
+Пример `read_front_config`:
+
+```json
+{
+  "protocol_version": "1",
+  "request_id": "run-read-config-1",
+  "task_type": "read_front_config",
+  "payload": {}
 }
 ```
 
