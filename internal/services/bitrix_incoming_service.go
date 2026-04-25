@@ -918,6 +918,21 @@ func (s *bitrixIncomingService) resolveBitrixAuthorName(ctx context.Context, aut
 			return strings.TrimSpace(u.FullName)
 		}
 	}
+	if cacheItems, err := s.repo.ListUserCache(ctx); err == nil {
+		for i := range cacheItems {
+			if cacheItems[i].B24UserID != *authorID {
+				continue
+			}
+			name := strings.TrimSpace(strings.Join([]string{cacheItems[i].LastName, cacheItems[i].FirstName, cacheItems[i].SecondName}, " "))
+			if name != "" {
+				return name
+			}
+			if strings.TrimSpace(cacheItems[i].Name) != "" {
+				return strings.TrimSpace(cacheItems[i].Name)
+			}
+			break
+		}
+	}
 	return "Bitrix24 #" + strconv.FormatInt(*authorID, 10)
 }
 
@@ -925,12 +940,9 @@ func (s *bitrixIncomingService) isOurDeal(deal *b24.Deal) bool {
 	if deal == nil {
 		return false
 	}
-	if deal.CategoryID != s.cfg.BitrixCategoryID {
-		return false
-	}
 	originator := strings.TrimSpace(deal.Originator)
 	if originator == "" {
-		return true
+		return deal.CategoryID == s.cfg.BitrixCategoryID
 	}
 	return originator == strings.TrimSpace(s.cfg.BitrixOriginatorID)
 }
@@ -1051,6 +1063,12 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 		changed = true
 	}
 	nextStatus := mapStageToTicketStatus(deal.StageID)
+	if strings.TrimSpace(ticket.Status) == tickets.StatusToManager {
+		nextStatus = tickets.StatusToManager
+		if strings.EqualFold(strings.TrimSpace(deal.Closed), "Y") {
+			nextStatus = tickets.StatusResolved
+		}
+	}
 	if nextStatus != "" {
 		if strings.TrimSpace(ticket.Status) != nextStatus {
 			ticket.Status = nextStatus

@@ -74,7 +74,7 @@ func (UserCache) TableName() string { return "bitrix_users_cache" }
 
 type CompanyServicePointMapping struct {
 	CompanyID            string    `json:"company_id" gorm:"primaryKey;type:text"`
-	BitrixServicePointID int64     `json:"bitrix_service_point_id" gorm:"uniqueIndex;not null;index"`
+	BitrixServicePointID int64     `json:"bitrix_service_point_id" gorm:"not null;index"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }

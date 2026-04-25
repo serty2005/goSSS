@@ -55,6 +55,14 @@ export const telephonyApi = {
     return response.data;
   },
 
+  unbindCallFromTicket: async (id: string, ticketId: string) => {
+    const response = await apiClient.delete<ApiResponse<{ status: string }>>(
+      `/telephony/calls/${id}/bind-ticket`,
+      { data: { ticket_id: ticketId } },
+    );
+    return response.data;
+  },
+
   getContactCompanies: async (contactId: number) => {
     const response = await apiClient.get<
       ApiResponse<{ items: TelephonyContactCompanyDTO[] }>

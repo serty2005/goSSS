@@ -73,12 +73,12 @@ func TestUpdateBitrixMapping_AssignReassignAndClear(t *testing.T) {
 	}
 
 	if err := svc.UpdateBitrixMapping(ctx, &company2.ID, &point101); err != nil {
-		t.Fatalf("не удалось переназначить mapping на company2: %v", err)
+		t.Fatalf("не удалось назначить ту же точку company2: %v", err)
 	}
 
 	oldItem, _ := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, company1.ID)
-	if oldItem != nil {
-		t.Fatalf("ожидали, что mapping company1 будет удалён")
+	if oldItem == nil || oldItem.BitrixServicePointID != 101 {
+		t.Fatalf("ожидали, что mapping company1->101 сохранится, получили %v", oldItem)
 	}
 	newItem, _ := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, company2.ID)
 	if newItem == nil || newItem.BitrixServicePointID != 101 {

@@ -247,8 +247,20 @@ func applyCompanySearchTerm(query *gorm.DB, term string) *gorm.DB {
 	for _, token := range tokens {
 		pattern := "%" + token + "%"
 		query = query.Where(
-			"(companies.title ILIKE ? OR companies.address ILIKE ? OR companies.additional_name ILIKE ? OR parent.title ILIKE ?)",
-			pattern, pattern, pattern, pattern,
+			`(
+				companies.title ILIKE ?
+				OR companies.address ILIKE ?
+				OR companies.additional_name ILIKE ?
+				OR parent.title ILIKE ?
+				OR EXISTS (
+					SELECT 1
+					FROM bitrix_company_service_point_mappings bcspm
+					JOIN bitrix_service_points bsp ON bsp.b24_element_id = bcspm.bitrix_service_point_id
+					WHERE bcspm.company_id = companies.id
+						AND (bsp.name ILIKE ? OR bsp.one_c_code ILIKE ? OR bsp.address ILIKE ?)
+				)
+			)`,
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern,
 		)
 	}
 

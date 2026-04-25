@@ -460,7 +460,7 @@ const TicketsPage: React.FC = () => {
   const periodFrom =
     archiveMode === "archive" ? archivePeriodFrom : activePeriodFrom;
   const periodTo = archiveMode === "archive" ? archivePeriodTo : activePeriodTo;
-  const viewMode = (searchParams.get("view") as ViewMode) || "list";
+  const viewMode = "table" as ViewMode;
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const statusValues = useMemo(

@@ -18,7 +18,6 @@ const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const LONGEST_STATUS_LABEL_WIDTH = 260;
-const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
   { value: 'selection', labelKey: 'layout:headerSearch.ticket.tableColumns.selection' },
   { value: 'number', labelKey: 'layout:headerSearch.ticket.tableColumns.number' },
@@ -92,14 +91,6 @@ const HeaderSearch: React.FC = () => {
     ],
     [t],
   );
-  const ticketViewOptions = useMemo(
-    () => [
-      { value: 'list', label: t('layout:headerSearch.ticket.views.list') },
-      { value: 'cards', label: t('layout:headerSearch.ticket.views.cards') },
-      { value: 'table', label: t('layout:headerSearch.ticket.views.table') },
-    ],
-    [t],
-  );
   const ticketStatusOptions = useMemo(
     () => TICKET_STATUS_OPTIONS.map((item) => ({
       ...item,
@@ -134,7 +125,7 @@ const HeaderSearch: React.FC = () => {
   const ticketStatus = ticketParams.get('status') || '';
   const selectedPresetID = ticketParams.get('preset_id') || undefined;
   const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
-  const ticketView = ticketParams.get('view') || 'list';
+  const ticketView = 'table';
   const ticketTableColumns = ticketParams.get('table_columns') || '';
   const ticketAssigneeIDs = ticketParams.get('assignee_ids') || '';
   const archiveMode = ticketParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
@@ -712,12 +703,6 @@ const HeaderSearch: React.FC = () => {
         )}
 
         <Space style={{ width: '100%' }} align="start">
-          <Select
-            value={ticketView}
-            onChange={(value) => updateTicketParams({ view: value })}
-            options={ticketViewOptions}
-            style={{ width: VIEW_SELECT_WIDTH, flexShrink: 0 }}
-          />
           {ticketView === 'table' && (
             <Select
               mode="multiple"

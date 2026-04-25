@@ -115,6 +115,42 @@ func (h *TelephonyHandler) BindCallToTicket(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (h *TelephonyHandler) UnbindCallFromTicket(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "сервис телефонии недоступен")
+		return
+	}
+
+	var dto api.TelephonyBindCallDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "некорректный payload")
+		return
+	}
+	callID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if callID == "" || strings.TrimSpace(dto.TicketID) == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "id и ticket_id обязательны")
+		return
+	}
+
+	err := h.service.UnbindCallFromTicket(
+		r.Context(),
+		callID,
+		dto.TicketID,
+		getUserIDFromContext(r),
+		getUserRolesFromContext(r),
+	)
+	switch {
+	case err == nil:
+		response.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case err == services.ErrTelephonyForbidden:
+		response.RespondWithError(w, http.StatusForbidden, err.Error())
+	case strings.Contains(strings.ToLower(err.Error()), "не найден"):
+		response.RespondWithError(w, http.StatusNotFound, err.Error())
+	default:
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 func (h *TelephonyHandler) ListContactCompanies(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.service == nil {
 		response.RespondWithJSON(w, http.StatusOK, map[string]any{"items": []api.TelephonyContactCompanyDTO{}})

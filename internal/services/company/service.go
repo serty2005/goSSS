@@ -447,12 +447,6 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		switch {
 		case normalizedCompanyID != "" && normalizedPointID != nil:
-			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID); err != nil {
-				return err
-			}
-			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID); err != nil {
-				return err
-			}
 			return s.bitrixRepo.UpsertCompanyServicePointMapping(txCtx, &bitrix.CompanyServicePointMapping{
 				CompanyID:            normalizedCompanyID,
 				BitrixServicePointID: *normalizedPointID,

@@ -137,6 +137,13 @@ const CompanyPage: React.FC = () => {
   const companyID = resolveCompanyID(company || {}) || company?.id || '';
   const parentCompanyID = String(company?.parent_id || '').trim();
 
+  const { data: bitrixMapping } = useQuery({
+    queryKey: ['company-bitrix-mapping', companyID, 'company-card'],
+    queryFn: () => companiesApi.getBitrixMappingByCompanyID(companyID),
+    enabled: Boolean(companyID),
+    staleTime: 30_000,
+  });
+
   const { data: contractRes } = useQuery({
     queryKey: ['contract', contractID, 'company-modal'],
     queryFn: () => contractsApi.getContract(contractID!),
@@ -924,6 +931,21 @@ const CompanyPage: React.FC = () => {
                 Создать контракт
               </Button>
             ) : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Точка обслуживания B24" span={2}>
+            {bitrixMapping?.bitrix_service_point_id ? (
+              <Space size={8} wrap>
+                <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
+                {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}
+                {typeof bitrixMapping.bitrix_service_point_enabled === 'boolean' && (
+                  <Tag color={bitrixMapping.bitrix_service_point_enabled ? 'success' : 'default'}>
+                    {bitrixMapping.bitrix_service_point_enabled ? 'контракт активен' : 'контракт не активен'}
+                  </Tag>
+                )}
+              </Space>
+            ) : (
+              <Text type="secondary">Не сопоставлена</Text>
+            )}
           </Descriptions.Item>
         </Descriptions>
       </Card>
