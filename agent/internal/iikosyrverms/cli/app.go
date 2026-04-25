@@ -30,15 +30,15 @@ type App struct {
 	runHandler    command.RunHandler
 }
 
-func New(version string, scanner command.Scanner) *App {
+func New(version string, service command.Service) *App {
 	return &App{
 		version:       strings.TrimSpace(version),
 		stdin:         os.Stdin,
 		stdout:        os.Stdout,
 		stderr:        os.Stderr,
 		describe:      command.HandleDescribe,
-		healthHandler: command.HealthHandler{Scanner: scanner},
-		runHandler:    command.RunHandler{Scanner: scanner},
+		healthHandler: command.HealthHandler{Scanner: service},
+		runHandler:    command.RunHandler{Runner: service},
 	}
 }
 
@@ -125,7 +125,7 @@ func (a *App) handleRun(ctx context.Context) int {
 			ErrorCode: "unsupported_protocol",
 		})
 	}
-	if strings.TrimSpace(strings.ToLower(request.TaskType)) != contract.TaskTypeCollect {
+	if !contract.IsSupportedTaskType(request.TaskType) {
 		return a.writeError(exitBadInput, contract.ErrorResponse{
 			Status:    "failed",
 			Message:   fmt.Sprintf("Неподдерживаемый task_type %q", request.TaskType),
@@ -133,7 +133,7 @@ func (a *App) handleRun(ctx context.Context) int {
 		})
 	}
 
-	if err := writeJSON(a.stdout, a.runHandler.Handle(ctx)); err != nil {
+	if err := writeJSON(a.stdout, a.runHandler.Handle(ctx, request)); err != nil {
 		writeText(a.stderr, fmt.Sprintf("Не удалось записать ответ run: %v", err))
 		return exitAppError
 	}

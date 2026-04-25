@@ -35,6 +35,42 @@ func detailsFromReport(report domain.ScanReport) map[string]any {
 	if report.RMSURL != "" {
 		details["rms_url"] = report.RMSURL
 	}
+	if report.CRMID != "" {
+		details["crm_id"] = report.CRMID
+	}
+	if report.CashServerLog != "" {
+		details["cash_server_log"] = report.CashServerLog
+	}
+	if report.FrontExecutable != "" {
+		details["front_executable"] = report.FrontExecutable
+	}
+	if report.PluginsRoot != "" {
+		details["plugins_root"] = report.PluginsRoot
+	}
+	if report.FrontInstallation != nil {
+		details["front_installation"] = map[string]any{
+			"software_type":    report.FrontInstallation.SoftwareType,
+			"root_path":        report.FrontInstallation.RootPath,
+			"executable_path":  report.FrontInstallation.ExecutablePath,
+			"plugins_root":     report.FrontInstallation.PluginsRoot,
+			"working_dir":      report.FrontInstallation.WorkingDir,
+			"discovery_source": report.FrontInstallation.Source,
+		}
+	}
+	if report.ConfigSnapshot.SourceFile != "" {
+		details["config_snapshot"] = map[string]any{
+			"source_file":        report.ConfigSnapshot.SourceFile,
+			"root_element":       report.ConfigSnapshot.RootElement,
+			"settings_count":     len(report.ConfigSnapshot.Settings),
+			"has_repeated_nodes": report.ConfigSnapshot.HasRepeatedNodes,
+		}
+	}
+	if len(report.Plugins) > 0 {
+		details["plugins_count"] = len(report.Plugins)
+	}
+	if len(report.Warnings) > 0 {
+		details["warnings_count"] = len(report.Warnings)
+	}
 
 	return details
 }
