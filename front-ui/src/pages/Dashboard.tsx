@@ -221,6 +221,7 @@ const Dashboard: React.FC = () => {
                 rowKey={(row) => `${row.user_id}`}
                 pagination={false}
                 size="small"
+                scroll={{ x: 'max-content' }}
               />
             )}
           </Card>
@@ -237,6 +238,7 @@ const Dashboard: React.FC = () => {
                 rowKey={(row) => `${row.user_id}`}
                 pagination={false}
                 size="small"
+                scroll={{ x: 'max-content' }}
               />
             )}
           </Card>
@@ -255,6 +257,7 @@ const Dashboard: React.FC = () => {
                 rowKey={(row) => `${row.status}`}
                 pagination={false}
                 size="small"
+                scroll={{ x: 'max-content' }}
                 onRow={(record) => ({
                   onClick: () => openServersByStatus(record),
                   style: { cursor: 'pointer' },
