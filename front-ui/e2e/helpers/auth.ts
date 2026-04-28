@@ -2,7 +2,11 @@ import type { Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import { installMockApi } from '../fixtures/mockApi';
 
-export const openMockedLoginPage = async (page: Page) => {
+type LoginMockOptions = {
+  failNextProfileConfigPatch?: boolean;
+};
+
+export const openMockedLoginPage = async (page: Page, options: LoginMockOptions = {}) => {
   const renderErrors: string[] = [];
   page.on('pageerror', (error) => renderErrors.push(`pageerror: ${error.message}`));
   page.on('console', (message) => {
@@ -13,7 +17,7 @@ export const openMockedLoginPage = async (page: Page) => {
   page.on('requestfailed', (request) => {
     renderErrors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText || ''}`);
   });
-  await installMockApi(page);
+  await installMockApi(page, options);
   await page.goto('/login?locale=ru');
   try {
     await expect(page.getByRole('heading', { name: 'MyHoreca XenionDesk' })).toBeVisible({ timeout: 15_000 });
@@ -28,8 +32,8 @@ export const openMockedLoginPage = async (page: Page) => {
   }
 };
 
-export const loginAsAdmin = async (page: Page) => {
-  await openMockedLoginPage(page);
+export const loginAsAdmin = async (page: Page, options: LoginMockOptions = {}) => {
+  await openMockedLoginPage(page, options);
   await page.getByPlaceholder('Имя пользователя').fill('admin');
   await page.getByPlaceholder('Пароль').fill('admin');
   await page.getByRole('button', { name: 'Войти' }).click();

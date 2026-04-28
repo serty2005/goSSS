@@ -1,5 +1,9 @@
 import type { Page, Route } from '@playwright/test';
 
+type MockApiOptions = {
+  failNextProfileConfigPatch?: boolean;
+};
+
 const adminUser = {
   id: 1,
   username: 'admin',
@@ -119,6 +123,121 @@ const ticketDetails = {
   attachments: [],
 };
 
+const companyList = [
+  {
+    id: 'company-1',
+    title: 'Ресторан Север',
+    additional_name: 'ООО Север',
+    address: 'Москва, ул. Сервисная, 10',
+    active_contract: true,
+  },
+  {
+    id: 'company-2',
+    title: 'Кафе Восток',
+    additional_name: 'ООО Восток',
+    address: 'Москва, пр-т Техподдержки, 7',
+    active_contract: true,
+  },
+];
+
+const companyMappings = [
+  {
+    company_id: 'company-1',
+    company_title: 'Ресторан Север',
+    company_parent_title: '',
+    bitrix_service_point_id: 501,
+    bitrix_service_point_name: 'Ресторан Север / касса',
+    bitrix_service_point_address: 'Москва, ул. Сервисная, 10',
+    bitrix_service_point_contract_on: true,
+  },
+];
+
+const bitrixServicePoints = [
+  {
+    b24_element_id: 501,
+    name: 'Ресторан Север / касса',
+    address: 'Москва, ул. Сервисная, 10',
+    one_c_code: 'RS-001',
+    contract_on: true,
+  },
+];
+
+const serverList = [
+  {
+    id: 'server-1',
+    unique_id: 'server-1',
+    server_name: 'srv-rest-sever',
+    device_name: 'srv-rest-sever',
+    ip: '10.10.1.10',
+    server_version: '2026.4',
+    status: 'online',
+    owner_id: 'company-1',
+    owner_title: 'Ресторан Север',
+    owner_parent_id: '',
+    owner_parent_title: '',
+    server_type: 'POS',
+  },
+  {
+    id: 'server-2',
+    unique_id: 'server-2',
+    server_name: 'srv-cafe-vostok',
+    device_name: 'srv-cafe-vostok',
+    ip: '10.20.1.10',
+    server_version: '2026.4',
+    status: 'warning',
+    owner_id: 'company-2',
+    owner_title: 'Кафе Восток',
+    owner_parent_id: '',
+    owner_parent_title: '',
+    server_type: 'BackOffice',
+  },
+];
+
+const userList = [
+  {
+    id: 1,
+    username: 'admin',
+    full_name: 'Администратор ServiceDesk',
+    first_name: 'Админ',
+    last_name: 'ServiceDesk',
+    position: 'admin',
+    email: 'admin@example.test',
+    schedule_type: '5/2',
+    is_active: true,
+    has_logged_in: true,
+    bitrix_enabled: true,
+    pyrus_enabled: true,
+    roles: ['admin', 'support_specialist'],
+    integrations: [
+      {
+        id: 1,
+        integration_type: 'bitrix24',
+        external_id: '1',
+        is_enabled: true,
+        is_verified: true,
+        is_locked: false,
+        verified_name: 'Администратор ServiceDesk',
+      },
+    ],
+  },
+  {
+    id: 2,
+    username: 'maria',
+    full_name: 'Мария оператор',
+    first_name: 'Мария',
+    last_name: 'Оператор',
+    position: 'support_specialist',
+    email: 'maria@example.test',
+    schedule_type: '2/2',
+    is_active: true,
+    has_logged_in: true,
+    bitrix_enabled: false,
+    pyrus_enabled: false,
+    roles: ['support_specialist'],
+    integrations: [],
+  },
+];
+
 const json = (data: unknown, status = 200) => ({
   status,
   contentType: 'application/json',
@@ -144,7 +263,9 @@ const readJsonBody = async (route: Route) => {
   }
 };
 
-export const installMockApi = async (page: Page) => {
+export const installMockApi = async (page: Page, options: MockApiOptions = {}) => {
+  let shouldFailNextProfileConfigPatch = Boolean(options.failNextProfileConfigPatch);
+
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -194,6 +315,15 @@ export const installMockApi = async (page: Page) => {
     }
 
     if (method === 'PATCH' && path === '/profile/config') {
+      if (shouldFailNextProfileConfigPatch) {
+        shouldFailNextProfileConfigPatch = false;
+        await route.fulfill(json({
+          status: 'error',
+          error: { error: 'E2E: сохранение оформления недоступно' },
+        }, 500));
+        return;
+      }
+
       const body = await readJsonBody(route);
       await route.fulfill(json(ok({ ...adminUser, profile_config: body.profile_config || adminUser.profile_config })));
       return;
@@ -289,6 +419,46 @@ export const installMockApi = async (page: Page) => {
           },
         },
       ])));
+      return;
+    }
+
+    if (method === 'GET' && path === '/companies') {
+      await route.fulfill(json(ok(companyList, {
+        total: companyList.length,
+        limit: Number(url.searchParams.get('limit') || 20),
+        offset: Number(url.searchParams.get('offset') || 0),
+        has_next: false,
+      })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/companies/bitrix-service-point-mappings') {
+      await route.fulfill(json(ok(companyMappings, {
+        total: companyMappings.length,
+        limit: Number(url.searchParams.get('limit') || 50),
+        offset: Number(url.searchParams.get('offset') || 0),
+        has_next: false,
+      })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/bitrix/service-points') {
+      await route.fulfill(json(ok(bitrixServicePoints)));
+      return;
+    }
+
+    if (method === 'GET' && path === '/servers') {
+      await route.fulfill(json(ok(serverList, {
+        total: serverList.length,
+        limit: Number(url.searchParams.get('limit') || 20),
+        offset: Number(url.searchParams.get('offset') || 0),
+        has_next: false,
+      })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/users') {
+      await route.fulfill(json(ok(userList)));
       return;
     }
 

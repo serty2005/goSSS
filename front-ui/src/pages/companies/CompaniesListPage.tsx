@@ -415,6 +415,7 @@ const CompaniesListPage: React.FC = () => {
           dataSource={mappings}
           pagination={{ pageSize: 20, hideOnSinglePage: true }}
           size="small"
+          scroll={{ x: 'max-content' }}
         />
       )}
     </Card>

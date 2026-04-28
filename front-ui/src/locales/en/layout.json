@@ -24,6 +24,9 @@
     "profile": "Profile",
     "logout": "Log out"
   },
+  "navigation": {
+    "mobileTitle": "Navigation"
+  },
   "theme": {
     "title": "Appearance",
     "light": "Day",

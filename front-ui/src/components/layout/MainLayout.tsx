@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Layout,
   Menu,
@@ -14,6 +14,7 @@ import {
   Segmented,
   Grid,
   Tag,
+  Drawer,
 } from "antd";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -180,6 +181,7 @@ const MainLayout: React.FC = () => {
   const { t } = useTranslation(["layout", "common"]);
   const { locale } = useAppLocale();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [headerConfig, setHeaderConfig] = useState<LayoutHeaderConfig | null>(
     null,
   );
@@ -451,8 +453,17 @@ const MainLayout: React.FC = () => {
     });
   };
 
-  const handleMenuClick = (key: string) => {
+  useEffect(() => {
+    if (screens.lg && mobileNavOpen) {
+      setMobileNavOpen(false);
+    }
+  }, [mobileNavOpen, screens.lg]);
+
+  const handleMenuClick = (key: string, closeMobileNav = false) => {
     navigate(key);
+    if (closeMobileNav) {
+      setMobileNavOpen(false);
+    }
   };
 
   const selectedMenuKey = (() => {
@@ -730,7 +741,7 @@ const MainLayout: React.FC = () => {
     headerAddonPlacement === "below" ? headerAddon : null;
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
+    <Layout style={{ minHeight: "100dvh" }}>
       <Sider
         trigger={null}
         collapsible
@@ -764,6 +775,22 @@ const MainLayout: React.FC = () => {
           style={{ borderRight: 0, background: "transparent" }}
         />
       </Sider>
+      <Drawer
+        className="mobile-navigation-drawer"
+        title={t("layout:navigation.mobileTitle")}
+        placement="left"
+        width="min(320px, calc(100vw - 40px))"
+        open={!screens.lg && mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+      >
+        <Menu
+          mode="inline"
+          selectedKeys={[selectedMenuKey]}
+          items={menuItems}
+          onClick={({ key }) => handleMenuClick(key, true)}
+          style={{ borderRight: 0 }}
+        />
+      </Drawer>
       <Layout>
         <div
           style={{
@@ -801,11 +828,18 @@ const MainLayout: React.FC = () => {
                   )
                 }
                 onClick={() => {
-                  if (!screens.lg) return;
+                  if (!screens.lg) {
+                    setMobileNavOpen(true);
+                    return;
+                  }
                   setSidebarCollapsed(!sidebarCollapsedPreference);
                 }}
                 aria-label={t("layout:accessibility.toggleSidebar")}
-                style={{ fontSize: "16px", width: 64, height: 64 }}
+                style={{
+                  fontSize: "16px",
+                  width: screens.md ? 64 : 40,
+                  height: 64,
+                }}
               />
             </div>
 
@@ -951,8 +985,8 @@ const MainLayout: React.FC = () => {
         </div>
         <Content
           style={{
-            margin: "24px 16px",
-            padding: 24,
+            margin: screens.md ? "24px 16px" : "12px 8px",
+            padding: screens.md ? 24 : 8,
             minHeight: 280,
             overflow: "initial",
             position: "relative",

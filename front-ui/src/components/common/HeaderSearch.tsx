@@ -871,7 +871,7 @@ const HeaderSearch: React.FC = () => {
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
-          style={{ width: isHeaderMobile ? 200 : (isCompact ? 240 : 320) }}
+          style={{ width: isHeaderMobile ? 88 : (isCompact ? 240 : 320) }}
         />
         {!isHeaderNarrow && archiveMode !== 'archive' && (
           <Select

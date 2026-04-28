@@ -5,6 +5,7 @@ import {
   expectDocumentHasNoHorizontalOverflow,
   expectNoBrowserErrors,
   expectVisibleBoxInsideViewport,
+  expectVisibleControlsInsideViewport,
 } from './helpers/pageHealth';
 
 test.describe('Адаптивность и вёрстка', () => {
@@ -22,13 +23,20 @@ test.describe('Адаптивность и вёрстка', () => {
     expectNoBrowserErrors(browserErrors);
   });
 
-  test('открывает страницу тикетов на узком viewport без горизонтального скролла документа', async ({ page }) => {
+  test('открывает страницу тикетов на узком viewport без горизонтального скролла документа', async ({ page }, testInfo) => {
     const browserErrors = collectBrowserErrors(page);
 
     await loginAsAdmin(page);
     await page.goto('/tickets');
 
-    await expect(page.getByRole('table')).toBeVisible();
+    if (testInfo.project.name.includes('mobile')) {
+      const firstCard = page.locator('.ticket-mobile-card').first();
+      await expect(firstCard).toBeVisible();
+      await expectVisibleBoxInsideViewport(firstCard, 'первая мобильная карточка тикета');
+      await expectVisibleControlsInsideViewport(firstCard, 'первая мобильная карточка тикета');
+    } else {
+      await expect(page.getByRole('table')).toBeVisible();
+    }
     await expect(page.getByText('Ресторан Север')).toBeVisible();
     await expectVisibleBoxInsideViewport(page.locator('.app-main-header'), 'верхняя панель');
     await expectDocumentHasNoHorizontalOverflow(page);
