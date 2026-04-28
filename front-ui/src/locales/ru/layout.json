@@ -25,7 +25,11 @@
     "logout": "Выйти"
   },
   "navigation": {
-    "mobileTitle": "Навигация"
+    "mobileTitle": "Навигация",
+    "mobileActions": "Навигация приложения",
+    "menu": "Меню",
+    "theme": "Тема",
+    "profile": "Профиль"
   },
   "theme": {
     "title": "Оформление",
@@ -87,6 +91,10 @@
       "resetFilters": "Сбросить фильтры",
       "newTicket": "Новая заявка",
       "openFilters": "Открыть фильтры заявок",
+      "filtersPanel": "Панель фильтров",
+      "mobileListSummary": "Сводка списка заявок",
+      "allTickets": "Все",
+      "activeFilterCount": "Фильтры: {{count}}",
       "bulkAssign": "Исполнитель ({{count}})",
       "bulkAssignSuccess": "Исполнитель назначен",
       "bulkAssignError": "Не удалось выполнить массовое назначение",
@@ -137,6 +145,9 @@
   "accessibility": {
     "toggleSidebar": "Переключить боковую панель",
     "openThemeSettings": "Открыть настройки оформления",
+    "openMobileSettings": "Открыть настройки и профиль",
+    "openMobileNavGroup": "Открыть раздел {{name}}",
+    "openProfileMenu": "Открыть меню профиля",
     "selectLanguage": "Выбрать язык интерфейса"
   }
 }

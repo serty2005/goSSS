@@ -460,18 +460,11 @@ const TicketsPage: React.FC = () => {
 
   const q = searchParams.get("q") || "";
   const status = searchParams.get("status") || "";
-  const [mobileSearchTerm, setMobileSearchTerm] = useState(q);
   const tableColumnsParam = searchParams.get("table_columns") || "";
   const tableSortParam = searchParams.get("table_sort") || "";
   const selectedPresetID = searchParams.get("preset_id") || "";
   const onlyActiveStatuses = searchParams.get("only_active_statuses") === "1";
   const assigneeIDs = searchParams.get("assignee_ids") || "";
-  const ownAssigneeID = user?.id ? String(user.id) : "";
-  const isMineOnly = Boolean(
-    ownAssigneeID &&
-      assigneeIDs.split(",").filter(Boolean).length === 1 &&
-      assigneeIDs === ownAssigneeID,
-  );
   const archiveMode =
     searchParams.get("archive_mode") === "archive" ? "archive" : "active";
   const activeCompany = searchParams.get("company") || "";
@@ -594,10 +587,6 @@ const TicketsPage: React.FC = () => {
     };
   }, [headerAddon, setHeaderAddon, setHeaderAddonPlacement]);
 
-  useEffect(() => {
-    setMobileSearchTerm(q);
-  }, [q]);
-
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
     useInfiniteQuery({
       queryKey: [
@@ -679,7 +668,6 @@ const TicketsPage: React.FC = () => {
         })),
     [usersResponse?.data],
   );
-
   const { data: infraResponse, isLoading: isInfraLoading } = useQuery({
     queryKey: ["company-infra", metadata?.company_id],
     queryFn: () => companiesApi.getInfrastructure(metadata?.company_id || ""),
@@ -1622,92 +1610,29 @@ const TicketsPage: React.FC = () => {
       <Card className="tickets-workspace-card">
         {isMobile && (
           <section
-            className="tickets-mobile-workbench"
-            aria-label="Мобильные действия по тикетам"
+            className="tickets-mobile-summary-bar"
+            aria-label={t("layout:headerSearch.ticket.mobileListSummary")}
           >
-            <div className="tickets-mobile-workbench__summary">
-              <div>
-                <Text type="secondary" className="tickets-mobile-kicker">
-                  {archiveMode === "archive"
-                    ? t("layout:headerSearch.ticket.modes.archive")
-                    : t("layout:headerSearch.ticket.modes.active")}
-                </Text>
-                <Text strong className="tickets-mobile-total">
-                  {t("tickets:labels.showing", {
-                    visible: visibleTickets.length,
-                    total,
-                  })}
-                </Text>
-              </div>
-              <Button
-                type="primary"
-                onClick={() => setIsCreateOpen(true)}
-                aria-label={t("layout:headerSearch.ticket.newTicket")}
-              >
-                {t("layout:headerSearch.ticket.newTicket")}
-              </Button>
+            <div>
+              <Text type="secondary" className="tickets-mobile-kicker">
+                {t("layout:headerSearch.ticket.activeFilterCount", {
+                  count: activeFilterCount,
+                })}
+              </Text>
+              <Text strong className="tickets-mobile-total">
+                {t("tickets:labels.showing", {
+                  visible: visibleTickets.length,
+                  total,
+                })}
+              </Text>
             </div>
-            <Input.Search
-              className="tickets-mobile-search"
-              placeholder={t("layout:headerSearch.ticket.searchPlaceholder")}
-              allowClear
-              value={mobileSearchTerm}
-              onChange={(event) => setMobileSearchTerm(event.target.value)}
-              onSearch={(value) =>
-                updateTicketParams({ q: value.trim() || undefined })
-              }
-            />
-            <div
-              className="tickets-mobile-quick-filters"
-              aria-label="Быстрые фильтры тикетов"
+            <Button
+              type="primary"
+              onClick={() => setIsCreateOpen(true)}
+              aria-label={t("layout:headerSearch.ticket.newTicket")}
             >
-              <Button
-                size="small"
-                type={
-                  archiveMode !== "archive" && !onlyActiveStatuses && !status
-                    ? "primary"
-                    : "default"
-                }
-                onClick={() =>
-                  updateTicketParams({
-                    archive_mode: "active",
-                    status: undefined,
-                    only_active_statuses: undefined,
-                  })
-                }
-              >
-                Все
-              </Button>
-              <Button
-                size="small"
-                type={onlyActiveStatuses ? "primary" : "default"}
-                onClick={() =>
-                  updateTicketParams({
-                    archive_mode: "active",
-                    status: undefined,
-                    only_active_statuses: "1",
-                  })
-                }
-              >
-                {t("layout:headerSearch.ticket.activeOnly")}
-              </Button>
-              <Button
-                size="small"
-                disabled={!ownAssigneeID}
-                type={isMineOnly ? "primary" : "default"}
-                onClick={() =>
-                  updateTicketParams({
-                    archive_mode: "active",
-                    assignee_ids: isMineOnly ? undefined : ownAssigneeID,
-                  })
-                }
-              >
-                {t("layout:headerSearch.ticket.mineOnly")}
-              </Button>
-              <Tag className="tickets-mobile-filter-count">
-                Фильтры: {activeFilterCount}
-              </Tag>
-            </div>
+              {t("layout:headerSearch.ticket.newTicket")}
+            </Button>
           </section>
         )}
         {viewMode === "list" && (
@@ -1991,7 +1916,8 @@ const TicketsPage: React.FC = () => {
         open={Boolean(selectedTicketId)}
         onClose={closeQuickModal}
         closable
-        width={isMobile ? "100vw" : "min(656px, 100vw)"}
+        width={isMobile ? undefined : "min(656px, 100vw)"}
+        height={isMobile ? "min(60dvh, 480px)" : undefined}
         title={
           metadata ? (
             <div
@@ -2024,7 +1950,7 @@ const TicketsPage: React.FC = () => {
             t("tickets:titles.quickPreviewTicket")
           )
         }
-        placement="right"
+        placement={isMobile ? "bottom" : "right"}
         mask={isMobile}
       >
         {isDetailsLoading || !details || !metadata ? (

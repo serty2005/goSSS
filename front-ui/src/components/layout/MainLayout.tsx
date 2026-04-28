@@ -181,7 +181,9 @@ const MainLayout: React.FC = () => {
   const { t } = useTranslation(["layout", "common"]);
   const { locale } = useAppLocale();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileNavGroupKey, setMobileNavGroupKey] = useState<string | null>(
+    null,
+  );
   const [headerConfig, setHeaderConfig] = useState<LayoutHeaderConfig | null>(
     null,
   );
@@ -299,7 +301,9 @@ const MainLayout: React.FC = () => {
 
   const activePalette = themeMode === "light" ? lightPalette : darkPalette;
   const sidebarCollapsed = !screens.lg || sidebarCollapsedPreference;
+  const isMobileLayout = !screens.md;
   const hasCustomHeaderControls = Boolean(headerConfig?.controls);
+  const shouldShowHeaderActions = !isMobileLayout;
   const fallbackNotificationTitle = t("layout:notifications.ticketEvent");
   const systemSourceLabel = t("common:states.system");
 
@@ -454,15 +458,15 @@ const MainLayout: React.FC = () => {
   };
 
   useEffect(() => {
-    if (screens.lg && mobileNavOpen) {
-      setMobileNavOpen(false);
+    if (screens.lg && mobileNavGroupKey) {
+      setMobileNavGroupKey(null);
     }
-  }, [mobileNavOpen, screens.lg]);
+  }, [mobileNavGroupKey, screens.lg]);
 
   const handleMenuClick = (key: string, closeMobileNav = false) => {
     navigate(key);
     if (closeMobileNav) {
-      setMobileNavOpen(false);
+      setMobileNavGroupKey(null);
     }
   };
 
@@ -587,6 +591,22 @@ const MainLayout: React.FC = () => {
       ],
     });
   }
+
+  const mobileNavGroup = menuItems.find(
+    (item) => String(item.key) === mobileNavGroupKey,
+  );
+  const getMenuLabelText = (label: React.ReactNode) =>
+    typeof label === "string" ? label : "";
+  const handleMobileRootClick = (item: (typeof menuItems)[number]) => {
+    if (item.children?.length) {
+      setMobileNavGroupKey(String(item.key));
+      return;
+    }
+    handleMenuClick(String(item.key));
+  };
+  const isMobileRootActive = (item: (typeof menuItems)[number]) =>
+    selectedMenuKey === item.key ||
+    Boolean(item.children?.some((child) => child.key === selectedMenuKey));
 
   const themeMenuContent = (
     <div style={{ width: 160 }}>
@@ -736,9 +756,13 @@ const MainLayout: React.FC = () => {
     </div>
   );
   const inlineHeaderAddon =
-    headerAddonPlacement === "inline" ? headerAddon : null;
+    shouldShowHeaderActions && headerAddonPlacement === "inline"
+      ? headerAddon
+      : null;
   const belowHeaderAddon =
-    headerAddonPlacement === "below" ? headerAddon : null;
+    shouldShowHeaderActions && headerAddonPlacement === "below"
+      ? headerAddon
+      : null;
 
   return (
     <Layout style={{ minHeight: "100dvh" }}>
@@ -748,6 +772,7 @@ const MainLayout: React.FC = () => {
         collapsed={sidebarCollapsed}
         width={250}
         style={{
+          display: screens.lg ? undefined : "none",
           background: token.colorBgContainer,
           borderRight: `1px solid ${token.colorBorderSecondary}`,
           backdropFilter: "blur(10px)",
@@ -777,16 +802,22 @@ const MainLayout: React.FC = () => {
       </Sider>
       <Drawer
         className="mobile-navigation-drawer"
-        title={t("layout:navigation.mobileTitle")}
-        placement="left"
-        width="min(320px, calc(100vw - 40px))"
-        open={!screens.lg && mobileNavOpen}
-        onClose={() => setMobileNavOpen(false)}
+        title={
+          mobileNavGroup
+            ? getMenuLabelText(mobileNavGroup.label)
+            : t("layout:navigation.mobileTitle")
+        }
+        placement="bottom"
+        height={isMobileLayout ? "min(68dvh, 520px)" : undefined}
+        open={!screens.lg && Boolean(mobileNavGroup)}
+        onClose={() => setMobileNavGroupKey(null)}
+        destroyOnHidden
+        aria-label={t("layout:navigation.mobileTitle")}
       >
         <Menu
           mode="inline"
           selectedKeys={[selectedMenuKey]}
-          items={menuItems}
+          items={mobileNavGroup?.children || []}
           onClick={({ key }) => handleMenuClick(key, true)}
           style={{ borderRight: 0 }}
         />
@@ -816,7 +847,10 @@ const MainLayout: React.FC = () => {
           >
             <div
               className="app-header-left"
-              style={{ display: "flex", alignItems: "center" }}
+              style={{
+                display: shouldShowHeaderActions ? "flex" : "none",
+                alignItems: "center",
+              }}
             >
               <Button
                 type="text"
@@ -829,7 +863,6 @@ const MainLayout: React.FC = () => {
                 }
                 onClick={() => {
                   if (!screens.lg) {
-                    setMobileNavOpen(true);
                     return;
                   }
                   setSidebarCollapsed(!sidebarCollapsedPreference);
@@ -851,7 +884,7 @@ const MainLayout: React.FC = () => {
                 justifyContent: "center",
                 minWidth: 0,
                 overflow: "visible",
-                paddingInlineEnd: screens.md ? 16 : 8,
+                paddingInlineEnd: shouldShowHeaderActions ? (screens.md ? 16 : 8) : 0,
               }}
             >
               <div
@@ -859,7 +892,9 @@ const MainLayout: React.FC = () => {
                   width: "100%",
                   display: "grid",
                   gridTemplateColumns:
-                    "minmax(0, 1fr) minmax(0, 920px) minmax(0, 1fr)",
+                    shouldShowHeaderActions
+                      ? "minmax(0, 1fr) minmax(0, 920px) minmax(0, 1fr)"
+                      : "minmax(0, 1fr)",
                   alignItems: "center",
                   columnGap: screens.md ? 12 : 8,
                   minWidth: 0,
@@ -868,7 +903,7 @@ const MainLayout: React.FC = () => {
               >
                 <div
                   style={{
-                    display: "flex",
+                    display: shouldShowHeaderActions ? "flex" : "none",
                     alignItems: "center",
                     minWidth: 0,
                     overflow: "visible",
@@ -926,6 +961,7 @@ const MainLayout: React.FC = () => {
                 <div
                   aria-hidden
                   style={{
+                    display: shouldShowHeaderActions ? undefined : "none",
                     minWidth: 0,
                   }}
                 />
@@ -935,7 +971,10 @@ const MainLayout: React.FC = () => {
             <Space
               size={screens.md ? "middle" : "small"}
               className="app-header-right"
-              style={{ minWidth: 0 }}
+              style={{
+                display: shouldShowHeaderActions ? undefined : "none",
+                minWidth: 0,
+              }}
             >
               <Popover
                 trigger="click"
@@ -986,7 +1025,7 @@ const MainLayout: React.FC = () => {
         <Content
           style={{
             margin: screens.md ? "24px 16px" : "12px 8px",
-            padding: screens.md ? 24 : 8,
+            padding: screens.md ? 24 : "8px 8px calc(76px + env(safe-area-inset-bottom))",
             minHeight: 280,
             overflow: "initial",
             position: "relative",
@@ -1053,6 +1092,32 @@ const MainLayout: React.FC = () => {
             </div>
           )}
         </Content>
+        {!screens.lg && (
+          <div
+            className="app-mobile-action-bar"
+            role="navigation"
+            aria-label={t("layout:navigation.mobileActions")}
+          >
+            {menuItems.map((item) => {
+              const label = getMenuLabelText(item.label);
+              return (
+                <Button
+                  key={String(item.key)}
+                  type={isMobileRootActive(item) ? "primary" : "text"}
+                  icon={item.icon}
+                  onClick={() => handleMobileRootClick(item)}
+                  aria-label={
+                    item.children?.length
+                      ? t("layout:accessibility.openMobileNavGroup", { name: label })
+                      : label
+                  }
+                >
+                  {label}
+                </Button>
+              );
+            })}
+          </div>
+        )}
       </Layout>
     </Layout>
   );
