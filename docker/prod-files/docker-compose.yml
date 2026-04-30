@@ -2,7 +2,7 @@ name: gosss-prod
 
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.6.15
     restart: unless-stopped
     command:
       - --api=true
@@ -46,6 +46,7 @@ services:
       - traefik.http.routers.traefik-admin.middlewares=admin-auth,etalon-secure-headers
 
       - traefik.http.middlewares.admin-auth.basicauth.users=${TRAEFIK_ADMIN_AUTH}
+      - traefik.http.middlewares.admin-auth.basicauth.removeheader=true
 
       - traefik.http.middlewares.etalon-secure-headers.headers.stsSeconds=31536000
       - traefik.http.middlewares.etalon-secure-headers.headers.stsIncludeSubdomains=true
