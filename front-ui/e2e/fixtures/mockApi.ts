@@ -392,8 +392,30 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
       return;
     }
 
+    if (method === 'POST' && path === '/tickets') {
+      const body = await readJsonBody(route);
+      await route.fulfill(json(ok({
+        ...ticketList[0],
+        id: 'ticket-created-e2e',
+        number: 1101,
+        subject: String(body.subject || 'Новая заявка E2E'),
+        description: String(body.description || ''),
+        company_id: String(body.company_id || 'company-1'),
+        assignee: {
+          id: Number(body.assignee_id || 1),
+          full_name: 'Администратор ServiceDesk',
+        },
+      })));
+      return;
+    }
+
     if (method === 'GET' && path === '/tickets/ticket-1001') {
       await route.fulfill(json(ok(ticketDetails)));
+      return;
+    }
+
+    if (method === 'PATCH' && (path === '/telephony/tickets/ticket-created-e2e/contact' || path === '/telephony/tickets/ticket-1001/contact')) {
+      await route.fulfill(json(ok({ status: 'ok' })));
       return;
     }
 

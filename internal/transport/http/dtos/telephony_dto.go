@@ -12,6 +12,12 @@ type TelephonyBindCallDTO struct {
 	ContactName string `json:"contact_name"`
 }
 
+type TelephonySetTicketContactDTO struct {
+	Phone       string `json:"phone"`
+	ContactName string `json:"contact_name"`
+	Clear       bool   `json:"clear"`
+}
+
 type TelephonyContactDTO struct {
 	ID              uint    `json:"id"`
 	PhoneNormalized string  `json:"phone_normalized"`

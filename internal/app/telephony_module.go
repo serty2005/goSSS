@@ -71,6 +71,7 @@ func (m *telephonyModule) registerProtectedRoutes(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/pending-context/{id}/bind-ticket", m.apiHandler.BindPendingContext)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/calls/{id}/bind-ticket", m.apiHandler.BindCallToTicket)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/calls/{id}/bind-ticket", m.apiHandler.UnbindCallFromTicket)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Patch("/tickets/{ticketId}/contact", m.apiHandler.SetTicketContact)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/contacts/{contactId}/companies", m.apiHandler.ListContactCompanies)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/users/{id}/calls", m.apiHandler.ListUserCalls)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/calls", m.apiHandler.ListCalls)

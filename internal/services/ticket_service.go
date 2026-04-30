@@ -2276,7 +2276,7 @@ func (s *ticketServiceImpl) syncCompanyContractFromBitrixPoint(ctx context.Conte
 		return nil, nil
 	}
 
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, *bitrixServicePointID)
 	if err != nil {
 		return nil, err
 	}
@@ -2324,7 +2324,7 @@ func (s *ticketServiceImpl) resolveMappedBitrixServicePointID(ctx context.Contex
 	if mapping == nil || mapping.BitrixServicePointID <= 0 {
 		return nil, nil
 	}
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, mapping.BitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, mapping.BitrixServicePointID)
 	if err != nil {
 		return nil, err
 	}
@@ -2343,7 +2343,7 @@ func (s *ticketServiceImpl) persistBitrixCompanyServicePointMapping(ctx context.
 	if companyID == "" {
 		return
 	}
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, *bitrixServicePointID)
 	if err != nil {
 		s.logger.Error("Не удалось проверить правила сохранения сопоставления точки Bitrix24", "company_id", companyID, "bitrix_service_point_id", *bitrixServicePointID, "error", err)
 		return

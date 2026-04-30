@@ -87,6 +87,7 @@
   "newTicket": {
     "messages": {
       "createdAndLinked": "Ticket created and linked to the call",
+      "createdAndContactSaved": "Ticket created and contact saved",
       "createdLinkWarning": "Ticket created, but the call was not linked",
       "created": "Ticket created",
       "createError": "Failed to create ticket"
@@ -114,7 +115,7 @@
       "recentTickets": "Last 10 tickets",
       "updatedAt": "Updated: {{value}}",
       "phoneField": "Phone number",
-      "phonePlaceholder": "Select a call from the last hour",
+      "phonePlaceholder": "Select a call or enter a phone number",
       "noFreeCalls": "No free calls yet",
       "contactNameField": "Contact name",
       "contactNamePlaceholder": "Clarify the caller name"

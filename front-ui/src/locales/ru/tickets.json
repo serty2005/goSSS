@@ -87,6 +87,7 @@
   "newTicket": {
     "messages": {
       "createdAndLinked": "Заявка создана и привязана к звонку",
+      "createdAndContactSaved": "Заявка создана, контакт сохранён",
       "createdLinkWarning": "Заявка создана, но привязка к звонку не выполнилась",
       "created": "Заявка создана",
       "createError": "Не удалось создать заявку"
@@ -114,7 +115,7 @@
       "recentTickets": "Последние 10 тикетов",
       "updatedAt": "Обновлено: {{value}}",
       "phoneField": "Номер телефона",
-      "phonePlaceholder": "Выберите звонок за последний час",
+      "phonePlaceholder": "Выберите звонок или введите номер",
       "noFreeCalls": "Свободных звонков пока нет",
       "contactNameField": "Имя контакта",
       "contactNamePlaceholder": "Уточните имя звонящего"

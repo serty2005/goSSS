@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
+import { AutoComplete, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { companiesApi } from '@/api/companies';
@@ -9,7 +9,7 @@ import { usersApi } from '@/api/users';
 import type { CompanyModel, InfrastructureItem, TelephonyCallDTO, TelephonyContactCompanyDTO } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { getIikoWebAppLinkMeta, normalizeServerAddress } from '@/utils/formatters';
-import { getTelephonyContactPhoneDisplay } from '@/utils/telephony';
+import { getTelephonyContactPhoneDisplay, getTelephonyContactPhoneForCopy } from '@/utils/telephony';
 import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
@@ -33,11 +33,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
-  const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; selectedLabel: string }>>([]);
+  const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; title: string }>>([]);
   const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parent_title?: string; parent_id?: string; active_contract?: boolean }>>({});
-  const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; selectedLabel: string } | null>(null);
+  const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; title: string } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
   const selectedTelephonyCallID = Form.useWatch('telephony_call_id', form) as string | undefined;
+  const contactPhone = Form.useWatch('contact_phone', form) as string | undefined;
   const syncWithBitrix = Form.useWatch('sync_with_bitrix', form) as boolean | undefined;
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
@@ -119,7 +120,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const selectCompany = (companyId: string, title?: string, parentTitle?: string) => {
     const selectedLabel = String(title || companyId).trim();
     const label = renderCompanyOptionLabel(selectedLabel, parentTitle);
-    const option = { value: companyId, label, selectedLabel };
+    const option = { value: companyId, label, title: selectedLabel };
     form.setFieldValue('company_id', companyId);
     setSelectedCompanyOption(option);
     setCompanyOptions((prev) => {
@@ -167,14 +168,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         return {
           value: id,
           label: labelNode,
-          selectedLabel: title,
+          title,
         };
       })
-      .filter(Boolean) as Array<{ value: string; label: React.ReactNode; selectedLabel: string }>;
+      .filter(Boolean) as Array<{ value: string; label: React.ReactNode; title: string }>;
 
     if (selectedCompanyId && !nextOptions.some((opt) => opt.value === selectedCompanyId)) {
-      const fallbackLabel = selectedCompanyOption?.selectedLabel ?? selectedCompanyId;
-      nextOptions.unshift({ value: selectedCompanyId, label: fallbackLabel, selectedLabel: fallbackLabel });
+      const fallbackLabel = selectedCompanyOption?.title ?? selectedCompanyId;
+      nextOptions.unshift({ value: selectedCompanyId, label: fallbackLabel, title: fallbackLabel });
     }
 
     setCompanyOptions(nextOptions);
@@ -185,7 +186,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!selectedCompanyId) return;
     const match = companyOptions.find((opt) => opt.value === selectedCompanyId);
-    if (match && match.selectedLabel !== selectedCompanyOption?.selectedLabel) {
+    if (match && match.title !== selectedCompanyOption?.title) {
       setSelectedCompanyOption(match);
     }
 
@@ -199,7 +200,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     });
     if (presetCompany?.id) {
       const label = presetCompany.title || presetCompany.id;
-      const option = { value: presetCompany.id, label, selectedLabel: label } as { value: string; label: React.ReactNode; selectedLabel: string };
+      const option = { value: presetCompany.id, label, title: label };
       setSelectedCompanyOption(option);
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === presetCompany.id);
@@ -216,10 +217,12 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     if (currentCallID) return;
     if (pendingContext?.call?.id && selectableCalls.some((item) => item.id === pendingContext.call?.id)) {
       form.setFieldValue('telephony_call_id', pendingContext.call.id);
+      form.setFieldValue('contact_phone', getTelephonyContactPhoneForCopy(pendingContext.contact, pendingContext.call.client_phone));
       return;
     }
     if (selectableCalls.length === 1) {
       form.setFieldValue('telephony_call_id', selectableCalls[0].id);
+      form.setFieldValue('contact_phone', getTelephonyContactPhoneForCopy(selectableCalls[0].contact, selectableCalls[0].client_phone));
     }
   }, [open, pendingContext?.call?.id, selectableCalls, form]);
 
@@ -229,6 +232,14 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     if (currentValue) return;
     form.setFieldValue('contact_name', selectedTelephonyCall?.contact?.name || undefined);
   }, [open, selectedTelephonyCall?.contact?.name, form]);
+
+  useEffect(() => {
+    if (!open || !selectedTelephonyCall) return;
+    const selectedPhone = getTelephonyContactPhoneForCopy(selectedTelephonyCall.contact, selectedTelephonyCall.client_phone);
+    if (selectedPhone && !String(contactPhone || '').trim()) {
+      form.setFieldValue('contact_phone', selectedPhone);
+    }
+  }, [open, selectedTelephonyCall, contactPhone, form]);
 
   useEffect(() => {
     if (syncWithBitrix === false) {
@@ -322,7 +333,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       const label = renderCompanyOptionLabel(selectedLabel, rawParentTitle);
       setCompanyOptions((prev) => {
         const exists = prev.some((opt) => opt.value === selectedCompanyId);
-        return exists ? prev : [{ value: selectedCompanyId, label, selectedLabel }, ...prev];
+        return exists ? prev : [{ value: selectedCompanyId, label, title: selectedLabel }, ...prev];
       });
     }
   }, [companyDetailData, selectedCompanyId]);
@@ -474,8 +485,9 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     window.open(targetURL, '_blank', 'noopener,noreferrer');
   };
 
-  const telephonyCallOptions = useMemo(() => selectableCalls.map((call) => {
+  const telephonyPhoneOptions = useMemo(() => selectableCalls.map((call) => {
     const phone = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || t('tickets:newTicket.fallback.phoneUndefined');
+    const phoneValue = getTelephonyContactPhoneForCopy(call.contact, call.client_phone) || phone;
     const contactName = String(call.contact?.name || '').trim();
     const timestamp = call.started_at || call.answered_at || call.completed_at;
     const secondaryParts = [
@@ -484,7 +496,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     ].filter(Boolean);
 
     return {
-      value: call.id,
+      value: phoneValue,
+      callID: call.id,
       searchLabel: `${phone} ${contactName}`.trim(),
       label: (
         <Space direction="vertical" size={2} style={{ lineHeight: 1.2 }}>
@@ -509,7 +522,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   );
 
   const createMutation = useMutation({
-    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; contact_name?: string; telephony_call_id?: string }) => {
+    mutationFn: async (values: { company_id: string; type: string; description: string; assignee_id: number; sync_with_bitrix?: boolean; bitrix_service_point_id?: number; contact_name?: string; contact_phone?: string; telephony_call_id?: string }) => {
       const description = values.description.trim();
       const effectiveSyncWithBitrix = isBitrixEnabled && (canDisableBitrixSync ? values.sync_with_bitrix !== false : true);
       return ticketsApi.createTicket({
@@ -526,6 +539,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       const createdTicketID = String(response?.data?.id || '').trim();
       let bindFailed = false;
       const selectedCallID = String(values.telephony_call_id || '').trim();
+      const manualPhone = String(values.contact_phone || '').trim();
 
       if (selectedCallID && createdTicketID) {
         try {
@@ -533,10 +547,21 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         } catch {
           bindFailed = true;
         }
+      } else if (manualPhone && createdTicketID) {
+        try {
+          await telephonyApi.setTicketContact(createdTicketID, {
+            phone: manualPhone,
+            contact_name: values.contact_name?.trim() || undefined,
+          });
+        } catch {
+          bindFailed = true;
+        }
       }
 
       if (selectedCallID && !bindFailed) {
         message.success(t('tickets:newTicket.messages.createdAndLinked'));
+      } else if (manualPhone && !bindFailed) {
+        message.success(t('tickets:newTicket.messages.createdAndContactSaved'));
       } else if (bindFailed) {
         message.warning(t('tickets:newTicket.messages.createdLinkWarning'));
       } else {
@@ -754,29 +779,39 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             xl={showTelephonySidebar ? (selectedCompanyId ? 10 : 17) : 24}
             style={{ maxHeight: MODAL_BODY_MAX_HEIGHT, overflowY: 'auto' }}
           >
-            <Row gutter={12}>
-              <Col xs={24} lg={8}>
+            <Row gutter={12} align="top">
+              <Col xs={24} lg={12}>
+                <Form.Item name="telephony_call_id" hidden>
+                  <Input />
+                </Form.Item>
                 <Form.Item
-                  name="telephony_call_id"
+                  name="contact_phone"
                   label={t('tickets:newTicket.telephony.phoneField')}
                 >
-                  <Select
+                  <AutoComplete
                     allowClear
-                    showSearch
                     placeholder={t('tickets:newTicket.telephony.phonePlaceholder')}
-                    loading={isRecentCallsLoading || isPendingContextLoading}
-                    options={telephonyCallOptions}
-                    optionFilterProp="searchLabel"
+                    options={telephonyPhoneOptions}
+                    filterOption={(inputValue, option) => String(option?.searchLabel || option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
+                    onSelect={(value) => {
+                      const option = telephonyPhoneOptions.find((item) => item.value === value);
+                      form.setFieldValue('telephony_call_id', option?.callID);
+                    }}
+                    onChange={(value) => {
+                      const option = telephonyPhoneOptions.find((item) => item.value === value);
+                      form.setFieldValue('telephony_call_id', option?.callID);
+                    }}
                     notFoundContent={(
                       <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                         description={t('tickets:newTicket.telephony.noFreeCalls')}
                       />
                     )}
+                    disabled={isRecentCallsLoading || isPendingContextLoading}
                   />
                 </Form.Item>
               </Col>
-              <Col xs={24} lg={8}>
+              <Col xs={24} lg={12}>
                 <Form.Item
                   name="contact_name"
                   label={t('tickets:newTicket.telephony.contactNameField')}
@@ -789,6 +824,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             <Form.Item
               name="company_id"
               label={t('tickets:newTicket.form.company')}
+              className="new-ticket-company-field"
               rules={[{ required: true, message: t('tickets:newTicket.form.companyRequired') }]}
             >
               <Select
@@ -801,7 +837,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 filterOption={false}
                 autoClearSearchValue
                 options={companyOptions}
-                optionLabelProp="selectedLabel"
+                optionLabelProp="title"
                 value={selectedCompanyId}
                 onChange={(value, option) => {
                   const valueStr = String(value);
@@ -809,7 +845,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     console.warn('[NewTicketModal] onChange invalid value', { value, option });
                     return;
                   }
-                  const selectedLabel = (option as { selectedLabel?: string } | undefined)?.selectedLabel ?? valueStr;
+                  const selectedLabel = (option as { title?: string } | undefined)?.title ?? valueStr;
                   selectCompany(valueStr, selectedLabel, companyMeta[valueStr]?.parent_title);
                 }}
               />
@@ -847,6 +883,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             <Form.Item
               name="type"
               label={t('tickets:newTicket.form.type')}
+              className="new-ticket-type-field"
               rules={[{ required: true, message: t('tickets:newTicket.form.typeRequired') }]}
             >
               <Select
@@ -889,6 +926,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 <Form.Item
                   name="bitrix_service_point_id"
                   label={t('tickets:newTicket.bitrix.servicePoint')}
+                  className="new-ticket-bitrix-point-field"
                   rules={[
                     {
                       validator: (_, value) => {

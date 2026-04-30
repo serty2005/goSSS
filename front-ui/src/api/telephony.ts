@@ -63,6 +63,17 @@ export const telephonyApi = {
     return response.data;
   },
 
+  setTicketContact: async (
+    ticketId: string,
+    payload: { phone?: string; contact_name?: string; clear?: boolean },
+  ) => {
+    const response = await apiClient.patch<ApiResponse<{ status: string }>>(
+      `/telephony/tickets/${ticketId}/contact`,
+      payload,
+    );
+    return response.data;
+  },
+
   getContactCompanies: async (contactId: number) => {
     const response = await apiClient.get<
       ApiResponse<{ items: TelephonyContactCompanyDTO[] }>

@@ -20,7 +20,14 @@ func isBitrixTemporaryServicePointName(name string) bool {
 	return normalizeBitrixServicePointName(name) == normalizeBitrixServicePointName(bitrixTemporaryServicePointName)
 }
 
-func isBitrixTemporaryServicePoint(ctx context.Context, repo bitrix.Repository, pointID int64) (bool, error) {
+func isBitrixConfiguredTestServicePointID(cfg *config.Config, pointID int64) bool {
+	return cfg != nil && cfg.BitrixTestServicePointID > 0 && cfg.BitrixTestServicePointID == pointID
+}
+
+func isBitrixTemporaryServicePoint(ctx context.Context, cfg *config.Config, repo bitrix.Repository, pointID int64) (bool, error) {
+	if isBitrixConfiguredTestServicePointID(cfg, pointID) {
+		return true, nil
+	}
 	if repo == nil || pointID <= 0 {
 		return false, nil
 	}

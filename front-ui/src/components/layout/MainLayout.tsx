@@ -773,6 +773,11 @@ const MainLayout: React.FC = () => {
         width={250}
         style={{
           display: screens.lg ? undefined : "none",
+          position: "sticky",
+          top: 0,
+          alignSelf: "flex-start",
+          height: "100dvh",
+          overflowY: "auto",
           background: token.colorBgContainer,
           borderRight: `1px solid ${token.colorBorderSecondary}`,
           backdropFilter: "blur(10px)",

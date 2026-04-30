@@ -162,6 +162,7 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 	if err != nil {
 		return 0, err
 	}
+	contactID := bitrixDealContactIDFromFields(fields)
 
 	if s.repo != nil {
 		link, linkErr := s.repo.GetDealLinkByTicketID(ctx, ticket.ID)
@@ -180,6 +181,9 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 			}
 			prepareDealFieldsForExistingDeal(fields, ticket, currentDeal, s.cfg.BitrixCategoryID)
 			if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
+				return 0, err
+			}
+			if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
 				return 0, err
 			}
 			s.setDealSuppress(ctx, dealID)
@@ -208,10 +212,16 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		if err != nil {
 			return 0, err
 		}
+		if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
+			return 0, err
+		}
 	} else {
 		dealID = deals[0].ID
 		prepareDealFieldsForExistingDeal(fields, ticket, &deals[0], s.cfg.BitrixCategoryID)
 		if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
+			return 0, err
+		}
+		if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
 			return 0, err
 		}
 	}
@@ -228,6 +238,57 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		return 0, err
 	}
 	return dealID, nil
+}
+
+func bitrixDealContactIDFromFields(fields map[string]interface{}) int64 {
+	if fields == nil {
+		return 0
+	}
+	switch value := fields["CONTACT_ID"].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (s *bitrixSyncService) syncDealContactBinding(ctx context.Context, dealID int64, contactID int64) error {
+	if s == nil || s.client == nil || dealID <= 0 || contactID <= 0 {
+		return nil
+	}
+
+	current, err := s.client.DealContactItemsGet(ctx, dealID)
+	if err != nil {
+		return err
+	}
+
+	items := make([]b24.DealContactBinding, 0, len(current)+1)
+	items = append(items, b24.DealContactBinding{
+		ContactID: contactID,
+		IsPrimary: true,
+		Sort:      10,
+	})
+	sortValue := 20
+	for _, item := range current {
+		if item.ContactID <= 0 || item.ContactID == contactID {
+			continue
+		}
+		items = append(items, b24.DealContactBinding{
+			ContactID: item.ContactID,
+			IsPrimary: false,
+			Sort:      sortValue,
+		})
+		sortValue += 10
+	}
+
+	return s.client.DealContactItemsSet(ctx, dealID, items)
 }
 
 func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error {

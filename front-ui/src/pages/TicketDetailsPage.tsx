@@ -174,6 +174,9 @@ const TicketDetailsPage: React.FC = () => {
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isAttachCallModalOpen, setIsAttachCallModalOpen] = useState(false);
+  const [isContactEditModalOpen, setIsContactEditModalOpen] = useState(false);
+  const [contactPhoneDraft, setContactPhoneDraft] = useState('');
+  const [contactNameDraft, setContactNameDraft] = useState('');
   const [attachCallPhoneSearch, setAttachCallPhoneSearch] = useState('');
   const [attachCallEmployeeID, setAttachCallEmployeeID] = useState<number | undefined>(undefined);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
@@ -866,6 +869,27 @@ const TicketDetailsPage: React.FC = () => {
     },
   });
 
+  const updateTicketContactMutation = useMutation({
+    mutationFn: async (payload: { phone?: string; contactName?: string; clear?: boolean }) => {
+      if (!id) return;
+      return telephonyApi.setTicketContact(id, {
+        phone: payload.phone,
+        contact_name: payload.contactName,
+        clear: payload.clear,
+      });
+    },
+    onSuccess: (_, variables) => {
+      message.success(variables.clear ? 'Контакт отвязан' : 'Контакт обновлён');
+      setIsContactEditModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['telephony'] });
+    },
+    onError: () => {
+      message.error('Не удалось обновить контакт');
+    },
+  });
+
   const handleDescriptionClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
@@ -1176,24 +1200,54 @@ const TicketDetailsPage: React.FC = () => {
                           <Text type="secondary">Тип: {contractType}</Text>
                         </Space>
                       </Descriptions.Item>
-                      <Descriptions.Item label="Контакт">
-                        {getTelephonyContactLabel(details.contact, details.contact?.phone_display) || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Телефон">
-                        <Space size={8} wrap>
-                          <Text>{getTelephonyContactPhoneDisplay(details.contact) || '-'}</Text>
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<CopyOutlined />}
-                            disabled={!getTelephonyContactPhoneForCopy(details.contact)}
-                            onClick={() => {
-                              void copyTicketPhone(getTelephonyContactPhoneForCopy(details.contact));
-                            }}
-                          >
-                            Копировать
-                          </Button>
-                        </Space>
+                      <Descriptions.Item label="Контакт" span={serviceInfoColumns}>
+                        <div style={highlightedFields.contact ? fieldHighlightStyle : undefined}>
+                          <Space size={8} wrap>
+                            <Text>{getTelephonyContactLabel(details.contact, details.contact?.phone_display) || '-'}</Text>
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CopyOutlined />}
+                              disabled={!getTelephonyContactPhoneForCopy(details.contact)}
+                              onClick={() => {
+                                void copyTicketPhone(getTelephonyContactPhoneForCopy(details.contact));
+                              }}
+                            >
+                              Копировать
+                            </Button>
+                            {!isManagerFlowLocked && (
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  setContactPhoneDraft(getTelephonyContactPhoneForCopy(details.contact));
+                                  setContactNameDraft(String(details.contact?.name || ''));
+                                  setIsContactEditModalOpen(true);
+                                }}
+                              >
+                                Изменить
+                              </Button>
+                            )}
+                            {!isManagerFlowLocked && details.contact && (
+                              <Popconfirm
+                                title="Отвязать контакт от тикета?"
+                                okText="Отвязать"
+                                cancelText="Отмена"
+                                onConfirm={() => updateTicketContactMutation.mutate({ clear: true })}
+                              >
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  danger
+                                  loading={updateTicketContactMutation.isPending && updateTicketContactMutation.variables?.clear}
+                                >
+                                  Отвязать
+                                </Button>
+                              </Popconfirm>
+                            )}
+                          </Space>
+                        </div>
                       </Descriptions.Item>
                       <Descriptions.Item label="Исполнитель">
                         <div style={highlightedFields.assignee ? fieldHighlightStyle : undefined}>
@@ -2027,6 +2081,34 @@ const TicketDetailsPage: React.FC = () => {
             placeholder="Добавьте отчёт по выполнению"
           />
         )}
+      </Modal>
+      <Modal
+        open={isContactEditModalOpen}
+        title="Контакт тикета"
+        okText="Сохранить"
+        cancelText="Отмена"
+        confirmLoading={updateTicketContactMutation.isPending && !updateTicketContactMutation.variables?.clear}
+        onCancel={() => setIsContactEditModalOpen(false)}
+        onOk={() => {
+          updateTicketContactMutation.mutate({
+            phone: contactPhoneDraft,
+            contactName: contactNameDraft,
+          });
+        }}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Input
+            value={contactPhoneDraft}
+            onChange={(event) => setContactPhoneDraft(event.target.value)}
+            placeholder="Телефон"
+          />
+          <Input
+            value={contactNameDraft}
+            onChange={(event) => setContactNameDraft(event.target.value)}
+            placeholder="Имя контакта"
+          />
+        </Space>
       </Modal>
       <Modal
         open={isAttachCallModalOpen}

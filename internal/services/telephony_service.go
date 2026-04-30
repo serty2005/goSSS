@@ -78,6 +78,7 @@ type TelephonyService interface {
 	BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, contactName string, actorID uint, roles []string) error
 	BindCallToTicket(ctx context.Context, callID string, ticketID string, contactName string, actorID uint, roles []string) error
 	UnbindCallFromTicket(ctx context.Context, callID string, ticketID string, actorID uint, roles []string) error
+	SetTicketContact(ctx context.Context, ticketID string, phone string, contactName string, clear bool, actorID uint, roles []string) error
 	ListContactCompanies(ctx context.Context, contactID uint) ([]TelephonyContactCompanyView, error)
 	ListCalls(ctx context.Context, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
 	ListUserCalls(ctx context.Context, userID uint, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
@@ -262,6 +263,39 @@ func (s *telephonyService) UnbindCallFromTicket(ctx context.Context, callID stri
 		return err
 	}
 	return s.refreshTicketContactFromLinkedCalls(ctx, ticket)
+}
+
+func (s *telephonyService) SetTicketContact(ctx context.Context, ticketID string, phone string, contactName string, clear bool, actorID uint, roles []string) error {
+	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil {
+		return nil
+	}
+	if !hasUserRole(roles, user.RoleAdmin) && !hasUserRole(roles, user.RoleSupportSpecialist) {
+		return ErrTelephonyForbidden
+	}
+
+	ticket, err := s.ticketRepo.GetByID(ctx, strings.TrimSpace(ticketID))
+	if err != nil {
+		return err
+	}
+	if ticket == nil {
+		return telephonyErrNotFound("ticket")
+	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return errors.New("тикет передан менеджеру: контакт менять нельзя")
+	}
+
+	if clear {
+		ticket.ContactID = nil
+		return s.ticketRepo.Update(ctx, ticket)
+	}
+
+	normalizedPhone := normalizeMegafonPhone(phone)
+	if normalizedPhone == "" {
+		return errors.New("не указан телефон контакта")
+	}
+
+	_, _, err = s.bindTicketContactByPhone(ctx, ticket.ID, normalizedPhone, contactName)
+	return err
 }
 
 func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketID string, normalizedPhone string, contactName string) (*tickets.Ticket, *telephony.Contact, error) {

@@ -418,6 +418,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 	)
 	companyService := companySvc.NewService(
 		app.Logger.With("component", "company_service"),
+		app.Config,
 		transactor,
 		repos.CompanyRepo,
 		repos.ServerRepo,

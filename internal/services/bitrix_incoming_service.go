@@ -1224,7 +1224,7 @@ func (s *bitrixIncomingService) resolveMappedCompanyIDByPoint(ctx context.Contex
 	if s.repo == nil || pointID <= 0 {
 		return "", nil
 	}
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.repo, pointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.repo, pointID)
 	if err != nil {
 		return "", err
 	}

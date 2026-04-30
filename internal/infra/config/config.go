@@ -127,6 +127,7 @@ type Config struct {
 	BitrixIncomingMaxAttempts   int
 	BitrixSuppressTTL           time.Duration
 	BitrixIntegrationUserID     int64
+	BitrixTestServicePointID    int64
 	BitrixTestCompanyIDs        []int64
 
 	EnablePyrusGateway       bool
@@ -275,6 +276,7 @@ func New() *Config {
 		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
 		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
 		BitrixIntegrationUserID:     bitrixIntegrationUserID,
+		BitrixTestServicePointID:    int64(getEnvAsInt("BITRIX_TEST_SERVICE_POINT_ID", 0)),
 		BitrixTestCompanyIDs:        getEnvAsInt64Slice("BITRIX_TEST_COMPANY_IDS"),
 
 		EnablePyrusGateway:       getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),

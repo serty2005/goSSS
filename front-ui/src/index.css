@@ -1,4 +1,5 @@
 ﻿:root {
+  --app-header-message-offset: 68px;
   --app-bg-layout: #f0f2f5;
   --app-bg-container: #ffffff;
   --app-color-primary: #1677ff;
@@ -22,6 +23,44 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: background-color 0.3s ease;
+}
+
+body > .ant-message,
+.ant-app .ant-message,
+#inline-message-host .ant-message {
+  top: var(--app-header-message-offset) !important;
+  inset-block-start: var(--app-header-message-offset) !important;
+}
+
+body .ant-message .ant-message-notice {
+  position: fixed !important;
+  top: var(--app-header-message-offset) !important;
+  left: 50% !important;
+  right: auto !important;
+  width: max-content !important;
+  max-width: min(560px, calc(100vw - 32px)) !important;
+  margin: 0 !important;
+  transform: translateX(-50%) !important;
+  box-sizing: border-box;
+}
+
+#inline-message-host .ant-message .ant-message-notice {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  max-width: 100% !important;
+  transform: none !important;
+}
+
+body .ant-message .ant-message-notice-content {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  box-sizing: border-box;
 }
 
 .glass-panel {
@@ -301,36 +340,46 @@ body {
 }
 
 #inline-message-host {
-  position: absolute;
-  left: 224px;
-  bottom: 14px;
-  width: min(420px, calc(100% - 48px));
-  max-width: calc(100% - 48px);
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--app-header-message-offset);
+  width: 100%;
+  max-width: none;
+  transform: none;
+  display: flex;
+  justify-content: center;
   overflow: visible;
-  z-index: 30;
+  z-index: 1300;
   pointer-events: none;
 }
 
 #inline-message-host .ant-message {
-  position: static;
-  width: 100%;
-  max-width: 100%;
-  left: auto;
-  top: auto;
-  transform: none;
+  position: static !important;
+  width: auto;
+  max-width: min(560px, calc(100vw - 32px));
+  left: auto !important;
+  right: auto !important;
+  inset-inline: auto !important;
+  top: auto !important;
+  inset-block-start: auto !important;
+  transform: none !important;
   margin: 0;
   padding: 0;
-  text-align: left;
+  text-align: center;
   pointer-events: none;
 }
 
 #inline-message-host .ant-message-notice-wrapper {
-  display: block;
-  width: 100%;
+  position: static !important;
+  display: flex;
+  justify-content: center;
+  width: max-content;
   max-width: 100%;
   left: auto;
   right: auto;
-  transform: none;
+  top: auto !important;
+  transform: none !important;
   margin-bottom: 10px;
   margin-inline: 0;
   pointer-events: auto;
@@ -338,8 +387,9 @@ body {
 
 #inline-message-host .ant-message-notice-content {
   box-sizing: border-box;
-  display: block;
-  width: 100%;
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
   border-radius: 14px;
   padding: 10px 14px;
   border: 1px solid var(--app-color-border);
@@ -383,17 +433,8 @@ body {
   -webkit-box-orient: vertical;
 }
 
-#inline-message-host .ant-message {
-  position: fixed !important;
-  left: 12px !important;
-  right: 12px !important;
-  inset-inline: 12px !important;
-  width: auto !important;
-  transform: none !important;
-}
-
 #inline-message-host .ant-message-notice {
-  width: 100%;
+  width: max-content;
   max-width: 100%;
   margin-inline: auto;
   box-sizing: border-box;
@@ -401,7 +442,7 @@ body {
 }
 
 #inline-message-host .ant-message-notice-content {
-  width: 100%;
+  width: auto;
   max-width: 100%;
   box-sizing: border-box;
   white-space: normal;

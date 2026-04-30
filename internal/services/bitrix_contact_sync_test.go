@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/infra/config"
@@ -176,5 +177,158 @@ func TestBitrixSyncServiceBuildDealFieldsAddsContactIDFromTelephonyContact(t *te
 	}
 	if gotUpdatedName != contactName {
 		t.Fatalf("ожидали обновление имени контакта до %q, получили %q", contactName, gotUpdatedName)
+	}
+}
+
+func TestBitrixSyncServiceUpsertDealAndLinkSetsDealContactItems(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:bitrix-deal-contact-sync?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&telephony.Contact{}, &bitrix.DealLink{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	telephonyRepo := repositories.NewTelephonyRepo(db)
+	bitrixRepo := repositories.NewBitrixRepo(db)
+	ctx := context.Background()
+	contactName := "Наталья бухгалтер"
+	bitrixContactID := "1501"
+	localContact, err := telephonyRepo.UpsertContact(ctx, telephony.ContactUpsert{
+		PhoneNormalized: "+79280371097",
+		PhoneDisplay:    "+79280371097",
+		Name:            &contactName,
+		BitrixContactID: &bitrixContactID,
+	})
+	if err != nil {
+		t.Fatalf("не удалось сохранить локальный контакт: %v", err)
+	}
+
+	ticketID := "ticket-contact-sync"
+	if err := bitrixRepo.UpsertDealLink(ctx, &bitrix.DealLink{
+		TicketID:   ticketID,
+		B24DealID:  6299,
+		LastSyncAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("не удалось подготовить связь сделки: %v", err)
+	}
+
+	var (
+		mu              sync.Mutex
+		updateCalls     int
+		contactSetCalls int
+		lastContactSet  []map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/rest/457/secret/crm.contact.get.json":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": map[string]any{
+					"ID":          "1501",
+					"NAME":        contactName,
+					"SECOND_NAME": "",
+					"LAST_NAME":   "",
+					"DATE_MODIFY": "2026-04-07T10:15:00+03:00",
+					"PHONE": []map[string]any{
+						{
+							"ID":         "5065",
+							"TYPE_ID":    "PHONE",
+							"VALUE_TYPE": "WORK",
+							"VALUE":      "+79280371097",
+						},
+					},
+				},
+			})
+		case "/rest/457/secret/crm.deal.update.json":
+			mu.Lock()
+			updateCalls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": true})
+		case "/rest/457/secret/crm.deal.contact.items.get.json":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": []map[string]any{
+					{"CONTACT_ID": "2400", "IS_PRIMARY": "Y", "SORT": 10},
+				},
+			})
+		case "/rest/457/secret/crm.deal.contact.items.set.json":
+			var body struct {
+				ID    int64            `json:"id"`
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("не удалось прочитать запрос crm.deal.contact.items.set: %v", err)
+			}
+			if body.ID != 6299 {
+				t.Fatalf("ожидали установку контактов сделки 6299, получили %d", body.ID)
+			}
+			mu.Lock()
+			contactSetCalls++
+			lastContactSet = body.Items
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": true})
+		default:
+			t.Fatalf("неожиданный метод Bitrix24: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		EnableBitrixGateway:   true,
+		RequestTimeout:        2 * time.Second,
+		BitrixBaseURL:         server.URL + "/rest/457/secret",
+		BitrixOriginatorID:    "ETALON_SD",
+		BitrixCategoryID:      17,
+		BitrixRateLimitPerMin: 120,
+		BitrixRateLimitBurst:  50,
+	}
+	svc := &bitrixSyncService{
+		cfg:           cfg,
+		log:           logger.New("", "test", "error", true),
+		client:        b24.NewClient(cfg, logger.New("", "test", "error", true)),
+		repo:          bitrixRepo,
+		telephonyRepo: telephonyRepo,
+	}
+
+	pointID := int64(17)
+	ticket := &tickets.Ticket{
+		Number:               1001,
+		Status:               tickets.StatusNew,
+		Type:                 tickets.TypeIncident,
+		SyncWithBitrix:       true,
+		ContactID:            &localContact.ID,
+		BitrixServicePointID: &pointID,
+	}
+	ticket.ID = ticketID
+
+	dealID, err := svc.upsertDealAndLink(ctx, ticket)
+	if err != nil {
+		t.Fatalf("upsertDealAndLink завершился ошибкой: %v", err)
+	}
+	if dealID != 6299 {
+		t.Fatalf("ожидали dealID=6299, получили %d", dealID)
+	}
+
+	mu.Lock()
+	gotUpdateCalls := updateCalls
+	gotContactSetCalls := contactSetCalls
+	gotItems := lastContactSet
+	mu.Unlock()
+
+	if gotUpdateCalls != 1 {
+		t.Fatalf("ожидали один crm.deal.update, получили %d", gotUpdateCalls)
+	}
+	if gotContactSetCalls != 1 {
+		t.Fatalf("ожидали один crm.deal.contact.items.set, получили %d", gotContactSetCalls)
+	}
+	if len(gotItems) != 2 {
+		t.Fatalf("ожидали два контакта в сделке, получили %v", gotItems)
+	}
+	if gotItems[0]["CONTACT_ID"] != float64(1501) || gotItems[0]["IS_PRIMARY"] != "Y" {
+		t.Fatalf("ожидали привязанный контакт тикета первичным, получили %v", gotItems[0])
+	}
+	if gotItems[1]["CONTACT_ID"] != float64(2400) || gotItems[1]["IS_PRIMARY"] != "N" {
+		t.Fatalf("ожидали сохранение существующего контакта вторым, получили %v", gotItems[1])
 	}
 }
