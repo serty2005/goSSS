@@ -52,6 +52,7 @@ const queryClient = new QueryClient({
 });
 
 const INLINE_MESSAGE_HOST_ID = 'inline-message-host';
+const MESSAGE_TOP_OFFSET = 68;
 
 const resolveInlineMessageHost = () => document.getElementById(INLINE_MESSAGE_HOST_ID) || document.body;
 
@@ -144,7 +145,7 @@ const App: React.FC = () => {
     message.config({
       duration: 5,
       maxCount: 6,
-      top: 0,
+      top: MESSAGE_TOP_OFFSET,
       getContainer: getInlineMessageContainer,
     });
   }, [getInlineMessageContainer]);
@@ -156,7 +157,7 @@ const App: React.FC = () => {
           message={{
             duration: 5,
             maxCount: 6,
-            top: 0,
+            top: MESSAGE_TOP_OFFSET,
             getContainer: getInlineMessageContainer,
           }}
         >

@@ -1,5 +1,5 @@
 ---
-name: fix
+name: react-code-linter
 description: Use when you have lint errors, formatting issues, or before committing code to ensure it passes CI.
 ---
 

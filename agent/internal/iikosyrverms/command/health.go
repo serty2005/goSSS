@@ -7,10 +7,6 @@ import (
 	"etalon-agent/internal/iikosyrverms/domain"
 )
 
-type Scanner interface {
-	Scan(context.Context) (domain.ScanReport, error)
-}
-
 type HealthHandler struct {
 	Scanner Scanner
 }

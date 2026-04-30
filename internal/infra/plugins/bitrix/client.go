@@ -26,6 +26,7 @@ type Deal struct {
 	OriginID   string
 	Originator string
 	StageID    string
+	Closed     string
 	CategoryID int
 	Title      string
 	AssignedBy *int64
@@ -174,7 +175,7 @@ func (c *Client) DealListByOrigin(ctx context.Context, originatorID, originID st
 			"ORIGINATOR_ID": originatorID,
 			"ORIGIN_ID":     originID,
 		},
-		"select": []string{"ID", "ORIGINATOR_ID", "ORIGIN_ID", "STAGE_ID", "CATEGORY_ID", "TITLE"},
+		"select": []string{"ID", "ORIGINATOR_ID", "ORIGIN_ID", "STAGE_ID", "CLOSED", "CATEGORY_ID", "TITLE"},
 	}
 	raw, _, _, err := c.call(ctx, "crm.deal.list", body)
 	if err != nil {
@@ -188,7 +189,7 @@ func (c *Client) DealListByOriginator(ctx context.Context, originatorID string, 
 		"filter": map[string]interface{}{
 			"ORIGINATOR_ID": originatorID,
 		},
-		"select": []string{"ID", "ORIGINATOR_ID", "ORIGIN_ID", "STAGE_ID", "CATEGORY_ID", "TITLE"},
+		"select": []string{"ID", "ORIGINATOR_ID", "ORIGIN_ID", "STAGE_ID", "CLOSED", "CATEGORY_ID", "TITLE"},
 		"start":  start,
 	}
 	raw, next, _, err := c.call(ctx, "crm.deal.list", body)
@@ -214,6 +215,7 @@ func (c *Client) DealGet(ctx context.Context, dealID int64) (*Deal, error) {
 			"ORIGINATOR_ID",
 			"ORIGIN_ID",
 			"STAGE_ID",
+			"CLOSED",
 			"CATEGORY_ID",
 			"TITLE",
 			"ASSIGNED_BY_ID",
@@ -1184,6 +1186,7 @@ func parseDeals(raw interface{}) []Deal {
 			OriginID:   strings.TrimSpace(toString(m["ORIGIN_ID"])),
 			Originator: strings.TrimSpace(toString(m["ORIGINATOR_ID"])),
 			StageID:    strings.TrimSpace(toString(m["STAGE_ID"])),
+			Closed:     strings.TrimSpace(toString(m["CLOSED"])),
 			CategoryID: toInt(m["CATEGORY_ID"]),
 			Title:      strings.TrimSpace(toString(m["TITLE"])),
 			AssignedBy: assignedByPtr,
@@ -1214,6 +1217,7 @@ func parseDeal(raw interface{}) *Deal {
 		OriginID:   strings.TrimSpace(toString(m["ORIGIN_ID"])),
 		Originator: strings.TrimSpace(toString(m["ORIGINATOR_ID"])),
 		StageID:    strings.TrimSpace(toString(m["STAGE_ID"])),
+		Closed:     strings.TrimSpace(toString(m["CLOSED"])),
 		CategoryID: toInt(m["CATEGORY_ID"]),
 		Title:      strings.TrimSpace(toString(m["TITLE"])),
 		AssignedBy: assignedByPtr,

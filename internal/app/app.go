@@ -418,6 +418,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 	)
 	companyService := companySvc.NewService(
 		app.Logger.With("component", "company_service"),
+		app.Config,
 		transactor,
 		repos.CompanyRepo,
 		repos.ServerRepo,
@@ -673,9 +674,10 @@ func (a *Application) setupRouter() *chi.Mux {
 	})
 	r.Use(corsMiddleware.Handler)
 	r.Use(chi_middleware.RequestID)
+	r.Use(chi_middleware.RealIP)
 	r.Use(middleware.LoggerInjector(a.Logger))
-	r.Use(middleware.DebugHTTPIOMiddleware())
-	r.Use(chi_middleware.RealIP, chi_middleware.Logger, chi_middleware.Recoverer)
+	r.Use(middleware.RequestLoggingMiddleware())
+	r.Use(middleware.Recoverer())
 	r.Use(middleware.TimeoutUnless(60*time.Second, func(r *http.Request) bool {
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/servers/") && strings.HasSuffix(r.URL.Path, "/license") {
 			return true

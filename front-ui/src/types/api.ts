@@ -1151,7 +1151,8 @@ export type CandidateStatus =
   | "IN_REVIEW"
   | "APPROVED"
   | "REJECTED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "SUPERSEDED";
 
 export interface CandidateWorkstationStagingDTO {
   id: number;
@@ -1192,6 +1193,7 @@ export interface CandidateDTO {
   server_url?: string;
   existing_server_id?: string;
   status: CandidateStatus;
+  deactivation_reason?: string;
   ticket_id?: number;
   approved_company_id?: string;
   approved_server_id?: string;
@@ -1203,6 +1205,7 @@ export interface CandidateDTO {
 
 export interface CandidateObservationDTO {
   observation_id: number;
+  observation_uid?: string;
   observed_at: string;
   payload_json: Record<string, unknown>;
 }
@@ -1267,7 +1270,8 @@ export type NetworkCandidateStatus =
   | "IN_REVIEW"
   | "APPROVED"
   | "REJECTED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "SUPERSEDED";
 
 export interface NetworkCandidateDTO {
   id: number;
@@ -1277,6 +1281,7 @@ export interface NetworkCandidateDTO {
   server_key?: string;
   server_crm_id?: string;
   server_url?: string;
+  deactivation_reason?: string;
   // Информация о конфликте владельцев
   conflict_info?: string;
   ws_owner_candidate?: string;
@@ -1320,6 +1325,7 @@ export interface NetworkCandidateGroupDTO {
     candidate_id: number;
     observation_id: number;
     status: string;
+    deactivation_reason?: string;
     created_at: string;
     updated_at: string;
   };

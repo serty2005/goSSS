@@ -174,6 +174,11 @@ const TicketDetailsPage: React.FC = () => {
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isAttachCallModalOpen, setIsAttachCallModalOpen] = useState(false);
+  const [isContactEditModalOpen, setIsContactEditModalOpen] = useState(false);
+  const [contactPhoneDraft, setContactPhoneDraft] = useState('');
+  const [contactNameDraft, setContactNameDraft] = useState('');
+  const [attachCallPhoneSearch, setAttachCallPhoneSearch] = useState('');
+  const [attachCallEmployeeID, setAttachCallEmployeeID] = useState<number | undefined>(undefined);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
@@ -207,6 +212,7 @@ const TicketDetailsPage: React.FC = () => {
   const details: TicketDetailsDTO | undefined = data?.data;
   const metadata = details?.metadata;
   const ticketCalls = useMemo(() => details?.calls || [], [details?.calls]);
+  const isManagerFlowLocked = metadata?.status === 'to_manager';
   const isPyrusLinkedTicket = hasPyrusLink(metadata);
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
@@ -335,11 +341,13 @@ const TicketDetailsPage: React.FC = () => {
 
   const parentInfrastructure = useMemo(() => parentInfraResponse?.data || [], [parentInfraResponse?.data]);
   const { data: attachableCallsResponse, isFetching: isAttachableCallsLoading } = useQuery({
-    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen],
+    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen, attachCallPhoneSearch, attachCallEmployeeID],
     queryFn: () => {
       const now = new Date();
       return telephonyApi.getCalls({
         only_without_ticket: true,
+        client_phone: attachCallPhoneSearch.trim() || undefined,
+        employee_user_id: attachCallEmployeeID,
         started_from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
         started_to: now.toISOString(),
         limit: 100,
@@ -391,6 +399,10 @@ const TicketDetailsPage: React.FC = () => {
         .filter((item) => item.is_active)
         .map((item) => ({ value: item.id, label: item.full_name || item.username })),
     [usersResponse?.data],
+  );
+  const attachCallEmployeeOptions = useMemo(
+    () => assigneeOptions.map((item) => ({ value: Number(item.value), label: String(item.label) })),
+    [assigneeOptions],
   );
   const mentionOptions = useMemo<MentionOption[]>(
     () => assigneeOptions.map((item) => ({ id: Number(item.value), label: String(item.label) })),
@@ -841,6 +853,43 @@ const TicketDetailsPage: React.FC = () => {
     },
   });
 
+  const unbindTicketCallMutation = useMutation({
+    mutationFn: async (call: TelephonyCallDTO) => {
+      if (!id) return;
+      return telephonyApi.unbindCallFromTicket(call.id, id);
+    },
+    onSuccess: () => {
+      message.success('Звонок отвязан от тикета');
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['telephony'] });
+    },
+    onError: () => {
+      message.error('Не удалось отвязать звонок');
+    },
+  });
+
+  const updateTicketContactMutation = useMutation({
+    mutationFn: async (payload: { phone?: string; contactName?: string; clear?: boolean }) => {
+      if (!id) return;
+      return telephonyApi.setTicketContact(id, {
+        phone: payload.phone,
+        contact_name: payload.contactName,
+        clear: payload.clear,
+      });
+    },
+    onSuccess: (_, variables) => {
+      message.success(variables.clear ? 'Контакт отвязан' : 'Контакт обновлён');
+      setIsContactEditModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['telephony'] });
+    },
+    onError: () => {
+      message.error('Не удалось обновить контакт');
+    },
+  });
+
   const handleDescriptionClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
@@ -905,6 +954,13 @@ const TicketDetailsPage: React.FC = () => {
   };
   const commentComposer = (
     <Space direction="vertical" size="small" style={{ width: '100%', marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}>
+      {isManagerFlowLocked && (
+        <Alert
+          type="info"
+          showIcon
+          message="Тикет передан менеджеру. Доступно только добавление комментариев, остальные действия обновляются из Bitrix24."
+        />
+      )}
       <SmartTicketEditor
         value={commentDraft}
         onChange={setCommentDraft}
@@ -988,6 +1044,7 @@ const TicketDetailsPage: React.FC = () => {
                 value={metadata.status}
                 options={TICKET_STATUS_OPTIONS.filter((item) => item.value !== 'closed').map((item) => ({ value: item.value, label: item.label }))}
                 style={{ width: 180 }}
+                disabled={isManagerFlowLocked}
                 onChange={(nextStatus: TicketStatus) => {
                   if (!id || nextStatus === metadata.status) return;
                   if (nextStatus === 'deferred') {
@@ -1024,7 +1081,7 @@ const TicketDetailsPage: React.FC = () => {
               </Button>
             </Space>
           )}
-          {isBitrixEnabled && !hasBitrixLink && (
+          {isBitrixEnabled && !hasBitrixLink && !isManagerFlowLocked && (
             <Button
               loading={updateBitrixMutation.isPending}
               onClick={() => {
@@ -1038,7 +1095,7 @@ const TicketDetailsPage: React.FC = () => {
               {metadata.sync_with_bitrix ? 'Выгрузить в Битрикс24' : 'Включить синхронизацию с Битрикс24'}
             </Button>
           )}
-          {isAdminRole && hasBitrixBinding && (
+          {isAdminRole && hasBitrixBinding && !isManagerFlowLocked && (
             <Popconfirm
               title="Разорвать связь с Bitrix24?"
               description="Тикет останется в ServiceDesk, но больше не будет синхронизироваться и не создастся заново из этой сделки."
@@ -1051,7 +1108,7 @@ const TicketDetailsPage: React.FC = () => {
               </Button>
             </Popconfirm>
           )}
-          {isAdminRole && (
+          {isAdminRole && !isManagerFlowLocked && (
             <Popconfirm
               title="Удалить тикет?"
               description={hasBitrixBinding ? 'Связь со сделкой Bitrix24 будет разорвана только локально. В Bitrix24 ничего не изменится.' : 'Тикет будет удалён из ServiceDesk без возможности восстановления.'}
@@ -1084,7 +1141,7 @@ const TicketDetailsPage: React.FC = () => {
                             ) : (
                               companyTitle || '-'
                             )}
-                            <Button
+                            {!isManagerFlowLocked && <Button
                               type="text"
                               size="small"
                               icon={<EditOutlined />}
@@ -1093,7 +1150,7 @@ const TicketDetailsPage: React.FC = () => {
                                 setCompanySearch('');
                                 setIsCompanyEditMode(true);
                               }}
-                            />
+                            />}
                           </Space>
                           ) : (
                           <Space>
@@ -1143,24 +1200,54 @@ const TicketDetailsPage: React.FC = () => {
                           <Text type="secondary">Тип: {contractType}</Text>
                         </Space>
                       </Descriptions.Item>
-                      <Descriptions.Item label="Контакт">
-                        {getTelephonyContactLabel(details.contact, details.contact?.phone_display) || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Телефон">
-                        <Space size={8} wrap>
-                          <Text>{getTelephonyContactPhoneDisplay(details.contact) || '-'}</Text>
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<CopyOutlined />}
-                            disabled={!getTelephonyContactPhoneForCopy(details.contact)}
-                            onClick={() => {
-                              void copyTicketPhone(getTelephonyContactPhoneForCopy(details.contact));
-                            }}
-                          >
-                            Копировать
-                          </Button>
-                        </Space>
+                      <Descriptions.Item label="Контакт" span={serviceInfoColumns}>
+                        <div style={highlightedFields.contact ? fieldHighlightStyle : undefined}>
+                          <Space size={8} wrap>
+                            <Text>{getTelephonyContactLabel(details.contact, details.contact?.phone_display) || '-'}</Text>
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<CopyOutlined />}
+                              disabled={!getTelephonyContactPhoneForCopy(details.contact)}
+                              onClick={() => {
+                                void copyTicketPhone(getTelephonyContactPhoneForCopy(details.contact));
+                              }}
+                            >
+                              Копировать
+                            </Button>
+                            {!isManagerFlowLocked && (
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  setContactPhoneDraft(getTelephonyContactPhoneForCopy(details.contact));
+                                  setContactNameDraft(String(details.contact?.name || ''));
+                                  setIsContactEditModalOpen(true);
+                                }}
+                              >
+                                Изменить
+                              </Button>
+                            )}
+                            {!isManagerFlowLocked && details.contact && (
+                              <Popconfirm
+                                title="Отвязать контакт от тикета?"
+                                okText="Отвязать"
+                                cancelText="Отмена"
+                                onConfirm={() => updateTicketContactMutation.mutate({ clear: true })}
+                              >
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  danger
+                                  loading={updateTicketContactMutation.isPending && updateTicketContactMutation.variables?.clear}
+                                >
+                                  Отвязать
+                                </Button>
+                              </Popconfirm>
+                            )}
+                          </Space>
+                        </div>
                       </Descriptions.Item>
                       <Descriptions.Item label="Исполнитель">
                         <div style={highlightedFields.assignee ? fieldHighlightStyle : undefined}>
@@ -1171,6 +1258,7 @@ const TicketDetailsPage: React.FC = () => {
                             options={assigneeOptions}
                             value={metadata.assignee?.id}
                             loading={assignMutation.isPending}
+                            disabled={isManagerFlowLocked}
                             onChange={(nextValue) => assignMutation.mutate(nextValue as number | undefined)}
                           />
                         </div>
@@ -1184,7 +1272,7 @@ const TicketDetailsPage: React.FC = () => {
                           {!isBitrixEditMode ? (
                           <Space>
                             <Text>{metadata.bitrix_deal_title || '-'}</Text>
-                            <Button
+                            {!isManagerFlowLocked && <Button
                               type="text"
                               size="small"
                               icon={<EditOutlined />}
@@ -1193,7 +1281,7 @@ const TicketDetailsPage: React.FC = () => {
                                 setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
                                 setIsBitrixEditMode(true);
                               }}
-                            />
+                            />}
                           </Space>
                           ) : (
                           <Input
@@ -1223,13 +1311,14 @@ const TicketDetailsPage: React.FC = () => {
                               }))}
                               optionFilterProp="label"
                               onChange={(value) => setDraftBitrixPointID(value)}
+                              disabled={isManagerFlowLocked}
                             />
                             <Button
                               type="text"
                               size="small"
                               icon={<CheckOutlined />}
                               loading={updateBitrixMutation.isPending}
-                              disabled={!draftBitrixPointID || !draftBitrixDealTitle.trim()}
+                              disabled={isManagerFlowLocked || !draftBitrixPointID || !draftBitrixDealTitle.trim()}
                               onClick={() => updateBitrixMutation.mutate()}
                             />
                             <Button
@@ -1259,7 +1348,7 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={handleDescriptionClick}
                               style={{ whiteSpace: 'pre-wrap' }}
                             />
-                            <Button
+                            {!isManagerFlowLocked && <Button
                               size="small"
                               icon={<EditOutlined />}
                               onClick={() => {
@@ -1268,7 +1357,7 @@ const TicketDetailsPage: React.FC = () => {
                               }}
                             >
                               Редактировать описание
-                            </Button>
+                            </Button>}
                           </Space>
                         ) : (
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1332,7 +1421,7 @@ const TicketDetailsPage: React.FC = () => {
                                           <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
                                           <Space size={8}>
                                             {item.is_private && <Tag color="orange">Приватный</Tag>}
-                                            {canManageComment(item.author_name) && (
+                                            {canManageComment(item.author_name) && !isManagerFlowLocked && (
                                               <Button
                                                 type="link"
                                                 size="small"
@@ -1344,7 +1433,7 @@ const TicketDetailsPage: React.FC = () => {
                                                 Редактировать
                                               </Button>
                                             )}
-                                            {canDeleteComment(item.author_name) && (
+                                            {canDeleteComment(item.author_name) && !isManagerFlowLocked && (
                                               <Popconfirm
                                                 title="Удалить комментарий?"
                                                 okText="Удалить"
@@ -1412,7 +1501,7 @@ const TicketDetailsPage: React.FC = () => {
                           label: `Вложения (${attachments.length})`,
                           children: (
                             <>
-                              <div style={{ marginBottom: 12 }}>
+                              {!isManagerFlowLocked && <div style={{ marginBottom: 12 }}>
                                 <Upload
                                   showUploadList={false}
                                   customRequest={uploadAttachmentsRequest}
@@ -1422,8 +1511,8 @@ const TicketDetailsPage: React.FC = () => {
                                     Прикрепить
                                   </Button>
                                 </Upload>
-                              </div>
-                              <Upload.Dragger
+                              </div>}
+                              {!isManagerFlowLocked && <Upload.Dragger
                                 name="files"
                                 multiple
                                 showUploadList={false}
@@ -1432,7 +1521,7 @@ const TicketDetailsPage: React.FC = () => {
                               >
                                 <p style={{ marginBottom: 4 }}>Перетащите файлы сюда или нажмите для выбора</p>
                                 <Text type="secondary">Поддерживается множественная загрузка</Text>
-                              </Upload.Dragger>
+                              </Upload.Dragger>}
                               {attachments.length === 0 ? (
                                 null
                               ) : (
@@ -1672,7 +1761,7 @@ const TicketDetailsPage: React.FC = () => {
                                   const employeeName = String(call.employee_name || call.employee_login || '').trim();
                                   const startedAt = call.started_at || call.answered_at || call.completed_at;
                                   return (
-                                    <List.Item
+                                     <List.Item
                                       actions={[
                                         <Button
                                           key="recording"
@@ -1684,6 +1773,24 @@ const TicketDetailsPage: React.FC = () => {
                                         >
                                           Открыть запись
                                         </Button>,
+                                        !isManagerFlowLocked ? (
+                                          <Popconfirm
+                                            key="unlink"
+                                            title="Отвязать звонок от тикета?"
+                                            okText="Отвязать"
+                                            cancelText="Отмена"
+                                            onConfirm={() => unbindTicketCallMutation.mutate(call)}
+                                          >
+                                            <Button
+                                              type="link"
+                                              size="small"
+                                              danger
+                                              loading={unbindTicketCallMutation.isPending && unbindTicketCallMutation.variables?.id === call.id}
+                                            >
+                                              Отвязать
+                                            </Button>
+                                          </Popconfirm>
+                                        ) : null,
                                       ]}
                                     >
                                       <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -1713,7 +1820,7 @@ const TicketDetailsPage: React.FC = () => {
                                 }}
                               />
                             )}
-                            {isAdminRole ? (
+                            {isAdminRole && !isManagerFlowLocked ? (
                               <Button
                                 type="dashed"
                                 block
@@ -1976,12 +2083,57 @@ const TicketDetailsPage: React.FC = () => {
         )}
       </Modal>
       <Modal
+        open={isContactEditModalOpen}
+        title="Контакт тикета"
+        okText="Сохранить"
+        cancelText="Отмена"
+        confirmLoading={updateTicketContactMutation.isPending && !updateTicketContactMutation.variables?.clear}
+        onCancel={() => setIsContactEditModalOpen(false)}
+        onOk={() => {
+          updateTicketContactMutation.mutate({
+            phone: contactPhoneDraft,
+            contactName: contactNameDraft,
+          });
+        }}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Input
+            value={contactPhoneDraft}
+            onChange={(event) => setContactPhoneDraft(event.target.value)}
+            placeholder="Телефон"
+          />
+          <Input
+            value={contactNameDraft}
+            onChange={(event) => setContactNameDraft(event.target.value)}
+            placeholder="Имя контакта"
+          />
+        </Space>
+      </Modal>
+      <Modal
         open={isAttachCallModalOpen}
         title="Непривязанные звонки за последние 24 часа"
         onCancel={() => setIsAttachCallModalOpen(false)}
         footer={null}
         destroyOnHidden
       >
+        <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 12 }}>
+          <Input.Search
+            allowClear
+            placeholder="Поиск по номеру"
+            value={attachCallPhoneSearch}
+            onChange={(event) => setAttachCallPhoneSearch(event.target.value)}
+          />
+          <Select
+            allowClear
+            showSearch
+            placeholder="Сотрудник"
+            value={attachCallEmployeeID}
+            options={attachCallEmployeeOptions}
+            optionFilterProp="label"
+            onChange={(value) => setAttachCallEmployeeID(value)}
+          />
+        </Space>
         {isAttachableCallsLoading ? (
           <div style={{ textAlign: 'center', padding: 24 }}>
             <Spin />

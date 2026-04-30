@@ -118,8 +118,73 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 	if err := EnsureDefaultAgentAdapterCatalog(cfg, db); err != nil {
 		return err
 	}
+	if err := ensureBitrixCompanyServicePointMappingIndexes(db); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func ensureBitrixCompanyServicePointMappingIndexes(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&bitrix.CompanyServicePointMapping{}) {
+		return nil
+	}
+	if err := dropLegacyUniqueBitrixMappingPointIndexes(db); err != nil {
+		return err
+	}
+	for _, indexName := range []string{
+		"idx_bitrix_company_service_point_mappings_bitrix_service_point_id",
+		"idx_bitrix_company_service_point_mappings_bitrix_service_point_id_uniq",
+		"idx_bitrix_company_service_point_mappings_point_id",
+		"idx_bitrix_company_service_point_mappings_bitrix_servic838e2928",
+	} {
+		if db.Migrator().HasIndex(&bitrix.CompanyServicePointMapping{}, indexName) {
+			if err := db.Migrator().DropIndex(&bitrix.CompanyServicePointMapping{}, indexName); err != nil {
+				return err
+			}
+		}
+	}
+	return db.Migrator().CreateIndex(&bitrix.CompanyServicePointMapping{}, "BitrixServicePointID")
+}
+
+func dropLegacyUniqueBitrixMappingPointIndexes(db *gorm.DB) error {
+	if db.Dialector.Name() != "postgres" {
+		return nil
+	}
+
+	type legacyIndex struct {
+		SchemaName string `gorm:"column:schema_name"`
+		IndexName  string `gorm:"column:index_name"`
+	}
+
+	var indexes []legacyIndex
+	if err := db.Raw(`
+		SELECT ns.nspname AS schema_name, idx.relname AS index_name
+		FROM pg_index i
+		JOIN pg_class idx ON idx.oid = i.indexrelid
+		JOIN pg_class tbl ON tbl.oid = i.indrelid
+		JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+		JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(i.indkey)
+		WHERE tbl.relname = 'bitrix_company_service_point_mappings'
+			AND i.indisunique = TRUE
+			AND i.indisprimary = FALSE
+			AND attr.attname = 'bitrix_service_point_id'
+		GROUP BY ns.nspname, idx.relname
+	`).Scan(&indexes).Error; err != nil {
+		return err
+	}
+
+	for _, index := range indexes {
+		indexRef := quotePostgresIdent(index.SchemaName) + "." + quotePostgresIdent(index.IndexName)
+		if err := db.Exec("DROP INDEX IF EXISTS " + indexRef).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func quotePostgresIdent(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func cleanupOrphanUserIntegrations(db *gorm.DB) error {

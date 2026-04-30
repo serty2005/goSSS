@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AutoComplete, Button, Checkbox, DatePicker, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
-import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
+import { LogoutOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -13,12 +13,12 @@ import { useAuthStore } from '@/store/authStore';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 import { TICKET_ACTIVE_STATUS_VALUES, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
+import GlobalSearchLauncher from '@/components/search/GlobalSearchLauncher';
 
 const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const LONGEST_STATUS_LABEL_WIDTH = 260;
-const VIEW_SELECT_WIDTH = LONGEST_STATUS_LABEL_WIDTH / 2;
 const TABLE_COLUMN_OPTIONS = [
   { value: 'selection', labelKey: 'layout:headerSearch.ticket.tableColumns.selection' },
   { value: 'number', labelKey: 'layout:headerSearch.ticket.tableColumns.number' },
@@ -83,20 +83,13 @@ const HeaderSearch: React.FC = () => {
   const location = useLocation();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
+  const logout = useAuthStore((state) => state.logout);
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const localeDefinition = useMemo(() => getSupportedLocale(i18n.resolvedLanguage), [i18n.resolvedLanguage]);
   const ticketModeOptions = useMemo(
     () => [
       { value: 'active', label: t('layout:headerSearch.ticket.modes.active') },
       { value: 'archive', label: t('layout:headerSearch.ticket.modes.archive') },
-    ],
-    [t],
-  );
-  const ticketViewOptions = useMemo(
-    () => [
-      { value: 'list', label: t('layout:headerSearch.ticket.views.list') },
-      { value: 'cards', label: t('layout:headerSearch.ticket.views.cards') },
-      { value: 'table', label: t('layout:headerSearch.ticket.views.table') },
     ],
     [t],
   );
@@ -134,7 +127,7 @@ const HeaderSearch: React.FC = () => {
   const ticketStatus = ticketParams.get('status') || '';
   const selectedPresetID = ticketParams.get('preset_id') || undefined;
   const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
-  const ticketView = ticketParams.get('view') || 'list';
+  const ticketView = isHeaderMobile ? 'cards' : 'table';
   const ticketTableColumns = ticketParams.get('table_columns') || '';
   const ticketAssigneeIDs = ticketParams.get('assignee_ids') || '';
   const archiveMode = ticketParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
@@ -666,6 +659,53 @@ const HeaderSearch: React.FC = () => {
     return { nextAgent, nextWS, nextFR };
   };
 
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  const mobileAccountActions = (
+    <div className="header-mobile-account-actions">
+      <Button
+        type="text"
+        block
+        icon={<UserOutlined />}
+        onClick={() => navigate('/profile')}
+      >
+        {t('layout:userMenu.profile')}
+      </Button>
+      <Button
+        type="text"
+        block
+        icon={<LogoutOutlined />}
+        onClick={handleLogout}
+      >
+        {t('layout:userMenu.logout')}
+      </Button>
+    </div>
+  );
+
+  const renderMobileSettingsButton = (content?: React.ReactNode) => (
+    <Popover
+      trigger="click"
+      placement="bottomRight"
+      arrow={false}
+      content={
+        <div className="header-mobile-settings-menu">
+          {content}
+          {content ? <Divider style={{ margin: '10px 0' }} /> : null}
+          {mobileAccountActions}
+        </div>
+      }
+    >
+      <Button
+        className="header-mobile-settings-button"
+        icon={<SettingOutlined />}
+        aria-label={t('layout:accessibility.openMobileSettings')}
+      />
+    </Popover>
+  );
+
   if (isTicketsPage) {
     const isBulkAssignMode =
       isTicketsListPage
@@ -673,7 +713,7 @@ const HeaderSearch: React.FC = () => {
       && selectedTicketIDs.length > 0;
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
     const filterContent = (
-      <Space direction="vertical" size="small" style={{ width: 420, maxWidth: 'min(420px, calc(100vw - 40px))' }}>
+      <Space direction="vertical" size="small" className="ticket-filter-popover-content">
         {isHeaderNarrow && (
           <div className="ticket-filter-popover-mobile-only">
             <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.listMode')}</Text>
@@ -712,12 +752,6 @@ const HeaderSearch: React.FC = () => {
         )}
 
         <Space style={{ width: '100%' }} align="start">
-          <Select
-            value={ticketView}
-            onChange={(value) => updateTicketParams({ view: value })}
-            options={ticketViewOptions}
-            style={{ width: VIEW_SELECT_WIDTH, flexShrink: 0 }}
-          />
           {ticketView === 'table' && (
             <Select
               mode="multiple"
@@ -867,6 +901,22 @@ const HeaderSearch: React.FC = () => {
       );
     }
 
+    if (isHeaderMobile) {
+      return (
+        <div className="header-mobile-search-row">
+          <Input.Search
+            className="ticket-header-mobile-search"
+            placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
+            allowClear
+            value={ticketTerm}
+            onChange={(event) => setTicketTerm(event.target.value)}
+            onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
+          />
+          {renderMobileSettingsButton(filterContent)}
+        </div>
+      );
+    }
+
     return (
       <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
         {!isHeaderNarrow && (
@@ -886,7 +936,7 @@ const HeaderSearch: React.FC = () => {
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
-          style={{ width: isHeaderMobile ? 200 : (isCompact ? 240 : 320) }}
+          style={{ width: isHeaderMobile ? 88 : (isCompact ? 240 : 320) }}
         />
         {!isHeaderNarrow && archiveMode !== 'archive' && (
           <Select
@@ -936,6 +986,22 @@ const HeaderSearch: React.FC = () => {
   }
 
   if (isSectionSearchPage) {
+    if (isHeaderMobile) {
+      return (
+        <div className="header-mobile-search-row">
+          <Input.Search
+            className="ticket-header-mobile-search"
+            placeholder={sectionPlaceholder}
+            allowClear
+            value={sectionSearchTerm}
+            onChange={(event) => setSectionSearchTerm(event.target.value)}
+            onSearch={onSectionSearch}
+          />
+          {renderMobileSettingsButton()}
+        </div>
+      );
+    }
+
     return (
       <Input.Search
         placeholder={sectionPlaceholder}
@@ -993,6 +1059,14 @@ const HeaderSearch: React.FC = () => {
     );
   }
 
+  if (isHeaderMobile) {
+    return (
+      <div className="header-mobile-search-row">
+        <GlobalSearchLauncher collapsed={false} sidebarWidth={0} />
+        {renderMobileSettingsButton()}
+      </div>
+    );
+  }
 
   return null;
 };

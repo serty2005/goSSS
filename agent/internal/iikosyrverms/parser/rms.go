@@ -4,11 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"io"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
-	"time"
 )
 
 func ExtractRMSURL(raw []byte) string {
@@ -48,47 +44,6 @@ func ExtractRMSURL(raw []byte) string {
 }
 
 func ParseConfigFiles(paths []string) (string, string, string) {
-	type configFile struct {
-		Path      string
-		UpdatedAt time.Time
-	}
-
-	files := make([]configFile, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Stat(filepath.Clean(path))
-		if err != nil || info.IsDir() {
-			continue
-		}
-		files = append(files, configFile{
-			Path:      filepath.Clean(path),
-			UpdatedAt: info.ModTime(),
-		})
-	}
-
-	if len(files) == 0 {
-		return "", "", "Известные каталоги найдены, но config.xml отсутствует"
-	}
-
-	slices.SortFunc(files, func(a, b configFile) int {
-		switch {
-		case a.UpdatedAt.After(b.UpdatedAt):
-			return -1
-		case a.UpdatedAt.Before(b.UpdatedAt):
-			return 1
-		default:
-			return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
-		}
-	})
-
-	for _, file := range files {
-		raw, err := os.ReadFile(file.Path)
-		if err != nil {
-			continue
-		}
-		if url := ExtractRMSURL(raw); url != "" {
-			return url, file.Path, "RMS URL успешно извлечён из config.xml"
-		}
-	}
-
-	return "", "", "config.xml найден, но поле serverUrl отсутствует или пустое"
+	snapshot, reason := ReadConfigFiles(paths)
+	return snapshot.ServerURL, snapshot.SourceFile, reason
 }

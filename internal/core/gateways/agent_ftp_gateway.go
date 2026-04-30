@@ -89,6 +89,10 @@ func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
 	ticker := time.NewTicker(g.cfg.AgentFTPInterval)
 	defer ticker.Stop()
 
+	if ctx.Err() == nil {
+		g.reconcileActualAgentObservations(ctx)
+	}
+
 	// Запускаем первый раз сразу, но проверяем контекст перед этим
 	if ctx.Err() == nil {
 		g.logger.Debug("Выполняем первый цикл сверки сразу после запуска")
@@ -105,6 +109,43 @@ func (g *agentFTPGatewayImpl) Start(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (g *agentFTPGatewayImpl) reconcileActualAgentObservations(ctx context.Context) {
+	startedAt := time.Now()
+	g.logger.Info("Запуск стартовой сверки актуальных наблюдений агентов")
+
+	result, err := g.obsSvc.ReconcileActualAgentObservations(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			g.logger.Info("Стартовая сверка наблюдений агентов прервана из-за остановки приложения")
+			return
+		}
+		g.logger.Error("Стартовая сверка наблюдений агентов завершилась ошибкой", "error", err)
+		return
+	}
+
+	if result == nil {
+		g.logger.Info("Стартовая сверка наблюдений агентов завершена без результата", "duration", time.Since(startedAt))
+		return
+	}
+
+	g.logger.Info("Стартовая сверка наблюдений агентов завершена",
+		"duration", time.Since(startedAt),
+		"agents_checked", result.AgentsChecked,
+		"agent_uuid_backfilled", result.AgentUUIDBackfilled,
+		"observations_superseded", result.ObservationsSuperseded,
+		"errors", result.Errors,
+		"candidates_total", result.CandidateRecalculation.CandidatesTotal,
+		"candidate_observations_total", result.CandidateRecalculation.ObservationsTotal,
+		"candidates_reprocessed", result.CandidateRecalculation.Reprocessed,
+		"candidates_applied", result.CandidateRecalculation.Applied,
+		"candidates_staged", result.CandidateRecalculation.Staged,
+		"candidates_ignored", result.CandidateRecalculation.Ignored,
+		"candidates_ignored_stale", result.CandidateRecalculation.IgnoredStale,
+		"candidate_errors", result.CandidateRecalculation.Errors,
+		"candidates_closed", result.CandidateRecalculation.CandidatesClosed,
+	)
 }
 
 // isFileNameNumeric проверяет, состоит ли имя файла только из цифр (без расширения).

@@ -777,6 +777,7 @@ const UsersAdminPage: React.FC = () => {
     deleteMutation,
     isBitrixEnabled,
     isPyrusEnabled,
+    openEditModal,
     statusMutation,
   ]);
 
@@ -801,6 +802,7 @@ const UsersAdminPage: React.FC = () => {
           columns={columns}
           dataSource={users}
           pagination={false}
+          scroll={{ x: 'max-content' }}
         />
       </Card>
 

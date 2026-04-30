@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
       // Разрешаем доступ из контейнера Playwright (MCP)
       allowedHosts: ['host.docker.internal', 'localhost', '127.0.0.1'],
       // Явно задаем порт
-      port: 5173,
+      port: 5178,
       // Если порт занят, Vite выйдет с ошибкой, а не будет искать следующий
       strictPort: true,
       proxy: {

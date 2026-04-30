@@ -389,12 +389,11 @@ func TestTelephonyServiceBindCallToTicketAllowsDifferentContactForSameTicket(t *
 	require.NoError(t, err)
 	require.NotNil(t, updatedTicket)
 	require.NotNil(t, updatedTicket.ContactID)
-	require.Equal(t, firstContactID, *updatedTicket.ContactID)
-
 	secondContact, err := env.telephonyRepo.GetContactByPhone(ctx, secondPhone)
 	require.NoError(t, err)
 	require.NotNil(t, secondContact)
 	require.NotEqual(t, firstContactID, secondContact.ID)
+	require.Equal(t, secondContact.ID, *updatedTicket.ContactID)
 
 	callLinks, err := env.telephonyRepo.ListCallTicketLinks(ctx, []string{"call-multi-contact-2"})
 	require.NoError(t, err)

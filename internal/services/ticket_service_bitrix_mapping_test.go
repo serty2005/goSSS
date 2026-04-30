@@ -320,19 +320,19 @@ func TestChangeCompany_SavesBitrixCompanyServicePointMapping(t *testing.T) {
 		t.Fatalf("ChangeCompany вернул ошибку: %v", err)
 	}
 
-	mapping, err := bitrixRepo.GetCompanyServicePointMappingByPointID(context.Background(), pointID)
+	newMapping, err := bitrixRepo.GetCompanyServicePointMappingByCompanyID(context.Background(), company2.ID)
 	if err != nil {
-		t.Fatalf("не удалось получить mapping по точке: %v", err)
+		t.Fatalf("не удалось получить mapping по новой компании: %v", err)
 	}
-	if mapping == nil || mapping.CompanyID != company2.ID {
-		t.Fatalf("ожидали mapping точки %d на company2, получили %+v", pointID, mapping)
+	if newMapping == nil || newMapping.BitrixServicePointID != pointID {
+		t.Fatalf("ожидали mapping company2 на точку %d, получили %+v", pointID, newMapping)
 	}
 	oldMapping, err := bitrixRepo.GetCompanyServicePointMappingByCompanyID(context.Background(), company1.ID)
 	if err != nil {
 		t.Fatalf("не удалось получить mapping по старой компании: %v", err)
 	}
-	if oldMapping != nil {
-		t.Fatalf("ожидали удаление mapping для старой компании, получили %+v", oldMapping)
+	if oldMapping == nil || oldMapping.BitrixServicePointID != pointID {
+		t.Fatalf("ожидали сохранение mapping старой компании на точку %d, получили %+v", pointID, oldMapping)
 	}
 }
 

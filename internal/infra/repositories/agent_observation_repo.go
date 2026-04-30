@@ -87,6 +87,14 @@ type CandidateRecalculationResult struct {
 	CandidatesClosed  int
 }
 
+type ActualObservationReconciliationResult struct {
+	AgentsChecked          int
+	AgentUUIDBackfilled    int
+	ObservationsSuperseded int
+	Errors                 int
+	CandidateRecalculation CandidateRecalculationResult
+}
+
 type AgentObservationService interface {
 	// ApplyObservation обрабатывает данные, полученные от агента мониторинга.
 	// Выполняет поиск существующих сущностей, создание/обновление Workstation и FiscalRegister,
@@ -98,6 +106,7 @@ type AgentObservationService interface {
 	ApproveCandidate(ctx context.Context, in CandidateApproveInput) (*models.Candidate, error)
 	RejectCandidate(ctx context.Context, in CandidateRejectInput) (*models.Candidate, error)
 	RecalculateCandidates(ctx context.Context) (*CandidateRecalculationResult, error)
+	ReconcileActualAgentObservations(ctx context.Context) (*ActualObservationReconciliationResult, error)
 }
 
 // agentObservationRepo реализует логику обработки наблюдений от агентов.
@@ -256,6 +265,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 	observedAt := parseObservedAt(data.CurrentTime)
 	normalizedRMS := normalizeRMS(data.URLRms)
 	serverKey := buildServerKey(normalizedRMS)
+	agentUUID := resolveObservationAgentUUID(source, data)
 	hash, payloadJSON, err := payloadDigest(data)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка вычисления хеша payload: %w", err)
@@ -273,13 +283,15 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Создание записи наблюдения с идемпотентностью по payload_hash
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.AgentObservation{
-			Source:      source,
-			ObservedAt:  observedAt,
-			ServerKey:   strPtr(serverKey),
-			ServerCRMID: strPtr(strings.TrimSpace(data.CRMID)),
-			PayloadJSON: payloadJSON,
-			PayloadHash: hash,
-			Status:      models.AgentObservationStatusProcessing,
+			ObservationUID: uuid.NewString(),
+			Source:         source,
+			AgentUUID:      strPtr(agentUUID),
+			ObservedAt:     observedAt,
+			ServerKey:      strPtr(serverKey),
+			ServerCRMID:    strPtr(strings.TrimSpace(data.CRMID)),
+			PayloadJSON:    payloadJSON,
+			PayloadHash:    hash,
+			Status:         models.AgentObservationStatusProcessing,
 		}).Error; err != nil {
 			return fmt.Errorf("ошибка создания наблюдения: %w", err)
 		}
@@ -299,8 +311,14 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		// Обогащаем логгер observation_id для последующих логов
 		log = log.With("observation_id", obs.ID)
 
+		if obs.Status == models.AgentObservationStatusProcessing {
+			if err := s.ensureObservationAgentMeta(tx, obs, agentUUID); err != nil {
+				return fmt.Errorf("ошибка подготовки метаданных наблюдения: %w", err)
+			}
+		}
+
 		// Проверка на повторную обработку (идемпотентность)
-		if obs.Status == models.AgentObservationStatusApplied || obs.Status == models.AgentObservationStatusStaged || obs.Status == models.AgentObservationStatusIgnored || obs.Status == models.AgentObservationStatusIgnoredStale {
+		if obs.Status == models.AgentObservationStatusApplied || obs.Status == models.AgentObservationStatusStaged || obs.Status == models.AgentObservationStatusSuperseded || obs.Status == models.AgentObservationStatusIgnored || obs.Status == models.AgentObservationStatusIgnoredStale {
 			s.logger.Debug("Повторное наблюдение пропущено",
 				"observation_id", obs.ID,
 				"status", obs.Status,
@@ -343,7 +361,7 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 		}
 
 		// Проверка на устаревшие данные от того же агента
-		staleByAgent, agentLastObservedAt, err := s.isStaleByAgentStream(tx, source, data, observedAt)
+		staleByAgent, agentLastObservedAt, err := s.isStaleByAgentStream(tx, obs.ID, source, data, observedAt)
 		if err != nil {
 			return fmt.Errorf("ошибка проверки устаревания: %w", err)
 		}
@@ -358,6 +376,9 @@ func (s *agentObservationRepo) ApplyObservation(ctx context.Context, source stri
 				"agent_last_observed_at", agentLastObservedAt.UTC().Format(time.RFC3339),
 			)
 			return tx.Save(obs).Error
+		}
+		if _, err := s.supersedeOlderStagedObservations(tx, obs, observedAt); err != nil {
+			return fmt.Errorf("ошибка supersede предыдущих staged-наблюдений: %w", err)
 		}
 		updater := resolveAgentUpdater(source, data)
 
@@ -711,6 +732,129 @@ func (s *agentObservationRepo) RecalculateCandidates(ctx context.Context) (*Cand
 	return result, nil
 }
 
+func (s *agentObservationRepo) ReconcileActualAgentObservations(ctx context.Context) (*ActualObservationReconciliationResult, error) {
+	result := &ActualObservationReconciliationResult{}
+
+	backfilled, backfillErrors, err := s.backfillObservationAgentUUIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result.AgentUUIDBackfilled = backfilled
+	result.Errors = backfillErrors
+
+	actualObservations, err := s.findLatestActualObservations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result.AgentsChecked = len(actualObservations)
+
+	for i := range actualObservations {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		actual := actualObservations[i]
+		supersededCount := 0
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			count, err := s.supersedeOlderStagedObservations(tx, &actual, actual.ObservedAt)
+			if err != nil {
+				return err
+			}
+			supersededCount = count
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		result.ObservationsSuperseded += supersededCount
+	}
+
+	recalculation, err := s.RecalculateCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if recalculation != nil {
+		result.CandidateRecalculation = *recalculation
+	}
+
+	return result, nil
+}
+
+func (s *agentObservationRepo) backfillObservationAgentUUIDs(ctx context.Context) (int, int, error) {
+	var observations []models.AgentObservation
+	if err := s.db.WithContext(ctx).
+		Select("id", "source", "payload_json").
+		Where("agent_uuid IS NULL OR trim(agent_uuid) = ''").
+		Find(&observations).Error; err != nil {
+		return 0, 0, err
+	}
+
+	updated := 0
+	errorsCount := 0
+	for i := range observations {
+		if err := ctx.Err(); err != nil {
+			return updated, errorsCount, err
+		}
+
+		observation := observations[i]
+		if len(observation.PayloadJSON) == 0 {
+			continue
+		}
+
+		var payload api.AgentDataDTO
+		if err := json.Unmarshal(observation.PayloadJSON, &payload); err != nil {
+			errorsCount++
+			s.logger.Error("Не удалось восстановить agent_uuid из payload наблюдения",
+				"observation_id", observation.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		agentUUID := resolveObservationAgentUUID(observation.Source, &payload)
+		if agentUUID == "" {
+			continue
+		}
+
+		if err := s.db.WithContext(ctx).
+			Model(&models.AgentObservation{}).
+			Where("id = ?", observation.ID).
+			Update("agent_uuid", agentUUID).Error; err != nil {
+			return updated, errorsCount, err
+		}
+		updated++
+	}
+
+	return updated, errorsCount, nil
+}
+
+func (s *agentObservationRepo) findLatestActualObservations(ctx context.Context) ([]models.AgentObservation, error) {
+	var observations []models.AgentObservation
+	if err := s.db.WithContext(ctx).
+		Select("id", "observation_uid", "agent_uuid", "observed_at").
+		Where("agent_uuid IS NOT NULL AND trim(agent_uuid) <> ''").
+		Where("status IN ?", []string{models.AgentObservationStatusApplied, models.AgentObservationStatusStaged}).
+		Order("agent_uuid asc, observed_at desc, id desc").
+		Find(&observations).Error; err != nil {
+		return nil, err
+	}
+
+	actual := make([]models.AgentObservation, 0, len(observations))
+	seenAgents := make(map[string]struct{}, len(observations))
+	for _, observation := range observations {
+		agentUUID := ptrValue(observation.AgentUUID)
+		if agentUUID == "" {
+			continue
+		}
+		if _, exists := seenAgents[agentUUID]; exists {
+			continue
+		}
+		seenAgents[agentUUID] = struct{}{}
+		actual = append(actual, observation)
+	}
+
+	return actual, nil
+}
+
 func (s *agentObservationRepo) closeEmptyCandidates(ctx context.Context, candidateIDs []uint) (int, error) {
 	if len(candidateIDs) == 0 {
 		return 0, nil
@@ -747,31 +891,30 @@ func (s *agentObservationRepo) closeEmptyCandidates(ctx context.Context, candida
 			}
 			return 0, err
 		}
-		if candidate.Status == models.CandidateStatusCancelled || candidate.Status == models.CandidateStatusApproved {
+		if candidate.Status == models.CandidateStatusCancelled || candidate.Status == models.CandidateStatusApproved || candidate.Status == models.CandidateStatusSuperseded {
 			continue
 		}
 
 		from := candidate.Status
-		reason := "РєР°РЅРґРёРґР°С‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°РєСЂС‹С‚ РїРѕСЃР»Рµ РїРµСЂРµСЃС‡РµС‚Р°"
+		reason := "Кандидат автоматически деактивирован после пересчёта"
 		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Model(&models.Candidate{}).
 				Where("id = ?", candidateID).
 				Updates(map[string]interface{}{
-					"status": models.CandidateStatusCancelled,
+					"status":              models.CandidateStatusSuperseded,
+					"deactivation_reason": models.SystemDeactivationReasonSupersededByObservation,
 				}).Error; err != nil {
 				return err
 			}
 			if err := tx.Create(&models.CandidateStatusHistory{
 				CandidateID: candidateID,
 				FromStatus:  strPtr(from),
-				ToStatus:    models.CandidateStatusCancelled,
+				ToStatus:    models.CandidateStatusSuperseded,
 				Reason:      &reason,
 			}).Error; err != nil {
 				return err
 			}
-			return tx.Model(&models.ReconciliationTask{}).
-				Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", candidateID), []string{"new", "pending_sd_action", "sd_error"}).
-				Updates(map[string]interface{}{"status": "resolved", "comment": reason}).Error
+			return s.closeCandidateTask(tx, candidateID, reason)
 		}); err != nil {
 			return 0, err
 		}
@@ -810,6 +953,8 @@ func (s *agentObservationRepo) RejectCandidate(ctx context.Context, in Candidate
 		switch out.Status {
 		case models.CandidateStatusApproved, models.CandidateStatusCancelled:
 			return fmt.Errorf("кандидат со статусом %s нельзя отклонить", out.Status)
+		case models.CandidateStatusSuperseded:
+			return fmt.Errorf("кандидат со статусом %s больше не актуален", out.Status)
 		case models.CandidateStatusRejected:
 			return nil
 		}
@@ -834,9 +979,7 @@ func (s *agentObservationRepo) RejectCandidate(ctx context.Context, in Candidate
 			return err
 		}
 
-		return tx.Model(&models.ReconciliationTask{}).
-			Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", out.ID), []string{"new", "pending_sd_action", "sd_error"}).
-			Updates(map[string]interface{}{"status": "resolved", "comment": "Кандидат отклонён"}).Error
+		return s.closeCandidateTask(tx, out.ID, "Кандидат отклонён")
 	})
 	if err != nil {
 		return nil, err
@@ -861,6 +1004,9 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		if !isManual {
 			if err := tx.Where("id = ?", in.CandidateID).First(&out).Error; err != nil {
 				return err
+			}
+			if out.Status == models.CandidateStatusSuperseded {
+				return fmt.Errorf("кандидат со статусом %s больше не актуален", out.Status)
 			}
 		}
 		companyID, err := s.ensureCompany(tx, in)
@@ -918,7 +1064,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		}
 
 		var staged []models.AgentObservation
-		if err := tx.Where("candidate_id = ?", out.ID).Order("observed_at asc").Find(&staged).Error; err != nil {
+		if err := tx.Where("candidate_id = ? AND status = ?", out.ID, models.AgentObservationStatusStaged).Order("observed_at asc, id asc").Find(&staged).Error; err != nil {
 			return err
 		}
 		s.logger.Info("Подтверждение кандидата: найдено staged-наблюдений",
@@ -1011,9 +1157,7 @@ func (s *agentObservationRepo) ApproveCandidate(ctx context.Context, in Candidat
 		if err := tx.Create(&models.CandidateStatusHistory{CandidateID: out.ID, FromStatus: strPtr(from), ToStatus: models.CandidateStatusApproved, Reason: &reason}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&models.ReconciliationTask{}).
-			Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", out.ID), []string{"new", "pending_sd_action", "sd_error"}).
-			Updates(map[string]interface{}{"status": "resolved", "comment": "Кандидат подтвержден"}).Error
+		return s.closeCandidateTask(tx, out.ID, "Кандидат подтвержден")
 	})
 	if err != nil {
 		return nil, err
@@ -1959,6 +2103,9 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 	crmID = strings.TrimSpace(crmID)
 	if crmID != "" {
 		if err := tx.Where("server_crm_id = ? AND status <> ?", crmID, models.CandidateStatusApproved).Order("id desc").First(&c).Error; err == nil {
+			if err := s.reactivateCandidateIfNeeded(tx, &c); err != nil {
+				return nil, err
+			}
 			if c.ExistingServerID == nil && existingServerID != nil {
 				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
 				c.ExistingServerID = existingServerID
@@ -1972,6 +2119,9 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 	}
 	if strings.TrimSpace(serverKey) != "" {
 		if err := tx.Where("server_key = ? AND status <> ?", serverKey, models.CandidateStatusApproved).Order("id desc").First(&c).Error; err == nil {
+			if err := s.reactivateCandidateIfNeeded(tx, &c); err != nil {
+				return nil, err
+			}
 			if c.ExistingServerID == nil && existingServerID != nil {
 				_ = tx.Model(&models.Candidate{}).Where("id = ?", c.ID).Update("existing_server_id", *existingServerID).Error
 				c.ExistingServerID = existingServerID
@@ -2004,6 +2154,263 @@ func (s *agentObservationRepo) findOrCreateCandidate(tx *gorm.DB, crmID, serverK
 		"existing_server_id", ptrValue(c.ExistingServerID),
 	)
 	return &c, nil
+}
+
+func (s *agentObservationRepo) ensureObservationAgentMeta(tx *gorm.DB, obs *models.AgentObservation, agentUUID string) error {
+	agentUUID = strings.TrimSpace(agentUUID)
+	if obs == nil || obs.ID == 0 {
+		return nil
+	}
+
+	updates := map[string]interface{}{}
+	if strings.TrimSpace(obs.ObservationUID) == "" {
+		obs.ObservationUID = uuid.NewString()
+		updates["observation_uid"] = obs.ObservationUID
+	}
+	if agentUUID != "" && strings.TrimSpace(ptrValue(obs.AgentUUID)) == "" {
+		obs.AgentUUID = strPtr(agentUUID)
+		updates["agent_uuid"] = agentUUID
+	}
+	if agentUUID == "" || obs.AgentStreamRev != nil {
+		if len(updates) == 0 {
+			return nil
+		}
+		return tx.Model(&models.AgentObservation{}).Where("id = ?", obs.ID).Updates(updates).Error
+	}
+
+	var last models.AgentObservation
+	err := tx.Model(&models.AgentObservation{}).
+		Select("agent_stream_rev").
+		Where("agent_uuid = ? AND id <> ? AND agent_stream_rev IS NOT NULL", agentUUID, obs.ID).
+		Order("agent_stream_rev desc, id desc").
+		First(&last).Error
+	switch {
+	case err == nil && last.AgentStreamRev != nil:
+		next := *last.AgentStreamRev + 1
+		obs.AgentStreamRev = &next
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		next := uint(1)
+		obs.AgentStreamRev = &next
+	case err != nil:
+		return err
+	}
+
+	if obs.AgentStreamRev != nil {
+		updates["agent_stream_rev"] = *obs.AgentStreamRev
+	}
+	return tx.Model(&models.AgentObservation{}).Where("id = ?", obs.ID).Updates(updates).Error
+}
+
+func (s *agentObservationRepo) supersedeOlderStagedObservations(tx *gorm.DB, current *models.AgentObservation, observedAt time.Time) (int, error) {
+	if current == nil {
+		return 0, nil
+	}
+	agentUUID := strings.TrimSpace(ptrValue(current.AgentUUID))
+	if agentUUID == "" {
+		return 0, nil
+	}
+
+	var outdated []models.AgentObservation
+	if err := tx.
+		Where("agent_uuid = ? AND status = ? AND id <> ?", agentUUID, models.AgentObservationStatusStaged, current.ID).
+		Where("(observed_at < ?) OR (observed_at = ? AND id < ?)", observedAt, observedAt, current.ID).
+		Order("observed_at asc, id asc").
+		Find(&outdated).Error; err != nil {
+		return 0, err
+	}
+
+	for i := range outdated {
+		if err := s.supersedeObservation(tx, &outdated[i], current); err != nil {
+			return 0, err
+		}
+	}
+	return len(outdated), nil
+}
+
+func (s *agentObservationRepo) supersedeObservation(tx *gorm.DB, outdated, actual *models.AgentObservation) error {
+	if outdated == nil || actual == nil {
+		return nil
+	}
+
+	observationRef := strings.TrimSpace(actual.ObservationUID)
+	if observationRef == "" {
+		observationRef = fmt.Sprintf("%d", actual.ID)
+	}
+	observationMessage := fmt.Sprintf("Наблюдение вытеснено более свежими данными агента: %s", observationRef)
+
+	if outdated.CandidateID != nil && *outdated.CandidateID > 0 {
+		candidateID := *outdated.CandidateID
+		if err := tx.Where("observation_id = ?", outdated.ID).Delete(&models.CandidateWorkstationStaging{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("observation_id = ?", outdated.ID).Delete(&models.CandidateFiscalStaging{}).Error; err != nil {
+			return err
+		}
+		if err := s.deactivateCandidateIfEmpty(tx, candidateID, actual); err != nil {
+			return err
+		}
+	}
+
+	candidateIDs, err := s.supersedeNetworkGroupsByObservation(tx, outdated.ID, actual)
+	if err != nil {
+		return err
+	}
+	for _, candidateID := range candidateIDs {
+		if err := s.deactivateNetworkCandidateIfEmpty(tx, candidateID, actual); err != nil {
+			return err
+		}
+	}
+
+	return tx.Model(&models.AgentObservation{}).
+		Where("id = ?", outdated.ID).
+		Updates(map[string]interface{}{
+			"status":               models.AgentObservationStatusSuperseded,
+			"error_text":           observationMessage,
+			"candidate_id":         nil,
+			"network_candidate_id": nil,
+			"workstation_id":       nil,
+			"fr_id":                nil,
+		}).Error
+}
+
+func (s *agentObservationRepo) supersedeNetworkGroupsByObservation(tx *gorm.DB, observationID uint, actual *models.AgentObservation) ([]uint, error) {
+	var groups []models.NetworkCandidateGroup
+	if err := tx.
+		Where("observation_id = ? AND status = ?", observationID, models.NetworkCandidateGroupStatusActive).
+		Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	if len(groups) == 0 {
+		return nil, nil
+	}
+
+	reasonCode := models.SystemDeactivationReasonSupersededByObservation
+	candidateIDs := make([]uint, 0, len(groups))
+	for _, group := range groups {
+		if err := tx.Model(&models.NetworkCandidateGroup{}).
+			Where("id = ?", group.ID).
+			Updates(map[string]interface{}{
+				"status":              models.NetworkCandidateGroupStatusSuperseded,
+				"deactivation_reason": reasonCode,
+			}).Error; err != nil {
+			return nil, err
+		}
+		candidateIDs = append(candidateIDs, group.CandidateID)
+	}
+	return candidateIDs, nil
+}
+
+func (s *agentObservationRepo) deactivateCandidateIfEmpty(tx *gorm.DB, candidateID uint, actual *models.AgentObservation) error {
+	var wsCount int64
+	if err := tx.Model(&models.CandidateWorkstationStaging{}).Where("candidate_id = ?", candidateID).Count(&wsCount).Error; err != nil {
+		return err
+	}
+	if wsCount > 0 {
+		return nil
+	}
+
+	var frCount int64
+	if err := tx.Model(&models.CandidateFiscalStaging{}).Where("candidate_id = ?", candidateID).Count(&frCount).Error; err != nil {
+		return err
+	}
+	if frCount > 0 {
+		return nil
+	}
+
+	var candidate models.Candidate
+	if err := tx.Where("id = ?", candidateID).First(&candidate).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if candidate.Status == models.CandidateStatusApproved || candidate.Status == models.CandidateStatusRejected || candidate.Status == models.CandidateStatusSuperseded {
+		return nil
+	}
+
+	reasonText := supersededEntityComment(actual)
+	from := candidate.Status
+	if err := tx.Model(&models.Candidate{}).Where("id = ?", candidateID).Updates(map[string]interface{}{
+		"status":              models.CandidateStatusSuperseded,
+		"deactivation_reason": models.SystemDeactivationReasonSupersededByObservation,
+	}).Error; err != nil {
+		return err
+	}
+	if err := tx.Create(&models.CandidateStatusHistory{
+		CandidateID: candidateID,
+		FromStatus:  strPtr(from),
+		ToStatus:    models.CandidateStatusSuperseded,
+		Reason:      strPtr(reasonText),
+	}).Error; err != nil {
+		return err
+	}
+	return s.closeCandidateTask(tx, candidateID, reasonText)
+}
+
+func (s *agentObservationRepo) closeCandidateTask(tx *gorm.DB, candidateID uint, comment string) error {
+	return tx.Model(&models.ReconciliationTask{}).
+		Where("task_type = ? AND entity_uuid = ? AND status IN ?", "candidate_connection", fmt.Sprintf("candidate:%d", candidateID), []string{"new", "pending_sd_action", "sd_error"}).
+		Updates(map[string]interface{}{"status": "resolved", "comment": comment}).Error
+}
+
+func (s *agentObservationRepo) reactivateCandidateIfNeeded(tx *gorm.DB, candidate *models.Candidate) error {
+	if candidate == nil {
+		return nil
+	}
+	if candidate.Status != models.CandidateStatusSuperseded {
+		return nil
+	}
+
+	reason := "Кандидат повторно активирован новым наблюдением агента"
+	if err := tx.Model(&models.Candidate{}).
+		Where("id = ?", candidate.ID).
+		Updates(map[string]interface{}{
+			"status":              models.CandidateStatusNew,
+			"deactivation_reason": nil,
+		}).Error; err != nil {
+		return err
+	}
+	if err := tx.Create(&models.CandidateStatusHistory{
+		CandidateID: candidate.ID,
+		FromStatus:  strPtr(models.CandidateStatusSuperseded),
+		ToStatus:    models.CandidateStatusNew,
+		Reason:      &reason,
+	}).Error; err != nil {
+		return err
+	}
+	candidate.Status = models.CandidateStatusNew
+	candidate.DeactivationReason = nil
+	return nil
+}
+
+func (s *agentObservationRepo) deactivateNetworkCandidateIfEmpty(tx *gorm.DB, candidateID uint, actual *models.AgentObservation) error {
+	var activeGroupCount int64
+	if err := tx.Model(&models.NetworkCandidateGroup{}).
+		Where("candidate_id = ? AND status = ?", candidateID, models.NetworkCandidateGroupStatusActive).
+		Count(&activeGroupCount).Error; err != nil {
+		return err
+	}
+	if activeGroupCount > 0 {
+		return nil
+	}
+
+	var candidate models.NetworkCandidate
+	if err := tx.Where("id = ?", candidateID).First(&candidate).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if candidate.Status == models.NetworkCandidateStatusApproved || candidate.Status == models.NetworkCandidateStatusRejected || candidate.Status == models.NetworkCandidateStatusSuperseded {
+		return nil
+	}
+
+	return tx.Model(&models.NetworkCandidate{}).
+		Where("id = ?", candidateID).
+		Updates(map[string]interface{}{
+			"status":              models.NetworkCandidateStatusSuperseded,
+			"deactivation_reason": models.SystemDeactivationReasonSupersededByObservation,
+		}).Error
 }
 
 // upsertAgent создает или обновляет запись agent_instance.
@@ -2346,107 +2753,23 @@ func (s *agentObservationRepo) stageNetworkCandidate(tx *gorm.DB, obs *models.Ag
 		)
 		return nil, errors.New("для network-кандидата не найден сервер или его владелец")
 	}
-
-	s.logger.Debug("Создание network-candidate для hub-сервера",
-		"observation_id", obs.ID,
-		"server_id", srv.ID,
-		"hub_company_id", ptrValue(srv.OwnerID),
-		"server_key", serverKey,
-	)
-	var candidate models.NetworkCandidate
-	err := tx.Where("hub_company_id = ? AND server_id = ? AND status IN ?", strings.TrimSpace(*srv.OwnerID), srv.ID, []string{models.NetworkCandidateStatusNew, models.NetworkCandidateStatusInReview}).
-		Order("id desc").
-		First(&candidate).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		candidate = models.NetworkCandidate{
-			Status:       models.NetworkCandidateStatusNew,
-			HubCompanyID: strings.TrimSpace(*srv.OwnerID),
-			ServerID:     srv.ID,
-			ServerKey:    strPtr(serverKey),
-			ServerCRMID:  strPtr(strings.TrimSpace(data.CRMID)),
-			ServerURL:    strPtr(normalizedRMS),
-		}
-		if err := tx.Create(&candidate).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	var group models.NetworkCandidateGroup
-	if err := tx.Where("candidate_id = ? AND observation_id = ?", candidate.ID, obs.ID).First(&group).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
-		group = models.NetworkCandidateGroup{
-			CandidateID:   candidate.ID,
-			ObservationID: obs.ID,
-			Status:        models.NetworkCandidateGroupStatusActive,
-		}
-		if err := tx.Create(&group).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	stageWorkstationID, err := s.resolveStageWorkstationID(tx, data)
+	candidate, err := s.findOrCreateNetworkCandidateForStage(tx, srv, data, normalizedRMS, serverKey, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	var wsCount int64
-	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
+	group, err := s.upsertNetworkCandidateGroup(tx, candidate.ID, obs, data, observedAt, normalizedRMS)
+	if err != nil {
 		return nil, err
 	}
-	if wsCount == 0 {
-		wsStage := models.NetworkCandidateWSStaging{
-			GroupID:         group.ID,
-			ObservedAt:      observedAt,
-			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
-			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
-			WorkstationUUID: stageWorkstationID,
-			TeamviewerID:    normRIDPtr(data.TeamviewerID),
-			LitemanagerID:   normRIDPtr(data.LitemanagerID),
-			RustdeskID:      normRIDPtr(data.RustdeskID),
-			AnydeskID:       normRIDPtr(data.AnydeskID),
-			URLRms:          strPtr(normalizedRMS),
-		}
-		if err := tx.Create(&wsStage).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
-		frStage := models.NetworkCandidateFRStaging{
-			GroupID:          group.ID,
-			ObservedAt:       observedAt,
-			SerialNumber:     strPtr(sn),
-			SerialNormalized: strPtr(normalizeSerial(sn)),
-			RNKKT:            strPtr(strings.TrimSpace(data.RNM)),
-			ModelName:        strPtr(strings.TrimSpace(data.ModelName)),
-			INN:              strPtr(strings.TrimSpace(data.INN)),
-			FNNumber:         strPtr(strings.TrimSpace(data.FNSerial)),
-			FNExpireDate:     parseDate(data.DateTimeEnd),
-			OrganizationName: strPtr(strings.TrimSpace(data.OrganizationName)),
-			Address:          strPtr(strings.TrimSpace(data.Address)),
-		}
-		if err := tx.Create(&frStage).Error; err != nil {
-			return nil, err
-		}
-		s.logger.Debug("Создана FR-staging запись для network-candidate",
-			"candidate_id", candidate.ID,
-			"group_id", group.ID,
-			"serial_number", sn,
-		)
-	}
-
 	s.logger.Info("Network-candidate создан/обновлен",
 		"candidate_id", candidate.ID,
 		"hub_company_id", ptrValue(srv.OwnerID),
 		"server_id", srv.ID,
+		"group_id", group.ID,
 		"observation_id", obs.ID,
 		"status", candidate.Status,
 	)
-	return &candidate, nil
+	return candidate, nil
 }
 
 // stageNetworkCandidateWithConflict создает network-кандидата с информацией о конфликте владельцев.
@@ -2513,9 +2836,30 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 		}
 		conflictInfoStr = strings.Join(parts, "; ")
 	}
+	candidate, err := s.findOrCreateNetworkCandidateForStage(tx, srv, data, normalizedRMS, serverKey, strPtr(conflictInfoStr), wsOwnerCandidate, frOwnerCandidate)
+	if err != nil {
+		return nil, err
+	}
+	group, err := s.upsertNetworkCandidateGroup(tx, candidate.ID, obs, data, observedAt, normalizedRMS)
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Info("Network-candidate с конфликтом создан/обновлен",
+		"candidate_id", candidate.ID,
+		"hub_company_id", ptrValue(srv.OwnerID),
+		"server_id", srv.ID,
+		"group_id", group.ID,
+		"observation_id", obs.ID,
+		"status", candidate.Status,
+		"ws_owner_candidate", ptrValue(wsOwnerCandidate),
+		"fr_owner_candidate", ptrValue(frOwnerCandidate),
+	)
+	return candidate, nil
+}
 
+func (s *agentObservationRepo) findOrCreateNetworkCandidateForStage(tx *gorm.DB, srv *server.Server, data *api.AgentDataDTO, normalizedRMS, serverKey string, conflictInfo, wsOwnerCandidate, frOwnerCandidate *string) (*models.NetworkCandidate, error) {
 	var candidate models.NetworkCandidate
-	err := tx.Where("hub_company_id = ? AND server_id = ? AND status IN ?", strings.TrimSpace(*srv.OwnerID), srv.ID, []string{models.NetworkCandidateStatusNew, models.NetworkCandidateStatusInReview}).
+	err := tx.Where("hub_company_id = ? AND server_id = ? AND status IN ?", strings.TrimSpace(*srv.OwnerID), srv.ID, []string{models.NetworkCandidateStatusNew, models.NetworkCandidateStatusInReview, models.NetworkCandidateStatusSuperseded}).
 		Order("id desc").
 		First(&candidate).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2523,75 +2867,126 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		candidate = models.NetworkCandidate{
-			Status:           models.NetworkCandidateStatusNew,
-			HubCompanyID:     strings.TrimSpace(*srv.OwnerID),
-			ServerID:         srv.ID,
-			ServerKey:        strPtr(serverKey),
-			ServerCRMID:      strPtr(strings.TrimSpace(data.CRMID)),
-			ServerURL:        strPtr(normalizedRMS),
-			ConflictInfo:     strPtr(conflictInfoStr),
-			WSOwnerCandidate: wsOwnerCandidate,
-			FROwnerCandidate: frOwnerCandidate,
+			Status:             models.NetworkCandidateStatusNew,
+			HubCompanyID:       strings.TrimSpace(*srv.OwnerID),
+			ServerID:           srv.ID,
+			ServerKey:          strPtr(serverKey),
+			ServerCRMID:        strPtr(strings.TrimSpace(data.CRMID)),
+			ServerURL:          strPtr(normalizedRMS),
+			DeactivationReason: nil,
+			ConflictInfo:       conflictInfo,
+			WSOwnerCandidate:   wsOwnerCandidate,
+			FROwnerCandidate:   frOwnerCandidate,
 		}
 		if err := tx.Create(&candidate).Error; err != nil {
 			return nil, err
 		}
-	} else {
-		// Обновляем информацию о конфликте в существующем кандидате
-		updates := map[string]interface{}{
-			"conflict_info":      valOrNil(strPtr(conflictInfoStr)),
-			"ws_owner_candidate": valOrNil(wsOwnerCandidate),
-			"fr_owner_candidate": valOrNil(frOwnerCandidate),
-		}
-		if err := tx.Model(&models.NetworkCandidate{}).Where("id = ?", candidate.ID).Updates(updates).Error; err != nil {
-			return nil, err
-		}
+		return &candidate, nil
 	}
 
+	updates := map[string]interface{}{
+		"server_key":         valOrNil(strPtr(serverKey)),
+		"server_crm_id":      valOrNil(strPtr(strings.TrimSpace(data.CRMID))),
+		"server_url":         valOrNil(strPtr(normalizedRMS)),
+		"conflict_info":      valOrNil(conflictInfo),
+		"ws_owner_candidate": valOrNil(wsOwnerCandidate),
+		"fr_owner_candidate": valOrNil(frOwnerCandidate),
+		"updated_at":         time.Now().UTC(),
+	}
+	if candidate.Status == models.NetworkCandidateStatusSuperseded {
+		updates["status"] = models.NetworkCandidateStatusNew
+		updates["deactivation_reason"] = nil
+		candidate.Status = models.NetworkCandidateStatusNew
+		candidate.DeactivationReason = nil
+	}
+	if err := tx.Model(&models.NetworkCandidate{}).Where("id = ?", candidate.ID).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	candidate.ServerKey = strPtr(serverKey)
+	candidate.ServerCRMID = strPtr(strings.TrimSpace(data.CRMID))
+	candidate.ServerURL = strPtr(normalizedRMS)
+	candidate.ConflictInfo = conflictInfo
+	candidate.WSOwnerCandidate = wsOwnerCandidate
+	candidate.FROwnerCandidate = frOwnerCandidate
+	return &candidate, nil
+}
+
+func (s *agentObservationRepo) upsertNetworkCandidateGroup(tx *gorm.DB, candidateID uint, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS string) (*models.NetworkCandidateGroup, error) {
+	agentUUID := strings.TrimSpace(ptrValue(obs.AgentUUID))
 	var group models.NetworkCandidateGroup
-	if err := tx.Where("candidate_id = ? AND observation_id = ?", candidate.ID, obs.ID).First(&group).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+	err := tx.Table("network_candidate_groups AS g").
+		Select("g.*").
+		Joins("LEFT JOIN network_candidate_ws_stagings ws ON ws.group_id = g.id").
+		Where("g.candidate_id = ? AND ws.agent_uuid = ? AND g.status IN ?", candidateID, agentUUID, []string{models.NetworkCandidateGroupStatusActive, models.NetworkCandidateGroupStatusSuperseded}).
+		Order("g.updated_at desc, g.id desc").
+		First(&group).Error
+	switch {
+	case err == nil:
+		if err := tx.Model(&models.NetworkCandidateGroup{}).
+			Where("id = ?", group.ID).
+			Updates(map[string]interface{}{
+				"candidate_id":        candidateID,
+				"observation_id":      obs.ID,
+				"status":              models.NetworkCandidateGroupStatusActive,
+				"deactivation_reason": nil,
+				"updated_at":          time.Now().UTC(),
+			}).Error; err != nil {
 			return nil, err
 		}
+		group.CandidateID = candidateID
+		group.ObservationID = obs.ID
+		group.Status = models.NetworkCandidateGroupStatusActive
+		group.DeactivationReason = nil
+	case errors.Is(err, gorm.ErrRecordNotFound):
 		group = models.NetworkCandidateGroup{
-			CandidateID:   candidate.ID,
+			CandidateID:   candidateID,
 			ObservationID: obs.ID,
 			Status:        models.NetworkCandidateGroupStatusActive,
 		}
 		if err := tx.Create(&group).Error; err != nil {
 			return nil, err
 		}
+	case err != nil:
+		return nil, err
+	}
+
+	if err := s.refreshNetworkCandidateGroupStages(tx, group.ID, obs, data, observedAt, normalizedRMS); err != nil {
+		return nil, err
+	}
+	return &group, nil
+}
+
+func (s *agentObservationRepo) refreshNetworkCandidateGroupStages(tx *gorm.DB, groupID uint, obs *models.AgentObservation, data *api.AgentDataDTO, observedAt time.Time, normalizedRMS string) error {
+	if err := tx.Where("group_id = ?", groupID).Delete(&models.NetworkCandidateWSStaging{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("group_id = ?", groupID).Delete(&models.NetworkCandidateFRStaging{}).Error; err != nil {
+		return err
 	}
 
 	stageWorkstationID, err := s.resolveStageWorkstationID(tx, data)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var wsCount int64
-	if err := tx.Model(&models.NetworkCandidateWSStaging{}).Where("group_id = ?", group.ID).Count(&wsCount).Error; err != nil {
-		return nil, err
+	wsStage := models.NetworkCandidateWSStaging{
+		GroupID:         groupID,
+		ObservedAt:      observedAt,
+		Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
+		AgentUUID:       strPtr(strings.TrimSpace(ptrValue(obs.AgentUUID))),
+		WorkstationUUID: stageWorkstationID,
+		TeamviewerID:    normRIDPtr(data.TeamviewerID),
+		LitemanagerID:   normRIDPtr(data.LitemanagerID),
+		RustdeskID:      normRIDPtr(data.RustdeskID),
+		AnydeskID:       normRIDPtr(data.AnydeskID),
+		URLRms:          strPtr(normalizedRMS),
 	}
-	if wsCount == 0 {
-		wsStage := models.NetworkCandidateWSStaging{
-			GroupID:         group.ID,
-			ObservedAt:      observedAt,
-			Hostname:        strPtr(strings.TrimSpace(data.Hostname)),
-			AgentUUID:       strPtr(strings.TrimSpace(data.AgentUUID)),
-			WorkstationUUID: stageWorkstationID,
-			TeamviewerID:    normRIDPtr(data.TeamviewerID),
-			LitemanagerID:   normRIDPtr(data.LitemanagerID),
-			RustdeskID:      normRIDPtr(data.RustdeskID),
-			AnydeskID:       normRIDPtr(data.AnydeskID),
-			URLRms:          strPtr(normalizedRMS),
-		}
-		if err := tx.Create(&wsStage).Error; err != nil {
-			return nil, err
-		}
+	if err := tx.Create(&wsStage).Error; err != nil {
+		return err
 	}
 
 	if sn := strings.TrimSpace(data.SerialNumber); sn != "" {
 		frStage := models.NetworkCandidateFRStaging{
-			GroupID:          group.ID,
+			GroupID:          groupID,
 			ObservedAt:       observedAt,
 			SerialNumber:     strPtr(sn),
 			SerialNormalized: strPtr(normalizeSerial(sn)),
@@ -2604,51 +2999,56 @@ func (s *agentObservationRepo) stageNetworkCandidateWithConflict(tx *gorm.DB, ob
 			Address:          strPtr(strings.TrimSpace(data.Address)),
 		}
 		if err := tx.Create(&frStage).Error; err != nil {
-			return nil, err
+			return err
 		}
-		s.logger.Debug("Создана FR-staging запись для network-candidate с конфликтом",
-			"candidate_id", candidate.ID,
-			"group_id", group.ID,
-			"serial_number", sn,
-		)
 	}
-
-	s.logger.Info("Network-candidate с конфликтом создан/обновлен",
-		"candidate_id", candidate.ID,
-		"hub_company_id", ptrValue(srv.OwnerID),
-		"server_id", srv.ID,
-		"observation_id", obs.ID,
-		"status", candidate.Status,
-		"ws_owner_candidate", ptrValue(wsOwnerCandidate),
-		"fr_owner_candidate", ptrValue(frOwnerCandidate),
-	)
-	return &candidate, nil
+	return nil
 }
 
 // isStaleByAgentStream проверяет, являются ли данные устаревшими по сравнению
 // с последним наблюдением от того же агента.
 // Используется для защиты от обработки старых данных при восстановлении связи.
 // Возвращает (true, lastObservedAt) если observedAt < lastObservedAt.
-func (s *agentObservationRepo) isStaleByAgentStream(tx *gorm.DB, source string, data *api.AgentDataDTO, observedAt time.Time) (bool, time.Time, error) {
-	agentUUID := strings.TrimSpace(data.AgentUUID)
-	if agentUUID == "" && isUUID(source) {
-		agentUUID = strings.TrimSpace(source)
-	}
+func (s *agentObservationRepo) isStaleByAgentStream(tx *gorm.DB, currentObservationID uint, source string, data *api.AgentDataDTO, observedAt time.Time) (bool, time.Time, error) {
+	agentUUID := resolveObservationAgentUUID(source, data)
 	if agentUUID == "" {
 		return false, time.Time{}, nil
 	}
+
+	var lastObservedAt time.Time
+	var lastObservation models.AgentObservation
+	if err := tx.Model(&models.AgentObservation{}).
+		Select("observed_at").
+		Where("agent_uuid = ? AND id <> ?", agentUUID, currentObservationID).
+		Order("observed_at desc, id desc").
+		First(&lastObservation).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, time.Time{}, err
+		}
+	} else if !lastObservation.ObservedAt.IsZero() {
+		lastObservedAt = lastObservation.ObservedAt.UTC()
+	}
+
 	var agent models.Agent
 	if err := tx.Where("uuid = ?", agentUUID).First(&agent).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, time.Time{}, nil
+			if lastObservedAt.IsZero() {
+				return false, time.Time{}, nil
+			}
+			return observedAt.Before(lastObservedAt), lastObservedAt, nil
 		}
 		return false, time.Time{}, err
 	}
-	if agent.LastObservedAt == nil {
+	if agent.LastObservedAt != nil {
+		agentObservedAt := agent.LastObservedAt.UTC()
+		if lastObservedAt.IsZero() || agentObservedAt.After(lastObservedAt) {
+			lastObservedAt = agentObservedAt
+		}
+	}
+	if lastObservedAt.IsZero() {
 		return false, time.Time{}, nil
 	}
-	last := agent.LastObservedAt.UTC()
-	return observedAt.Before(last), last, nil
+	return observedAt.Before(lastObservedAt), lastObservedAt, nil
 }
 
 // parseObservedAt парсит время наблюдения из строки агента.
@@ -2909,6 +3309,30 @@ func resolveAgentUpdater(source string, data *api.AgentDataDTO) string {
 		return src
 	}
 	return "agent"
+}
+
+func resolveObservationAgentUUID(source string, data *api.AgentDataDTO) string {
+	if data != nil {
+		if agentUUID := strings.TrimSpace(data.AgentUUID); agentUUID != "" {
+			return agentUUID
+		}
+	}
+	source = strings.TrimSpace(source)
+	if isUUID(source) {
+		return source
+	}
+	return ""
+}
+
+func supersededEntityComment(actual *models.AgentObservation) string {
+	if actual == nil {
+		return "Сущность деактивирована более свежим наблюдением агента"
+	}
+	ref := strings.TrimSpace(actual.ObservationUID)
+	if ref == "" {
+		ref = fmt.Sprintf("%d", actual.ID)
+	}
+	return fmt.Sprintf("Сущность деактивирована более свежим наблюдением агента: %s", ref)
 }
 
 func isUUID(v string) bool {

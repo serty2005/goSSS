@@ -27,6 +27,10 @@ const (
 	// Используется, когда сервер не найден и требуется ручное подтверждение.
 	AgentObservationStatusStaged = "STAGED"
 
+	// AgentObservationStatusSuperseded — наблюдение вытеснено более свежими данными того же агента.
+	// Используется для staged-наблюдений, которые больше не считаются актуальными.
+	AgentObservationStatusSuperseded = "SUPERSEDED"
+
 	// AgentObservationStatusIgnored — наблюдение отклонено.
 	// Причина: локальный IP-адрес, отсутствие полезных данных или другие критерии фильтрации.
 	AgentObservationStatusIgnored = "IGNORED"
@@ -62,6 +66,16 @@ const (
 	// CandidateStatusCancelled — кандидат отменён.
 	// Автоматическая отмена при обнаружении дубликата или других условиях.
 	CandidateStatusCancelled = "CANCELLED"
+
+	// CandidateStatusSuperseded — кандидат деактивирован более свежим наблюдением того же агента.
+	// Используется для системного закрытия неактуальных staging-кандидатов.
+	CandidateStatusSuperseded = "SUPERSEDED"
+)
+
+// Константы системных причин деактивации.
+// Используются при автоматическом переводе кандидатов и групп в неактуальное состояние.
+const (
+	SystemDeactivationReasonSupersededByObservation = "superseded_by_new_observation"
 )
 
 // ===========================================================================
@@ -100,10 +114,22 @@ type AgentObservation struct {
 	// Генерируется автоматически при создании.
 	ID uint `gorm:"primaryKey" json:"id"`
 
+	// ObservationUID — публичный стабильный идентификатор наблюдения.
+	// Используется во внешних API вместо технического PK.
+	ObservationUID string `gorm:"type:text;uniqueIndex" json:"observation_uid"`
+
 	// Source — источник данных.
 	// Формат: имя файла (например, "12345.json") или UUID агента для HTTP API.
 	// Используется для трассировки и логирования.
 	Source string `gorm:"type:text;index" json:"source"`
+
+	// AgentUUID — идентификатор агента, отправившего наблюдение.
+	// Используется для выбора актуального состояния внутри потока одного агента.
+	AgentUUID *string `gorm:"type:text;index" json:"agent_uuid"`
+
+	// AgentStreamRev — порядковая ревизия наблюдения внутри потока одного агента.
+	// Используется для стабильного упорядочивания наблюдений с одинаковым ObservedAt.
+	AgentStreamRev *uint `gorm:"index" json:"agent_stream_rev"`
 
 	// ObservedAt — время наблюдения на агенте.
 	// Источник: поле current_time из AgentDataDTO.
@@ -214,9 +240,13 @@ type Candidate struct {
 	ServerURL *string `gorm:"type:text" json:"server_url"`
 
 	// Status — текущий статус кандидата.
-	// Возможные значения: NEW, IN_REVIEW, APPROVED, REJECTED, CANCELLED.
+	// Возможные значения: NEW, IN_REVIEW, APPROVED, REJECTED, CANCELLED, SUPERSEDED.
 	// Индекс используется для фильтрации кандидатов по статусу.
 	Status string `gorm:"type:varchar(32);index" json:"status"`
+
+	// DeactivationReason — системная причина деактивации кандидата.
+	// Заполняется для автоматически закрытых кандидатов.
+	DeactivationReason *string `gorm:"type:text" json:"deactivation_reason"`
 
 	// TicketID — идентификатор заявки в ServiceDesk.
 	// Заполняется при создании заявки для согласования кандидата.

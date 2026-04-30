@@ -76,7 +76,7 @@ const LoginPage: React.FC = () => {
   return (
     <Layout style={{ minHeight: '100vh', justifyContent: 'center', alignItems: 'center' }}>
       <Card
-        style={{ width: 400, boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}
+        style={{ width: 400, maxWidth: 'calc(100vw - 32px)', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}
         className="glass-panel"
         bordered={false}
       >

@@ -1,13 +1,66 @@
 package gateways
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"etalon-server/internal/domain/models"
+	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
+	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 
+	"github.com/jlaffaye/ftp"
 	"github.com/stretchr/testify/assert"
 )
+
+type startupObservationServiceStub struct {
+	reconcileCalls int
+	onReconcile    func()
+}
+
+func (s *startupObservationServiceStub) ApplyObservation(context.Context, string, *api.AgentDataDTO) (*models.AgentObservation, error) {
+	return &models.AgentObservation{}, nil
+}
+
+func (s *startupObservationServiceStub) ApproveCandidate(context.Context, services.CandidateApproveInput) (*models.Candidate, error) {
+	return nil, nil
+}
+
+func (s *startupObservationServiceStub) RejectCandidate(context.Context, services.CandidateRejectInput) (*models.Candidate, error) {
+	return nil, nil
+}
+
+func (s *startupObservationServiceStub) RecalculateCandidates(context.Context) (*services.CandidateRecalculationResult, error) {
+	return &services.CandidateRecalculationResult{}, nil
+}
+
+func (s *startupObservationServiceStub) ReconcileActualAgentObservations(context.Context) (*services.ActualObservationReconciliationResult, error) {
+	s.reconcileCalls++
+	if s.onReconcile != nil {
+		s.onReconcile()
+	}
+	return &services.ActualObservationReconciliationResult{}, nil
+}
+
+type startupFTPClientStub struct{}
+
+func (startupFTPClientStub) ListFiles(string) ([]*ftp.Entry, error) {
+	return nil, nil
+}
+
+func (startupFTPClientStub) DownloadFile(string) ([]byte, error) {
+	return nil, nil
+}
+
+func (startupFTPClientStub) GetModTime(string) (time.Time, error) {
+	return time.Time{}, nil
+}
+
+func (startupFTPClientStub) IsTimePreciseInList() bool {
+	return true
+}
 
 func TestIsFileNameNumeric(t *testing.T) {
 	tests := []struct {
@@ -213,4 +266,26 @@ func TestComputePayloadHashDeterminism(t *testing.T) {
 	differentHash := computePayloadHash(differentData)
 
 	assert.NotEqual(t, hash1, differentHash, "разные данные должны давать разный хеш")
+}
+
+func TestAgentFTPGatewayStart_ВыполняетСверкуАктуальныхНаблюденийДоПервогоЦикла(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	obsSvc := &startupObservationServiceStub{
+		onReconcile: cancel,
+	}
+	gateway := NewAgentFTPGateway(
+		&config.Config{
+			AgentFTPInterval: time.Hour,
+		},
+		logger.New("", "test", "error", true),
+		nil,
+		startupFTPClientStub{},
+		obsSvc,
+	)
+
+	gateway.Start(ctx)
+
+	assert.Equal(t, 1, obsSvc.reconcileCalls)
 }

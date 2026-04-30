@@ -162,6 +162,7 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 	if err != nil {
 		return 0, err
 	}
+	contactID := bitrixDealContactIDFromFields(fields)
 
 	if s.repo != nil {
 		link, linkErr := s.repo.GetDealLinkByTicketID(ctx, ticket.ID)
@@ -170,7 +171,19 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		}
 		if link != nil && link.B24DealID > 0 {
 			dealID := link.B24DealID
+			var currentDeal *b24.Deal
+			if ticket.Status == tickets.StatusToManager {
+				deal, dealErr := s.client.DealGet(ctx, dealID)
+				if dealErr != nil {
+					return 0, dealErr
+				}
+				currentDeal = deal
+			}
+			prepareDealFieldsForExistingDeal(fields, ticket, currentDeal, s.cfg.BitrixCategoryID)
 			if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
+				return 0, err
+			}
+			if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
 				return 0, err
 			}
 			s.setDealSuppress(ctx, dealID)
@@ -199,9 +212,16 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		if err != nil {
 			return 0, err
 		}
+		if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
+			return 0, err
+		}
 	} else {
 		dealID = deals[0].ID
+		prepareDealFieldsForExistingDeal(fields, ticket, &deals[0], s.cfg.BitrixCategoryID)
 		if err := s.client.DealUpdate(ctx, dealID, fields); err != nil {
+			return 0, err
+		}
+		if err := s.syncDealContactBinding(ctx, dealID, contactID); err != nil {
 			return 0, err
 		}
 	}
@@ -218,6 +238,57 @@ func (s *bitrixSyncService) upsertDealAndLink(ctx context.Context, ticket *ticke
 		return 0, err
 	}
 	return dealID, nil
+}
+
+func bitrixDealContactIDFromFields(fields map[string]interface{}) int64 {
+	if fields == nil {
+		return 0
+	}
+	switch value := fields["CONTACT_ID"].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (s *bitrixSyncService) syncDealContactBinding(ctx context.Context, dealID int64, contactID int64) error {
+	if s == nil || s.client == nil || dealID <= 0 || contactID <= 0 {
+		return nil
+	}
+
+	current, err := s.client.DealContactItemsGet(ctx, dealID)
+	if err != nil {
+		return err
+	}
+
+	items := make([]b24.DealContactBinding, 0, len(current)+1)
+	items = append(items, b24.DealContactBinding{
+		ContactID: contactID,
+		IsPrimary: true,
+		Sort:      10,
+	})
+	sortValue := 20
+	for _, item := range current {
+		if item.ContactID <= 0 || item.ContactID == contactID {
+			continue
+		}
+		items = append(items, b24.DealContactBinding{
+			ContactID: item.ContactID,
+			IsPrimary: false,
+			Sort:      sortValue,
+		})
+		sortValue += 10
+	}
+
+	return s.client.DealContactItemsSet(ctx, dealID, items)
 }
 
 func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error {
@@ -577,19 +648,22 @@ func (s *bitrixSyncService) pullCommentsForDeal(ctx context.Context, ticket *tic
 
 func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets.Ticket) (map[string]interface{}, error) {
 	stageCode := mapTicketStatusToStage(ticket.Status)
+	categoryID := s.cfg.BitrixCategoryID
+	stageID := fmt.Sprintf("C%d:%s", categoryID, stageCode)
 	connections := s.buildDealConnections(ctx, ticket)
 	fields := map[string]interface{}{
-		"CATEGORY_ID":          s.cfg.BitrixCategoryID,
+		"CATEGORY_ID":          categoryID,
 		"ORIGINATOR_ID":        s.cfg.BitrixOriginatorID,
 		"ORIGIN_ID":            ticket.ID,
-		"STAGE_ID":             "C17:" + stageCode,
+		"STAGE_ID":             stageID,
 		bitrixDescriptionField: "",
-		"COMMENTS":             s.buildDealComment(ticket),
+		"COMMENTS":             stripEmojiForBitrix(s.buildDealComment(ticket)),
 		bitrixConnectionsField: connections,
 		bitrixTypeField:        mapTicketTypeToBitrixID(ticket.Type),
 		bitrixPointField:       ticket.BitrixServicePointID,
 	}
 
+	fields["CONTACT_ID"] = 0
 	if ticket.ContactID != nil && *ticket.ContactID > 0 && s.telephonyRepo != nil {
 		contact, err := s.telephonyRepo.GetContactByID(ctx, *ticket.ContactID)
 		if err != nil {
@@ -630,6 +704,19 @@ func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets
 		}
 	}
 	return fields, nil
+}
+
+func prepareDealFieldsForExistingDeal(fields map[string]interface{}, ticket *tickets.Ticket, deal *b24.Deal, baseCategoryID int) {
+	if fields == nil || ticket == nil {
+		return
+	}
+	if ticket.Status != tickets.StatusToManager {
+		return
+	}
+	delete(fields, "CATEGORY_ID")
+	if deal != nil && deal.CategoryID > 0 && deal.CategoryID != baseCategoryID {
+		delete(fields, "STAGE_ID")
+	}
 }
 
 func (s *bitrixSyncService) buildDealConnections(ctx context.Context, ticket *tickets.Ticket) []string {
@@ -844,7 +931,7 @@ func (s *bitrixSyncService) buildCommentBody(ctx context.Context, _ string, comm
 		}
 		return bitrixUserID, true
 	})
-	return s.withBitrixAuthorMention(commentBody, authorID, authorName)
+	return stripEmojiForBitrix(s.withBitrixAuthorMention(commentBody, authorID, authorName))
 }
 
 func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string {
@@ -859,7 +946,7 @@ func (s *bitrixSyncService) buildDealDescription(ticket *tickets.Ticket) string 
 		return bitrixUserID, true
 	})
 	body = stripBitrixServiceDescriptionPrefix(body, ticket.ID)
-	return body
+	return stripEmojiForBitrix(body)
 }
 
 func (s *bitrixSyncService) buildDealComment(ticket *tickets.Ticket) string {
@@ -1620,7 +1707,9 @@ func mapTicketStatusToStage(status string) string {
 
 func mapStageToTicketStatus(stageID string) string {
 	stage := strings.TrimSpace(strings.ToUpper(stageID))
-	stage = strings.TrimPrefix(stage, "C17:")
+	if _, rest, ok := strings.Cut(stage, ":"); ok {
+		stage = rest
+	}
 	switch stage {
 	case "NEW":
 		return tickets.StatusNew
@@ -1682,6 +1771,35 @@ func toPlainText(v string) string {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func stripEmojiForBitrix(value string) string {
+	if value == "" {
+		return ""
+	}
+	out := make([]rune, 0, len(value))
+	for _, r := range value {
+		if isEmojiRune(r) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
+func isEmojiRune(r rune) bool {
+	switch {
+	case r >= 0x1F000 && r <= 0x1FAFF:
+		return true
+	case r >= 0x2600 && r <= 0x27BF:
+		return true
+	case r >= 0xFE00 && r <= 0xFE0F:
+		return true
+	case r == 0x200D:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizePersonToken(v string) string {

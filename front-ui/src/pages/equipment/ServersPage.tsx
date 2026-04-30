@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Button, Card, Empty, Space, Spin, Table, Typography } from 'antd';
@@ -101,7 +101,7 @@ const ServersPage: React.FC = () => {
   const { setHeaderAddon } = useLayoutHeader();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const initialViewState = useMemo(readStoredViewState, []);
+  const initialViewState = useMemo(() => readStoredViewState(), []);
   const [selectedCompanyIDs, setSelectedCompanyIDs] = useState<string[]>(initialViewState.companies);
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(initialViewState.statuses);
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initialViewState.types);
@@ -299,12 +299,12 @@ const ServersPage: React.FC = () => {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, rows.length]);
 
-  const addCompanyFilter = (companyId: string) => {
+  const addCompanyFilter = useCallback((companyId: string) => {
     if (!companyId) return;
     setSelectedCompanyIDs((prev) => addUniqueValue(prev, companyId));
-  };
+  }, []);
 
-  const renderCompanyLink = (companyId: string, companyName: string) => {
+  const renderCompanyLink = useCallback((companyId: string, companyName: string) => {
     if (!companyId) return '-';
     return (
       <Button
@@ -319,7 +319,7 @@ const ServersPage: React.FC = () => {
         {companyName || companyId}
       </Button>
     );
-  };
+  }, [navigate]);
 
   const allColumns: ColumnsType<Row> = useMemo(
     () => [
@@ -393,7 +393,7 @@ const ServersPage: React.FC = () => {
         render: (value: string) => value || '-',
       },
     ],
-    [navigate],
+    [addCompanyFilter, renderCompanyLink],
   );
 
   const columns = useMemo(() => {
@@ -413,7 +413,7 @@ const ServersPage: React.FC = () => {
         filterOption: false,
         onSearch: setCompanyFilterSearch,
         maxTagCount: undefined,
-        style: { width: '100%', minWidth: 520, flex: '1 1 520px' },
+        style: { width: '100%', minWidth: 0, flex: '1 1 260px' },
         onChange: setSelectedCompanyIDs,
       },
       {
@@ -482,6 +482,7 @@ const ServersPage: React.FC = () => {
               dataSource={rows}
               columns={columns}
               pagination={false}
+              scroll={{ x: 'max-content' }}
               showSorterTooltip={false}
               onRow={(record) => ({
                 onClick: () => record.id && navigate(`/servers/${record.id}`),

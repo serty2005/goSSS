@@ -542,6 +542,17 @@ func (r *telephonyRepo) ListCallsByTicketID(ctx context.Context, ticketID string
 	return items, err
 }
 
+func (r *telephonyRepo) DeleteCallTicketLink(ctx context.Context, callID string, ticketID string) error {
+	callID = strings.TrimSpace(callID)
+	ticketID = strings.TrimSpace(ticketID)
+	if callID == "" || ticketID == "" {
+		return nil
+	}
+	return r.getDB(ctx).WithContext(ctx).
+		Where("telephony_call_id = ? AND ticket_id = ?", callID, ticketID).
+		Delete(&telephony.CallTicketLink{}).Error
+}
+
 func (r *telephonyRepo) InsertIncomingEventIfNotExists(ctx context.Context, event *telephony.IncomingEvent) (bool, error) {
 	if event == nil {
 		return false, gorm.ErrInvalidData

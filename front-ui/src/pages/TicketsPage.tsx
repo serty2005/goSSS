@@ -11,10 +11,10 @@ import {
   Col,
   Drawer,
   DatePicker,
+  Grid,
   Input,
   List,
   Popconfirm,
-  Popover,
   Row,
   Select,
   Space,
@@ -75,6 +75,7 @@ import {
 import i18n from "@/i18n/i18n";
 
 const { Text, Paragraph } = Typography;
+const { useBreakpoint } = Grid;
 const LazyNewTicketModal = React.lazy(
   () => import("@/components/tickets/NewTicketModal"),
 );
@@ -177,6 +178,20 @@ const formatDateStamp = (value?: string) => ({
   date: value ? dayjs(value).format("DD.MM.YYYY") : "-",
   time: value ? dayjs(value).format("HH:mm") : "--:--",
 });
+
+const formatActivityTime = (value?: string) => {
+  if (!value) return "--:--";
+  const activity = dayjs(value);
+  if (!activity.isValid()) return "--:--";
+  const now = dayjs();
+  if (activity.isSame(now, "day")) {
+    return activity.format("HH:mm");
+  }
+  if (activity.isSame(now.subtract(1, "day"), "day")) {
+    return `вчера ${activity.format("HH:mm")}`;
+  }
+  return activity.format("DD.MM HH:mm");
+};
 
 const formatDeferredDateTime = (value?: string) => {
   if (!value) return "";
@@ -387,6 +402,8 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({
 const TicketsPage: React.FC = () => {
   const { t } = useTranslation(["common", "layout", "tickets"]);
   const { token } = antTheme.useToken();
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { setHeaderAddon, setHeaderAddonPlacement } = useLayoutHeader();
   const searchParamsRaw = useTicketParamsStore((state) => state.ticketParams);
   const setSearchParamsRaw = useTicketParamsStore(
@@ -460,7 +477,7 @@ const TicketsPage: React.FC = () => {
   const periodFrom =
     archiveMode === "archive" ? archivePeriodFrom : activePeriodFrom;
   const periodTo = archiveMode === "archive" ? archivePeriodTo : activePeriodTo;
-  const viewMode = (searchParams.get("view") as ViewMode) || "list";
+  const viewMode = (isMobile ? "cards" : "table") as ViewMode;
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const statusValues = useMemo(
@@ -483,6 +500,29 @@ const TicketsPage: React.FC = () => {
     return filtered.length ? filtered : TICKET_ACTIVE_STATUS_VALUES;
   }, [archiveMode, onlyActiveStatuses, statusValues]);
   const effectiveStatus = effectiveStatusValues.join(",");
+  const activeFilterCount = useMemo(
+    () =>
+      [
+        q,
+        status,
+        onlyActiveStatuses ? "active" : "",
+        assigneeIDs,
+        company,
+        periodFrom,
+        periodTo,
+        archiveMode === "archive" ? "archive" : "",
+      ].filter(Boolean).length,
+    [
+      archiveMode,
+      assigneeIDs,
+      company,
+      onlyActiveStatuses,
+      periodFrom,
+      periodTo,
+      q,
+      status,
+    ],
+  );
   const selectedTableColumnKeys = useMemo<TableColumnKey[]>(() => {
     const allowedColumnKeys = isBitrixEnabled
       ? TABLE_COLUMN_KEYS
@@ -628,7 +668,6 @@ const TicketsPage: React.FC = () => {
         })),
     [usersResponse?.data],
   );
-
   const { data: infraResponse, isLoading: isInfraLoading } = useQuery({
     queryKey: ["company-infra", metadata?.company_id],
     queryFn: () => companiesApi.getInfrastructure(metadata?.company_id || ""),
@@ -1272,6 +1311,19 @@ const TicketsPage: React.FC = () => {
     });
   };
 
+  function updateTicketParams(next: Record<string, string | undefined>) {
+    const params = new URLSearchParams(searchParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (!value) {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    });
+    params.set("page", "1");
+    setSearchParamsRaw(params.toString());
+  }
+
   function applyTableSort(key: TableSortKey) {
     const nextOrder: TableSortOrder | null =
       tableSort?.key !== key
@@ -1457,10 +1509,7 @@ const TicketsPage: React.FC = () => {
 
   const applyAssigneeFilter = (assigneeID?: number) => {
     if (!assigneeID) return;
-    const params = new URLSearchParams(searchParams);
-    params.set("assignee_ids", String(assigneeID));
-    params.set("page", "1");
-    setSearchParamsRaw(params.toString());
+    updateTicketParams({ assignee_ids: String(assigneeID) });
   };
 
   const toggleTicketSubscription = async () => {
@@ -1558,7 +1607,34 @@ const TicketsPage: React.FC = () => {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Card>
+      <Card className="tickets-workspace-card">
+        {isMobile && (
+          <section
+            className="tickets-mobile-summary-bar"
+            aria-label={t("layout:headerSearch.ticket.mobileListSummary")}
+          >
+            <div>
+              <Text type="secondary" className="tickets-mobile-kicker">
+                {t("layout:headerSearch.ticket.activeFilterCount", {
+                  count: activeFilterCount,
+                })}
+              </Text>
+              <Text strong className="tickets-mobile-total">
+                {t("tickets:labels.showing", {
+                  visible: visibleTickets.length,
+                  total,
+                })}
+              </Text>
+            </div>
+            <Button
+              type="primary"
+              onClick={() => setIsCreateOpen(true)}
+              aria-label={t("layout:headerSearch.ticket.newTicket")}
+            >
+              {t("layout:headerSearch.ticket.newTicket")}
+            </Button>
+          </section>
+        )}
         {viewMode === "list" && (
           <List
             loading={isLoading}
@@ -1657,158 +1733,115 @@ const TicketsPage: React.FC = () => {
         )}
 
         {viewMode === "cards" && (
-          <Row gutter={[12, 12]}>
+          <Row gutter={[12, 12]} className="tickets-mobile-list">
             {visibleTickets.map((item) => {
               const meta = getTicketStatusMeta(item.status);
               const deferredTitle =
                 item.status === "deferred"
                   ? formatDeferredTooltip(item.deferred_until)
                   : "";
+              const subject = resolveTicketSubjectFromDescription(
+                item.description,
+              );
+              const lastComment = normalizeDescription(item.last_comment);
+              const companyLabel =
+                item.company_name ||
+                item.company_id ||
+                t("tickets:fallback.companyNotSpecified");
+              const assigneeLabel =
+                item.assignee?.full_name || t("tickets:fallback.unassigned");
               return (
                 <Col key={item.id} xs={24} md={12} xl={8}>
-                  <Card
-                    hoverable
-                    className="glass-panel"
-                    onClick={(event) =>
-                      onTicketRowClick(
-                        item.id,
-                        event as unknown as React.MouseEvent,
-                      )
-                    }
-                  >
-                    <Space
-                      direction="vertical"
-                      size={6}
-                      style={{ width: "100%" }}
+                  <article className="ticket-mobile-card">
+                    <button
+                      type="button"
+                      className="ticket-mobile-card__main"
+                      aria-label={`Быстрый просмотр тикета #${item.number}`}
+                      onClick={(event) =>
+                        onTicketRowClick(
+                          item.id,
+                          event as unknown as React.MouseEvent,
+                        )
+                      }
                     >
-                      <div className="ticket-card-top">
-                        <div className="ticket-card-left">
-                          <Link
-                            to={`/tickets/${item.id}`}
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <Text strong className="ticket-card-number">
-                              #{item.number}
-                            </Text>
-                          </Link>
-                          <ExternalLinksBadges
-                            bitrixURL={
-                              isBitrixEnabled ? item.bitrix_deal_url : undefined
-                            }
-                            pyrusURL={item.pyrus_task_url}
-                            compact
-                            onClick={(event) => event.stopPropagation()}
-                          />
-                        </div>
-                        <div className="ticket-company-centered ticket-company-top">
-                          {/* TODO: Реализовать содержимое popover компании вместе с popover исполнителя. */}
-                          <Popover
-                            trigger="hover"
-                            content={
-                              <div style={{ minWidth: 180, minHeight: 48 }} />
-                            }
-                          >
-                            <a
-                              className="ticket-assignee-linklike"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                              }}
-                            >
-                              {item.company_name || item.company_id}
-                            </a>
-                          </Popover>
-                        </div>
-                        <div className="ticket-card-right">
-                          <Space size={4} className="ticket-card-status-wrap">
-                            {deferredTitle ? (
-                              <Tooltip title={deferredTitle}>
-                                <Tag color={meta.color}>{meta.label}</Tag>
-                              </Tooltip>
-                            ) : (
+                      <span className="ticket-mobile-card__top">
+                        <span className="ticket-mobile-card__number">
+                          #{item.number}
+                        </span>
+                        <span className="ticket-mobile-card__status">
+                          {deferredTitle ? (
+                            <Tooltip title={deferredTitle}>
                               <Tag color={meta.color}>{meta.label}</Tag>
+                            </Tooltip>
+                          ) : (
+                            <Tag color={meta.color}>{meta.label}</Tag>
+                          )}
+                          {item.is_common_contract && (
+                            <Tag color="gold">{t("tickets:labels.paid")}</Tag>
+                          )}
+                        </span>
+                      </span>
+                      <span className="ticket-mobile-card__subject">
+                        {subject}
+                      </span>
+                      <span className="ticket-mobile-card__meta-grid">
+                        <span>
+                          <Text type="secondary">Компания</Text>
+                          <Text strong>{companyLabel}</Text>
+                        </span>
+                        <span>
+                          <Text type="secondary">
+                            {t(
+                              "layout:headerSearch.ticket.tableColumns.assignee_display",
                             )}
-                            {item.is_common_contract && (
-                              <Tag color="gold">{t("tickets:labels.paid")}</Tag>
-                            )}
-                          </Space>
-                          <div className="ticket-card-assignee-right">
-                            <Popover
-                              trigger="hover"
-                              content={
-                                <div style={{ minWidth: 180, minHeight: 48 }} />
-                              }
-                            >
-                              <a
-                                className="ticket-assignee-linklike"
-                              onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  applyAssigneeFilter(item.assignee?.id);
-                                }}
-                              >
-                                {item.assignee?.full_name || t("tickets:fallback.unassigned")}
-                              </a>
-                            </Popover>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="ticket-company-centered ticket-company-mobile">
-                        <Popover
-                          trigger="hover"
-                          content={
-                            <div style={{ minWidth: 180, minHeight: 48 }} />
-                          }
-                        >
-                          <a
-                            className="ticket-assignee-linklike"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
+                          </Text>
+                          <Text>{assigneeLabel}</Text>
+                        </span>
+                        <span>
+                          <Text type="secondary">
+                            {t("tickets:labels.updated")}
+                          </Text>
+                          <Text>{formatActivityTime(item.last_activity)}</Text>
+                        </span>
+                      </span>
+                      <span className="ticket-mobile-card__comment">
+                        <Text type="secondary">
+                          {t(
+                            "layout:headerSearch.ticket.tableColumns.last_comment",
+                          )}
+                        </Text>
+                        <Text>
+                          {lastComment || t("tickets:fallback.noComments")}
+                        </Text>
+                      </span>
+                    </button>
+                    <div className="ticket-mobile-card__actions">
+                      <ExternalLinksBadges
+                        bitrixURL={
+                          isBitrixEnabled ? item.bitrix_deal_url : undefined
+                        }
+                        pyrusURL={item.pyrus_task_url}
+                        compact
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                      <Space size={4} wrap>
+                        {item.assignee?.id && (
+                          <Button
+                            size="small"
+                            onClick={() => applyAssigneeFilter(item.assignee?.id)}
                           >
-                            {item.company_name || item.company_id}
-                          </a>
-                        </Popover>
-                      </div>
-                      <Paragraph
-                        style={{ marginBottom: 0 }}
-                        ellipsis={{ rows: 2 }}
-                      >
-                        {resolveTicketSubjectFromDescription(item.description)}
-                      </Paragraph>
-                      <Text type="secondary">
-                        {item.reporter_name || t("tickets:fallback.employee")} •{" "}
-                        {resolveTicketCreatedSourceLabel(item.created_source)}
-                      </Text>
-                      {item.last_comment && (
-                        <Paragraph
-                          className="ticket-description-paragraph"
-                          type="secondary"
-                          style={{ marginBottom: 0 }}
-                          ellipsis={{ rows: 3 }}
+                            По исполнителю
+                          </Button>
+                        )}
+                        <Button
+                          size="small"
+                          onClick={() => navigate(`/tickets/${item.id}`)}
                         >
-                          {normalizeDescription(item.last_comment)}
-                        </Paragraph>
-                      )}
-                      <Space
-                        style={{
-                          width: "100%",
-                          justifyContent: "space-between",
-                        }}
-                        wrap
-                      >
-                        <TicketDateStamp
-                          label={t("tickets:labels.created")}
-                          value={item.created_at}
-                        />
-                        <TicketDateStamp
-                          label={t("tickets:labels.updated")}
-                          value={item.last_activity}
-                        />
+                          {t("tickets:actions.openPage")}
+                        </Button>
                       </Space>
-                    </Space>
-                  </Card>
+                    </div>
+                  </article>
                 </Col>
               );
             })}
@@ -1879,17 +1912,22 @@ const TicketsPage: React.FC = () => {
       </Card>
 
       <Drawer
+        className="ticket-quick-preview-drawer"
         open={Boolean(selectedTicketId)}
         onClose={closeQuickModal}
-        closable={false}
-        width={656}
+        closable
+        width={isMobile ? undefined : "min(656px, 100vw)"}
+        height={isMobile ? "min(60dvh, 480px)" : undefined}
         title={
           metadata ? (
             <div
+              className="ticket-quick-preview-title"
               style={{
                 display: "grid",
                 alignItems: "center",
-                gridTemplateColumns: "1fr auto 1fr",
+                gridTemplateColumns: isMobile
+                  ? "minmax(0, 1fr)"
+                  : "1fr auto 1fr",
                 gap: 8,
               }}
             >
@@ -1912,8 +1950,8 @@ const TicketsPage: React.FC = () => {
             t("tickets:titles.quickPreviewTicket")
           )
         }
-        placement="right"
-        mask={false}
+        placement={isMobile ? "bottom" : "right"}
+        mask={isMobile}
       >
         {isDetailsLoading || !details || !metadata ? (
           <div style={{ padding: 24, textAlign: "center" }}>
@@ -1921,7 +1959,7 @@ const TicketsPage: React.FC = () => {
           </div>
         ) : (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            <Space wrap>
+            <div className="ticket-quick-preview-actions">
               {metadata.is_archived ? (
                 <Button
                   type="primary"
@@ -1947,7 +1985,7 @@ const TicketsPage: React.FC = () => {
                       `layout:headerSearch.ticket.statusOptions.${item.value}`,
                     ),
                   }))}
-                  style={{ width: 220 }}
+                  className="ticket-quick-preview-status"
                   onChange={(nextStatus: TicketStatus) => {
                     if (!selectedTicketId || nextStatus === metadata.status) {
                       return;
@@ -2030,7 +2068,7 @@ const TicketsPage: React.FC = () => {
               >
                 {t("tickets:actions.openPage")}
               </Button>
-            </Space>
+            </div>
 
             <Card size="small" title={t("tickets:cards.contact")}>
               <Space direction="vertical" size={6} style={{ width: "100%" }}>
@@ -2269,7 +2307,7 @@ const TicketsPage: React.FC = () => {
           setStatusComment("");
           setPendingDeferredAt("");
         }}
-        width={420}
+        width="min(420px, 100vw)"
         title={
           pendingStatus === "deferred"
             ? t("tickets:titles.deferTicket")

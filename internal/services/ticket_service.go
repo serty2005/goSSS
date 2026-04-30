@@ -43,6 +43,8 @@ import (
 // Regex для РїРѕРёСЃРєР° UUID файлов РІ ссылках Naumen (./download?uuid=file$123...)
 var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 
+var ticketTextPhoneRegex = regexp.MustCompile(`(?:\+?\d[\d\s().-]{8,}\d)`)
+
 type TicketService interface {
 	// Чтение
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
@@ -293,6 +295,9 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		return nil, err
 	}
 	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
+	if err := s.bindTicketTelephonyByText(ctx, ticket, ticket.Description); err != nil {
+		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
+	}
 
 	// Запись РІ историю
 	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, "", tickets.StatusNew, nil)
@@ -404,12 +409,16 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
 	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
+	}
 	if ticket.IsArchived && status != tickets.StatusInProgress {
 		return nil, fmt.Errorf("архивный тикет можно вернуть только в статус \"В работе\"")
 	}
 
 	oldStatus := ticket.Status
-	if oldStatus == status {
+	isReturnFromArchive := ticket.IsArchived && status == tickets.StatusInProgress
+	if oldStatus == status && !isReturnFromArchive {
 		return ticket, nil // Статус не изменился
 	}
 
@@ -442,7 +451,7 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	ticket.Status = status
 	ticket.DeferredUntil = nextDeferredUntil
 	ticket.DeferredByID = nextDeferredByID
-	if ticket.IsArchived && status == tickets.StatusInProgress {
+	if isReturnFromArchive {
 		ticket.IsArchived = false
 		ticket.ArchivedAt = nil
 	}
@@ -450,8 +459,10 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 
-	// Запись в историю
-	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
+	if oldStatus != status {
+		// Запись в историю
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
+	}
 
 	// Отчёт о смене статуса сохраняем как обычный комментарий в тикете.
 	if comment != "" {
@@ -493,6 +504,9 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	}
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
 	}
 
 	var oldAssigneeName, newAssigneeName string
@@ -536,6 +550,9 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 	}
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
 	}
 
 	targetCompany, err := s.companyRepo.GetByID(ctx, companyID)
@@ -600,6 +617,9 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	}
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
+	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
 	}
 
 	nextTitle := strings.TrimSpace(bitrixDealTitle)
@@ -740,6 +760,9 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 	}
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
 		return nil, err
+	}
+	if err := s.bindTicketTelephonyByText(ctx, ticket, text); err != nil {
+		s.logger.Warn("не удалось привязать телефонию по комментарию тикета", "ticket_id", ticket.ID, "comment_id", newComment.ID, "error", err)
 	}
 
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", text, nil)
@@ -1472,16 +1495,81 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 	if ticket == nil {
 		return nil, fmt.Errorf("заявка не найдена")
 	}
+	if isTicketLockedByManagerFlow(ticket) {
+		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
+	}
 
 	oldValue := ticket.Description
 	ticket.Description = description
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
+	if err := s.bindTicketTelephonyByText(ctx, ticket, description); err != nil {
+		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
+	}
 
 	s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldDescription, tickets.HistorySourceUI, oldValue, description, nil)
 	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) bindTicketTelephonyByText(ctx context.Context, ticket *tickets.Ticket, text string) error {
+	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil || ticket == nil {
+		return nil
+	}
+	phone := extractFirstPhoneFromTicketText(text)
+	if phone == "" {
+		return nil
+	}
+	contact, err := s.telephonyRepo.EnsureContact(ctx, phone, phone)
+	if err != nil {
+		return err
+	}
+	if contact != nil {
+		if ticket.ContactID == nil || *ticket.ContactID != contact.ID {
+			ticket.ContactID = &contact.ID
+			if err = s.ticketRepo.Update(ctx, ticket); err != nil {
+				return err
+			}
+		}
+		if strings.TrimSpace(ticket.CompanyID) != "" {
+			if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
+				return err
+			}
+		}
+	}
+
+	calls, _, err := s.telephonyRepo.ListCalls(ctx, telephony.CallListFilter{
+		ClientPhone:       phone,
+		OnlyWithoutTicket: true,
+		Limit:             20,
+	})
+	if err != nil {
+		return err
+	}
+	for i := range calls {
+		if strings.TrimSpace(safeTelephonyString(calls[i].ClientPhone)) != phone {
+			continue
+		}
+		if err = s.telephonyRepo.UpsertCallTicketLink(ctx, &telephony.CallTicketLink{
+			TelephonyCallID: calls[i].ID,
+			TicketID:        ticket.ID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractFirstPhoneFromTicketText(text string) string {
+	plain := toPlainText(text)
+	for _, raw := range ticketTextPhoneRegex.FindAllString(plain, -1) {
+		phone := normalizeMegafonPhone(raw)
+		if len(phone) >= 10 {
+			return phone
+		}
+	}
+	return ""
 }
 
 func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error) {
@@ -1876,6 +1964,10 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 	return nil
 }
 
+func isTicketLockedByManagerFlow(ticket *tickets.Ticket) bool {
+	return ticket != nil && strings.TrimSpace(ticket.Status) == tickets.StatusToManager
+}
+
 func (s *ticketServiceImpl) enrichTicketHistoryUsers(ctx context.Context, history []tickets.TicketHistory) {
 	if len(history) == 0 || s.userRepo == nil {
 		return
@@ -2184,7 +2276,7 @@ func (s *ticketServiceImpl) syncCompanyContractFromBitrixPoint(ctx context.Conte
 		return nil, nil
 	}
 
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, *bitrixServicePointID)
 	if err != nil {
 		return nil, err
 	}
@@ -2232,7 +2324,7 @@ func (s *ticketServiceImpl) resolveMappedBitrixServicePointID(ctx context.Contex
 	if mapping == nil || mapping.BitrixServicePointID <= 0 {
 		return nil, nil
 	}
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, mapping.BitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, mapping.BitrixServicePointID)
 	if err != nil {
 		return nil, err
 	}
@@ -2251,7 +2343,7 @@ func (s *ticketServiceImpl) persistBitrixCompanyServicePointMapping(ctx context.
 	if companyID == "" {
 		return
 	}
-	skip, err := isBitrixTemporaryServicePoint(ctx, s.bitrixRepo, *bitrixServicePointID)
+	skip, err := isBitrixTemporaryServicePoint(ctx, s.cfg, s.bitrixRepo, *bitrixServicePointID)
 	if err != nil {
 		s.logger.Error("Не удалось проверить правила сохранения сопоставления точки Bitrix24", "company_id", companyID, "bitrix_service_point_id", *bitrixServicePointID, "error", err)
 		return

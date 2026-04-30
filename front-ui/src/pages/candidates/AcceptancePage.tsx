@@ -62,6 +62,7 @@ const STATUS_COLORS: Record<CandidateStatus, string> = {
   APPROVED: 'green',
   REJECTED: 'red',
   CANCELLED: 'default',
+  SUPERSEDED: 'default',
 };
 
 // normalizeCandidate приводит ответ backend к формату фронта:
@@ -78,6 +79,7 @@ const normalizeCandidate = (raw: Record<string, unknown>): CandidateDTO => {
     server_url: pick('server_url', 'ServerURL') as string | undefined,
     existing_server_id: pick('existing_server_id', 'ExistingServerID') as string | undefined,
     status: asString(pick('status', 'Status')) as CandidateStatus,
+    deactivation_reason: pick('deactivation_reason', 'DeactivationReason') as string | undefined,
     ticket_id: pick('ticket_id', 'TicketID') as number | undefined,
     approved_company_id: pick('approved_company_id', 'ApprovedCompanyID') as string | undefined,
     approved_server_id: pick('approved_server_id', 'ApprovedServerID') as string | undefined,
@@ -895,6 +897,7 @@ const AcceptancePage: React.FC = () => {
               { value: 'APPROVED', label: 'APPROVED' },
               { value: 'REJECTED', label: 'REJECTED' },
               { value: 'CANCELLED', label: 'CANCELLED' },
+              { value: 'SUPERSEDED', label: 'SUPERSEDED' },
               { value: 'ALL', label: 'Все' },
             ]}
           />
@@ -1206,7 +1209,11 @@ const AcceptancePage: React.FC = () => {
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             {agentObservations.map((item) => (
-              <Card key={item.observation_id} size="small" title={`Наблюдение #${item.observation_id}`}>
+              <Card
+                key={item.observation_uid || item.observation_id}
+                size="small"
+                title={item.observation_uid ? `Наблюдение ${item.observation_uid}` : `Наблюдение #${item.observation_id}`}
+              >
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Typography.Text type="secondary">
                     Время наблюдения: {dayjs(item.observed_at).isValid() ? dayjs(item.observed_at).format('DD.MM.YYYY HH:mm:ss') : '-'}

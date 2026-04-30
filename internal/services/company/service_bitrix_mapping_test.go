@@ -8,6 +8,7 @@ import (
 	domainCompany "etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/models"
+	"etalon-server/internal/infra/config"
 	dbpkg "etalon-server/internal/infra/db"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/infra/repositories"
@@ -73,12 +74,12 @@ func TestUpdateBitrixMapping_AssignReassignAndClear(t *testing.T) {
 	}
 
 	if err := svc.UpdateBitrixMapping(ctx, &company2.ID, &point101); err != nil {
-		t.Fatalf("не удалось переназначить mapping на company2: %v", err)
+		t.Fatalf("не удалось назначить ту же точку company2: %v", err)
 	}
 
 	oldItem, _ := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, company1.ID)
-	if oldItem != nil {
-		t.Fatalf("ожидали, что mapping company1 будет удалён")
+	if oldItem == nil || oldItem.BitrixServicePointID != 101 {
+		t.Fatalf("ожидали, что mapping company1->101 сохранится, получили %v", oldItem)
 	}
 	newItem, _ := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, company2.ID)
 	if newItem == nil || newItem.BitrixServicePointID != 101 {
@@ -104,6 +105,61 @@ func TestUpdateBitrixMapping_AssignReassignAndClear(t *testing.T) {
 	clearedByPoint, _ := bitrixRepo.GetCompanyServicePointMappingByPointID(ctx, 102)
 	if clearedByPoint != nil {
 		t.Fatalf("ожидали, что mapping по точке 102 будет очищен")
+	}
+}
+
+func TestUpdateBitrixMapping_DoesNotSaveConfiguredTestServicePoint(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(
+		&domainCompany.Company{},
+		&bitrix.ServicePoint{},
+		&bitrix.CompanyServicePointMapping{},
+	); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	companyRepo := repositories.NewCompanyRepo(db)
+	bitrixRepo := repositories.NewBitrixRepo(db)
+
+	ctx := context.Background()
+	title := "Компания с тестовой точкой"
+	comp := &domainCompany.Company{Title: &title}
+	if err := companyRepo.Create(ctx, comp); err != nil {
+		t.Fatalf("не удалось создать компанию: %v", err)
+	}
+	if err := db.Create(&bitrix.ServicePoint{B24ElementID: 999, Name: "Любое имя"}).Error; err != nil {
+		t.Fatalf("не удалось создать тестовую точку: %v", err)
+	}
+	if err := bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
+		CompanyID:            comp.ID,
+		BitrixServicePointID: 101,
+	}); err != nil {
+		t.Fatalf("не удалось создать исходный mapping: %v", err)
+	}
+
+	svc := &serviceImpl{
+		cfg:         &config.Config{BitrixTestServicePointID: 999},
+		tm:          dbpkg.NewGormTransactor(db),
+		companyRepo: companyRepo,
+		bitrixRepo:  bitrixRepo,
+	}
+
+	point999 := int64(999)
+	if err := svc.UpdateBitrixMapping(ctx, &comp.ID, &point999); err != nil {
+		t.Fatalf("не ожидали ошибку при выборе тестовой точки: %v", err)
+	}
+
+	byCompany, _ := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, comp.ID)
+	if byCompany != nil {
+		t.Fatalf("ожидали, что mapping компании будет очищен, получили %v", byCompany)
+	}
+	byPoint, _ := bitrixRepo.GetCompanyServicePointMappingByPointID(ctx, point999)
+	if byPoint != nil {
+		t.Fatalf("ожидали, что mapping тестовой точки не сохранится, получили %v", byPoint)
 	}
 }
 

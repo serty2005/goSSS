@@ -12,6 +12,7 @@ import (
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/workstation"
+	"etalon-server/internal/infra/config"
 	"etalon-server/internal/infra/logger"
 	"etalon-server/internal/pkg/utils"
 	contractsvc "etalon-server/internal/services/contract"
@@ -24,6 +25,7 @@ import (
 
 type serviceImpl struct {
 	logger          logger.LoggerInterface
+	cfg             *config.Config
 	tm              interfaces.Transactor
 	companyRepo     company.Repository
 	serverRepo      server.Repository
@@ -37,6 +39,7 @@ type serviceImpl struct {
 // NewService создает сервис с зависимостями от репозиториев оборудования.
 func NewService(
 	logger logger.LoggerInterface,
+	cfg *config.Config,
 	tm interfaces.Transactor,
 	companyRepo company.Repository,
 	serverRepo server.Repository,
@@ -48,6 +51,7 @@ func NewService(
 ) company.Service {
 	return &serviceImpl{
 		logger:          logger,
+		cfg:             cfg,
 		tm:              tm,
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
@@ -447,11 +451,11 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		switch {
 		case normalizedCompanyID != "" && normalizedPointID != nil:
-			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID); err != nil {
-				return err
-			}
-			if err := s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID); err != nil {
-				return err
+			if s.isBitrixTestServicePoint(ctx, *normalizedPointID) {
+				if err := s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID); err != nil {
+					return err
+				}
+				return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
 			}
 			return s.bitrixRepo.UpsertCompanyServicePointMapping(txCtx, &bitrix.CompanyServicePointMapping{
 				CompanyID:            normalizedCompanyID,
@@ -463,6 +467,20 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 			return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
 		}
 	})
+}
+
+func (s *serviceImpl) isBitrixTestServicePoint(ctx context.Context, pointID int64) bool {
+	if s.cfg != nil && s.cfg.BitrixTestServicePointID > 0 && s.cfg.BitrixTestServicePointID == pointID {
+		return true
+	}
+	point, err := s.bitrixRepo.GetServicePointByID(ctx, pointID)
+	return err == nil && point != nil && normalizeBitrixServicePointName(point.Name) == normalizeBitrixServicePointName("Тестовая временная")
+}
+
+func normalizeBitrixServicePointName(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "ё", "е")
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func (s *serviceImpl) SyncBitrixContract(ctx context.Context, companyID string) error {
