@@ -90,6 +90,51 @@ func TestMegafonVATSIncomingService_ProcessIncomingEventCreatesCallSnapshot(t *t
 	}
 }
 
+func TestMegafonVATSIncomingService_EventUpdatesCachedEmployeeStatus(t *testing.T) {
+	env := newMegafonVATSIncomingTestEnv(t)
+	statusOffline := "offline"
+	if err := env.repo.ReplaceProviderEmployees(t.Context(), telephony.ProviderMegafonVATS, []telephony.ProviderEmployee{
+		{
+			EmployeeLogin: "admin",
+			EmployeeName:  "Администратор",
+			Status:        &statusOffline,
+			LastSeenAt:    time.Now().Add(-time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("не удалось подготовить сотрудника телефонии: %v", err)
+	}
+
+	acceptedID := enqueueMegafonWebhook(
+		t,
+		env,
+		"cmd=event&type=ACCEPTED&callid=call-dynamic-status&crm_token=test-token&phone=%2B79990001122&user=admin&direction=in",
+	)
+	processMegafonEvent(t, env, acceptedID)
+
+	employee, err := env.repo.GetProviderEmployee(t.Context(), telephony.ProviderMegafonVATS, "admin")
+	if err != nil {
+		t.Fatalf("не удалось получить сотрудника телефонии: %v", err)
+	}
+	if employee == nil || employee.Status == nil || *employee.Status != "in_call" {
+		t.Fatalf("ожидали динамический статус in_call, получили %+v", employee)
+	}
+
+	completedID := enqueueMegafonWebhook(
+		t,
+		env,
+		"cmd=event&type=COMPLETED&callid=call-dynamic-status&crm_token=test-token&phone=%2B79990001122&user=admin&direction=in",
+	)
+	processMegafonEvent(t, env, completedID)
+
+	employee, err = env.repo.GetProviderEmployee(t.Context(), telephony.ProviderMegafonVATS, "admin")
+	if err != nil {
+		t.Fatalf("не удалось перечитать сотрудника телефонии: %v", err)
+	}
+	if employee == nil || employee.Status == nil || *employee.Status != "online" {
+		t.Fatalf("ожидали динамический статус online после завершения, получили %+v", employee)
+	}
+}
+
 func TestMegafonVATSIncomingService_HistoryFinalizesCallAndStoresRecording(t *testing.T) {
 	env := newMegafonVATSIncomingTestEnv(t)
 	eventID := enqueueMegafonWebhook(
@@ -289,7 +334,7 @@ func newMegafonVATSIncomingTestEnv(t *testing.T) *megafonIncomingTestEnv {
 	if err != nil {
 		t.Fatalf("не удалось открыть sqlite: %v", err)
 	}
-	if err = db.AutoMigrate(&telephony.IncomingEvent{}, &telephony.Call{}, &telephony.CallEvent{}, &telephony.CallArtifact{}, &telephony.PendingContext{}, &telephony.Contact{}); err != nil {
+	if err = db.AutoMigrate(&telephony.ProviderEmployee{}, &telephony.IncomingEvent{}, &telephony.Call{}, &telephony.CallEvent{}, &telephony.CallArtifact{}, &telephony.PendingContext{}, &telephony.Contact{}); err != nil {
 		t.Fatalf("не удалось подготовить схему БД: %v", err)
 	}
 

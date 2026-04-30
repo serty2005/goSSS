@@ -43,7 +43,7 @@ import (
 // Regex для РїРѕРёСЃРєР° UUID файлов РІ ссылках Naumen (./download?uuid=file$123...)
 var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 
-var ticketTextPhoneRegex = regexp.MustCompile(`(?:\+?\d[\d\s().-]{8,}\d)`)
+var ticketTextPhoneRegex = regexp.MustCompile(`(^|[^\d+])(\+?79\d{9}|89\d{9}|9\d{9})([^\d]|$)`)
 
 type TicketService interface {
 	// Чтение
@@ -295,7 +295,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		return nil, err
 	}
 	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
-	if err := s.bindTicketTelephonyByText(ctx, ticket, ticket.Description); err != nil {
+	if err := s.bindTicketTelephonyByText(ctx, ticket, ticket.Description, authorID); err != nil {
 		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
 	}
 
@@ -761,7 +761,7 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
 		return nil, err
 	}
-	if err := s.bindTicketTelephonyByText(ctx, ticket, text); err != nil {
+	if err := s.bindTicketTelephonyByText(ctx, ticket, text, userID); err != nil {
 		s.logger.Warn("не удалось привязать телефонию по комментарию тикета", "ticket_id", ticket.ID, "comment_id", newComment.ID, "error", err)
 	}
 
@@ -1504,7 +1504,7 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
-	if err := s.bindTicketTelephonyByText(ctx, ticket, description); err != nil {
+	if err := s.bindTicketTelephonyByText(ctx, ticket, description, userID); err != nil {
 		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
 	}
 
@@ -1513,9 +1513,13 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 	return ticket, nil
 }
 
-func (s *ticketServiceImpl) bindTicketTelephonyByText(ctx context.Context, ticket *tickets.Ticket, text string) error {
+func (s *ticketServiceImpl) bindTicketTelephonyByText(ctx context.Context, ticket *tickets.Ticket, text string, actorID uint) error {
 	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil || ticket == nil {
 		return nil
+	}
+	enabled, err := s.ticketPhoneParsingEnabledForUser(ctx, actorID)
+	if err != nil || !enabled {
+		return err
 	}
 	phone := extractFirstPhoneFromTicketText(text)
 	if phone == "" {
@@ -1563,13 +1567,46 @@ func (s *ticketServiceImpl) bindTicketTelephonyByText(ctx context.Context, ticke
 
 func extractFirstPhoneFromTicketText(text string) string {
 	plain := toPlainText(text)
-	for _, raw := range ticketTextPhoneRegex.FindAllString(plain, -1) {
+	for _, match := range ticketTextPhoneRegex.FindAllStringSubmatch(plain, -1) {
+		if len(match) < 3 {
+			continue
+		}
+		raw := match[2]
 		phone := normalizeMegafonPhone(raw)
-		if len(phone) >= 10 {
+		if isSupportedTicketTextPhone(phone) {
 			return phone
 		}
 	}
 	return ""
+}
+
+func (s *ticketServiceImpl) ticketPhoneParsingEnabledForUser(ctx context.Context, userID uint) (bool, error) {
+	if s == nil || s.userRepo == nil || userID == 0 {
+		return true, nil
+	}
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || u == nil {
+		return true, err
+	}
+	configMap := mapProfileConfig(u.ProfileConfig)
+	ticketsConfig, ok := configMap["tickets"].(map[string]interface{})
+	if !ok {
+		return true, nil
+	}
+	value, exists := ticketsConfig["parse_phone_from_description"]
+	if !exists {
+		return true, nil
+	}
+	enabled, ok := value.(bool)
+	if !ok {
+		return true, nil
+	}
+	return enabled, nil
+}
+
+func isSupportedTicketTextPhone(phone string) bool {
+	phone = strings.TrimSpace(phone)
+	return len(phone) == 11 && strings.HasPrefix(phone, "79")
 }
 
 func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error) {

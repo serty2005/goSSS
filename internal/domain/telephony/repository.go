@@ -30,6 +30,7 @@ type Repository interface {
 	ReplaceProviderEmployees(ctx context.Context, provider string, items []ProviderEmployee) error
 	ListProviderEmployees(ctx context.Context, provider string) ([]ProviderEmployee, error)
 	GetProviderEmployee(ctx context.Context, provider string, login string) (*ProviderEmployee, error)
+	UpdateProviderEmployeeStatus(ctx context.Context, provider string, login string, status string, seenAt time.Time) error
 
 	GetCallByExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)
 	GetCallByAnyExternalID(ctx context.Context, provider string, externalCallID string) (*Call, error)

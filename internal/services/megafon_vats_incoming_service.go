@@ -604,6 +604,7 @@ func (s *megafonVATSIncomingService) handleIncomingEvent(
 	if err = s.ensureCallContext(ctx, call); err != nil {
 		return "", "", err
 	}
+	s.updateEmployeeStatusFromEvent(ctx, incomingEvent, payload)
 	publishTelephonyLineUpdate(ctx, s.log, s.eventBus, s.repo, s.userRepo)
 
 	return telephony.IncomingEventStatusDone, "", nil
@@ -802,6 +803,34 @@ func (s *megafonVATSIncomingService) applyEventSnapshot(call *telephony.Call, ev
 
 func (s *megafonVATSIncomingService) applyHistorySnapshot(call *telephony.Call, payload megafonVATSPayload) {
 	applyMegafonHistorySnapshot(call, payload)
+}
+
+func (s *megafonVATSIncomingService) updateEmployeeStatusFromEvent(ctx context.Context, incomingEvent *telephony.IncomingEvent, payload megafonVATSPayload) {
+	if s == nil || s.repo == nil || incomingEvent == nil || incomingEvent.Cmd != telephony.IncomingEventCommandEvent {
+		return
+	}
+	login := strings.TrimSpace(payload.User)
+	if login == "" {
+		return
+	}
+	status := megafonEmployeeStatusFromEvent(payload.EventName)
+	if status == "" {
+		return
+	}
+	if err := s.repo.UpdateProviderEmployeeStatus(ctx, telephony.ProviderMegafonVATS, login, status, incomingEvent.ReceivedAt); err != nil && s.log != nil {
+		s.log.Warn("Мегафон ВАТС: не удалось обновить состояние сотрудника по webhook", "login", login, "status", status, "error", err)
+	}
+}
+
+func megafonEmployeeStatusFromEvent(eventName string) string {
+	switch strings.ToUpper(strings.TrimSpace(eventName)) {
+	case "INCOMING", "OUTGOING", "ACCEPTED", "TRANSFERRED":
+		return "in_call"
+	case "COMPLETED", "CANCELLED", "FAILED", "BUSY", "MISSED", "NOANSWER":
+		return "online"
+	default:
+		return ""
+	}
 }
 
 func applyMegafonHistorySnapshot(call *telephony.Call, payload megafonVATSPayload) {
@@ -1108,6 +1137,9 @@ func normalizeMegafonPhone(value string) string {
 		return ""
 	}
 	normalized := string(digits)
+	if len(normalized) == 10 && strings.HasPrefix(normalized, "9") {
+		return "7" + normalized
+	}
 	if len(normalized) == 11 && strings.HasPrefix(normalized, "8") {
 		return "7" + normalized[1:]
 	}

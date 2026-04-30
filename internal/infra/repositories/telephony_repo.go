@@ -94,6 +94,26 @@ func (r *telephonyRepo) GetProviderEmployee(ctx context.Context, provider string
 	return &item, err
 }
 
+func (r *telephonyRepo) UpdateProviderEmployeeStatus(ctx context.Context, provider string, login string, status string, seenAt time.Time) error {
+	provider = strings.TrimSpace(provider)
+	login = strings.TrimSpace(login)
+	status = strings.TrimSpace(status)
+	if provider == "" || login == "" || status == "" {
+		return nil
+	}
+	if seenAt.IsZero() {
+		seenAt = time.Now()
+	}
+	return r.getDB(ctx).WithContext(ctx).
+		Model(&telephony.ProviderEmployee{}).
+		Where("provider = ? AND employee_login = ?", provider, login).
+		Updates(map[string]any{
+			"status":       status,
+			"last_seen_at": seenAt,
+			"updated_at":   time.Now(),
+		}).Error
+}
+
 func (r *telephonyRepo) GetCallByExternalID(ctx context.Context, provider string, externalCallID string) (*telephony.Call, error) {
 	var item telephony.Call
 	err := r.getDB(ctx).WithContext(ctx).

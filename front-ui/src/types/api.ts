@@ -805,6 +805,7 @@ export interface UserProfileConfigDTO {
   };
   tickets?: {
     comments_new_first?: boolean;
+    parse_phone_from_description?: boolean;
     subscriptions?: string[];
     filters?: {
       presets?: Array<{

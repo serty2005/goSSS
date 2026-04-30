@@ -869,7 +869,10 @@ func loadMegafonIntegratedEmployees(
 			continue
 		}
 		status := "offline"
-		if strings.EqualFold(strings.TrimSpace(safeTelephonyString(providerEmployees[i].Status)), "online") {
+		providerStatus := strings.ToLower(strings.TrimSpace(safeTelephonyString(providerEmployees[i].Status)))
+		if providerStatus == "in_call" {
+			status = "in_call"
+		} else if providerStatus == "online" {
 			status = "online"
 		}
 		item := TelephonyLineEmployeeView{
