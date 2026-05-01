@@ -434,14 +434,24 @@ const TicketsPage: React.FC = () => {
   const isAdminRole = userRoles.includes("admin");
   const canAccessTelephony =
     isAdminRole || userRoles.includes("support_specialist");
-  const isDeleteBlockedRole =
-    userRoles.includes("support_specialist") || userRoles.includes("intern");
-  const isCommentAuthor = (authorName?: string) =>
-    String(authorName || "").trim() === String(user?.full_name || "").trim();
-  const canManageComment = (authorName?: string) =>
-    isAdminRole || isCommentAuthor(authorName);
-  const canDeleteComment = (authorName?: string) =>
-    isAdminRole || (!isDeleteBlockedRole && isCommentAuthor(authorName));
+  const isCommentAuthor = (comment?: {
+    authorRaw?: string;
+    authorUserID?: number;
+  }) => {
+    const authorUserID = Number(comment?.authorUserID || 0);
+    if (authorUserID > 0 && user?.id) {
+      return authorUserID === user.id;
+    }
+    return String(comment?.authorRaw || "").trim() === String(user?.full_name || "").trim();
+  };
+  const canManageComment = (comment?: {
+    authorRaw?: string;
+    authorUserID?: number;
+  }) => isCommentAuthor(comment);
+  const canDeleteComment = (comment?: {
+    authorRaw?: string;
+    authorUserID?: number;
+  }) => isCommentAuthor(comment);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
@@ -761,6 +771,7 @@ const TicketsPage: React.FC = () => {
       id: item.uuid,
       author: item.author_name || t("tickets:fallback.employee"),
       authorRaw: item.author_name || "",
+      authorUserID: item.author_user_id,
       date: dayjs(item.creation_date).format("DD.MM.YYYY HH:mm"),
       text: item.text,
       isPrivate: item.is_private ?? false,
@@ -2237,7 +2248,7 @@ const TicketsPage: React.FC = () => {
                             {item.isPrivate && (
                               <Tag color="orange">{t("tickets:labels.private")}</Tag>
                             )}
-                            {canManageComment(item.authorRaw) && (
+                            {canManageComment(item) && (
                               <Button
                                 type="link"
                                 size="small"
@@ -2249,7 +2260,7 @@ const TicketsPage: React.FC = () => {
                                 {t("tickets:actions.edit")}
                               </Button>
                             )}
-                            {canDeleteComment(item.authorRaw) && (
+                            {canDeleteComment(item) && (
                               <Popconfirm
                                 title={t("tickets:titles.deleteComment")}
                                 okText={t("common:actions.delete")}

@@ -1298,6 +1298,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 				UUID:          commentUUID,
 				Text:          c.Text,
 				AuthorName:    c.AuthorName,
+				AuthorUserID:  c.AuthorUserID,
 				CreationDate:  c.CreationDate,
 				IsInternal:    c.IsInternal,
 				IsPrivate:     c.IsPrivate,
@@ -2270,26 +2271,11 @@ func isCommentAuthor(actor *user.User, comment *tickets.TicketComment) bool {
 	)
 }
 
-func canEditTicketComment(ticket *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, roles []string) bool {
-	if isPyrusTicket(ticket) {
-		return isCommentAuthor(actor, comment)
-	}
-	if isAdminUser(actor) || hasUserRole(roles, user.RoleAdmin) {
-		return true
-	}
+func canEditTicketComment(_ *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, _ []string) bool {
 	return isCommentAuthor(actor, comment)
 }
 
-func canDeleteTicketComment(ticket *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, roles []string) bool {
-	if isPyrusTicket(ticket) {
-		return isCommentAuthor(actor, comment)
-	}
-	if isAdminUser(actor) || hasUserRole(roles, user.RoleAdmin) {
-		return true
-	}
-	if hasUserRole(roles, user.RoleSupportSpecialist) || hasUserRole(roles, user.RoleIntern) {
-		return false
-	}
+func canDeleteTicketComment(_ *tickets.Ticket, actor *user.User, comment *tickets.TicketComment, _ []string) bool {
 	return isCommentAuthor(actor, comment)
 }
 

@@ -1024,6 +1024,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		UUID          string    `json:"uuid"`
 		Text          string    `json:"text"`
 		AuthorName    string    `json:"author_name"`
+		AuthorUserID  *uint     `json:"author_user_id,omitempty"`
 		CreationDate  time.Time `json:"creation_date"`
 		IsInternal    bool      `json:"is_internal"`
 		IsPrivate     bool      `json:"is_private"`
@@ -1036,6 +1037,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			UUID:          item.UUID,
 			Text:          item.Text,
 			AuthorName:    item.AuthorName,
+			AuthorUserID:  item.AuthorUserID,
 			CreationDate:  item.CreationDate,
 			IsInternal:    item.IsInternal,
 			IsPrivate:     item.IsPrivate,

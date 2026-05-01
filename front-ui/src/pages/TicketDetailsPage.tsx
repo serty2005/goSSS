@@ -1,7 +1,7 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, EditOutlined, LinkOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -12,7 +12,7 @@ import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
 import { agentObservationsApi } from '@/api/agentObservations';
-import { AgentObservationFeedRowDTO, ApiResponse, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus, WorkstationEntity } from '@/types/api';
+import { AgentObservationFeedRowDTO, ApiResponse, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketCommentDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus, WorkstationEntity } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
@@ -150,6 +150,33 @@ type AgentEquipmentGroup = {
   fiscals: InfrastructureItem[];
 };
 
+const escapeCommentQuoteText = (value: string) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getCommentQuoteText = (html: string) => {
+  const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  parsed.body.querySelectorAll('blockquote').forEach((node) => node.remove());
+  return String(parsed.body?.textContent || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const buildCommentQuoteHTML = (comment: TicketCommentDTO) => {
+  const author = escapeCommentQuoteText(comment.author_name || 'Сотрудник');
+  const createdAt = dayjs(comment.creation_date).isValid()
+    ? dayjs(comment.creation_date).format('DD.MM.YYYY HH:mm')
+    : '';
+  const quoteText = escapeCommentQuoteText(getCommentQuoteText(comment.text) || 'Комментарий без текста')
+    .replace(/\n/g, '<br />');
+
+  return `<blockquote><p><strong>${author}</strong>${createdAt ? ` · ${createdAt}` : ''}</p><p>${quoteText}</p></blockquote><p></p>`;
+};
+
 type AgentObservationLookupTarget = {
   agentID: string;
   workstationIDs: string[];
@@ -256,6 +283,7 @@ const TicketDetailsPage: React.FC = () => {
   const [observationTarget, setObservationTarget] = useState<AgentObservationLookupTarget | null>(null);
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
   const previousCommentsRef = useRef<Array<{ uuid: string; text: string; creation_date: string }>>([]);
+  const commentComposerRef = useRef<HTMLDivElement | null>(null);
   const clearFieldTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const clearCommentTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const createParam = searchParams.get('create') || '';
@@ -290,10 +318,15 @@ const TicketDetailsPage: React.FC = () => {
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
-  const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
-  const isCommentAuthor = (authorName?: string) => String(authorName || '').trim() === String(user?.full_name || '').trim();
-  const canManageComment = (authorName?: string) => isAdminRole || isCommentAuthor(authorName);
-  const canDeleteComment = (authorName?: string) => isAdminRole || (!isDeleteBlockedRole && isCommentAuthor(authorName));
+  const isCommentAuthor = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => {
+    const authorUserID = Number(comment?.author_user_id || 0);
+    if (authorUserID > 0 && user?.id) {
+      return authorUserID === user.id;
+    }
+    return String(comment?.author_name || '').trim() === String(user?.full_name || '').trim();
+  };
+  const canManageComment = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => isCommentAuthor(comment);
+  const canDeleteComment = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => isCommentAuthor(comment);
 
   const markFieldChanged = (field: string) => {
     setHighlightedFields((prev) => ({ ...prev, [field]: true }));
@@ -1525,45 +1558,62 @@ const TicketDetailsPage: React.FC = () => {
     </Space>
   );
 
+  const appendReplyQuote = (comment: TicketCommentDTO) => {
+    const quote = buildCommentQuoteHTML(comment);
+    setCommentDraft((current) => {
+      const hasDraft = hasEditorContent(current);
+      return `${hasDraft ? current : ''}${hasDraft ? '<p></p>' : ''}${quote}`;
+    });
+    window.requestAnimationFrame(() => {
+      commentComposerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  };
+
   const commentComposer = (
-    <Space direction="vertical" size="small" style={{ width: '100%', marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}>
-      {isManagerFlowLocked && (
-        <Alert
-          type="info"
-          showIcon
-          message="Тикет передан менеджеру. Доступно только добавление комментариев, остальные действия обновляются из Bitrix24."
+    <div
+      ref={commentComposerRef}
+      className="ticket-comment-composer"
+      style={{ marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}
+    >
+      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        {isManagerFlowLocked && (
+          <Alert
+            type="info"
+            showIcon
+            message="Тикет передан менеджеру. Доступно только добавление комментариев, остальные действия обновляются из Bitrix24."
+          />
+        )}
+        <SmartTicketEditor
+          value={commentDraft}
+          onChange={setCommentDraft}
+          placeholder="Добавьте комментарий"
+          mentions={mentionOptions}
+          onImageUpload={uploadInlineImage}
+          onFileUpload={uploadInlineFile}
+          minHeight={84}
         />
-      )}
-      <SmartTicketEditor
-        value={commentDraft}
-        onChange={setCommentDraft}
-        placeholder="Добавьте комментарий"
-        mentions={mentionOptions}
-        onImageUpload={uploadInlineImage}
-        onFileUpload={uploadInlineFile}
-        minHeight={100}
-      />
-      <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
-        Приватный комментарий (не синхронизировать во внешние системы)
-      </Checkbox>
-      {isPyrusLinkedTicket && !commentIsPrivate && (
-        <Alert
-          type="warning"
-          showIcon
-          message="Публичный комментарий будет добавлен в Pyrus от имени бота интеграции."
-        />
-      )}
-      <Space>
-        <Button
-          type="primary"
-          loading={addCommentMutation.isPending}
-          disabled={!hasEditorContent(commentDraft)}
-          onClick={() => addCommentMutation.mutate()}
-        >
-          Отправить
-        </Button>
+        <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
+          Приватный комментарий (не синхронизировать во внешние системы)
+        </Checkbox>
+        {isPyrusLinkedTicket && !commentIsPrivate && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Публичный комментарий будет добавлен в Pyrus от имени бота интеграции."
+          />
+        )}
+        <Space>
+          <Button
+            type="primary"
+            loading={addCommentMutation.isPending}
+            disabled={!hasEditorContent(commentDraft)}
+            onClick={() => addCommentMutation.mutate()}
+          >
+            Отправить
+          </Button>
+        </Space>
       </Space>
-    </Space>
+    </div>
   );
 
   return (
@@ -1704,7 +1754,8 @@ const TicketDetailsPage: React.FC = () => {
       <div className="ticket-overview-layout">
         <div className="ticket-overview-main">
                   <Card size="small" className="ticket-overview-service-card" title="Служебная информация">
-                    <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
+                    <div className="ticket-overview-service-summary">
+                      <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
                       <Descriptions.Item label="Компания">
                         <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
                           {!isCompanyEditMode ? (
@@ -1915,10 +1966,28 @@ const TicketDetailsPage: React.FC = () => {
                         </div>
                       </Descriptions.Item>
                       )}
-                    </Descriptions>
+                      </Descriptions>
+                    </div>
 
-                    <div style={{ marginTop: 16 }}>
-                      <Text strong style={{ display: 'block', marginBottom: 8 }}>Описание</Text>
+                    <div className="ticket-overview-description-panel">
+                    <div>
+                      <Space align="center" size={6} style={{ marginBottom: 8 }}>
+                        <Text strong>Описание</Text>
+                        {!isManagerFlowLocked && !isDescriptionEditMode && (
+                          <Tooltip title="Редактировать описание">
+                            <Button
+                              type="text"
+                              size="small"
+                              aria-label="Редактировать описание"
+                              icon={<EditOutlined />}
+                              onClick={() => {
+                                setDescriptionDraft(metadata.description || '');
+                                setIsDescriptionEditMode(true);
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                      </Space>
                       <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
                         {!isDescriptionEditMode ? (
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1927,16 +1996,6 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={handleDescriptionClick}
                               style={{ whiteSpace: 'pre-wrap' }}
                             />
-                            {!isManagerFlowLocked && <Button
-                              size="small"
-                              icon={<EditOutlined />}
-                              onClick={() => {
-                                setDescriptionDraft(metadata.description || '');
-                                setIsDescriptionEditMode(true);
-                              }}
-                            >
-                              Редактировать описание
-                            </Button>}
                           </Space>
                         ) : (
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1967,8 +2026,8 @@ const TicketDetailsPage: React.FC = () => {
                             </Space>
                           </Space>
                         )}
+                        </div>
                       </div>
-                    </div>
 
                     {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
                       <div style={{ marginTop: 16 }}>
@@ -1978,9 +2037,10 @@ const TicketDetailsPage: React.FC = () => {
                         </div>
                       </div>
                     )}
+                    </div>
                   </Card>
 
-                  <Card size="small" className="ticket-overview-comments-card" title="Обзор">
+                  <Card size="small" className="ticket-overview-comments-card">
                     <Tabs
                       defaultActiveKey="comments"
                       items={[
@@ -1988,91 +2048,120 @@ const TicketDetailsPage: React.FC = () => {
                           key: 'comments',
                           label: 'Комментарии',
                           children: (
-                            <>
+                            <div className="ticket-comments-tab">
                               {commentsNewFirst && commentComposer}
                               {commentsOrdered.length ? (
                                 <List
+                                  className="ticket-comment-list"
                                   dataSource={commentsOrdered}
-                                  renderItem={(item) => (
-                                    <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
-                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                        <Space size={8} style={{ justifyContent: 'space-between', width: '100%' }} wrap>
-                                          <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
-                                          <Space size={8}>
-                                            {item.is_private && <Tag color="orange">Приватный</Tag>}
-                                            {canManageComment(item.author_name) && !isManagerFlowLocked && (
+                                  renderItem={(item) => {
+                                    const isOwnComment = isCommentAuthor(item);
+                                    return (
+                                      <List.Item
+                                        key={item.uuid}
+                                        className={`ticket-comment-list__item${isOwnComment ? ' ticket-comment-list__item--own' : ''}`}
+                                        style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}
+                                      >
+                                        <div className="ticket-comment-bubble">
+                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                            <Space size={8} className="ticket-comment-bubble__meta" wrap>
+                                              <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
+                                              {item.is_private && <Tag color="orange">Приватный</Tag>}
+                                            </Space>
+                                            {editingCommentUUID === item.uuid ? (
+                                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                                <SmartTicketEditor
+                                                  value={editingCommentDraft}
+                                                  onChange={setEditingCommentDraft}
+                                                  placeholder="Измените комментарий"
+                                                  mentions={mentionOptions}
+                                                  onImageUpload={uploadInlineImage}
+                                                  onFileUpload={uploadInlineFile}
+                                                  minHeight={100}
+                                                />
+                                                {isPyrusLinkedTicket && !item.is_private && (
+                                                  <Alert
+                                                    type="warning"
+                                                    showIcon
+                                                    message="Публичный комментарий будет синхронизирован в Pyrus от имени бота интеграции."
+                                                  />
+                                                )}
+                                                <Space>
+                                                  <Button
+                                                    type="primary"
+                                                    loading={updateCommentMutation.isPending}
+                                                    disabled={!hasEditorContent(editingCommentDraft)}
+                                                    onClick={() => updateCommentMutation.mutate()}
+                                                  >
+                                                    Сохранить
+                                                  </Button>
+                                                  <Button
+                                                    onClick={() => {
+                                                      setEditingCommentUUID('');
+                                                      setEditingCommentDraft('');
+                                                    }}
+                                                  >
+                                                    Отмена
+                                                  </Button>
+                                                </Space>
+                                              </Space>
+                                            ) : (
+                                              <div className="ticket-comment-bubble__content">
+                                                <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+                                              </div>
+                                            )}
+                                            <Space size={4} className="ticket-comment-bubble__actions">
                                               <Button
                                                 type="link"
                                                 size="small"
-                                                onClick={() => {
-                                                  setEditingCommentUUID(item.uuid);
-                                                  setEditingCommentDraft(item.text || '');
-                                                }}
+                                                icon={<MessageOutlined />}
+                                                onClick={() => appendReplyQuote(item)}
                                               >
-                                                Редактировать
+                                                Ответить
                                               </Button>
-                                            )}
-                                            {canDeleteComment(item.author_name) && !isManagerFlowLocked && (
-                                              <Popconfirm
-                                                title="Удалить комментарий?"
-                                                okText="Удалить"
-                                                cancelText="Отмена"
-                                                onConfirm={() => deleteCommentMutation.mutate(item.uuid)}
-                                              >
-                                                <Button type="link" size="small" danger loading={deleteCommentMutation.isPending}>
-                                                  Удалить
-                                                </Button>
-                                              </Popconfirm>
-                                            )}
-                                          </Space>
-                                        </Space>
-                                        {editingCommentUUID === item.uuid ? (
-                                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                            <SmartTicketEditor
-                                              value={editingCommentDraft}
-                                              onChange={setEditingCommentDraft}
-                                              placeholder="Измените комментарий"
-                                              mentions={mentionOptions}
-                                              onImageUpload={uploadInlineImage}
-                                              onFileUpload={uploadInlineFile}
-                                              minHeight={100}
-                                            />
-                                            {isPyrusLinkedTicket && !item.is_private && (
-                                              <Alert
-                                                type="warning"
-                                                showIcon
-                                                message="Публичный комментарий будет синхронизирован в Pyrus от имени бота интеграции."
-                                              />
-                                            )}
-                                            <Space>
-                                              <Button
-                                                type="primary"
-                                                loading={updateCommentMutation.isPending}
-                                                disabled={!hasEditorContent(editingCommentDraft)}
-                                                onClick={() => updateCommentMutation.mutate()}
-                                              >
-                                                Сохранить
-                                              </Button>
-                                              <Button
-                                                onClick={() => {
-                                                  setEditingCommentUUID('');
-                                                  setEditingCommentDraft('');
-                                                }}
-                                              >
-                                                Отмена
-                                              </Button>
+                                              {canManageComment(item) && !isManagerFlowLocked && (
+                                                <Tooltip title="Редактировать">
+                                                  <Button
+                                                    type="text"
+                                                    size="small"
+                                                    aria-label="Редактировать комментарий"
+                                                    icon={<EditOutlined />}
+                                                    onClick={() => {
+                                                      setEditingCommentUUID(item.uuid);
+                                                      setEditingCommentDraft(item.text || '');
+                                                    }}
+                                                  />
+                                                </Tooltip>
+                                              )}
+                                              {canDeleteComment(item) && !isManagerFlowLocked && (
+                                                <Popconfirm
+                                                  title="Удалить комментарий?"
+                                                  okText="Удалить"
+                                                  cancelText="Отмена"
+                                                  onConfirm={() => deleteCommentMutation.mutate(item.uuid)}
+                                                >
+                                                  <Tooltip title="Удалить">
+                                                    <Button
+                                                      type="text"
+                                                      size="small"
+                                                      danger
+                                                      aria-label="Удалить комментарий"
+                                                      icon={<DeleteOutlined />}
+                                                      loading={deleteCommentMutation.isPending}
+                                                    />
+                                                  </Tooltip>
+                                                </Popconfirm>
+                                              )}
                                             </Space>
                                           </Space>
-                                        ) : (
-                                          <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
-                                        )}
-                                      </Space>
-                                    </List.Item>
-                                  )}
+                                        </div>
+                                      </List.Item>
+                                    );
+                                  }}
                                 />
                               ) : null}
                               {!commentsNewFirst && commentComposer}
-                            </>
+                            </div>
                           ),
                         },
                         {

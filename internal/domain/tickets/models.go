@@ -138,6 +138,7 @@ type Comment struct {
 	UUID          string    `json:"uuid"`
 	Text          string    `json:"text"`
 	AuthorName    string    `json:"author_name"`
+	AuthorUserID  *uint     `json:"author_user_id,omitempty"`
 	CreationDate  time.Time `json:"creation_date"`
 	IsInternal    bool      `json:"is_internal"`
 	IsPrivate     bool      `json:"is_private"`

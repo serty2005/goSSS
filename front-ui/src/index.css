@@ -410,7 +410,7 @@ body .ant-message .ant-message-notice-content {
   grid-area: main;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: fit-content(calc((100% - 12px) / 2)) minmax(0, 1fr);
   gap: 12px;
   height: 100%;
   min-height: 0;
@@ -429,6 +429,7 @@ body .ant-message .ant-message-notice-content {
   flex: 0 0 auto;
 }
 
+.ticket-overview-service-card,
 .ticket-overview-comments-card,
 .ticket-overview-side-card {
   height: 100%;
@@ -439,7 +440,7 @@ body .ant-message .ant-message-notice-content {
 }
 
 .ticket-overview-service-card {
-  height: auto;
+  min-height: 0;
 }
 
 .ticket-overview-comments-card > .ant-card-body,
@@ -447,6 +448,132 @@ body .ant-message .ant-message-notice-content {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+.ticket-overview-service-card > .ant-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ticket-overview-service-summary {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.ticket-overview-description-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.ticket-overview-comments-card > .ant-card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.ticket-overview-comments-card .ant-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ticket-overview-comments-card .ant-tabs-content-holder,
+.ticket-overview-comments-card .ant-tabs-content,
+.ticket-overview-comments-card .ant-tabs-tabpane {
+  min-height: 0;
+}
+
+.ticket-overview-comments-card .ant-tabs-content-holder,
+.ticket-overview-comments-card .ant-tabs-content,
+.ticket-overview-comments-card .ant-tabs-tabpane-active {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ticket-comments-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ticket-comment-composer {
+  flex: 0 0 auto;
+}
+
+.ticket-comment-list {
+  min-height: 0;
+}
+
+.ticket-comment-list .ant-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ticket-comment-list__item.ant-list-item {
+  display: flex;
+  width: 100%;
+  padding: 4px 0;
+  border-block-end: 0;
+}
+
+.ticket-comment-list__item--own.ant-list-item {
+  justify-content: flex-end;
+}
+
+.ticket-comment-bubble {
+  width: fit-content;
+  max-width: min(82%, 680px);
+  padding: 10px 12px;
+  background: var(--app-bg-container);
+  border: 1px solid var(--app-color-border);
+  border-radius: 8px 8px 8px 2px;
+}
+
+.ticket-comment-list__item--own .ticket-comment-bubble {
+  background: var(--app-color-primary-soft);
+  border-color: color-mix(in srgb, var(--app-color-primary) 34%, var(--app-color-border));
+  border-radius: 8px 8px 2px 8px;
+}
+
+.ticket-comment-bubble__meta {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.ticket-comment-bubble__content {
+  overflow-wrap: anywhere;
+}
+
+.ticket-comment-bubble__content p {
+  margin-bottom: 0.45em;
+}
+
+.ticket-comment-bubble__content p:last-child {
+  margin-bottom: 0;
+}
+
+.ticket-comment-bubble__content blockquote,
+.smart-ticket-editor__content blockquote {
+  margin: 6px 0;
+  padding: 6px 10px;
+  color: var(--app-color-muted-text);
+  border-inline-start: 3px solid var(--app-color-primary);
+  background: color-mix(in srgb, var(--app-color-primary-soft) 64%, transparent);
+  border-radius: 6px;
+}
+
+.ticket-comment-bubble__actions {
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .profile-notification-advanced {
@@ -584,6 +711,17 @@ body .ant-message .ant-message-notice-content {
 .ticket-service-descriptions .ant-descriptions-item-content,
 .ticket-service-descriptions .ant-descriptions-item-label {
   min-width: 0;
+}
+
+.ticket-service-descriptions table {
+  width: 100% !important;
+  table-layout: fixed !important;
+}
+
+.ticket-service-descriptions .ant-descriptions-item-label {
+  width: 178px;
+  min-width: 178px;
+  white-space: nowrap;
 }
 
 .ticket-service-descriptions .ant-descriptions-item-content {
@@ -1267,12 +1405,14 @@ body .ant-message .ant-message-notice-content {
 
   .ticket-overview-main {
     height: auto;
+    grid-template-rows: auto;
   }
 
   .ticket-overview-service-card,
   .ticket-overview-comments-card,
   .ticket-overview-side-card {
     grid-column: 1;
+    height: auto;
   }
 }
 

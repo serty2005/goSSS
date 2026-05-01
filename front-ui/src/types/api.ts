@@ -631,6 +631,7 @@ export interface TicketCommentDTO {
   uuid: string;
   text: string;
   author_name: string;
+  author_user_id?: number;
   creation_date: string;
   is_internal: boolean;
   is_private?: boolean;
