@@ -117,10 +117,21 @@ func (h *AgentObservationFeedHandler) ListLatestByAgent(w http.ResponseWriter, r
 	filterWS := strings.TrimSpace(r.URL.Query().Get("workstation_id"))
 	filterFR := strings.TrimSpace(r.URL.Query().Get("fr_id"))
 
-	var rawRows []observationFeedDBRow
-	if err := h.db.WithContext(r.Context()).
+	query := h.db.WithContext(r.Context()).
 		Model(&models.AgentObservation{}).
-		Select("id, observed_at, source, agent_uuid, workstation_id, fr_id, payload_json").
+		Select("id, observed_at, source, agent_uuid, workstation_id, fr_id, payload_json")
+	if filterAgent != "" {
+		query = query.Where("agent_uuid = ? OR source = ?", filterAgent, filterAgent)
+	}
+	if filterWS != "" {
+		query = query.Where("workstation_id = ?", filterWS)
+	}
+	if filterFR != "" {
+		query = query.Where("fr_id = ?", filterFR)
+	}
+
+	var rawRows []observationFeedDBRow
+	if err := query.
 		Order("observed_at DESC, id DESC").
 		Limit(limit).
 		Find(&rawRows).Error; err != nil {

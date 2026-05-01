@@ -12,17 +12,19 @@ import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
 import { agentObservationsApi } from '@/api/agentObservations';
-import { AgentObservationFeedRowDTO, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketDetailsDTO, TicketHistoryDTO, TicketListItemDTO, TicketStatus, WorkstationEntity } from '@/types/api';
+import { AgentObservationFeedRowDTO, ApiResponse, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus, WorkstationEntity } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import { getTelephonyContactLabel, getTelephonyContactPhoneDisplay, getTelephonyContactPhoneForCopy } from '@/utils/telephony';
+import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import TicketTable from '@/components/tickets/TicketTable';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Title, Text } = Typography;
@@ -148,6 +150,12 @@ type AgentEquipmentGroup = {
   fiscals: InfrastructureItem[];
 };
 
+type AgentObservationLookupTarget = {
+  agentID: string;
+  workstationIDs: string[];
+  fiscalIDs: string[];
+};
+
 type CopyFieldEntityType = 'Server' | 'Workstation';
 
 type CopyValueParams = {
@@ -245,7 +253,7 @@ const TicketDetailsPage: React.FC = () => {
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
   const [copiedFieldKey, setCopiedFieldKey] = useState('');
-  const [observationAgentID, setObservationAgentID] = useState('');
+  const [observationTarget, setObservationTarget] = useState<AgentObservationLookupTarget | null>(null);
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
   const previousCommentsRef = useRef<Array<{ uuid: string; text: string; creation_date: string }>>([]);
   const clearFieldTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -499,38 +507,70 @@ const TicketDetailsPage: React.FC = () => {
     return source;
   }, [commentsNewFirst, details?.comments]);
 
-  const { data: latestCompanyTicketsResponse, isLoading: isLatestCompanyTicketsLoading } = useQuery({
-    queryKey: ['tickets', 'company-latest', metadata?.company_id],
-    queryFn: () => ticketsApi.getTickets({
-      company_id: metadata?.company_id,
-      limit: 8,
-      offset: 0,
-      archive_mode: 'all',
-    }),
-    enabled: Boolean(metadata?.company_id),
-    staleTime: 30_000,
-  });
-
-  const latestCompanyTickets = useMemo(() => {
-    return (latestCompanyTicketsResponse?.data || [])
-      .filter((item) => item.id !== metadata?.id)
-      .slice(0, 8);
-  }, [latestCompanyTicketsResponse?.data, metadata?.id]);
-
   const {
     data: latestAgentObservationResponse,
     isFetching: isAgentObservationLookupLoading,
     isError: isAgentObservationLookupError,
     error: agentObservationLookupError,
   } = useQuery({
-    queryKey: ['agent-observations', 'latest-by-agent', observationAgentID],
-    queryFn: () => agentObservationsApi.listFeed({
-      agent_uuid: observationAgentID,
-      sort_by: 'latest',
-      order: 'desc',
-      limit: 1,
-    }),
-    enabled: Boolean(observationAgentID),
+    queryKey: [
+      'agent-observations',
+      'latest-by-agent',
+      observationTarget?.agentID,
+      observationTarget?.workstationIDs.join('|'),
+      observationTarget?.fiscalIDs.join('|'),
+    ],
+    queryFn: async () => {
+      const target = observationTarget!;
+      const baseParams = {
+        sort_by: 'latest' as const,
+        order: 'desc' as const,
+        limit: 1,
+      };
+      const emptyResult: ApiResponse<AgentObservationFeedRowDTO[]> = {
+        status: 'success',
+        data: [],
+      };
+      const tryLookup = async (params: Parameters<typeof agentObservationsApi.listFeed>[0]) => {
+        try {
+          const response = await agentObservationsApi.listFeed(params);
+          return response;
+        } catch {
+          return null;
+        }
+      };
+
+      const byAgent = await tryLookup({
+        ...baseParams,
+        agent_uuid: target.agentID,
+      });
+      if ((byAgent?.data || []).length > 0) {
+        return byAgent;
+      }
+
+      for (const workstationID of target.workstationIDs) {
+        const byWorkstation = await tryLookup({
+          ...baseParams,
+          workstation_id: workstationID,
+        });
+        if ((byWorkstation?.data || []).length > 0) {
+          return byWorkstation;
+        }
+      }
+
+      for (const frID of target.fiscalIDs) {
+        const byFiscal = await tryLookup({
+          ...baseParams,
+          fr_id: frID,
+        });
+        if ((byFiscal?.data || []).length > 0) {
+          return byFiscal;
+        }
+      }
+
+      return byAgent ?? emptyResult;
+    },
+    enabled: Boolean(observationTarget?.agentID),
     staleTime: 15_000,
   });
 
@@ -1103,6 +1143,18 @@ const TicketDetailsPage: React.FC = () => {
     );
   };
 
+  const renderCopyValueGrid = (items: React.ReactNode[]) => {
+    const visibleItems = items.filter(Boolean);
+    if (visibleItems.length === 0) {
+      return null;
+    }
+    return (
+      <div className="ticket-equipment-copy-grid">
+        {visibleItems}
+      </div>
+    );
+  };
+
   const renderEditLink = (path: string, title: string) => (
     <Tooltip title={title}>
       <Button
@@ -1117,7 +1169,8 @@ const TicketDetailsPage: React.FC = () => {
     </Tooltip>
   );
 
-  const renderAgentBadge = (agentID: string, agentType?: string) => {
+  const renderAgentBadge = (target: AgentObservationLookupTarget, agentType?: string) => {
+    const agentID = target.agentID;
     if (!agentID) {
       return null;
     }
@@ -1127,7 +1180,7 @@ const TicketDetailsPage: React.FC = () => {
         <button
           type="button"
           className="ticket-agent-badge"
-          onClick={() => setObservationAgentID(agentID)}
+          onClick={() => setObservationTarget(target)}
         >
           {label}
         </button>
@@ -1143,6 +1196,7 @@ const TicketDetailsPage: React.FC = () => {
     const title = resolveEntityTitle(item);
     const crmID = normalizeTextValue(dataRow.crm_id);
     const partnersLink = normalizeTextValue(dataRow.partners_link);
+    const iikoWebMeta = getIikoWebAppLinkMeta(server.iiko_web_link);
     const titleHref = partnersLink || path;
     return (
       <Card key={`${keyPrefix}-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
@@ -1155,7 +1209,11 @@ const TicketDetailsPage: React.FC = () => {
             </Tooltip>
             <Space size={4}>
               {sourceLabel ? <Tag color="purple" style={{ marginInlineEnd: 0 }}>{sourceLabel}</Tag> : null}
-              <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>Сервер</Tag>
+              {iikoWebMeta ? (
+                <a href={iikoWebMeta.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                  <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{iikoWebMeta.label}</Tag>
+                </a>
+              ) : null}
               {path ? renderEditLink(path, 'Открыть карточку сервера') : null}
             </Space>
           </Space>
@@ -1167,30 +1225,32 @@ const TicketDetailsPage: React.FC = () => {
             entityID,
             connectionField: 'ip',
           })}
-          {isDigitsOnly(crmID) ? renderCopyValueRow({
-              key: `${keyPrefix}-${entityID}-crm`,
-              label: 'CRMid',
-              value: crmID,
+          {renderCopyValueGrid([
+            isDigitsOnly(crmID) ? renderCopyValueRow({
+                key: `${keyPrefix}-${entityID}-crm`,
+                label: 'CRMid',
+                value: crmID,
+                entityType: 'Server',
+                entityID,
+                connectionField: 'crm_id',
+              }) : null,
+            renderCopyValueRow({
+              key: `${keyPrefix}-${entityID}-version`,
+              label: 'Версия',
+              value: normalizeTextValue(dataRow.server_version),
               entityType: 'Server',
               entityID,
-              connectionField: 'crm_id',
-            }) : null}
-          {renderCopyValueRow({
-            key: `${keyPrefix}-${entityID}-version`,
-            label: 'Версия',
-            value: normalizeTextValue(dataRow.server_version),
-            entityType: 'Server',
-            entityID,
-            connectionField: 'server_version',
-          })}
-          {renderCopyValueRow({
-            key: `${keyPrefix}-${entityID}-uid`,
-            label: 'UID',
-            value: normalizeTextValue(dataRow.unique_id),
-            entityType: 'Server',
-            entityID,
-            connectionField: 'unique_id',
-          })}
+              connectionField: 'server_version',
+            }),
+            renderCopyValueRow({
+              key: `${keyPrefix}-${entityID}-uid`,
+              label: 'UID',
+              value: normalizeTextValue(dataRow.unique_id),
+              entityType: 'Server',
+              entityID,
+              connectionField: 'unique_id',
+            }),
+          ])}
         </Space>
       </Card>
     );
@@ -1218,14 +1278,14 @@ const TicketDetailsPage: React.FC = () => {
               {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
             </Space>
           </Space>
-          {remoteRows.length > 0 ? remoteRows.map((row) => renderCopyValueRow({
+          {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
             key: `workstation-${entityID}-${row.field}`,
             label: row.label,
             value: row.value,
             entityType: 'Workstation',
             entityID,
             connectionField: row.field,
-          })) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
+          }))) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
         </Space>
       </Card>
     );
@@ -1264,12 +1324,20 @@ const TicketDetailsPage: React.FC = () => {
     );
   };
 
-  const renderAgentEquipmentGroupCard = (group: AgentEquipmentGroup) => (
-    <Card key={group.key} size="small" className="glass-panel ticket-equipment-card ticket-agent-equipment-card">
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        <div className="ticket-agent-equipment-card__badge-row">
-          {renderAgentBadge(group.agentID, group.agentType)}
-        </div>
+  const renderAgentEquipmentGroupCard = (group: AgentEquipmentGroup) => {
+    const workstationIDs = group.workstations
+      .map((item) => normalizeTextValue(toInfraData(item).uuid))
+      .filter(Boolean);
+    const fiscalIDs = group.fiscals
+      .map((item) => normalizeTextValue(toInfraData(item).uuid))
+      .filter(Boolean);
+
+    return (
+      <Card key={group.key} size="small" className="glass-panel ticket-equipment-card ticket-agent-equipment-card">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div className="ticket-agent-equipment-card__badge-row">
+            {renderAgentBadge({ agentID: group.agentID, workstationIDs, fiscalIDs }, group.agentType)}
+          </div>
         {group.workstations.map((item) => {
           const dataRow = toInfraData(item);
           const entityID = normalizeTextValue(dataRow.uuid);
@@ -1292,14 +1360,14 @@ const TicketDetailsPage: React.FC = () => {
                   {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
                 </Space>
               </Space>
-              {remoteRows.length > 0 ? remoteRows.map((row) => renderCopyValueRow({
+              {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
                 key: `agent-workstation-${entityID}-${row.field}`,
                 label: row.label,
                 value: row.value,
                 entityType: 'Workstation',
                 entityID,
                 connectionField: row.field,
-              })) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
+              }))) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
             </div>
           );
         })}
@@ -1334,9 +1402,10 @@ const TicketDetailsPage: React.FC = () => {
             </div>
           );
         })}
-      </Space>
-    </Card>
-  );
+        </Space>
+      </Card>
+    );
+  };
 
   const equipmentTabContent = (
     (isInfraLoading || isParentInfraLoading) ? (
@@ -1358,34 +1427,15 @@ const TicketDetailsPage: React.FC = () => {
     )
   );
 
-  const latestTicketsTabContent = (
-    isLatestCompanyTicketsLoading ? (
-      <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-    ) : latestCompanyTickets.length === 0 ? (
-      <Empty description="Других тикетов компании пока нет" />
-    ) : (
-      <List<TicketListItemDTO>
-        dataSource={latestCompanyTickets}
-        renderItem={(ticket) => (
-          <List.Item key={ticket.id} className="ticket-latest-company-item">
-            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-              <Link to={`/tickets/${ticket.id}`}>
-                <Text strong>#{ticket.number} {ticket.subject}</Text>
-              </Link>
-              <Space size={6} wrap>
-                <Tag style={{ marginInlineEnd: 0 }}>{ticket.status}</Tag>
-                <Text type="secondary">
-                  {dayjs(ticket.last_activity || ticket.created_at).isValid()
-                    ? dayjs(ticket.last_activity || ticket.created_at).format('DD.MM.YYYY HH:mm')
-                    : '-'}
-                </Text>
-              </Space>
-              {ticket.last_comment ? <Text type="secondary" ellipsis>{ticket.last_comment}</Text> : null}
-            </Space>
-          </List.Item>
-        )}
-      />
-    )
+  const latestTicketsTabContent = metadata?.company_id ? (
+    <TicketTable
+      companyIds={[metadata.company_id]}
+      limit={10}
+      showCompanyColumn={false}
+      excludedTicketId={metadata.id}
+    />
+  ) : (
+    <Empty description="Компания тикета не выбрана" />
   );
 
   const callsTabContent = (
@@ -2147,15 +2197,15 @@ const TicketDetailsPage: React.FC = () => {
       </div>
 
       <AgentObservationRawModal
-        open={Boolean(observationAgentID)}
+        open={Boolean(observationTarget?.agentID)}
         observationID={latestAgentObservation?.observation_id}
-        onClose={() => setObservationAgentID('')}
-        title={observationAgentID ? 'Последнее наблюдение агента' : undefined}
+        onClose={() => setObservationTarget(null)}
+        title={observationTarget?.agentID ? 'Последнее наблюдение агента' : undefined}
         lookupLoading={isAgentObservationLookupLoading}
         lookupError={isAgentObservationLookupError ? getLookupErrorMessage(agentObservationLookupError) : undefined}
         emptyDescription="Для этого агента пока нет наблюдений"
         summary={{
-          agentUUID: observationAgentID,
+          agentUUID: observationTarget?.agentID,
           serverURL: latestAgentObservation?.server_url,
           currentTime: latestAgentObservation?.current_time || latestAgentObservation?.current_time_parsed,
           vTime: latestAgentObservation?.v_time || latestAgentObservation?.v_time_parsed,

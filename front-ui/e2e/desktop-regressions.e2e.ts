@@ -59,6 +59,14 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     await loginAsAdmin(page);
     await page.goto('/tickets');
 
+    const numberLink = page.locator('a.ticket-number-cell-link', { hasText: '#1001' }).first();
+    const numberCell = numberLink.locator('xpath=ancestor::td[1]');
+    const numberCellBox = await numberCell.boundingBox();
+    const numberLinkBox = await numberLink.boundingBox();
+    expect(numberCellBox).not.toBeNull();
+    expect(numberLinkBox).not.toBeNull();
+    expect(numberLinkBox?.width || 0, 'ссылка номера должна занимать почти всю ячейку').toBeGreaterThan((numberCellBox?.width || 0) - 24);
+
     await page.getByRole('button', { name: 'Новая заявка' }).click();
     const dialog = page.getByRole('dialog', { name: 'Новая заявка' });
     await expect(dialog).toBeVisible();
@@ -154,6 +162,7 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     await expect(networkBlock.getByText('Ресторан Север Доставка')).toBeVisible();
     await expect(networkBlock.getByText('Ресторан Север Склад')).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Инфраструктура' })).toHaveCount(0);
+    await expect(networkBlock.getByText('Текущая')).toHaveCount(0);
 
     const rootBox = await networkBlock.getByText('Ресторан Север', { exact: true }).first().boundingBox();
     const childBox = await networkBlock.getByText('Ресторан Север Бар').first().boundingBox();
@@ -196,6 +205,8 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
 
     await expect(sideCard.getByText('Серверы родительской компании')).toHaveCount(0);
     await expect(sideCard.getByText('srv-rest-sever')).toBeVisible();
+    await expect(sideCard.getByText('Сервер', { exact: true })).toHaveCount(0);
+    await expect(sideCard.getByRole('link', { name: 'SyrveApp' })).toHaveAttribute('href', 'https://demo.syrve.app/');
     await expect(sideCard.getByText('IP:порт')).toBeVisible();
     await expect(sideCard.getByText('CRMid')).toHaveCount(0);
     await expect(sideCard.getByRole('button', { name: /UID UID-SRV-001/ })).toBeVisible();
@@ -222,14 +233,42 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     await sideCard.getByRole('button', { name: /IP:порт/ }).click();
     await expect(page.locator('.ant-message-notice-content').last()).toContainText('Значение скопировано');
 
-    await sideCard.getByRole('button', { name: 'agent' }).first().click();
+    const serverCard = equipmentCards.nth(0);
+    const versionBox = await serverCard.getByRole('button', { name: /Версия/ }).boundingBox();
+    const uidBox = await serverCard.getByRole('button', { name: /UID/ }).boundingBox();
+    expect(versionBox).not.toBeNull();
+    expect(uidBox).not.toBeNull();
+    expect(Math.abs((versionBox?.y || 0) - (uidBox?.y || 0)), 'компактные кнопки сервера должны быть в одном ряду').toBeLessThanOrEqual(4);
+    expect((versionBox?.width || 0), 'компактная кнопка сервера должна быть уже IP').toBeLessThan((await serverCard.getByRole('button', { name: /IP:порт/ }).boundingBox())?.width || 0);
+
+    const workstationCard = equipmentCards.nth(3);
+    const anydeskBox = await workstationCard.getByRole('button', { name: /AnyDesk/ }).boundingBox();
+    const teamviewerBox = await workstationCard.getByRole('button', { name: /TeamViewer/ }).boundingBox();
+    expect(anydeskBox).not.toBeNull();
+    expect(teamviewerBox).not.toBeNull();
+    expect(Math.abs((anydeskBox?.y || 0) - (teamviewerBox?.y || 0)), 'ID подключений станции должны быть в две колонки').toBeLessThanOrEqual(4);
+
+    const [fallbackRequest] = await Promise.all([
+      page.waitForRequest((request) =>
+        request.url().includes('/api/agent-observations')
+        && request.url().includes('workstation_id=workstation-uuid-agent'),
+      ),
+      sideCard.getByRole('button', { name: 'agent' }).first().click(),
+    ]);
+    expect(fallbackRequest.url()).toContain('workstation_id=workstation-uuid-agent');
     const observationDialog = page.getByRole('dialog', { name: /Последнее наблюдение агента/ });
     await expect(observationDialog).toBeVisible();
     await expect(observationDialog).toContainText('#9001');
     await observationDialog.getByRole('button', { name: 'Закрыть' }).click();
 
     await sideCard.getByRole('tab', { name: 'Тикеты' }).click();
-    await expect(sideCard.getByText('#1003 Проверить связь с агентом кассы')).toBeVisible();
+    await expect(sideCard.getByText('Период создания')).toBeVisible();
+    await expect(sideCard.getByText('Период закрытия (Решено)')).toBeVisible();
+    await expect(sideCard.getByRole('columnheader', { name: 'Компания' })).toHaveCount(0);
+    await expect(sideCard.getByRole('link', { name: '#1003' })).toBeVisible();
+    await expect(sideCard.getByText('Повторная диагностика оборудования.')).toBeVisible();
+    await expect(sideCard.getByText('Показано: 1 из 1')).toBeVisible();
+    await expect(sideCard.getByRole('link', { name: '#1001' })).toHaveCount(0);
 
     await sideCard.getByRole('tab', { name: 'Звонки' }).click();
     await expect(sideCard.getByText('Звонки по тикету пока не привязаны')).toBeVisible();

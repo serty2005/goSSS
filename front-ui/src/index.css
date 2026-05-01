@@ -361,17 +361,25 @@ body .ant-message .ant-message-notice-content {
 
 .company-equipment-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 340px));
   gap: 16px;
   width: 100%;
+  justify-content: start;
+  align-items: start;
 }
 
 .company-equipment-grid--compact {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 280px));
 }
 
 .company-equipment-grid__item {
   min-width: 0;
+  width: 100%;
+  max-width: 340px;
+}
+
+.company-equipment-grid--compact .company-equipment-grid__item {
+  max-width: 280px;
 }
 
 .company-equipment-grid__item > .ant-card {
@@ -1072,6 +1080,13 @@ body .ant-message .ant-message-notice-content {
   filter: brightness(0.98);
 }
 
+.ticket-equipment-copy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
 .ticket-equipment-copy-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
@@ -1119,6 +1134,14 @@ body .ant-message .ant-message-notice-content {
 
 .ticket-latest-company-item {
   padding-inline: 0 !important;
+}
+
+.ticket-number-cell-link {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  margin: -8px;
+  padding: 8px;
 }
 
 @media (max-width: 992px) {

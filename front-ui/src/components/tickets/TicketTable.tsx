@@ -14,6 +14,8 @@ interface Props {
   companyId?: string;
   companyIds?: string[];
   limit?: number;
+  showCompanyColumn?: boolean;
+  excludedTicketId?: string | number;
 }
 
 type DateRangeValue = [Dayjs | null, Dayjs | null] | null;
@@ -47,7 +49,13 @@ const resolveRangeBounds = (range: DateRangeValue) => {
   return { from, to };
 };
 
-const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => {
+const TicketTable: React.FC<Props> = ({
+  companyId,
+  companyIds,
+  limit = 20,
+  showCompanyColumn = true,
+  excludedTicketId,
+}) => {
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [createdRange, setCreatedRange] = useState<DateRangeValue>(null);
@@ -107,11 +115,20 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
     staleTime: 20_000,
   });
 
-  const rows = useMemo(
+  const rawRows = useMemo(
     () => (data?.pages || []).flatMap((pageData) => pageData.data || []),
     [data?.pages],
   );
+
+  const rows = useMemo(() => {
+    const excludedID = excludedTicketId === undefined || excludedTicketId === null ? '' : String(excludedTicketId);
+    if (!excludedID) {
+      return rawRows;
+    }
+    return rawRows.filter((item) => String(item.id) !== excludedID);
+  }, [excludedTicketId, rawRows]);
   const total = data?.pages?.[0]?.meta?.total || 0;
+  const visibleTotal = Math.max(0, total - (rawRows.length - rows.length));
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -144,18 +161,18 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
   };
 
   const columns: ColumnsType<TicketListItemDTO> = [
-    {
+    ...(showCompanyColumn ? [{
       title: 'Компания',
       dataIndex: 'company_name',
       key: 'company_name',
       width: 220,
-      sorter: (a, b) => String(a.company_name || a.company_id || '').localeCompare(String(b.company_name || b.company_id || ''), 'ru'),
+      sorter: (a: TicketListItemDTO, b: TicketListItemDTO) => String(a.company_name || a.company_id || '').localeCompare(String(b.company_name || b.company_id || ''), 'ru'),
       render: (_value: string | undefined, record: TicketListItemDTO) => (
         <Link to={`/companies/${record.company_id}`} onClick={(event) => event.stopPropagation()}>
           {record.company_name || record.company_id || '-'}
         </Link>
       ),
-    },
+    }] : []),
     {
       title: 'Номер',
       dataIndex: 'number',
@@ -163,7 +180,7 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
       width: 100,
       sorter: (a, b) => (a.number || 0) - (b.number || 0),
       render: (val: number, record: TicketListItemDTO) => (
-        <Link to={`/tickets/${record.id}`} onClick={(event) => event.stopPropagation()}>
+        <Link className="ticket-number-cell-link" to={`/tickets/${record.id}`} onClick={(event) => event.stopPropagation()}>
           <Text strong>#{val}</Text>
         </Link>
       ),
@@ -247,6 +264,7 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
         loading={isLoading}
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
         onRow={(record) => ({
           onClick: () => {
             navigate(`/tickets/${record.id}`);
@@ -258,7 +276,7 @@ const TicketTable: React.FC<Props> = ({ companyId, companyIds, limit = 20 }) => 
       <div ref={loadMoreRef} style={{ marginTop: 4, display: 'flex', justifyContent: 'center', minHeight: 28 }}>
         {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
         {!hasNextPage && rows.length > 0 && (
-          <Text type="secondary">Показано: {rows.length} из {total}</Text>
+          <Text type="secondary">Показано: {rows.length} из {visibleTotal}</Text>
         )}
         {!isLoading && rows.length === 0 && (
           <Text type="secondary">Тикеты не найдены</Text>

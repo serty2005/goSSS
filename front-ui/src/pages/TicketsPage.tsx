@@ -1046,6 +1046,7 @@ const TicketsPage: React.FC = () => {
         ),
         render: (val: number, row) => (
           <Link
+            className="ticket-number-cell-link"
             to={`/tickets/${row.id}`}
             onClick={(event) => event.stopPropagation()}
           >

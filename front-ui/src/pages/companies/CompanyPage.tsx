@@ -690,11 +690,10 @@ const CompanyPage: React.FC = () => {
           boxShadow: isCurrent ? `0 0 0 1px ${token.colorPrimary}` : undefined,
         }}
       >
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <Space size={8} wrap>
-            {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
-            {isCurrent && <Tag color="gold" style={{ marginRight: 0 }}>Текущая</Tag>}
-            <Tag
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space size={8} wrap>
+              {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
+              <Tag
               color={contractBadge.color}
               style={{ marginRight: 0, cursor: 'pointer' }}
               onClick={() => openNetworkContractModal(cardCompanyID)}

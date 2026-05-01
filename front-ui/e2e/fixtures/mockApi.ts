@@ -439,7 +439,11 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
 
     if (method === 'GET' && path === '/tickets') {
       const companyID = url.searchParams.get('company_id') || '';
-      if (companyID === 'company-1') {
+      const companyIDs = (url.searchParams.get('company_ids') || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (companyID === 'company-1' || companyIDs.includes('company-1')) {
         const items = [ticketList[0], latestCompanyTicket];
         await route.fulfill(json(ok(items, {
           total: items.length,
@@ -548,6 +552,7 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
             server_version: '2026.4',
             unique_id: 'UID-SRV-001',
             partners_link: 'https://partners.example.test/server-1',
+            iiko_web_link: 'https://demo.syrve.app/',
           },
         },
         {
@@ -631,22 +636,30 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
     }
 
     if (method === 'GET' && path === '/agent-observations') {
-      await route.fulfill(json(ok([
-        {
-          observation_id: 9001,
-          agent_uuid: url.searchParams.get('agent_uuid') || 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-          vc: '1.8.0',
-          workstation_id: 'workstation-1',
-          workstation_name: 'Касса 1',
-          fr_id: 'fiscal-1',
-          fr_name: 'АТОЛ 55Ф',
-          owner_match: true,
-          observed_at: '2026-04-27T10:05:00Z',
-          current_time: '2026-04-27T13:05:00+03:00',
-          v_time: '2026-04-27T13:05:00+03:00',
-          server_url: 'https://srv-rest-sever.example.test',
-        },
-      ])));
+      const agentUUID = url.searchParams.get('agent_uuid') || '';
+      const workstationID = url.searchParams.get('workstation_id') || '';
+      const frID = url.searchParams.get('fr_id') || '';
+      const shouldReturnObservation = agentUUID === 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+        || workstationID === 'workstation-uuid-agent'
+        || workstationID === 'workstation-1'
+        || frID === 'fiscal-uuid-agent'
+        || frID === 'fiscal-1';
+      await route.fulfill(json(ok(shouldReturnObservation ? [
+          {
+            observation_id: 9001,
+            agent_uuid: agentUUID || 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            vc: '1.8.0',
+            workstation_id: workstationID || 'workstation-1',
+            workstation_name: workstationID === 'workstation-uuid-agent' ? 'Касса с агентским UUID' : 'Касса 1',
+            fr_id: frID || 'fiscal-1',
+            fr_name: frID === 'fiscal-uuid-agent' ? 'АТОЛ UUID' : 'АТОЛ 55Ф',
+            owner_match: true,
+            observed_at: '2026-04-27T10:05:00Z',
+            current_time: '2026-04-27T13:05:00+03:00',
+            v_time: '2026-04-27T13:05:00+03:00',
+            server_url: 'https://srv-rest-sever.example.test',
+          },
+        ] : [])));
       return;
     }
 
