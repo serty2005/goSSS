@@ -23,6 +23,7 @@ import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -222,6 +223,8 @@ const TicketDetailsPage: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [pendingDeferredAt, setPendingDeferredAt] = useState('');
   const [companySearch, setCompanySearch] = useState('');
+  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
+  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
   const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
@@ -236,6 +239,8 @@ const TicketDetailsPage: React.FC = () => {
   const [contactPhoneDraft, setContactPhoneDraft] = useState('');
   const [contactNameDraft, setContactNameDraft] = useState('');
   const [attachCallPhoneSearch, setAttachCallPhoneSearch] = useState('');
+  const [attachCallAppliedPhoneSearch, setAttachCallAppliedPhoneSearch] = useState('');
+  const debouncedAttachCallPhoneSearch = useDebouncedValue(attachCallPhoneSearch, TEXT_SEARCH_DEBOUNCE_MS);
   const [attachCallEmployeeID, setAttachCallEmployeeID] = useState<number | undefined>(undefined);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
@@ -401,12 +406,12 @@ const TicketDetailsPage: React.FC = () => {
 
   const parentInfrastructure = useMemo(() => parentInfraResponse?.data || [], [parentInfraResponse?.data]);
   const { data: attachableCallsResponse, isFetching: isAttachableCallsLoading } = useQuery({
-    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen, attachCallPhoneSearch, attachCallEmployeeID],
+    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen, attachCallAppliedPhoneSearch, attachCallEmployeeID],
     queryFn: () => {
       const now = new Date();
       return telephonyApi.getCalls({
         only_without_ticket: true,
-        client_phone: attachCallPhoneSearch.trim() || undefined,
+        client_phone: attachCallAppliedPhoneSearch.trim() || undefined,
         employee_user_id: attachCallEmployeeID,
         started_from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
         started_to: now.toISOString(),
@@ -417,6 +422,10 @@ const TicketDetailsPage: React.FC = () => {
     staleTime: 15_000,
   });
   const attachableCalls = useMemo(() => attachableCallsResponse?.items || [], [attachableCallsResponse?.items]);
+
+  useEffect(() => {
+    setAttachCallAppliedPhoneSearch(debouncedAttachCallPhoneSearch);
+  }, [debouncedAttachCallPhoneSearch]);
 
   const companyTitle = useMemo(() => {
     const companyData = companyResponse?.data as { title?: string; additional_name?: string } | undefined;
@@ -555,10 +564,14 @@ const TicketDetailsPage: React.FC = () => {
   }, [isDescriptionEditMode, metadata]);
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
-    queryKey: ['ticket-companies', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    queryKey: ['ticket-companies', companyAppliedSearch],
+    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 20, 0),
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setCompanyAppliedSearch(debouncedCompanySearch);
+  }, [debouncedCompanySearch]);
 
   const companySelectOptions = useMemo(() => {
     const list = companiesData?.data || [];
@@ -1654,6 +1667,7 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={() => {
                                 setDraftCompanyID(metadata.company_id);
                                 setCompanySearch('');
+                                setCompanyAppliedSearch('');
                                 setIsCompanyEditMode(true);
                               }}
                             />}
@@ -1670,6 +1684,11 @@ const TicketDetailsPage: React.FC = () => {
                               filterOption={false}
                               loading={isCompaniesLoading || changeCompanyMutation.isPending}
                               onSearch={(value) => setCompanySearch(value)}
+                              onInputKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  setCompanyAppliedSearch(companySearch);
+                                }
+                              }}
                               onChange={(nextCompanyID) => setDraftCompanyID(String(nextCompanyID))}
                             />
                             <Button
@@ -2256,6 +2275,7 @@ const TicketDetailsPage: React.FC = () => {
             placeholder="Поиск по номеру"
             value={attachCallPhoneSearch}
             onChange={(event) => setAttachCallPhoneSearch(event.target.value)}
+            onSearch={(value) => setAttachCallAppliedPhoneSearch(value.trim())}
           />
           <Select
             allowClear

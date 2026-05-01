@@ -8,6 +8,7 @@ import { CompanyContractReportRowDTO } from '@/types/api';
 import { downloadBlob, extractFileNameFromContentDisposition } from '@/utils/reportExport';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
+import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Text } = Typography;
 
@@ -20,6 +21,8 @@ const CompanyContractsReportPage: React.FC = () => {
   const [companyIDs, setCompanyIDs] = useState<string[]>([]);
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [companySearch, setCompanySearch] = useState('');
+  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
+  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
 
   const reportQuery = useQuery({
     queryKey: ['report', 'companies-contracts', statuses, contractTypes, companyIDs, searchTerms],
@@ -39,10 +42,14 @@ const CompanyContractsReportPage: React.FC = () => {
   });
 
   const companiesLookupQuery = useQuery({
-    queryKey: ['companies', 'reports-company-filter', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 30, 0),
+    queryKey: ['companies', 'reports-company-filter', companyAppliedSearch],
+    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 30, 0),
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setCompanyAppliedSearch(debouncedCompanySearch);
+  }, [debouncedCompanySearch]);
 
   const exportMutation = useMutation({
     mutationFn: () => reportsApi.exportCompanyContractsReport({
@@ -203,6 +210,11 @@ const CompanyContractsReportPage: React.FC = () => {
         options={companyOptions}
         style={{ minWidth: 320 }}
         onSearch={setCompanySearch}
+        onInputKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            setCompanyAppliedSearch(companySearch);
+          }
+        }}
         onChange={(values) => setCompanyIDs(values)}
       />
       <Button
@@ -222,7 +234,8 @@ const CompanyContractsReportPage: React.FC = () => {
     contractTypeOptions,
     companyIDs,
     companyOptions,
-    exportMutation.isPending,
+    companySearch,
+    exportMutation,
   ]);
 
   useEffect(() => {

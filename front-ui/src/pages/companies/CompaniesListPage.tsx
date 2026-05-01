@@ -9,6 +9,7 @@ import { CompanyBitrixMappingRowDTO, CompanyModel } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
+import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { cancelDraft, createInitialDraft, formatMappedServicePointLabel, isDraftDirty, MappingDraft, toggleDirection } from './companyBitrixMappingState';
 
 const { Title, Text } = Typography;
@@ -25,6 +26,10 @@ const CompaniesListPage: React.FC = () => {
 
   const [companyLookupTerm, setCompanyLookupTerm] = useState('');
   const [servicePointLookupTerm, setServicePointLookupTerm] = useState('');
+  const [companyLookupAppliedTerm, setCompanyLookupAppliedTerm] = useState('');
+  const [servicePointLookupAppliedTerm, setServicePointLookupAppliedTerm] = useState('');
+  const debouncedCompanyLookupTerm = useDebouncedValue(companyLookupTerm, SELECT_SEARCH_DEBOUNCE_MS);
+  const debouncedServicePointLookupTerm = useDebouncedValue(servicePointLookupTerm, SELECT_SEARCH_DEBOUNCE_MS);
   const [drafts, setDrafts] = useState<Record<string, MappingDraft>>({});
   const [syncingCompanyID, setSyncingCompanyID] = useState<string | null>(null);
   const companiesLimit = 20;
@@ -52,9 +57,9 @@ const CompaniesListPage: React.FC = () => {
   });
 
   const { data: pointsData = [] } = useQuery({
-    queryKey: ['bitrix-service-points', 'for-company-mappings', servicePointLookupTerm],
+    queryKey: ['bitrix-service-points', 'for-company-mappings', servicePointLookupAppliedTerm],
     queryFn: () => ticketsApi.getBitrixServicePoints({
-      term: servicePointLookupTerm,
+      term: servicePointLookupAppliedTerm,
       limit: 20,
       offset: 0,
       random_if_empty: true,
@@ -64,11 +69,19 @@ const CompaniesListPage: React.FC = () => {
   });
 
   const { data: companiesLookupData } = useQuery({
-    queryKey: ['companies', 'lookup', companyLookupTerm],
-    queryFn: () => companiesApi.searchCompanies(companyLookupTerm, 30, 0),
+    queryKey: ['companies', 'lookup', companyLookupAppliedTerm],
+    queryFn: () => companiesApi.searchCompanies(companyLookupAppliedTerm, 30, 0),
     enabled: isAdminUser,
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setCompanyLookupAppliedTerm(debouncedCompanyLookupTerm);
+  }, [debouncedCompanyLookupTerm]);
+
+  useEffect(() => {
+    setServicePointLookupAppliedTerm(debouncedServicePointLookupTerm);
+  }, [debouncedServicePointLookupTerm]);
 
   useEffect(() => {
     if (!mappingsData?.data) {
@@ -205,6 +218,11 @@ const CompaniesListPage: React.FC = () => {
               value={currentValue}
               options={options}
               onSearch={setCompanyLookupTerm}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setCompanyLookupAppliedTerm(companyLookupTerm);
+                }
+              }}
               onChange={(value) => {
                 setDrafts((prev) => ({
                   ...prev,
@@ -278,6 +296,11 @@ const CompaniesListPage: React.FC = () => {
               value={draft?.pointId}
               options={fallbackOptions}
               onSearch={setServicePointLookupTerm}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setServicePointLookupAppliedTerm(servicePointLookupTerm);
+                }
+              }}
               onChange={(value) => {
                 setDrafts((prev) => ({
                   ...prev,

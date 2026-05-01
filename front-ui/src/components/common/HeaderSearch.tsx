@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { LogoutOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
@@ -14,6 +14,7 @@ import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 import { TICKET_ACTIVE_STATUS_VALUES, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import GlobalSearchLauncher from '@/components/search/GlobalSearchLauncher';
+import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { useBreakpoint } = Grid;
 const { Text } = Typography;
@@ -120,8 +121,15 @@ const HeaderSearch: React.FC = () => {
   const requestCreateTicket = useTicketParamsStore((state) => state.requestCreateTicket);
   const selectedTicketIDs = useTicketParamsStore((state) => state.selectedTicketIDs);
   const clearSelectedTicketIDs = useTicketParamsStore((state) => state.clearSelectedTicketIDs);
+  const ticketsFetchCount = useIsFetching({ queryKey: ['tickets'] });
+  const companiesFetchCount = useIsFetching({ queryKey: ['companies', 'list'] });
+  const serversFetchCount = useIsFetching({ queryKey: ['equipment', 'servers'] });
+  const workstationsFetchCount = useIsFetching({ queryKey: ['equipment', 'workstations'] });
+  const fiscalsFetchCount = useIsFetching({ queryKey: ['equipment', 'fiscals'] });
+  const agentsFetchCount = useIsFetching({ queryKey: ['agent-diagnostics-list'] });
   const ticketParams = useMemo(() => new URLSearchParams(ticketParamsRaw), [ticketParamsRaw]);
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
+  const debouncedTicketTerm = useDebouncedValue(ticketTerm, TEXT_SEARCH_DEBOUNCE_MS);
   const [presetName, setPresetName] = useState('');
   const appliedSearch = ticketParams.get('q') || '';
   const ticketStatus = ticketParams.get('status') || '';
@@ -143,6 +151,13 @@ const HeaderSearch: React.FC = () => {
   const companyParamKey = archiveMode === 'archive' ? 'archive_company' : 'company';
   const periodFromParamKey = archiveMode === 'archive' ? 'archive_period_from' : 'period_from';
   const periodToParamKey = archiveMode === 'archive' ? 'archive_period_to' : 'period_to';
+  const isTicketSearchLoading = ticketsFetchCount > 0;
+  const isSectionSearchLoading =
+    (isCompaniesPage && companiesFetchCount > 0)
+    || (isServersPage && serversFetchCount > 0)
+    || (isWorkstationsPage && workstationsFetchCount > 0)
+    || (isFiscalsPage && fiscalsFetchCount > 0)
+    || (isAgentsPage && agentsFetchCount > 0);
 
   useEffect(() => {
     if (!isTicketsPage || !location.search) {
@@ -348,7 +363,7 @@ const HeaderSearch: React.FC = () => {
     return Object.keys(parsed).length ? parsed : null;
   }, [user?.profile_config]);
 
-  const updateTicketParams = (next: Record<string, string | undefined>) => {
+  const updateTicketParams = useCallback((next: Record<string, string | undefined>) => {
     const params = new URLSearchParams(ticketParams);
     Object.entries(next).forEach(([key, value]) => {
       if (!value) {
@@ -365,7 +380,18 @@ const HeaderSearch: React.FC = () => {
     }
     params.set('page', '1');
     setTicketParamsRaw(params.toString());
-  };
+  }, [setTicketParamsRaw, ticketParams]);
+
+  useEffect(() => {
+    if (!isTicketsPage) {
+      return;
+    }
+    const normalized = debouncedTicketTerm.trim();
+    if (normalized === appliedSearch) {
+      return;
+    }
+    updateTicketParams({ q: normalized || undefined });
+  }, [appliedSearch, debouncedTicketTerm, isTicketsPage, updateTicketParams]);
 
   useEffect(() => {
     if (!isTicketsListPage) {
@@ -580,6 +606,7 @@ const HeaderSearch: React.FC = () => {
   const [sectionParams] = useSearchParams();
   const sectionTerm = sectionParams.get('q') || '';
   const [sectionSearchTerm, setSectionSearchTerm] = useState(sectionTerm);
+  const debouncedSectionSearchTerm = useDebouncedValue(sectionSearchTerm, TEXT_SEARCH_DEBOUNCE_MS);
 
   useEffect(() => {
     if (!isSectionSearchPage) return;
@@ -595,7 +622,7 @@ const HeaderSearch: React.FC = () => {
     return t('layout:headerSearch.sectionPlaceholders.default');
   })();
 
-  const onSectionSearch = (value: string) => {
+  const onSectionSearch = useCallback((value: string) => {
     const trimmed = value.trim();
     const params = new URLSearchParams(sectionParams);
     if (!trimmed) {
@@ -606,7 +633,17 @@ const HeaderSearch: React.FC = () => {
     params.delete('page');
     const query = params.toString();
     navigate(query ? `${location.pathname}?${query}` : location.pathname);
-  };
+  }, [location.pathname, navigate, sectionParams]);
+
+  useEffect(() => {
+    if (!isSectionSearchPage) {
+      return;
+    }
+    if (debouncedSectionSearchTerm.trim() === sectionTerm.trim()) {
+      return;
+    }
+    onSectionSearch(debouncedSectionSearchTerm);
+  }, [debouncedSectionSearchTerm, isSectionSearchPage, onSectionSearch, sectionTerm]);
 
   const [agentObservationParams] = useSearchParams();
   const agentUUIDFilter = (agentObservationParams.get('agent_uuid') || agentObservationParams.get('agent') || '').trim();
@@ -908,6 +945,7 @@ const HeaderSearch: React.FC = () => {
             className="ticket-header-mobile-search"
             placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
             allowClear
+            loading={isTicketSearchLoading}
             value={ticketTerm}
             onChange={(event) => setTicketTerm(event.target.value)}
             onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
@@ -933,6 +971,7 @@ const HeaderSearch: React.FC = () => {
         <Input.Search
           placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
           allowClear
+          loading={isTicketSearchLoading}
           value={ticketTerm}
           onChange={(event) => setTicketTerm(event.target.value)}
           onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
@@ -993,6 +1032,7 @@ const HeaderSearch: React.FC = () => {
             className="ticket-header-mobile-search"
             placeholder={sectionPlaceholder}
             allowClear
+            loading={isSectionSearchLoading}
             value={sectionSearchTerm}
             onChange={(event) => setSectionSearchTerm(event.target.value)}
             onSearch={onSectionSearch}
@@ -1006,6 +1046,7 @@ const HeaderSearch: React.FC = () => {
       <Input.Search
         placeholder={sectionPlaceholder}
         allowClear
+        loading={isSectionSearchLoading}
         value={sectionSearchTerm}
         onChange={(event) => setSectionSearchTerm(event.target.value)}
         onSearch={onSectionSearch}

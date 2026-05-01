@@ -15,6 +15,7 @@ import {
   getRegistrationStatusMeta,
   isMeaningfulDate,
 } from '@/components/agents/agentDiagnosticsUtils';
+import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Title, Text } = Typography;
 
@@ -50,6 +51,7 @@ const AgentsPage: React.FC = () => {
   const heartbeatFilter = ((searchParams.get('heartbeat') || 'all').trim() || 'all') as HeartbeatFilterValue;
   const inventoryFilter = ((searchParams.get('inventory') || 'all').trim() || 'all') as InventoryFilterValue;
   const [searchValue, setSearchValue] = useState(term);
+  const debouncedSearchValue = useDebouncedValue(searchValue, TEXT_SEARCH_DEBOUNCE_MS);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -75,6 +77,13 @@ const AgentsPage: React.FC = () => {
     });
     setSearchParams(params);
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (debouncedSearchValue.trim() === term) {
+      return;
+    }
+    updateFilters({ q: debouncedSearchValue });
+  }, [debouncedSearchValue, term, updateFilters]);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['agent-diagnostics-list', term, registrationFilter],

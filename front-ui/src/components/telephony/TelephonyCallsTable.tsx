@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
@@ -21,6 +21,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { telephonyApi } from "@/api/telephony";
 import { usersApi } from "@/api/users";
 import type { TelephonyCallDTO, TelephonyCallListParams } from "@/types/api";
+import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/hooks/useDebouncedValue";
 
 const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
@@ -151,6 +152,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   const [pageSize, setPageSize] = useState(20);
   const [employeeUserID, setEmployeeUserID] = useState<number | undefined>();
   const [clientPhoneInput, setClientPhoneInput] = useState("");
+  const [clientPhoneApplied, setClientPhoneApplied] = useState("");
   const [statuses, setStatuses] = useState<string[]>([]);
   const [groupNames, setGroupNames] = useState<string[]>([]);
   const [period, setPeriod] = useState<[Dayjs | null, Dayjs | null] | null>(
@@ -158,7 +160,10 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   );
   const [onlyMissed, setOnlyMissed] = useState(false);
   const [onlyWithoutTicket, setOnlyWithoutTicket] = useState(false);
-  const deferredClientPhone = useDeferredValue(clientPhoneInput.trim());
+  const debouncedClientPhone = useDebouncedValue(
+    clientPhoneInput.trim(),
+    TEXT_SEARCH_DEBOUNCE_MS,
+  );
 
   useEffect(() => {
     const nextSearchParams = new URLSearchParams(searchParamsKey);
@@ -167,9 +172,11 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
         ? parseTelephonyNumberParam(nextSearchParams.get("employee_user_id"))
         : undefined,
     );
-    setClientPhoneInput(
-      String(nextSearchParams.get("client_phone") || "").trim(),
-    );
+    const nextClientPhone = String(
+      nextSearchParams.get("client_phone") || "",
+    ).trim();
+    setClientPhoneInput(nextClientPhone);
+    setClientPhoneApplied(nextClientPhone);
     setStatuses(parseTelephonyCSVParam(nextSearchParams.get("status")));
     setGroupNames(parseTelephonyCSVParam(nextSearchParams.get("group_name")));
     setPeriod(buildPeriodFromSearchParams(nextSearchParams));
@@ -186,10 +193,14 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   }, [mode, searchParamsKey]);
 
   useEffect(() => {
+    setClientPhoneApplied(debouncedClientPhone);
+  }, [debouncedClientPhone]);
+
+  useEffect(() => {
     setPage(1);
   }, [
     employeeUserID,
-    deferredClientPhone,
+    clientPhoneApplied,
     groupNames,
     statuses,
     period,
@@ -200,7 +211,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
   const params = useMemo<TelephonyCallListParams>(
     () => ({
       employee_user_id: mode === "admin" ? employeeUserID : undefined,
-      client_phone: deferredClientPhone || undefined,
+      client_phone: clientPhoneApplied || undefined,
       status: statuses.length > 0 ? statuses : undefined,
       group_name: groupNames.length > 0 ? groupNames : undefined,
       started_from: period?.[0] ? period[0].toISOString() : undefined,
@@ -211,7 +222,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
       offset: (page - 1) * pageSize,
     }),
     [
-      deferredClientPhone,
+      clientPhoneApplied,
       employeeUserID,
       groupNames,
       mode,
@@ -445,6 +456,7 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
               placeholder="Номер клиента"
               value={clientPhoneInput}
               onChange={(event) => setClientPhoneInput(event.target.value)}
+              onPressEnter={() => setClientPhoneApplied(clientPhoneInput.trim())}
             />
 
             <Select

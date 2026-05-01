@@ -1,10 +1,11 @@
-import React, { useDeferredValue, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Popover, Typography } from 'antd';
 import type { InputRef } from 'antd';
 import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import SearchResultsContent from '@/components/search/SearchResultsContent';
+import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Text } = Typography;
 
@@ -18,7 +19,8 @@ const GlobalSearchLauncher: React.FC<Props> = ({ collapsed, sidebarWidth }) => {
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState('');
-  const deferredTerm = useDeferredValue(term.trim());
+  const [appliedTerm, setAppliedTerm] = useState('');
+  const debouncedTerm = useDebouncedValue(term.trim(), TEXT_SEARCH_DEBOUNCE_MS);
   const popoverOffset = collapsed ? 12 : Math.max(12, Math.round(sidebarWidth * 0.06));
   const triggerRef = useRef<HTMLDivElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -27,6 +29,10 @@ const GlobalSearchLauncher: React.FC<Props> = ({ collapsed, sidebarWidth }) => {
   useEffect(() => {
     setOpen(false);
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    setAppliedTerm(debouncedTerm);
+  }, [debouncedTerm]);
 
   useEffect(() => {
     if (!open) {
@@ -102,11 +108,12 @@ const GlobalSearchLauncher: React.FC<Props> = ({ collapsed, sidebarWidth }) => {
           placeholder={t('layout:headerSearch.global.placeholder')}
           value={term}
           onChange={(event) => setTerm(event.target.value)}
+          onPressEnter={() => setAppliedTerm(term.trim())}
         />
       ) : null}
 
       <div className="global-search-popover__results">
-        <SearchResultsContent term={deferredTerm} variant="popover" />
+        <SearchResultsContent term={appliedTerm} variant="popover" />
       </div>
     </div>
   );
@@ -144,6 +151,7 @@ const GlobalSearchLauncher: React.FC<Props> = ({ collapsed, sidebarWidth }) => {
                 setTerm(event.target.value);
                 setOpen(true);
               }}
+              onPressEnter={() => setAppliedTerm(term.trim())}
               className="global-search-launcher__input"
             />
           </div>

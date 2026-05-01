@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button, Checkbox, Dropdown, Input, Select, Space, Typography, theme as antTheme } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
+import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Text } = Typography;
 
@@ -42,6 +43,42 @@ interface EntityListToolbarProps {
   filterRows?: string[][];
   columnsButtonPlacement?: 'controls' | 'lastFilterRow';
 }
+
+const EntityListFilterSelect: React.FC<{ filter: EntityListFilterConfig }> = ({ filter }) => {
+  const [searchValue, setSearchValue] = React.useState('');
+  const debouncedSearchValue = useDebouncedValue(searchValue, SELECT_SEARCH_DEBOUNCE_MS);
+  const { onSearch } = filter;
+
+  React.useEffect(() => {
+    if (!onSearch) {
+      return;
+    }
+    onSearch(debouncedSearchValue);
+  }, [debouncedSearchValue, onSearch]);
+
+  return (
+    <Select
+      mode="multiple"
+      showSearch={filter.showSearch ?? true}
+      allowClear
+      filterOption={filter.filterOption ?? true}
+      maxTagCount={filter.maxTagCount}
+      placeholder={filter.placeholder}
+      value={filter.value}
+      options={filter.options}
+      loading={filter.loading}
+      optionFilterProp="label"
+      style={{ width: '100%' }}
+      onSearch={setSearchValue}
+      onInputKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          filter.onSearch?.(searchValue);
+        }
+      }}
+      onChange={(nextValue) => filter.onChange(nextValue.map(String))}
+    />
+  );
+};
 
 const EntityListToolbar: React.FC<EntityListToolbarProps> = ({
   showSearch = true,
@@ -117,21 +154,7 @@ const EntityListToolbar: React.FC<EntityListToolbarProps> = ({
         ...filter.style,
       }}
     >
-      <Select
-        mode="multiple"
-        showSearch={filter.showSearch ?? true}
-        allowClear
-        filterOption={filter.filterOption ?? true}
-        maxTagCount={filter.maxTagCount}
-        placeholder={filter.placeholder}
-        value={filter.value}
-        options={filter.options}
-        loading={filter.loading}
-        optionFilterProp="label"
-        style={{ width: '100%' }}
-        onSearch={filter.onSearch}
-        onChange={(nextValue) => filter.onChange(nextValue.map(String))}
-      />
+      <EntityListFilterSelect filter={filter} />
     </div>
   );
 

@@ -14,6 +14,7 @@ import { normalizeTicketPreview } from '@/utils/ticketText';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 import { getTicketStatusMeta } from '@/constants/ticketStatus';
+import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Text, Paragraph } = Typography;
 
@@ -33,6 +34,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
+  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
+  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; title: string }>>([]);
   const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parent_title?: string; parent_id?: string; active_contract?: boolean }>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; title: string } | null>(null);
@@ -130,11 +133,15 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   };
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
-    queryKey: ['companies', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    queryKey: ['companies', companyAppliedSearch],
+    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 20, 0),
     enabled: open,
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setCompanyAppliedSearch(debouncedCompanySearch);
+  }, [debouncedCompanySearch]);
 
   useEffect(() => {
     if (!companiesData?.data) return;
@@ -570,6 +577,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
       form.resetFields();
       setCompanySearch('');
+      setCompanyAppliedSearch('');
       setSelectedCompanyOption(null);
       onClose();
       onCreated?.();
@@ -584,6 +592,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const handleCancel = () => {
     form.resetFields();
     setCompanySearch('');
+    setCompanyAppliedSearch('');
     setSelectedCompanyOption(null);
     onClose();
   };
@@ -832,6 +841,11 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 placeholder={t('tickets:newTicket.form.companyPlaceholder')}
                 onSearch={(value) => {
                   setCompanySearch(value);
+                }}
+                onInputKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    setCompanyAppliedSearch(companySearch);
+                  }
                 }}
                 loading={isCompaniesLoading}
                 filterOption={false}

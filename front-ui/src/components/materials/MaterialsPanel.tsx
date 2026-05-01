@@ -9,6 +9,7 @@ import { companiesApi } from '@/api/companies';
 import { equipmentApi } from '@/api/equipment';
 import { MaterialDTO, MaterialEntityRefDTO, MaterialPayload } from '@/types/api';
 import { useUiStore } from '@/store/uiStore';
+import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Text, Title } = Typography;
 
@@ -69,6 +70,14 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   const [serverSearch, setServerSearch] = useState('');
   const [workstationSearch, setWorkstationSearch] = useState('');
   const [fiscalSearch, setFiscalSearch] = useState('');
+  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
+  const [serverAppliedSearch, setServerAppliedSearch] = useState('');
+  const [workstationAppliedSearch, setWorkstationAppliedSearch] = useState('');
+  const [fiscalAppliedSearch, setFiscalAppliedSearch] = useState('');
+  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
+  const debouncedServerSearch = useDebouncedValue(serverSearch, SELECT_SEARCH_DEBOUNCE_MS);
+  const debouncedWorkstationSearch = useDebouncedValue(workstationSearch, SELECT_SEARCH_DEBOUNCE_MS);
+  const debouncedFiscalSearch = useDebouncedValue(fiscalSearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [selectedCompanyOptions, setSelectedCompanyOptions] = useState<SelectOption[]>([]);
   const [selectedServerOptions, setSelectedServerOptions] = useState<SelectOption[]>([]);
   const [selectedWorkstationOptions, setSelectedWorkstationOptions] = useState<SelectOption[]>([]);
@@ -108,25 +117,41 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   );
 
   const { data: companiesRes } = useQuery({
-    queryKey: ['materials-company-search', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    queryKey: ['materials-company-search', companyAppliedSearch],
+    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 20, 0),
     staleTime: 20_000,
   });
   const { data: serversRes } = useQuery({
-    queryKey: ['materials-server-search', serverSearch],
-    queryFn: () => equipmentApi.listServers(serverSearch, 20, 0),
+    queryKey: ['materials-server-search', serverAppliedSearch],
+    queryFn: () => equipmentApi.listServers(serverAppliedSearch, 20, 0),
     staleTime: 20_000,
   });
   const { data: workstationsRes } = useQuery({
-    queryKey: ['materials-workstation-search', workstationSearch],
-    queryFn: () => equipmentApi.listWorkstations(workstationSearch, 20, 0),
+    queryKey: ['materials-workstation-search', workstationAppliedSearch],
+    queryFn: () => equipmentApi.listWorkstations(workstationAppliedSearch, 20, 0),
     staleTime: 20_000,
   });
   const { data: fiscalsRes } = useQuery({
-    queryKey: ['materials-fiscal-search', fiscalSearch],
-    queryFn: () => equipmentApi.listFiscals(fiscalSearch, 20, 0),
+    queryKey: ['materials-fiscal-search', fiscalAppliedSearch],
+    queryFn: () => equipmentApi.listFiscals(fiscalAppliedSearch, 20, 0),
     staleTime: 20_000,
   });
+
+  useEffect(() => {
+    setCompanyAppliedSearch(debouncedCompanySearch);
+  }, [debouncedCompanySearch]);
+
+  useEffect(() => {
+    setServerAppliedSearch(debouncedServerSearch);
+  }, [debouncedServerSearch]);
+
+  useEffect(() => {
+    setWorkstationAppliedSearch(debouncedWorkstationSearch);
+  }, [debouncedWorkstationSearch]);
+
+  useEffect(() => {
+    setFiscalAppliedSearch(debouncedFiscalSearch);
+  }, [debouncedFiscalSearch]);
 
   useEffect(() => {
     const ownerIDs = Array.from(
@@ -516,6 +541,11 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
               filterOption={false}
               options={companyOptions}
               onSearch={setCompanySearch}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setCompanyAppliedSearch(companySearch);
+                }
+              }}
               placeholder="Найдите и выберите компании"
             />
           </Form.Item>
@@ -528,6 +558,11 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
               filterOption={false}
               options={serverOptions}
               onSearch={setServerSearch}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setServerAppliedSearch(serverSearch);
+                }
+              }}
               placeholder="Найдите и выберите серверы"
             />
           </Form.Item>
@@ -540,6 +575,11 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
               filterOption={false}
               options={workstationOptions}
               onSearch={setWorkstationSearch}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setWorkstationAppliedSearch(workstationSearch);
+                }
+              }}
               placeholder="Найдите и выберите рабочие станции"
             />
           </Form.Item>
@@ -552,6 +592,11 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
               filterOption={false}
               options={fiscalOptions}
               onSearch={setFiscalSearch}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setFiscalAppliedSearch(fiscalSearch);
+                }
+              }}
               placeholder="Найдите и выберите ФР (владелец • серийный номер)"
             />
           </Form.Item>

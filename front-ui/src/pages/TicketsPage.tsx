@@ -587,7 +587,7 @@ const TicketsPage: React.FC = () => {
     };
   }, [headerAddon, setHeaderAddon, setHeaderAddonPlacement]);
 
-  const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
+  const { data, isLoading, isFetching, isFetchingNextPage, hasNextPage, fetchNextPage } =
     useInfiniteQuery({
       queryKey: [
         "tickets",
@@ -641,6 +641,7 @@ const TicketsPage: React.FC = () => {
   );
   const visibleTickets = tickets;
   const total = data?.pages?.[0]?.meta?.total || 0;
+  const isRefreshingTickets = isFetching && !isFetchingNextPage && !isLoading;
 
   const { data: detailsResponse, isLoading: isDetailsLoading } = useQuery({
     queryKey: ["ticket", selectedTicketId],
@@ -1635,9 +1636,32 @@ const TicketsPage: React.FC = () => {
             </Button>
           </section>
         )}
+        {isRefreshingTickets && (
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              minHeight: 28,
+              marginBottom: 12,
+              padding: "4px 10px",
+              borderRadius: 8,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
+            }}
+          >
+            <Spin size="small" />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {t("tickets:labels.searching")}
+            </Text>
+          </div>
+        )}
         {viewMode === "list" && (
           <List
-            loading={isLoading}
+            loading={{
+              spinning: isLoading || isRefreshingTickets,
+              tip: t("tickets:labels.searching"),
+            }}
             dataSource={visibleTickets}
             renderItem={(item) => {
               const meta = getTicketStatusMeta(item.status);
@@ -1732,7 +1756,13 @@ const TicketsPage: React.FC = () => {
           />
         )}
 
-        {viewMode === "cards" && (
+        {viewMode === "cards" && isLoading && (
+          <div style={{ display: "flex", justifyContent: "center", padding: 32 }}>
+            <Spin />
+          </div>
+        )}
+
+        {viewMode === "cards" && !isLoading && (
           <Row gutter={[12, 12]} className="tickets-mobile-list">
             {visibleTickets.map((item) => {
               const meta = getTicketStatusMeta(item.status);
@@ -1868,6 +1898,10 @@ const TicketsPage: React.FC = () => {
                 tableLayout="fixed"
                 scroll={{ x: tableScrollX }}
                 pagination={false}
+                loading={{
+                  spinning: isLoading || isRefreshingTickets,
+                  tip: t("tickets:labels.searching"),
+                }}
                 components={{
                   header: {
                     cell: DraggableHeaderCell,
