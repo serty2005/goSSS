@@ -942,10 +942,10 @@ const CompanyPage: React.FC = () => {
 
   return (
     <div className="company-details-page">
-      {companySummaryCard}
       {hasNetwork ? (
         <div className="company-network-layout company-details-content">
           <div className="company-network-main">
+            {companySummaryCard}
             {renderCompanyTabs}
           </div>
           <aside className="company-network-aside">
@@ -953,9 +953,12 @@ const CompanyPage: React.FC = () => {
           </aside>
         </div>
       ) : (
-        <div className="company-details-content company-details-content--single">
+        <>
+          {companySummaryCard}
+          <div className="company-details-content company-details-content--single">
           {renderCompanyTabs}
-        </div>
+          </div>
+        </>
       )}
 
       <Modal

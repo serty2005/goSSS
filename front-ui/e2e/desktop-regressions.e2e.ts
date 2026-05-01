@@ -164,6 +164,12 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     await expect(page.getByRole('tab', { name: 'Инфраструктура' })).toHaveCount(0);
     await expect(networkBlock.getByText('Текущая')).toHaveCount(0);
 
+    const summaryBox = await page.locator('.company-summary-card').boundingBox();
+    const networkBox = await networkBlock.boundingBox();
+    expect(summaryBox).not.toBeNull();
+    expect(networkBox).not.toBeNull();
+    expect(Math.abs((summaryBox?.y || 0) - (networkBox?.y || 0)), 'инфраструктура должна начинаться на уровне служебной информации').toBeLessThanOrEqual(4);
+
     const rootBox = await networkBlock.getByText('Ресторан Север', { exact: true }).first().boundingBox();
     const childBox = await networkBlock.getByText('Ресторан Север Бар').first().boundingBox();
     expect(rootBox).not.toBeNull();
