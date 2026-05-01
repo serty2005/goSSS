@@ -90,7 +90,7 @@ func TestMegafonVATSIncomingService_ProcessIncomingEventCreatesCallSnapshot(t *t
 	}
 }
 
-func TestMegafonVATSIncomingService_EventUpdatesCachedEmployeeStatus(t *testing.T) {
+func TestMegafonVATSIncomingService_EventDoesNotMutateCachedEmployeeRegistrationStatus(t *testing.T) {
 	env := newMegafonVATSIncomingTestEnv(t)
 	statusOffline := "offline"
 	if err := env.repo.ReplaceProviderEmployees(t.Context(), telephony.ProviderMegafonVATS, []telephony.ProviderEmployee{
@@ -115,8 +115,8 @@ func TestMegafonVATSIncomingService_EventUpdatesCachedEmployeeStatus(t *testing.
 	if err != nil {
 		t.Fatalf("не удалось получить сотрудника телефонии: %v", err)
 	}
-	if employee == nil || employee.Status == nil || *employee.Status != "in_call" {
-		t.Fatalf("ожидали динамический статус in_call, получили %+v", employee)
+	if employee == nil || employee.Status == nil || *employee.Status != "offline" {
+		t.Fatalf("ожидали сохранение регистрационного статуса offline после ACCEPTED, получили %+v", employee)
 	}
 
 	completedID := enqueueMegafonWebhook(
@@ -130,8 +130,8 @@ func TestMegafonVATSIncomingService_EventUpdatesCachedEmployeeStatus(t *testing.
 	if err != nil {
 		t.Fatalf("не удалось перечитать сотрудника телефонии: %v", err)
 	}
-	if employee == nil || employee.Status == nil || *employee.Status != "online" {
-		t.Fatalf("ожидали динамический статус online после завершения, получили %+v", employee)
+	if employee == nil || employee.Status == nil || *employee.Status != "offline" {
+		t.Fatalf("ожидали сохранение регистрационного статуса offline после COMPLETED, получили %+v", employee)
 	}
 }
 
