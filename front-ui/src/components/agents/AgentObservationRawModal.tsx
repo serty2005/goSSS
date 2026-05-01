@@ -157,7 +157,7 @@ const AgentObservationRawModal: React.FC<Props> = ({
 
           {hasSummary ? (
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="UUID агента">
+              <Descriptions.Item label="Агент">
                 {summary?.agentUUID || '-'}
               </Descriptions.Item>
               <Descriptions.Item label="Рабочая станция">
