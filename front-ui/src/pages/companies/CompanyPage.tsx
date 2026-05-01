@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
@@ -606,37 +606,37 @@ const CompanyPage: React.FC = () => {
           {renderSection(
             'Серверы',
             groupedInfra.servers.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid">
               {groupedInfra.servers.map((srv) => (
-                <Col key={srv.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={srv.uuid} className="company-equipment-grid__item">
                   <ServerCard data={srv} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {renderSection(
             'Фискальные регистраторы',
             groupedInfra.fiscals.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid">
               {groupedInfra.fiscals.map((fr) => (
-                <Col key={fr.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={fr.uuid} className="company-equipment-grid__item">
                   <FiscalCard data={fr} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {renderSection(
             'Рабочие станции',
             groupedInfra.workstations.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid company-equipment-grid--compact">
               {groupedInfra.workstations.map((ws) => (
-                <Col key={ws.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={ws.uuid} className="company-equipment-grid__item">
                   <WorkstationCard data={ws} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {(infraRes?.data || []).length === 0 && <Empty description="Оборудование не найдено" />}
@@ -942,11 +942,11 @@ const CompanyPage: React.FC = () => {
   );
 
   return (
-    <div>
+    <div className="company-details-page">
+      {companySummaryCard}
       {hasNetwork ? (
-        <div className="company-network-layout">
+        <div className="company-network-layout company-details-content">
           <div className="company-network-main">
-            {companySummaryCard}
             {renderCompanyTabs}
           </div>
           <aside className="company-network-aside">
@@ -954,10 +954,9 @@ const CompanyPage: React.FC = () => {
           </aside>
         </div>
       ) : (
-        <>
-          {companySummaryCard}
+        <div className="company-details-content company-details-content--single">
           {renderCompanyTabs}
-        </>
+        </div>
       )}
 
       <Modal

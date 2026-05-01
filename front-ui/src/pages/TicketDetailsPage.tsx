@@ -1142,13 +1142,17 @@ const TicketDetailsPage: React.FC = () => {
     const path = entityID ? `/servers/${entityID}` : '';
     const title = resolveEntityTitle(item);
     const crmID = normalizeTextValue(dataRow.crm_id);
+    const partnersLink = normalizeTextValue(dataRow.partners_link);
+    const titleHref = partnersLink || path;
     return (
       <Card key={`${keyPrefix}-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space className="ticket-equipment-card__header">
-            <a href={path || undefined} target="_blank" rel="noreferrer">
-              <Text strong>{title}</Text>
-            </a>
+            <Tooltip title={partnersLink ? 'Partners' : 'Открыть карточку сервера'}>
+              <a href={titleHref || undefined} target="_blank" rel="noreferrer">
+                <Text strong>{title}</Text>
+              </a>
+            </Tooltip>
             <Space size={4}>
               {sourceLabel ? <Tag color="purple" style={{ marginInlineEnd: 0 }}>{sourceLabel}</Tag> : null}
               <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>Сервер</Tag>
@@ -1513,8 +1517,8 @@ const TicketDetailsPage: React.FC = () => {
   );
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+    <div className="ticket-details-page">
+      <Space className="ticket-details-header" style={{ width: '100%', justifyContent: 'space-between' }} wrap>
         <Space direction="vertical" size={0}>
           <Space align="center" size={8}>
             <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
@@ -2363,7 +2367,7 @@ const TicketDetailsPage: React.FC = () => {
           />
         </Suspense>
       )}
-    </Space>
+    </div>
   );
 };
 

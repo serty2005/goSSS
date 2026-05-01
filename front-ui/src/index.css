@@ -288,25 +288,53 @@ body .ant-message .ant-message-notice-content {
   padding-right: 20px;
 }
 
+.company-details-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100dvh - var(--app-header-message-offset) - 32px);
+  min-height: 0;
+}
+
+.company-details-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.company-details-content--single {
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .company-network-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(520px, 720px);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .company-network-main,
 .company-network-aside {
   min-width: 0;
+  min-height: 0;
 }
 
-.company-network-aside {
-  position: sticky;
-  top: calc(var(--app-header-message-offset) + 16px);
+.company-network-main {
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.company-network-aside-card {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .company-network-aside-card .ant-card-body {
-  max-height: calc(100dvh - 140px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   padding: 18px;
 }
@@ -331,6 +359,25 @@ body .ant-message .ant-message-notice-content {
   min-width: 0;
 }
 
+.company-equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.company-equipment-grid--compact {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+
+.company-equipment-grid__item {
+  min-width: 0;
+}
+
+.company-equipment-grid__item > .ant-card {
+  width: 100%;
+}
+
 .ws-row-new > td {
   background: var(--app-color-row-highlight-bg) !important;
   box-shadow: inset 0 0 0 1px var(--app-color-row-highlight-border);
@@ -342,7 +389,9 @@ body .ant-message .ant-message-notice-content {
   grid-template-columns: minmax(0, 1.55fr) minmax(560px, 1fr);
   grid-template-areas: "main side";
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ticket-overview-layout > * {
@@ -353,16 +402,43 @@ body .ant-message .ant-message-notice-content {
   grid-area: main;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  min-height: calc(100vh - 220px);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
-.ticket-overview-service-card,
+.ticket-details-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: calc(100dvh - var(--app-header-message-offset) - 32px);
+  min-height: 0;
+}
+
+.ticket-details-header {
+  flex: 0 0 auto;
+}
+
 .ticket-overview-comments-card,
 .ticket-overview-side-card {
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ticket-overview-service-card {
+  height: auto;
+}
+
+.ticket-overview-comments-card > .ant-card-body,
+.ticket-overview-side-card > .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .profile-notification-advanced {
@@ -1058,18 +1134,6 @@ body .ant-message .ant-message-notice-content {
     min-width: 0;
   }
 
-  .company-network-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .company-network-aside {
-    position: static;
-  }
-
-  .company-network-aside-card .ant-card-body {
-    max-height: none;
-  }
-
   .company-network-children-grid {
     grid-template-columns: 1fr;
   }
@@ -1117,6 +1181,27 @@ body .ant-message .ant-message-notice-content {
   }
 }
 
+@media (max-width: 1280px) {
+  .company-details-page {
+    height: auto;
+    min-height: 0;
+  }
+
+  .company-network-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .company-network-main,
+  .company-details-content--single {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .company-network-aside-card {
+    height: auto;
+  }
+}
+
 @media (max-width: 1760px) {
   .ticket-overview-layout {
     grid-template-columns: minmax(0, 1.25fr) minmax(540px, 1fr);
@@ -1145,11 +1230,20 @@ body .ant-message .ant-message-notice-content {
 }
 
 @media (max-width: 1320px) {
+  .ticket-details-page {
+    height: auto;
+    min-height: 0;
+  }
+
   .ticket-overview-layout {
     grid-template-columns: 1fr;
     grid-template-areas:
       "main"
       "side";
+  }
+
+  .ticket-overview-main {
+    height: auto;
   }
 
   .ticket-overview-service-card,

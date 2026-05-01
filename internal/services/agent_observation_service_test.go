@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
@@ -92,10 +93,12 @@ func TestApplyObservation_AnydeskRebind(t *testing.T) {
 	require.Nil(t, got2.Anydesk)
 }
 
-func TestApplyObservation_FRRebindBetweenWorkstations(t *testing.T) {
+func TestApplyObservation_FRRebindBetweenWorkstationsWhenAgentChanged(t *testing.T) {
 	db, svc := setupObsService(t)
 	owner := "cmp-1"
 	crm := "CRM-1"
+	agentOne := "11111111-1111-1111-1111-111111111111"
+	agentTwo := "22222222-2222-2222-2222-222222222222"
 	srv := server.Server{OwnerID: &owner, CRMid: &crm}
 	require.NoError(t, db.Create(&srv).Error)
 
@@ -104,15 +107,39 @@ func TestApplyObservation_FRRebindBetweenWorkstations(t *testing.T) {
 	require.NoError(t, db.Create(&ws1).Error)
 	require.NoError(t, db.Create(&ws2).Error)
 
-	_, err := svc.ApplyObservation(context.Background(), "agent-1", &api.AgentDataDTO{Hostname: "ws1", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 10:00:00", TeamviewerID: "111", LitemanagerID: "LM-1", SerialNumber: " SN 100 "})
+	_, err := svc.ApplyObservation(context.Background(), agentOne, &api.AgentDataDTO{Hostname: "ws1", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 10:00:00", TeamviewerID: "111", LitemanagerID: "LM-1", SerialNumber: " SN 100 "})
 	require.NoError(t, err)
-	_, err = svc.ApplyObservation(context.Background(), "agent-2", &api.AgentDataDTO{Hostname: "ws2", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 11:00:00", TeamviewerID: "222", LitemanagerID: "LM-2", SerialNumber: "sn100"})
+	_, err = svc.ApplyObservation(context.Background(), agentTwo, &api.AgentDataDTO{Hostname: "ws2", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 11:00:00", TeamviewerID: "222", LitemanagerID: "LM-2", SerialNumber: "sn100"})
 	require.NoError(t, err)
 
 	var fr fiscal.FiscalRegister
 	require.NoError(t, db.First(&fr, "fr_serial_normalized = ?", "SN100").Error)
 	require.NotNil(t, fr.WorkstationID)
 	require.Equal(t, ws2.ID, *fr.WorkstationID)
+}
+
+func TestApplyObservation_FRKeepsWorkstationWhenAgentSame(t *testing.T) {
+	db, svc := setupObsService(t)
+	owner := "cmp-1"
+	crm := "CRM-1"
+	agentUUID := "33333333-3333-3333-3333-333333333333"
+	srv := server.Server{OwnerID: &owner, CRMid: &crm}
+	require.NoError(t, db.Create(&srv).Error)
+
+	ws1 := workstation.Workstation{Base: common.Base{LastUpdatedBy: agentUUID}, IdentityHash: strRef(identityHash("111", "LM-1")), Teamviewer: strRef("111"), Litemanager: strRef("LM-1"), OwnerID: &owner}
+	ws2 := workstation.Workstation{Base: common.Base{LastUpdatedBy: agentUUID}, IdentityHash: strRef(identityHash("222", "LM-2")), Teamviewer: strRef("222"), Litemanager: strRef("LM-2"), OwnerID: &owner}
+	require.NoError(t, db.Create(&ws1).Error)
+	require.NoError(t, db.Create(&ws2).Error)
+
+	_, err := svc.ApplyObservation(context.Background(), agentUUID, &api.AgentDataDTO{Hostname: "ws1", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 10:00:00", TeamviewerID: "111", LitemanagerID: "LM-1", SerialNumber: " SN 200 "})
+	require.NoError(t, err)
+	_, err = svc.ApplyObservation(context.Background(), agentUUID, &api.AgentDataDTO{Hostname: "ws2", URLRms: "example.com", CRMID: crm, CurrentTime: "2026-01-10 11:00:00", TeamviewerID: "222", LitemanagerID: "LM-2", SerialNumber: "sn200"})
+	require.NoError(t, err)
+
+	var fr fiscal.FiscalRegister
+	require.NoError(t, db.First(&fr, "fr_serial_normalized = ?", "SN200").Error)
+	require.NotNil(t, fr.WorkstationID)
+	require.Equal(t, ws1.ID, *fr.WorkstationID)
 }
 
 func TestApplyObservation_StaleIgnored(t *testing.T) {

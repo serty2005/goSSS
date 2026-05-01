@@ -33,17 +33,19 @@ type observationFeedDBRow struct {
 	ID            uint           `gorm:"column:id"`
 	ObservedAt    time.Time      `gorm:"column:observed_at"`
 	Source        string         `gorm:"column:source"`
+	AgentUUID     *string        `gorm:"column:agent_uuid"`
 	WorkstationID *string        `gorm:"column:workstation_id"`
 	FRID          *string        `gorm:"column:fr_id"`
 	PayloadJSON   datatypes.JSON `gorm:"column:payload_json"`
 }
 
 type observationPayload struct {
-	AgentUUID string `json:"uuid"`
-	URLRms    string `json:"url_rms"`
-	Current   string `json:"current_time"`
-	VTime     string `json:"v_time"`
-	VC        string `json:"vc"`
+	AgentUUID      string `json:"uuid"`
+	AgentUUIDAlias string `json:"agent_uuid"`
+	URLRms         string `json:"url_rms"`
+	Current        string `json:"current_time"`
+	VTime          string `json:"v_time"`
+	VC             string `json:"vc"`
 }
 
 type observationFeedRow struct {
@@ -118,7 +120,7 @@ func (h *AgentObservationFeedHandler) ListLatestByAgent(w http.ResponseWriter, r
 	var rawRows []observationFeedDBRow
 	if err := h.db.WithContext(r.Context()).
 		Model(&models.AgentObservation{}).
-		Select("id, observed_at, source, workstation_id, fr_id, payload_json").
+		Select("id, observed_at, source, agent_uuid, workstation_id, fr_id, payload_json").
 		Order("observed_at DESC, id DESC").
 		Limit(limit).
 		Find(&rawRows).Error; err != nil {
@@ -247,8 +249,14 @@ func parseObservationFeedRow(raw observationFeedDBRow) observationFeedRow {
 		_ = json.Unmarshal(raw.PayloadJSON, &payload)
 	}
 
-	agentUUID := strings.TrimSpace(payload.AgentUUID)
-	if agentUUID == "" && isUUIDLike(raw.Source) {
+	agentUUID := strings.TrimSpace(trimPtrValue(raw.AgentUUID))
+	if agentUUID == "" {
+		agentUUID = strings.TrimSpace(payload.AgentUUID)
+	}
+	if agentUUID == "" {
+		agentUUID = strings.TrimSpace(payload.AgentUUIDAlias)
+	}
+	if agentUUID == "" {
 		agentUUID = strings.TrimSpace(raw.Source)
 	}
 	row.AgentUUID = stringPtrOrNil(agentUUID)

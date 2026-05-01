@@ -1835,8 +1835,8 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 	}
 
 	// Обновление существующего ФР (Full Trust — все поля обновляются)
+	prevWorkstationID := ptrValue(fr.WorkstationID)
 	updates := map[string]interface{}{
-		"workstation_id":       ws.ID,
 		"fr_serial_number":     strings.TrimSpace(data.SerialNumber),
 		"fr_serial_normalized": sn,
 		"model_kkt":            valOrNil(strPtr(strings.TrimSpace(data.ModelName))),
@@ -1851,6 +1851,19 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 		"fr_firmware":          valOrNil(strPtr(strings.TrimSpace(data.BootVersion))),
 		"last_modified_date":   observedAt,
 		"last_updated_by":      updater,
+	}
+	if prevWorkstationID == "" {
+		updates["workstation_id"] = ws.ID
+	} else if prevWorkstationID != ws.ID && shouldReattachFiscalToWorkstation(fr, ws) {
+		updates["workstation_id"] = ws.ID
+	} else if prevWorkstationID != ws.ID {
+		s.logger.Info("ФР оставлен на прежней рабочей станции: последний агент совпадает или не определен",
+			"fr_id", fr.ID,
+			"current_workstation_id", prevWorkstationID,
+			"candidate_workstation_id", ws.ID,
+			"fiscal_agent_id", strings.TrimSpace(fr.LastUpdatedBy),
+			"workstation_agent_id", strings.TrimSpace(ws.LastUpdatedBy),
+		)
 	}
 	if t := parseDate(data.DateTimeEnd); t != nil {
 		updates["fn_expire_date"] = *t
@@ -1929,6 +1942,15 @@ func (s *agentObservationRepo) applyFiscal(tx *gorm.DB, observationID uint, srv 
 	)
 
 	return &fr, false, nil
+}
+
+func shouldReattachFiscalToWorkstation(fr fiscal.FiscalRegister, ws *workstation.Workstation) bool {
+	if ws == nil {
+		return false
+	}
+	frAgentID := strings.TrimSpace(fr.LastUpdatedBy)
+	wsAgentID := strings.TrimSpace(ws.LastUpdatedBy)
+	return frAgentID != "" && wsAgentID != "" && frAgentID != wsAgentID
 }
 
 // findWorkstation выполняет поиск рабочей станции по нескольким критериям.
