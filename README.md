@@ -1,168 +1,259 @@
-# Etalon-Server
+# XenionDesk / goSSS
 
-`Etalon-Server` — это центральный бэкенд-сервис, предназначенный для агрегации, сверки и хранения "эталонной" информации об IT-инфраструктуре клиентов. Сервис является ядром для построения единого источника правды о состоянии клиентского оборудования.
+`goSSS` - ServiceDesk-система для сотрудников техподдержки. Проект объединяет операторский веб-интерфейс, серверное API, фоновые синхронизации с внешними системами и Windows-агент для сбора инвентаризации и выполнения локальных задач на клиентских рабочих местах.
 
-## 1. Назначение системы
+## 1. Назначение
 
--   **Агрегация данных:** Сбор информации о компаниях, серверах, рабочих станциях и фискальных регистраторах из различных источников (ServiceDesk, агенты мониторинга).
--   **Сверка и обогащение:** Автоматическое сравнение данных, выявление расхождений и обогащение локальной базы данных.
--   **Управление задачами:** Создание задач для операторов при обнаружении конфликтов данных, дубликатов или нового, неидентифицированного оборудования.
--   **Предоставление API:** Обеспечение REST API для фронтенд-приложения, используемого операторами.
--   **Взаимодействие с внешними системами:** Предоставление инструментов для внесения изменений во внешние системы (например, ServiceDesk) на основе проверенных данных.
+Система используется как рабочее место техподдержки:
 
-## 2. Архитектура
+- ведение заявок, комментариев, вложений, назначений и статусов;
+- учет компаний, договоров, серверов, рабочих станций и фискальных регистраторов;
+- прием и разбор наблюдений от агентов, подтверждение новых сущностей и сетевых кандидатов;
+- диагностика агентов, выбор адаптеров, запуск адаптерных задач и контроль heartbeat;
+- синхронизация с Naumen ServiceDesk, Bitrix24, Pyrus и телефонией Мегафон ВАТС;
+- отчеты, административные справочники, пользователи, переводы UI и настройки профиля.
 
-Проект построен на **событийно-ориентированной архитектуре (Event-Driven Architecture)**, что обеспечивает слабую связанность компонентов и высокую масштабируемость.
+## 2. Состав репозитория
 
--   **Шлюзы (Gateways):** Фоновые сервисы, отвечающие за интеграцию с одной внешней системой (`ServiceDesk`, `FTP`, `RMS Polling`). Их задача — получить данные и опубликовать событие в шину.
--   **Шина событий (Event Bus):** Асинхронная шина для обмена сообщениями между компонентами.
--   **Оркестратор (Orchestrator):** Центральный компонент, который подписывается на события и координирует бизнес-процессы (например, "получены данные от агента" -> "обработать в движке" -> "обновить БД и создать задачу").
--   **Движок обработки (Processing Engine):** Компонент, инкапсулирующий сложную бизнес-логику анализа и сверки данных.
+```text
+.
+├── cmd/
+│   ├── etalon-server/        # основной backend-сервер XenionDesk
+│   └── adapter-publisher/    # CLI публикации релизов агентских адаптеров в S3/MinIO
+├── internal/                 # backend: домен, инфраструктура, сервисы, HTTP-транспорт
+├── pkg/eventbus/             # in-memory event bus backend-приложения
+├── front-ui/                 # React/Vite/Ant Design операторский интерфейс
+├── agent/                    # Windows core-agent и внешние адаптеры
+├── docker/                   # Docker Compose, Dockerfile, production-шаблоны и deploy-доки
+├── tools/                    # сидер, мок-данные, служебные инструменты
+├── ftp_cache/                # локальный кэш FTP-наблюдений агентов
+└── storage/tickets/          # локальное хранилище файлов заявок
+```
 
-Для обработки HTTP-запросов используется классическая слоеная архитектура: **Handlers → Services → Repositories**.
+## 3. Архитектура backend
 
-## 3. Технологический стек
+Backend написан на Go, точка входа - `cmd/etalon-server/main.go`. Приложение собирается в `internal/app.Application`, где поднимаются конфиг, БД, репозитории, сервисы, обработчики, интеграционные модули и фоновые процессы.
 
--   **Язык:** Go 1.24+
--   **Веб-фреймворк:** `chi/v5`
--   **База данных:** PostgreSQL
--   **ORM:** `gorm`
--   **Логирование:** `zap`
--   **Конфигурация:** `godotenv` (переменные окружения)
+Основные слои:
 
-## 4. Установка и запуск
+- `internal/domain` - доменные модели, интерфейсы репозиториев и бизнес-типы;
+- `internal/infra` - PostgreSQL/GORM, внешние клиенты, S3/MinIO, плагины интеграций, логирование;
+- `internal/services` - бизнес-сервисы заявок, агентов, кандидатов, синхронизаций, телефонии, отчетов;
+- `internal/core` - event-driven контур: gateways, workers, orchestrator, processing engine;
+- `internal/transport/http` - HTTP handlers и middleware;
+- `pkg/eventbus` - внутренняя шина событий.
 
-### 4.1. Требования
+HTTP-запросы идут через `chi`: middleware CORS, request id, real IP, логирование, recoverer, timeout и JWT. Бизнес-поток для обычных API остается слоистым: handler -> service -> repository. Фоновые интеграции и реакции на изменения идут через event bus.
 
--   Go (версия 1.24 или выше)
--   PostgreSQL
+## 4. Основные домены
 
-### 4.2. Настройка окружения
+- `tickets` - заявки, история, комментарии, вложения, файловые связи, отложенные события.
+- `company`, `contract` - компании, иерархия, договоры, отчеты по договорам, связи с Bitrix24.
+- `server`, `workstation`, `fiscal` - оборудование, владельцы, статусы, история смены владельца.
+- `models.Agent*` - агенты, регистрации, сессии, команды, наблюдения, адаптеры и релизы.
+- `Candidate*`, `NetworkCandidate*` - операторская приемка найденных рабочих станций и ФР.
+- `bitrix`, `pyrus`, `telephony` - проекции и очереди внешних интеграций.
+- `Material`, `AppLocalization`, `EntityDeletionCandidate` - материалы, переводы UI, безопасное удаление сущностей.
 
-1.  **Клонируйте репозиторий:**
-    ```bash
-    git clone https://git.serty.top/serty/goSSS.git
-    cd etalon-server
-    ```
+Миграции выполняются через `gorm.AutoMigrate` при старте сервера.
 
-2.  **Создайте файл конфигурации `.env`:**
-    Скопируйте `.env.example` в `.env` и заполните необходимые переменные.
-    ```bash
-    cp .env.example .env
-    ```
+## 5. Операторский UI
 
-    Ключевые переменные:
-    -   `DATABASE_URL`: Строка подключения к PostgreSQL.
-    -   `PORT`: Порт, на котором будет работать сервер.
-    -   `LOG_LEVEL`: Уровень логирования (`debug`, `info`, `warn`, `error`).
-    -   `JWT_SECRET`: Секретный ключ для подписи JWT-токенов.
-    -   `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_FULLNAME`: Учетные данные для администратора по умолчанию.
-    -   `SDKEY`, `BASE_URL`: Ключ и URL для API ServiceDesk.
-    -   `FTP_HOST`, `FTP_USER`, `FTP_PASSWORD`: Данные для подключения к FTP.
+Frontend находится в `front-ui`, стек: React 19, TypeScript, Vite, Ant Design 6, TanStack Query, Zustand, i18next, TipTap, Playwright.
 
-### 4.3. Запуск
+Основные маршруты UI:
 
-1.  **Установите зависимости:**
-    ```bash
-    go mod tidy
-    ```
+- `/tickets`, `/tickets/:id` - список и карточка заявки;
+- `/companies`, `/companies/:id` - компании и инфраструктура;
+- `/acceptance`, `/network-acceptance` - приемка кандидатов от агентов;
+- `/servers`, `/workstations`, `/fiscals` - оборудование;
+- `/agents`, `/agent-diagnostics/:uuid`, `/agent-observations` - агентский контур;
+- `/admin/users`, `/admin/translations`, `/admin/telephony`, `/admin/synchronizations` - администрирование;
+- `/tasks` и `/reports/companies-contracts` - задачи сверки и отчет по договорам.
 
-2.  **Запустите приложение:**
-    ```bash
-    go run ./cmd/etalon-server/main.go
-    ```
-    Сервер будет запущен на порту, указанном в `.env` (по умолчанию `8080`).
+UI использует JWT, SSE `/api/events` для realtime-обновлений и профильные настройки пользователя для темы, локализации и уведомлений.
 
-### 4.4. Наполнение базы тестовыми данными (Seeding)
+## 6. Windows-агент
 
-Для наполнения базы данных мок-данными из файлов в директории `tools/seeder/mock_data`, используйте флаг `--seed`:
+Агент находится в `agent`, модуль Go - `etalon-agent`. Основная точка входа: `agent/cmd/etalon-agent/main.go`.
+
+Агент:
+
+- читает `agent-config.json` или путь из `--config` / `ETALON_AGENT_CONFIG`;
+- работает с правами администратора;
+- хранит идентичность и токены в HKLM, токены защищаются DPAPI;
+- регистрируется через `POST /api/agents/register` с bootstrap API key;
+- обновляет agent access token через `/api/agents/auth/refresh`;
+- отправляет heartbeat и inventory через `/api/agents/{uuid}/data`;
+- синхронизирует адаптеры по manifest из ответа сервера;
+- выполняет задачи `run_adapter`, `adapter_run`, `saga_run`, legacy `self_update`;
+- умеет очищать локальные данные через `--cleanup` и `--cleanup-and-run`.
+
+Адаптеры собираются отдельно: `fiscal-atol`, `fiscal-mitsu`, `fiscal-shtrih`, `iiko-syrve-rms`. Контракт описан в `agent/docs/ADAPTER_CONTRACT.md`, жизненный цикл релизов - в `agent/docs/ADAPTER_RELEASE_LIFECYCLE.md`.
+
+## 7. Интеграции и фоновые процессы
+
+Backend поддерживает следующие фоновые контуры:
+
+- `ServiceDeskGateway` и `TicketGateway` - синхронизация сущностей и заявок через Naumen-адаптер;
+- `AgentFTPGateway` - импорт JSON-наблюдений из FTP и локального `ftp_cache`;
+- `ServerPollingGateway` - опрос RMS/iiko-серверов;
+- `ContractGateway` - импорт договорных отчетов из почты и подготовка синхронизации с Bitrix24;
+- `DuplicatesGateway` - поиск дублей и создание кандидатов на удаление;
+- `FRUpdateFounder` - поиск расхождений по фискальным регистраторам;
+- `StatusActualityWorker` - проверка актуальности статусов оборудования;
+- `DeferredTicketWorker` - обработка отложенных событий заявок;
+- `AgentAdapterCatalogSync` - синхронизация каталога адаптеров из S3/MinIO;
+- модули Bitrix24, Pyrus и Мегафон ВАТС - webhook, очереди Redis Streams, справочники и синхронизации.
+
+Включение контуров управляется переменными `ENABLE_*` в `.env`.
+
+## 8. Ключевые API
+
+Публичные или специальные маршруты:
+
+- `POST /api/auth/login` - вход пользователя;
+- `POST /api/submit_json` - legacy-прием данных от getad-агентов;
+- `POST /api/agents/register` - bootstrap-регистрация агента;
+- `POST /api/agents/auth/refresh` - обновление токенов агента;
+- `POST /api/agents/{uuid}/data` - heartbeat и данные агента;
+- `POST /api/integrations/bitrix/webhook` - webhook Bitrix24;
+- `POST /api/integrations/pyrus/webhook` - webhook Pyrus;
+- `POST /api/integrations/megafon-vats/webhook` - webhook Мегафон ВАТС;
+- `GET /swagger/*` - Swagger UI.
+
+Основные защищенные группы `/api`:
+
+- `/tickets`, `/companies`, `/servers`, `/workstations`, `/fiscals`, `/contracts`, `/materials`;
+- `/candidates`, `/network-candidates`, `/deletion-candidates`;
+- `/agent-diagnostics`, `/agent-observations`, `/agents-list`;
+- `/tasks`, `/duplicates`, `/search`, `/events`, `/reports`;
+- `/profile`, `/translations`, `/users`;
+- `/bitrix/*`, `/pyrus/*`, `/telephony/*`, `/integrations/*` при включенных модулях.
+
+Пользовательские маршруты требуют `Authorization: Bearer <JWT>`. Агентские маршруты используют bootstrap key или agent access token.
+
+### 8.1. Legacy getad endpoint `/api/submit_json`
+
+`POST /api/submit_json` - отдельная совместимая ручка для старых пассивных getad-агентов. Она зарегистрирована вне JWT-группы и не использует новый bootstrap/access-token flow активного `sssruner`-агента.
+
+Фактическое поведение:
+
+- авторизация выполняется внутри handler по заголовку `X-API-Key`;
+- значение `X-API-Key` сравнивается с backend-переменной `AGENT_API_KEY`;
+- если `AGENT_API_KEY` пустой, handler не отклоняет запрос по ключу;
+- тело запроса декодируется как `AgentDataDTO`;
+- UUID агента берется из `agent_uuid`, а для legacy payload допускается поле `uuid`;
+- если UUID не найден, возвращается `400 Field 'uuid' is required`;
+- `agent_type` принудительно устанавливается в `getad`;
+- данные передаются в общий `AgentService.ProcessData`;
+- для неизвестного `getad`-агента сервис может создать запись автоматически со статусом active;
+- ответ возвращается через стандартный JSON-конверт `{"status":"success","data":...}`.
+
+Эта ручка нужна для обратной совместимости. Новый активный агент должен использовать `/api/agents/register`, `/api/agents/auth/refresh` и `/api/agents/{uuid}/data`.
+
+## 9. Конфигурация
+
+Backend читает первый найденный `.env`, поднимаясь от текущей директории к корню. Основной шаблон - `.env.example`.
+
+Минимальные группы настроек:
+
+- приложение: `PORT`, `DATABASE_URL`, `LOG_LEVEL`, `ALLOWED_ORIGINS`;
+- безопасность: `JWT_SECRET`, `JWT_EXPIRATION_MIN`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `AGENT_API_KEY`;
+- Naumen ServiceDesk: `BASE_URL`, `SDKEY`, `SD_DRY_RUN`, rate limit и retry;
+- хранилища: `TICKET_STORAGE_PATH`, `FTP_CACHE_PATH`, `S3_*`, `AGENT_ADAPTER_CATALOG_*`;
+- фоновые контуры: `ENABLE_SDESK_GATEWAY`, `ENABLE_AGENT_FTP_GATEWAY`, `ENABLE_POLLING_GATEWAY`, `ENABLE_CONTRACT_GATEWAY`;
+- внешние интеграции: `ENABLE_BITRIX_GATEWAY`, `ENABLE_PYRUS_GATEWAY`, `ENABLE_MEGAFON_VATS`;
+- очереди: `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_DB`.
+
+Frontend использует `front-ui/.env.example`; основной параметр для dev-прокси - `VITE_API_TARGET`.
+
+## 10. Локальный запуск
+
+Требования:
+
+- Go для backend-модуля `etalon-server`;
+- Go для `agent/`, если нужно собирать агента;
+- Node.js 22+ и npm для frontend;
+- PostgreSQL 16+;
+- Redis 7+ для интеграционных очередей;
+- MinIO/S3 для каталога агентских адаптеров и записей телефонии, если включены соответствующие контуры.
+
+Backend:
 
 ```bash
-go run ./cmd/etalon-server/main.go --seed
+cp .env.example .env
+go mod download
+go run ./cmd/etalon-server
 ```
 
-Процесс наполнит базу и автоматически завершит работу.
+Frontend:
 
-## 5. Структура проекта
-
-```
-.
-├── cmd/etalon-server/      # Точка входа в приложение
-├── internal/
-│   ├── api/                # DTO (Data Transfer Objects) для API
-│   ├── app/                # Инициализация приложения (DI-контейнер)
-│   ├── config/             # Конфигурация
-│   ├── core/               # Основные бизнес-сущности и события
-│   ├── db/                 # Настройка подключения к БД
-│   ├── gateways/           # Шлюзы для интеграции с внешними системами
-│   ├── handlers/           # HTTP-обработчики
-│   ├── logger/             # Настройка логирования
-│   ├── models/             # Модели данных (GORM)
-│   ├── processing/         # Оркестратор и движок обработки
-│   ├── repositories/       # Слой доступа к данным
-│   ├── seeder/             # Логика наполнения БД
-│   ├── services/           # Бизнес-логика
-│   └── utils/              # Вспомогательные функции
-└── pkg/
-    └── eventbus/           # Реализация шины событий
+```bash
+cd front-ui
+npm ci
+npm run dev
 ```
 
-## 6. Ключевые API эндпоинты
+Агент:
 
--   `POST /api/auth/login`: Аутентификация пользователя и получение JWT.
--   `GET /api/search`: Глобальный поиск по всем сущностям.
--   `GET /api/tasks`: Получение списка задач для оператора.
--   `POST /api/tasks/{id}/resolve`: Решение задачи.
--   `POST /api/tasks/{id}/create-entity-in-sd`: Создание сущности в ServiceDesk на основе задачи.
--   `POST /api/agents/register`: Регистрация нового агента мониторинга.
--   `POST /api/agents/{uuid}/data`: Отправка данных от агента.
--   `GET /api/agent-diagnostics`: Диагностический список новых агентов для UI техподдержки.
--   `GET /api/agent-diagnostics/{uuid}`: Детали регистрации и последние heartbeat snapshot конкретного агента.
+```bash
+cd agent
+go mod download
+go run ./cmd/etalon-agent --config ./agent-config.json
+```
 
-**Примечание:** Все эндпоинты в группе `/api`, кроме `/api/auth` и bootstrap-контуров агентов, требуют `Authorization: Bearer <token>` пользовательского JWT.
-- `POST /api/agents/register` требует `Authorization: Bearer <AGENT_API_KEY>`.
-- `POST /api/agents/{uuid}/data` требует agent access token, который сервер выдает на bootstrap-регистрации.
-- `GET /api/agent-diagnostics*` предназначены для UI техподдержки и требуют обычный пользовательский JWT.
-## 7. Интеграция Bitrix24 (Event-Driven)
+Дополнительные режимы backend:
 
-- Включение интеграции: `ENABLE_BITRIX_GATEWAY=true`.
-- Входящий поток из Bitrix24 работает только через webhook:
-  - `POST /api/integrations/bitrix/webhook`
-  - `Content-Type: application/x-www-form-urlencoded`
-  - проверка `auth[application_token]` по `BITRIX_WEBHOOK_APPLICATION_TOKEN`
-- Ручной pull-эндпоинт удалён: `/api/v1/bitrix/sync/pull` больше не используется.
-- Входящие события сначала сохраняются в Postgres (`bitrix_incoming_events`), затем диспетчеризуются через Redis Streams.
-- Поддерживаемые события:
-  - `ONCRMDEALADD`
-  - `ONCRMDEALUPDATE`
-  - `ONCRMDEALDELETE`
-  - `ONCRMTIMELINECOMMENTADD`
-  - `ONCRMTIMELINECOMMENTUPDATE`
-  - `ONCRMTIMELINECOMMENTDELETE`
-- Очередь и обработка настраиваются переменными:
-  - `BITRIX_EVENTS_STREAM_NAME`
-  - `BITRIX_EVENTS_CONSUMER_GROUP`
-  - `BITRIX_INCOMING_PARALLELISM`
-  - `BITRIX_INCOMING_RETRY_BASE_MS`
-  - `BITRIX_INCOMING_RETRY_MAX_MS`
-  - `BITRIX_INCOMING_MAX_ATTEMPTS`
-  - `BITRIX_SUPPRESS_TTL_SEC`
+```bash
+go run ./cmd/etalon-server --seed
+go run ./cmd/etalon-server --seed-ftp-cache
+go run ./cmd/etalon-server --reverse-seed
+```
 
-## 8. Интеграция Мегафон ВАТС
+## 11. Docker
 
-- Включение интеграции: `ENABLE_MEGAFON_VATS=true`.
-- Публичный входящий webhook:
-  - `POST /api/integrations/megafon-vats/webhook`
-  - `Content-Type: application/x-www-form-urlencoded`
-  - проверка `crm_token` по `MEGAFON_VATS_CRM_TOKEN`
-- На текущем этапе webhook сохраняет сырой payload в Postgres (`telephony_incoming_events`) и выполняет дедупликацию по `payload_hash`.
-- Поддерживаемые входящие команды MVP:
-  - `cmd=event`
-  - `cmd=history`
-- Базовые настройки очереди и ретраев уже заведены в конфиг:
-  - `MEGAFON_VATS_EVENTS_STREAM_NAME`
-  - `MEGAFON_VATS_EVENTS_CONSUMER_GROUP`
-  - `MEGAFON_VATS_INCOMING_PARALLELISM`
-  - `MEGAFON_VATS_INCOMING_MAX_ATTEMPTS`
-  - `MEGAFON_VATS_RETRY_BASE_MS`
-  - `MEGAFON_VATS_RETRY_MAX_MS`
+Локальная инфраструктура в `docker/docker-compose.yml` поднимает PostgreSQL, Redis, MinIO, `minio-init` и опциональный `agents-proxy`.
+
+Сборка образов:
+
+```bash
+docker compose -f docker/docker-compose.build.yml build
+```
+
+Production-шаблон находится в `docker/prod-files/docker-compose.yml`. Подробный порядок деплоя, backup/restore и публикации адаптеров описан в `docker/DEPLOY.md`.
+
+## 12. Тесты и проверки
+
+Backend:
+
+```bash
+go test ./...
+```
+
+Agent:
+
+```bash
+cd agent
+go test ./...
+```
+
+Frontend:
+
+```bash
+cd front-ui
+npm run lint
+npm run test
+npm run test:e2e
+```
+
+Playwright E2E использует логин `admin/admin` и по умолчанию запускает Vite на `127.0.0.1:5178`. Детали - `front-ui/e2e/README.md`.
+
+## 13. Важные документы
+
+- `AGENTS.md` - рабочие правила для AI-агентов и архитектурная карта проекта;
+- `docker/DEPLOY.md` - Docker, production, backup/restore, MinIO и релизы адаптеров;
+- `agent/docs/ADAPTER_CONTRACT.md` - контракт core-agent и внешних адаптеров;
+- `agent/docs/ADAPTER_RELEASE_LIFECYCLE.md` - публикация, promote и rollback адаптеров;
+- `agent/docs/STAGE_REVIEW_AND_OPERATOR_FLOW.md` - операторский flow выбора адаптеров;
+- `agent/docs/saga_runtime.md` - runtime многошаговых задач агента.
