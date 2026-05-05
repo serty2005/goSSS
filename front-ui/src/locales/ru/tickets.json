@@ -32,6 +32,7 @@
     "private": "Приватный",
     "privateXenionOnly": "Приватный (Только в Xenion)",
     "showing": "Показано: {{visible}} из {{total}}",
+    "searching": "Идёт поиск и загрузка результатов...",
     "created": "Создано",
     "updated": "Обновлено",
     "assignee": "Исполнитель: {{name}}"

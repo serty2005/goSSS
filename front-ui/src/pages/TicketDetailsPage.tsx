@@ -1,9 +1,9 @@
 ﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, EditOutlined, LinkOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ticketsApi } from '@/api/tickets';
 import { telephonyApi } from '@/api/telephony';
@@ -11,21 +11,23 @@ import { profileApi } from '@/api/profile';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
-import { equipmentApi } from '@/api/equipment';
-import { CompanyModel, InfrastructureItem, TelephonyCallDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus } from '@/types/api';
+import { agentObservationsApi } from '@/api/agentObservations';
+import { AgentObservationFeedRowDTO, ApiResponse, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketCommentDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus, WorkstationEntity } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import SmartTicketEditor from '@/features/tickets/editor/SmartTicketEditor';
 import { hasEditorContent } from '@/features/tickets/editor/content';
 import type { MentionOption } from '@/features/tickets/editor/mentions';
-import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { SafeHtmlContent } from '@/utils/safeHtml';
 import { getTelephonyContactLabel, getTelephonyContactPhoneDisplay, getTelephonyContactPhoneForCopy } from '@/utils/telephony';
-import InlineFieldEditor from '@/components/common/InlineFieldEditor';
+import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
+import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import TicketTable from '@/components/tickets/TicketTable';
+import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
 const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
@@ -119,16 +121,6 @@ const resolveEntityTitle = (item: InfrastructureItem) => {
   );
 };
 
-const resolveEntityPath = (item: InfrastructureItem) => {
-  const dataRow = item.data as Record<string, string | undefined>;
-  const uuid = dataRow.uuid;
-  if (!uuid) return '';
-  if (item.entity_type === 'Server') return `/servers/${uuid}`;
-  if (item.entity_type === 'Workstation') return `/workstations/${uuid}`;
-  if (item.entity_type === 'FiscalRegister') return `/fiscals/${uuid}`;
-  return '';
-};
-
 const ExternalLinkBadge: React.FC<{
   label: string;
   href?: string;
@@ -148,11 +140,113 @@ const ExternalLinkBadge: React.FC<{
   );
 };
 
+type InfraDataRecord = Record<string, string | undefined>;
+
+type AgentEquipmentGroup = {
+  key: string;
+  agentID: string;
+  agentType: string;
+  workstations: InfrastructureItem[];
+  fiscals: InfrastructureItem[];
+};
+
+const escapeCommentQuoteText = (value: string) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getCommentQuoteText = (html: string) => {
+  const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  parsed.body.querySelectorAll('blockquote').forEach((node) => node.remove());
+  return String(parsed.body?.textContent || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const buildCommentQuoteHTML = (comment: TicketCommentDTO) => {
+  const author = escapeCommentQuoteText(comment.author_name || 'Сотрудник');
+  const createdAt = dayjs(comment.creation_date).isValid()
+    ? dayjs(comment.creation_date).format('DD.MM.YYYY HH:mm')
+    : '';
+  const quoteText = escapeCommentQuoteText(getCommentQuoteText(comment.text) || 'Комментарий без текста')
+    .replace(/\n/g, '<br />');
+
+  return `<blockquote><p><strong>${author}</strong>${createdAt ? ` · ${createdAt}` : ''}</p><p>${quoteText}</p></blockquote><p></p>`;
+};
+
+type AgentObservationLookupTarget = {
+  agentID: string;
+  workstationIDs: string[];
+  fiscalIDs: string[];
+};
+
+type CopyFieldEntityType = 'Server' | 'Workstation';
+
+type CopyValueParams = {
+  key: string;
+  label: string;
+  value?: string;
+  displayValue?: string;
+  entityType?: CopyFieldEntityType;
+  entityID?: string;
+  connectionField?: string;
+  successText?: string;
+};
+
+const toInfraData = (item: InfrastructureItem) => item.data as InfraDataRecord;
+
+const normalizeTextValue = (value: unknown) => String(value || '').trim();
+
+const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const getAgentTypeLabel = (value?: string | null) => {
+  const normalized = normalizeTextValue(value);
+  return normalized || 'agent';
+};
+
+const getAgentSourceMeta = (data: {
+  last_updated_by?: string | null;
+  last_modified_date?: string | null;
+  updated_at?: string | null;
+}) => {
+  const raw = normalizeTextValue(data.last_updated_by);
+  const lowerRaw = raw.toLowerCase();
+  const hasAgentID = UUID_LIKE_REGEX.test(raw) || (lowerRaw.startsWith('agent-') && raw.length > 'agent-'.length);
+  const explicitType = normalizeTextValue((data as Record<string, unknown>).agent_type);
+  const agentType = explicitType || (hasAgentID || lowerRaw.startsWith('agent') ? 'agent' : '');
+  const agentID = hasAgentID ? raw : '';
+  return {
+    raw,
+    agentID,
+    agentType,
+    updatedAt: normalizeTextValue(data.last_modified_date || data.updated_at),
+  };
+};
+
+const isDigitsOnly = (value: string) => /^\d+$/.test(value.trim());
+
+const shortenAddress = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed.length <= 48) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 45)}...`;
+};
+
+const getLookupErrorMessage = (error: unknown) => {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'Не удалось найти последнее наблюдение агента';
+};
+
 const TicketDetailsPage: React.FC = () => {
   const screens = useBreakpoint();
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
@@ -164,6 +258,8 @@ const TicketDetailsPage: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [pendingDeferredAt, setPendingDeferredAt] = useState('');
   const [companySearch, setCompanySearch] = useState('');
+  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
+  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
   const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
@@ -178,11 +274,16 @@ const TicketDetailsPage: React.FC = () => {
   const [contactPhoneDraft, setContactPhoneDraft] = useState('');
   const [contactNameDraft, setContactNameDraft] = useState('');
   const [attachCallPhoneSearch, setAttachCallPhoneSearch] = useState('');
+  const [attachCallAppliedPhoneSearch, setAttachCallAppliedPhoneSearch] = useState('');
+  const debouncedAttachCallPhoneSearch = useDebouncedValue(attachCallPhoneSearch, TEXT_SEARCH_DEBOUNCE_MS);
   const [attachCallEmployeeID, setAttachCallEmployeeID] = useState<number | undefined>(undefined);
   const [highlightedFields, setHighlightedFields] = useState<Record<string, boolean>>({});
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
+  const [copiedFieldKey, setCopiedFieldKey] = useState('');
+  const [observationTarget, setObservationTarget] = useState<AgentObservationLookupTarget | null>(null);
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
   const previousCommentsRef = useRef<Array<{ uuid: string; text: string; creation_date: string }>>([]);
+  const commentComposerRef = useRef<HTMLDivElement | null>(null);
   const clearFieldTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const clearCommentTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const createParam = searchParams.get('create') || '';
@@ -217,10 +318,15 @@ const TicketDetailsPage: React.FC = () => {
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
-  const isDeleteBlockedRole = userRoles.includes('support_specialist') || userRoles.includes('intern');
-  const isCommentAuthor = (authorName?: string) => String(authorName || '').trim() === String(user?.full_name || '').trim();
-  const canManageComment = (authorName?: string) => isAdminRole || isCommentAuthor(authorName);
-  const canDeleteComment = (authorName?: string) => isAdminRole || (!isDeleteBlockedRole && isCommentAuthor(authorName));
+  const isCommentAuthor = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => {
+    const authorUserID = Number(comment?.author_user_id || 0);
+    if (authorUserID > 0 && user?.id) {
+      return authorUserID === user.id;
+    }
+    return String(comment?.author_name || '').trim() === String(user?.full_name || '').trim();
+  };
+  const canManageComment = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => isCommentAuthor(comment);
+  const canDeleteComment = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => isCommentAuthor(comment);
 
   const markFieldChanged = (field: string) => {
     setHighlightedFields((prev) => ({ ...prev, [field]: true }));
@@ -341,12 +447,12 @@ const TicketDetailsPage: React.FC = () => {
 
   const parentInfrastructure = useMemo(() => parentInfraResponse?.data || [], [parentInfraResponse?.data]);
   const { data: attachableCallsResponse, isFetching: isAttachableCallsLoading } = useQuery({
-    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen, attachCallPhoneSearch, attachCallEmployeeID],
+    queryKey: ['telephony', 'ticket-attachable-calls', id, isAttachCallModalOpen, attachCallAppliedPhoneSearch, attachCallEmployeeID],
     queryFn: () => {
       const now = new Date();
       return telephonyApi.getCalls({
         only_without_ticket: true,
-        client_phone: attachCallPhoneSearch.trim() || undefined,
+        client_phone: attachCallAppliedPhoneSearch.trim() || undefined,
         employee_user_id: attachCallEmployeeID,
         started_from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
         started_to: now.toISOString(),
@@ -357,6 +463,10 @@ const TicketDetailsPage: React.FC = () => {
     staleTime: 15_000,
   });
   const attachableCalls = useMemo(() => attachableCallsResponse?.items || [], [attachableCallsResponse?.items]);
+
+  useEffect(() => {
+    setAttachCallAppliedPhoneSearch(debouncedAttachCallPhoneSearch);
+  }, [debouncedAttachCallPhoneSearch]);
 
   const companyTitle = useMemo(() => {
     const companyData = companyResponse?.data as { title?: string; additional_name?: string } | undefined;
@@ -430,6 +540,78 @@ const TicketDetailsPage: React.FC = () => {
     return source;
   }, [commentsNewFirst, details?.comments]);
 
+  const {
+    data: latestAgentObservationResponse,
+    isFetching: isAgentObservationLookupLoading,
+    isError: isAgentObservationLookupError,
+    error: agentObservationLookupError,
+  } = useQuery({
+    queryKey: [
+      'agent-observations',
+      'latest-by-agent',
+      observationTarget?.agentID,
+      observationTarget?.workstationIDs.join('|'),
+      observationTarget?.fiscalIDs.join('|'),
+    ],
+    queryFn: async () => {
+      const target = observationTarget!;
+      const baseParams = {
+        sort_by: 'latest' as const,
+        order: 'desc' as const,
+        limit: 1,
+      };
+      const emptyResult: ApiResponse<AgentObservationFeedRowDTO[]> = {
+        status: 'success',
+        data: [],
+      };
+      const tryLookup = async (params: Parameters<typeof agentObservationsApi.listFeed>[0]) => {
+        try {
+          const response = await agentObservationsApi.listFeed(params);
+          return response;
+        } catch {
+          return null;
+        }
+      };
+
+      const byAgent = await tryLookup({
+        ...baseParams,
+        agent_uuid: target.agentID,
+      });
+      if ((byAgent?.data || []).length > 0) {
+        return byAgent;
+      }
+
+      for (const workstationID of target.workstationIDs) {
+        const byWorkstation = await tryLookup({
+          ...baseParams,
+          workstation_id: workstationID,
+        });
+        if ((byWorkstation?.data || []).length > 0) {
+          return byWorkstation;
+        }
+      }
+
+      for (const frID of target.fiscalIDs) {
+        const byFiscal = await tryLookup({
+          ...baseParams,
+          fr_id: frID,
+        });
+        if ((byFiscal?.data || []).length > 0) {
+          return byFiscal;
+        }
+      }
+
+      return byAgent ?? emptyResult;
+    },
+    enabled: Boolean(observationTarget?.agentID),
+    staleTime: 15_000,
+  });
+
+  const latestAgentObservation = useMemo<AgentObservationFeedRowDTO | undefined>(
+    () => latestAgentObservationResponse?.data?.[0],
+    [latestAgentObservationResponse?.data],
+  );
+
   const openBitrixSyncModal = () => {
     if (!metadata) {
       return;
@@ -455,10 +637,14 @@ const TicketDetailsPage: React.FC = () => {
   }, [isDescriptionEditMode, metadata]);
 
   const { data: companiesData, isLoading: isCompaniesLoading } = useQuery({
-    queryKey: ['ticket-companies', companySearch],
-    queryFn: () => companiesApi.searchCompanies(companySearch, 20, 0),
+    queryKey: ['ticket-companies', companyAppliedSearch],
+    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 20, 0),
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setCompanyAppliedSearch(debouncedCompanySearch);
+  }, [debouncedCompanySearch]);
 
   const companySelectOptions = useMemo(() => {
     const list = companiesData?.data || [];
@@ -504,82 +690,79 @@ const TicketDetailsPage: React.FC = () => {
   const workstationItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'Workstation'), [infrastructure]);
   const fiscalItems = useMemo(() => infrastructure.filter((item) => item.entity_type === 'FiscalRegister'), [infrastructure]);
 
-  const buildServerConnectionCards = (items: InfrastructureItem[], keyPrefix: string) => {
-    return items
-      .map((item) => {
-        const dataRow = item.data as Record<string, string | undefined>;
-        const entityID = String(dataRow.uuid || '').trim();
-        const address = String(dataRow.ip || '').trim();
-        if (!entityID || !address) return null;
-        const iikoWebMeta = getIikoWebAppLinkMeta(dataRow.iiko_web_link || dataRow.ip);
-        const partnersLink = String(dataRow.partners_link || '').trim();
-        return {
-          key: `${keyPrefix}-Server-${entityID}`,
-          entityType: 'Server' as const,
-          entityID,
-          entityPath: `/servers/${entityID}`,
-          title: resolveEntityTitle(item),
-          rows: [{ label: 'Адрес сервера', field: 'ip', value: address }],
-          iikoWebMeta,
-          partnersLink,
-        };
-      })
-      .filter(Boolean) as Array<{
-      key: string;
-      entityType: 'Server';
-      entityID: string;
-      entityPath: string;
-      title: string;
-      rows: Array<{ label: string; field: string; value: string }>;
-      iikoWebMeta: ReturnType<typeof getIikoWebAppLinkMeta>;
-      partnersLink: string;
-    }>;
-  };
+  const agentEquipmentGroups = useMemo(() => {
+    const groups = new Map<string, AgentEquipmentGroup>();
+    const ensureGroup = (key: string, agentID: string, agentType: string) => {
+      const existing = groups.get(key);
+      if (existing) {
+        return existing;
+      }
+      const next: AgentEquipmentGroup = {
+        key,
+        agentID,
+        agentType,
+        workstations: [],
+        fiscals: [],
+      };
+      groups.set(key, next);
+      return next;
+    };
 
-  const sortConnectionCardsByTitle = <T extends { title: string }>(items: T[]) => (
-    items.slice().sort((left, right) => left.title.localeCompare(right.title, 'ru'))
+    workstationItems.forEach((item) => {
+      const sourceMeta = getAgentSourceMeta(item.data as WorkstationEntity);
+      if (!sourceMeta.agentID) {
+        return;
+      }
+      const group = ensureGroup(`agent-${sourceMeta.agentID}`, sourceMeta.agentID, sourceMeta.agentType);
+      group.workstations.push(item);
+    });
+
+    fiscalItems.forEach((item) => {
+      const sourceMeta = getAgentSourceMeta(item.data as FiscalEntity);
+      if (!sourceMeta.agentID) {
+        return;
+      }
+      const group = ensureGroup(`agent-${sourceMeta.agentID}`, sourceMeta.agentID, sourceMeta.agentType);
+      group.fiscals.push(item);
+    });
+
+    return Array.from(groups.values()).sort((left, right) => {
+      const leftTitle = left.agentID || resolveEntityTitle(left.workstations[0] || left.fiscals[0]);
+      const rightTitle = right.agentID || resolveEntityTitle(right.workstations[0] || right.fiscals[0]);
+      return leftTitle.localeCompare(rightTitle, 'ru');
+    });
+  }, [fiscalItems, workstationItems]);
+
+  const groupedWorkstationIDs = useMemo(() => {
+    const ids = new Set<string>();
+    agentEquipmentGroups.forEach((group) => {
+      group.workstations.forEach((item) => {
+        const entityID = normalizeTextValue(toInfraData(item).uuid);
+        if (entityID) ids.add(entityID);
+      });
+    });
+    return ids;
+  }, [agentEquipmentGroups]);
+
+  const groupedFiscalIDs = useMemo(() => {
+    const ids = new Set<string>();
+    agentEquipmentGroups.forEach((group) => {
+      group.fiscals.forEach((item) => {
+        const entityID = normalizeTextValue(toInfraData(item).uuid);
+        if (entityID) ids.add(entityID);
+      });
+    });
+    return ids;
+  }, [agentEquipmentGroups]);
+
+  const ungroupedWorkstationItems = useMemo(
+    () => workstationItems.filter((item) => !groupedWorkstationIDs.has(normalizeTextValue(toInfraData(item).uuid))),
+    [groupedWorkstationIDs, workstationItems],
   );
 
-  const ownConnectionCards = useMemo(() => {
-    const serverCards = buildServerConnectionCards(serverItems, 'own');
-
-    const workstationCards = workstationItems
-      .map((item) => {
-        const dataRow = item.data as Record<string, string | undefined>;
-        const entityID = String(dataRow.uuid || '').trim();
-        if (!entityID) return null;
-        const rows = [
-          { label: 'AnyDesk', field: 'anydesk', value: String(dataRow.anydesk || '').trim() },
-          { label: 'TeamViewer', field: 'teamviewer', value: String(dataRow.teamviewer || '').trim() },
-          { label: 'LiteManager', field: 'litemanager', value: String(dataRow.litemanager || '').trim() },
-          { label: 'RustDesk', field: 'rustdesk', value: String(dataRow.rustdesk || '').trim() },
-          { label: 'RDP', field: 'rdp', value: String(dataRow.rdp || '').trim() },
-        ].filter((row) => row.value);
-        if (rows.length === 0) return null;
-        return {
-          key: `Workstation-${entityID}`,
-          entityType: 'Workstation' as const,
-          entityID,
-          entityPath: `/workstations/${entityID}`,
-          title: resolveEntityTitle(item),
-          rows,
-        };
-      })
-      .filter(Boolean) as Array<{
-      key: string;
-      entityType: 'Workstation';
-      entityID: string;
-      entityPath: string;
-      title: string;
-      rows: Array<{ label: string; field: string; value: string }>;
-    }>;
-
-    return sortConnectionCardsByTitle([...serverCards, ...workstationCards]);
-  }, [serverItems, workstationItems]);
-
-  const parentConnectionCards = useMemo(
-    () => sortConnectionCardsByTitle(buildServerConnectionCards(parentServerItems, 'parent')),
-    [parentServerItems],
+  const ungroupedFiscalItems = useMemo(
+    () => fiscalItems.filter((item) => !groupedFiscalIDs.has(normalizeTextValue(toInfraData(item).uuid))),
+    [fiscalItems, groupedFiscalIDs],
   );
 
   const attachments = useMemo(() => {
@@ -800,16 +983,6 @@ const TicketDetailsPage: React.FC = () => {
     onError: () => message.error('Не удалось удалить тикет'),
   });
 
-  const updateWorkstationNameMutation = useMutation({
-    mutationFn: async (payload: { workstationID: string; deviceName: string }) => {
-      return equipmentApi.updateWorkstation(payload.workstationID, { device_name: payload.deviceName });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['company-infra', metadata?.company_id] });
-      queryClient.invalidateQueries({ queryKey: ['ticket', id] });
-    },
-  });
-
   const copyConnectionMutation = useMutation({
     mutationFn: async (payload: {
       label: string;
@@ -952,50 +1125,500 @@ const TicketDetailsPage: React.FC = () => {
       .replace(/^\/static\//, '/api/static/')
       .replace(/^static\//, '/api/static/');
   };
-  const commentComposer = (
-    <Space direction="vertical" size="small" style={{ width: '100%', marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}>
-      {isManagerFlowLocked && (
-        <Alert
-          type="info"
-          showIcon
-          message="Тикет передан менеджеру. Доступно только добавление комментариев, остальные действия обновляются из Bitrix24."
-        />
-      )}
-      <SmartTicketEditor
-        value={commentDraft}
-        onChange={setCommentDraft}
-        placeholder="Добавьте комментарий"
-        mentions={mentionOptions}
-        onImageUpload={uploadInlineImage}
-        onFileUpload={uploadInlineFile}
-        minHeight={100}
+
+  const copyValue = async (params: CopyValueParams) => {
+    const value = normalizeTextValue(params.value);
+    if (!value) {
+      message.warning('Нет значения для копирования');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedFieldKey(params.key);
+      window.setTimeout(() => {
+        setCopiedFieldKey((current) => (current === params.key ? '' : current));
+      }, 1600);
+      message.success(params.successText || 'Значение скопировано');
+      if (params.entityType && params.entityID) {
+        copyConnectionMutation.mutate({
+          label: params.label,
+          value,
+          entityType: params.entityType,
+          entityID: params.entityID,
+          connectionField: params.connectionField,
+        });
+      }
+    } catch {
+      message.error('Не удалось скопировать значение');
+    }
+  };
+
+  const renderCopyValueRow = (params: CopyValueParams) => {
+    const value = normalizeTextValue(params.value);
+    const displayValue = normalizeTextValue(params.displayValue) || value || '-';
+    const copied = copiedFieldKey === params.key;
+    return (
+      <button
+        key={params.key}
+        type="button"
+        className="ticket-equipment-copy-row"
+        disabled={!value}
+        onClick={() => copyValue(params)}
+      >
+        <span className="ticket-equipment-copy-row__content">
+          <Text type="secondary" className="ticket-equipment-copy-row__label">{params.label}</Text>
+          <Text className="ticket-equipment-copy-row__value">{displayValue}</Text>
+        </span>
+        <span className="ticket-equipment-copy-row__indicator" aria-hidden="true">
+          {copied ? <CheckOutlined /> : <CopyOutlined />}
+        </span>
+      </button>
+    );
+  };
+
+  const renderCopyValueGrid = (items: React.ReactNode[]) => {
+    const visibleItems = items.filter(Boolean);
+    if (visibleItems.length === 0) {
+      return null;
+    }
+    return (
+      <div className="ticket-equipment-copy-grid">
+        {visibleItems}
+      </div>
+    );
+  };
+
+  const renderEditLink = (path: string, title: string) => (
+    <Tooltip title={title}>
+      <Button
+        type="text"
+        size="small"
+        icon={<EditOutlined />}
+        href={path}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={title}
       />
-      <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
-        Приватный комментарий (не синхронизировать во внешние системы)
-      </Checkbox>
-      {isPyrusLinkedTicket && !commentIsPrivate && (
-        <Alert
-          type="warning"
-          showIcon
-          message="Публичный комментарий будет добавлен в Pyrus от имени бота интеграции."
+    </Tooltip>
+  );
+
+  const renderAgentBadge = (target: AgentObservationLookupTarget, agentType?: string) => {
+    const agentID = target.agentID;
+    if (!agentID) {
+      return null;
+    }
+    const label = getAgentTypeLabel(agentType);
+    return (
+      <Tooltip title="Открыть последнее наблюдение агента">
+        <button
+          type="button"
+          className="ticket-agent-badge"
+          onClick={() => setObservationTarget(target)}
+        >
+          {label}
+        </button>
+      </Tooltip>
+    );
+  };
+
+  const renderServerCard = (item: InfrastructureItem, keyPrefix: string, sourceLabel?: string) => {
+    const dataRow = toInfraData(item);
+    const server = item.data as ServerEntity;
+    const entityID = normalizeTextValue(server.uuid || dataRow.uuid);
+    const path = entityID ? `/servers/${entityID}` : '';
+    const title = resolveEntityTitle(item);
+    const crmID = normalizeTextValue(dataRow.crm_id);
+    const partnersLink = normalizeTextValue(dataRow.partners_link);
+    const iikoWebMeta = getIikoWebAppLinkMeta(server.iiko_web_link);
+    const titleHref = partnersLink || path;
+    return (
+      <Card key={`${keyPrefix}-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space className="ticket-equipment-card__header">
+            <Tooltip title={partnersLink ? 'Partners' : 'Открыть карточку сервера'}>
+              <a href={titleHref || undefined} target="_blank" rel="noreferrer">
+                <Text strong>{title}</Text>
+              </a>
+            </Tooltip>
+            <Space size={4}>
+              {sourceLabel ? <Tag color="purple" style={{ marginInlineEnd: 0 }}>{sourceLabel}</Tag> : null}
+              {iikoWebMeta ? (
+                <a href={iikoWebMeta.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                  <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{iikoWebMeta.label}</Tag>
+                </a>
+              ) : null}
+              {path ? renderEditLink(path, 'Открыть карточку сервера') : null}
+            </Space>
+          </Space>
+          {renderCopyValueRow({
+            key: `${keyPrefix}-${entityID}-ip`,
+            label: 'IP:порт',
+            value: normalizeTextValue(dataRow.ip),
+            entityType: 'Server',
+            entityID,
+            connectionField: 'ip',
+          })}
+          {renderCopyValueGrid([
+            isDigitsOnly(crmID) ? renderCopyValueRow({
+                key: `${keyPrefix}-${entityID}-crm`,
+                label: 'CRMid',
+                value: crmID,
+                entityType: 'Server',
+                entityID,
+                connectionField: 'crm_id',
+              }) : null,
+            renderCopyValueRow({
+              key: `${keyPrefix}-${entityID}-version`,
+              label: 'Версия',
+              value: normalizeTextValue(dataRow.server_version),
+              entityType: 'Server',
+              entityID,
+              connectionField: 'server_version',
+            }),
+            renderCopyValueRow({
+              key: `${keyPrefix}-${entityID}-uid`,
+              label: 'UID',
+              value: normalizeTextValue(dataRow.unique_id),
+              entityType: 'Server',
+              entityID,
+              connectionField: 'unique_id',
+            }),
+          ])}
+        </Space>
+      </Card>
+    );
+  };
+
+  const renderWorkstationCard = (item: InfrastructureItem) => {
+    const dataRow = toInfraData(item);
+    const entityID = normalizeTextValue(dataRow.uuid);
+    const path = entityID ? `/workstations/${entityID}` : '';
+    const title = normalizeTextValue(dataRow.device_name) || entityID || 'Рабочая станция';
+    const remoteRows = [
+      { label: 'AnyDesk', field: 'anydesk', value: normalizeTextValue(dataRow.anydesk) },
+      { label: 'TeamViewer', field: 'teamviewer', value: normalizeTextValue(dataRow.teamviewer) },
+      { label: 'LiteManager', field: 'litemanager', value: normalizeTextValue(dataRow.litemanager) },
+      { label: 'RustDesk', field: 'rustdesk', value: normalizeTextValue(dataRow.rustdesk) },
+      { label: 'RDP', field: 'rdp', value: normalizeTextValue(dataRow.rdp) },
+    ].filter((row) => row.value);
+    return (
+      <Card key={`workstation-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space className="ticket-equipment-card__header">
+            <Text strong>{title}</Text>
+            <Space size={4}>
+              <Tag color="cyan" style={{ marginInlineEnd: 0 }}>РС</Tag>
+              {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
+            </Space>
+          </Space>
+          {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
+            key: `workstation-${entityID}-${row.field}`,
+            label: row.label,
+            value: row.value,
+            entityType: 'Workstation',
+            entityID,
+            connectionField: row.field,
+          }))) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
+        </Space>
+      </Card>
+    );
+  };
+
+  const renderFiscalCard = (item: InfrastructureItem) => {
+    const dataRow = toInfraData(item);
+    const entityID = normalizeTextValue(dataRow.uuid);
+    const path = entityID ? `/fiscals/${entityID}` : '';
+    const title = normalizeTextValue(dataRow.model_kkt) || 'Фискальный регистратор';
+    const organizationName = normalizeTextValue(dataRow.legal_name) || normalizeTextValue(dataRow.organization_name);
+    const address = normalizeTextValue(dataRow.address);
+    return (
+      <Card key={`fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} size="small" className="glass-panel ticket-equipment-card">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space className="ticket-equipment-card__header">
+            <Text strong>{title}</Text>
+            <Space size={4}>
+              <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
+              {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
+            </Space>
+          </Space>
+          <Text type="secondary">Серийный номер: {normalizeTextValue(dataRow.serial_number) || '-'}</Text>
+          <Text type="secondary">РНМ: {normalizeTextValue(dataRow.rn_kkt) || '-'}</Text>
+          <Text type="secondary">Юр. лицо: {organizationName || '-'}</Text>
+          <Text type="secondary">ИНН: {normalizeTextValue(dataRow.inn) || '-'}</Text>
+          {address ? renderCopyValueRow({
+            key: `fiscal-${entityID}-address`,
+            label: 'Адрес',
+            value: address,
+            displayValue: shortenAddress(address),
+            successText: 'Адрес скопирован',
+          }) : null}
+        </Space>
+      </Card>
+    );
+  };
+
+  const renderAgentEquipmentGroupCard = (group: AgentEquipmentGroup) => {
+    const workstationIDs = group.workstations
+      .map((item) => normalizeTextValue(toInfraData(item).uuid))
+      .filter(Boolean);
+    const fiscalIDs = group.fiscals
+      .map((item) => normalizeTextValue(toInfraData(item).uuid))
+      .filter(Boolean);
+
+    return (
+      <Card key={group.key} size="small" className="glass-panel ticket-equipment-card ticket-agent-equipment-card">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div className="ticket-agent-equipment-card__badge-row">
+            {renderAgentBadge({ agentID: group.agentID, workstationIDs, fiscalIDs }, group.agentType)}
+          </div>
+        {group.workstations.map((item) => {
+          const dataRow = toInfraData(item);
+          const entityID = normalizeTextValue(dataRow.uuid);
+          const path = entityID ? `/workstations/${entityID}` : '';
+          const title = normalizeTextValue(dataRow.device_name) || entityID || 'Рабочая станция';
+          const remoteRows = [
+            { label: 'AnyDesk', field: 'anydesk', value: normalizeTextValue(dataRow.anydesk) },
+            { label: 'TeamViewer', field: 'teamviewer', value: normalizeTextValue(dataRow.teamviewer) },
+            { label: 'LiteManager', field: 'litemanager', value: normalizeTextValue(dataRow.litemanager) },
+            { label: 'RustDesk', field: 'rustdesk', value: normalizeTextValue(dataRow.rustdesk) },
+            { label: 'RDP', field: 'rdp', value: normalizeTextValue(dataRow.rdp) },
+          ].filter((row) => row.value);
+
+          return (
+            <div key={`agent-workstation-${entityID || title}`} className="ticket-agent-equipment-card__section">
+              <Space className="ticket-equipment-card__header">
+                <Text strong>{title}</Text>
+                <Space size={4}>
+                  <Tag color="cyan" style={{ marginInlineEnd: 0 }}>РС</Tag>
+                  {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
+                </Space>
+              </Space>
+              {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
+                key: `agent-workstation-${entityID}-${row.field}`,
+                label: row.label,
+                value: row.value,
+                entityType: 'Workstation',
+                entityID,
+                connectionField: row.field,
+              }))) : <Text type="secondary">ID удалённых доступов не указаны</Text>}
+            </div>
+          );
+        })}
+        {group.fiscals.map((item) => {
+          const dataRow = toInfraData(item);
+          const entityID = normalizeTextValue(dataRow.uuid);
+          const path = entityID ? `/fiscals/${entityID}` : '';
+          const title = normalizeTextValue(dataRow.model_kkt) || 'Фискальный регистратор';
+          const organizationName = normalizeTextValue(dataRow.legal_name) || normalizeTextValue(dataRow.organization_name);
+          const address = normalizeTextValue(dataRow.address);
+
+          return (
+            <div key={`agent-fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} className="ticket-agent-equipment-card__section">
+              <Space className="ticket-equipment-card__header">
+                <Text strong>{title}</Text>
+                <Space size={4}>
+                  <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
+                  {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
+                </Space>
+              </Space>
+              <Text type="secondary">Серийный номер: {normalizeTextValue(dataRow.serial_number) || '-'}</Text>
+              <Text type="secondary">РНМ: {normalizeTextValue(dataRow.rn_kkt) || '-'}</Text>
+              <Text type="secondary">Юр. лицо: {organizationName || '-'}</Text>
+              <Text type="secondary">ИНН: {normalizeTextValue(dataRow.inn) || '-'}</Text>
+              {address ? renderCopyValueRow({
+                key: `agent-fiscal-${entityID}-address`,
+                label: 'Адрес',
+                value: address,
+                displayValue: shortenAddress(address),
+                successText: 'Адрес скопирован',
+              }) : null}
+            </div>
+          );
+        })}
+        </Space>
+      </Card>
+    );
+  };
+
+  const equipmentTabContent = (
+    (isInfraLoading || isParentInfraLoading) ? (
+      <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
+    ) : serverItems.length === 0
+      && parentServerItems.length === 0
+      && agentEquipmentGroups.length === 0
+      && ungroupedWorkstationItems.length === 0
+      && ungroupedFiscalItems.length === 0 ? (
+      <Empty description="Оборудование не найдено" />
+    ) : (
+      <div className="ticket-overview-equipment-grid">
+        {parentServerItems.map((item) => renderServerCard(item, 'parent-server', 'Родитель'))}
+        {serverItems.map((item) => renderServerCard(item, 'server'))}
+        {agentEquipmentGroups.map((group) => renderAgentEquipmentGroupCard(group))}
+        {ungroupedWorkstationItems.map((item) => renderWorkstationCard(item))}
+        {ungroupedFiscalItems.map((item) => renderFiscalCard(item))}
+      </div>
+    )
+  );
+
+  const latestTicketsTabContent = metadata?.company_id ? (
+    <TicketTable
+      companyIds={[metadata.company_id]}
+      limit={10}
+      showCompanyColumn={false}
+      excludedTicketId={metadata.id}
+    />
+  ) : (
+    <Empty description="Компания тикета не выбрана" />
+  );
+
+  const callsTabContent = (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {ticketCalls.length === 0 ? (
+        <Empty description="Звонки по тикету пока не привязаны" />
+      ) : (
+        <List
+          dataSource={ticketCalls}
+          renderItem={(call) => {
+            const phoneDisplay = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
+            const phoneForCopy = getTelephonyContactPhoneForCopy(call.contact, call.client_phone) || '';
+            const contactName = normalizeTextValue(call.contact?.name);
+            const employeeName = normalizeTextValue(call.employee_name || call.employee_login);
+            const startedAt = call.started_at || call.answered_at || call.completed_at;
+            return (
+              <List.Item
+                actions={[
+                  <Button
+                    key="recording"
+                    type="link"
+                    size="small"
+                    href={call.recording_url}
+                    target="_blank"
+                    disabled={!call.recording_url}
+                  >
+                    Открыть запись
+                  </Button>,
+                  !isManagerFlowLocked ? (
+                    <Popconfirm
+                      key="unlink"
+                      title="Отвязать звонок от тикета?"
+                      okText="Отвязать"
+                      cancelText="Отмена"
+                      onConfirm={() => unbindTicketCallMutation.mutate(call)}
+                    >
+                      <Button
+                        type="link"
+                        size="small"
+                        danger
+                        loading={unbindTicketCallMutation.isPending && unbindTicketCallMutation.variables?.id === call.id}
+                      >
+                        Отвязать
+                      </Button>
+                    </Popconfirm>
+                  ) : null,
+                ]}
+              >
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space size={8} wrap>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<CopyOutlined />}
+                      style={{ paddingInline: 0 }}
+                      onClick={() => copyTicketPhone(phoneForCopy)}
+                    >
+                      {phoneDisplay}
+                    </Button>
+                    {contactName ? <Tag color="blue">{contactName}</Tag> : <Text type="secondary">Имя не указано</Text>}
+                    {employeeName ? <Tag>{employeeName}</Tag> : <Tag>Сотрудник не определён</Tag>}
+                  </Space>
+                  <Text type="secondary">
+                    {[
+                      startedAt ? dayjs(startedAt).format('DD.MM.YYYY HH:mm') : '',
+                      normalizeTextValue(call.direction),
+                      normalizeTextValue(call.status),
+                    ].filter(Boolean).join(' · ')}
+                  </Text>
+                </Space>
+              </List.Item>
+            );
+          }}
         />
       )}
-      <Space>
+      {isAdminRole && !isManagerFlowLocked ? (
         <Button
-          type="primary"
-          loading={addCommentMutation.isPending}
-          disabled={!hasEditorContent(commentDraft)}
-          onClick={() => addCommentMutation.mutate()}
+          type="dashed"
+          block
+          icon={<PlusOutlined />}
+          onClick={() => setIsAttachCallModalOpen(true)}
+          style={{ height: 44 }}
         >
-          Отправить
+          Прикрепить звонок за последние 24 часа
         </Button>
-      </Space>
+      ) : null}
     </Space>
   );
 
+  const appendReplyQuote = (comment: TicketCommentDTO) => {
+    const quote = buildCommentQuoteHTML(comment);
+    setCommentDraft((current) => {
+      const hasDraft = hasEditorContent(current);
+      return `${hasDraft ? current : ''}${hasDraft ? '<p></p>' : ''}${quote}`;
+    });
+    window.requestAnimationFrame(() => {
+      commentComposerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  };
+
+  const commentComposer = (
+    <div
+      ref={commentComposerRef}
+      className="ticket-comment-composer"
+      style={{ marginTop: commentsNewFirst ? 0 : 12, marginBottom: commentsNewFirst ? 12 : 0 }}
+    >
+      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        {isManagerFlowLocked && (
+          <Alert
+            type="info"
+            showIcon
+            message="Тикет передан менеджеру. Доступно только добавление комментариев, остальные действия обновляются из Bitrix24."
+          />
+        )}
+        <SmartTicketEditor
+          value={commentDraft}
+          onChange={setCommentDraft}
+          placeholder="Добавьте комментарий"
+          mentions={mentionOptions}
+          onImageUpload={uploadInlineImage}
+          onFileUpload={uploadInlineFile}
+          minHeight={84}
+        />
+        <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
+          Приватный комментарий (не синхронизировать во внешние системы)
+        </Checkbox>
+        {isPyrusLinkedTicket && !commentIsPrivate && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Публичный комментарий будет добавлен в Pyrus от имени бота интеграции."
+          />
+        )}
+        <Space>
+          <Button
+            type="primary"
+            loading={addCommentMutation.isPending}
+            disabled={!hasEditorContent(commentDraft)}
+            onClick={() => addCommentMutation.mutate()}
+          >
+            Отправить
+          </Button>
+        </Space>
+      </Space>
+    </div>
+  );
+
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+    <div className="ticket-details-page">
+      <Space className="ticket-details-header" style={{ width: '100%', justifyContent: 'space-between' }} wrap>
         <Space direction="vertical" size={0}>
           <Space align="center" size={8}>
             <Title level={4} style={{ margin: 0 }}>Заявка #{metadata.number}</Title>
@@ -1131,7 +1754,8 @@ const TicketDetailsPage: React.FC = () => {
       <div className="ticket-overview-layout">
         <div className="ticket-overview-main">
                   <Card size="small" className="ticket-overview-service-card" title="Служебная информация">
-                    <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
+                    <div className="ticket-overview-service-summary">
+                      <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
                       <Descriptions.Item label="Компания">
                         <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
                           {!isCompanyEditMode ? (
@@ -1148,6 +1772,7 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={() => {
                                 setDraftCompanyID(metadata.company_id);
                                 setCompanySearch('');
+                                setCompanyAppliedSearch('');
                                 setIsCompanyEditMode(true);
                               }}
                             />}
@@ -1164,6 +1789,11 @@ const TicketDetailsPage: React.FC = () => {
                               filterOption={false}
                               loading={isCompaniesLoading || changeCompanyMutation.isPending}
                               onSearch={(value) => setCompanySearch(value)}
+                              onInputKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  setCompanyAppliedSearch(companySearch);
+                                }
+                              }}
                               onChange={(nextCompanyID) => setDraftCompanyID(String(nextCompanyID))}
                             />
                             <Button
@@ -1336,10 +1966,28 @@ const TicketDetailsPage: React.FC = () => {
                         </div>
                       </Descriptions.Item>
                       )}
-                    </Descriptions>
+                      </Descriptions>
+                    </div>
 
-                    <div style={{ marginTop: 16 }}>
-                      <Text strong style={{ display: 'block', marginBottom: 8 }}>Описание</Text>
+                    <div className="ticket-overview-description-panel">
+                    <div>
+                      <Space align="center" size={6} style={{ marginBottom: 8 }}>
+                        <Text strong>Описание</Text>
+                        {!isManagerFlowLocked && !isDescriptionEditMode && (
+                          <Tooltip title="Редактировать описание">
+                            <Button
+                              type="text"
+                              size="small"
+                              aria-label="Редактировать описание"
+                              icon={<EditOutlined />}
+                              onClick={() => {
+                                setDescriptionDraft(metadata.description || '');
+                                setIsDescriptionEditMode(true);
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                      </Space>
                       <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
                         {!isDescriptionEditMode ? (
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1348,16 +1996,6 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={handleDescriptionClick}
                               style={{ whiteSpace: 'pre-wrap' }}
                             />
-                            {!isManagerFlowLocked && <Button
-                              size="small"
-                              icon={<EditOutlined />}
-                              onClick={() => {
-                                setDescriptionDraft(metadata.description || '');
-                                setIsDescriptionEditMode(true);
-                              }}
-                            >
-                              Редактировать описание
-                            </Button>}
                           </Space>
                         ) : (
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1388,8 +2026,8 @@ const TicketDetailsPage: React.FC = () => {
                             </Space>
                           </Space>
                         )}
+                        </div>
                       </div>
-                    </div>
 
                     {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
                       <div style={{ marginTop: 16 }}>
@@ -1399,9 +2037,10 @@ const TicketDetailsPage: React.FC = () => {
                         </div>
                       </div>
                     )}
+                    </div>
                   </Card>
 
-                  <Card size="small" className="ticket-overview-comments-card" title="Обзор">
+                  <Card size="small" className="ticket-overview-comments-card">
                     <Tabs
                       defaultActiveKey="comments"
                       items={[
@@ -1409,91 +2048,120 @@ const TicketDetailsPage: React.FC = () => {
                           key: 'comments',
                           label: 'Комментарии',
                           children: (
-                            <>
+                            <div className="ticket-comments-tab">
                               {commentsNewFirst && commentComposer}
                               {commentsOrdered.length ? (
                                 <List
+                                  className="ticket-comment-list"
                                   dataSource={commentsOrdered}
-                                  renderItem={(item) => (
-                                    <List.Item key={item.uuid} style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}>
-                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                        <Space size={8} style={{ justifyContent: 'space-between', width: '100%' }} wrap>
-                                          <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
-                                          <Space size={8}>
-                                            {item.is_private && <Tag color="orange">Приватный</Tag>}
-                                            {canManageComment(item.author_name) && !isManagerFlowLocked && (
+                                  renderItem={(item) => {
+                                    const isOwnComment = isCommentAuthor(item);
+                                    return (
+                                      <List.Item
+                                        key={item.uuid}
+                                        className={`ticket-comment-list__item${isOwnComment ? ' ticket-comment-list__item--own' : ''}`}
+                                        style={highlightedComments[item.uuid] ? fieldHighlightStyle : undefined}
+                                      >
+                                        <div className="ticket-comment-bubble">
+                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                            <Space size={8} className="ticket-comment-bubble__meta" wrap>
+                                              <Text type="secondary">{item.author_name || 'Сотрудник'} в {dayjs(item.creation_date).format('DD.MM.YYYY HH:mm')}</Text>
+                                              {item.is_private && <Tag color="orange">Приватный</Tag>}
+                                            </Space>
+                                            {editingCommentUUID === item.uuid ? (
+                                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                                <SmartTicketEditor
+                                                  value={editingCommentDraft}
+                                                  onChange={setEditingCommentDraft}
+                                                  placeholder="Измените комментарий"
+                                                  mentions={mentionOptions}
+                                                  onImageUpload={uploadInlineImage}
+                                                  onFileUpload={uploadInlineFile}
+                                                  minHeight={100}
+                                                />
+                                                {isPyrusLinkedTicket && !item.is_private && (
+                                                  <Alert
+                                                    type="warning"
+                                                    showIcon
+                                                    message="Публичный комментарий будет синхронизирован в Pyrus от имени бота интеграции."
+                                                  />
+                                                )}
+                                                <Space>
+                                                  <Button
+                                                    type="primary"
+                                                    loading={updateCommentMutation.isPending}
+                                                    disabled={!hasEditorContent(editingCommentDraft)}
+                                                    onClick={() => updateCommentMutation.mutate()}
+                                                  >
+                                                    Сохранить
+                                                  </Button>
+                                                  <Button
+                                                    onClick={() => {
+                                                      setEditingCommentUUID('');
+                                                      setEditingCommentDraft('');
+                                                    }}
+                                                  >
+                                                    Отмена
+                                                  </Button>
+                                                </Space>
+                                              </Space>
+                                            ) : (
+                                              <div className="ticket-comment-bubble__content">
+                                                <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
+                                              </div>
+                                            )}
+                                            <Space size={4} className="ticket-comment-bubble__actions">
                                               <Button
                                                 type="link"
                                                 size="small"
-                                                onClick={() => {
-                                                  setEditingCommentUUID(item.uuid);
-                                                  setEditingCommentDraft(item.text || '');
-                                                }}
+                                                icon={<MessageOutlined />}
+                                                onClick={() => appendReplyQuote(item)}
                                               >
-                                                Редактировать
+                                                Ответить
                                               </Button>
-                                            )}
-                                            {canDeleteComment(item.author_name) && !isManagerFlowLocked && (
-                                              <Popconfirm
-                                                title="Удалить комментарий?"
-                                                okText="Удалить"
-                                                cancelText="Отмена"
-                                                onConfirm={() => deleteCommentMutation.mutate(item.uuid)}
-                                              >
-                                                <Button type="link" size="small" danger loading={deleteCommentMutation.isPending}>
-                                                  Удалить
-                                                </Button>
-                                              </Popconfirm>
-                                            )}
-                                          </Space>
-                                        </Space>
-                                        {editingCommentUUID === item.uuid ? (
-                                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                            <SmartTicketEditor
-                                              value={editingCommentDraft}
-                                              onChange={setEditingCommentDraft}
-                                              placeholder="Измените комментарий"
-                                              mentions={mentionOptions}
-                                              onImageUpload={uploadInlineImage}
-                                              onFileUpload={uploadInlineFile}
-                                              minHeight={100}
-                                            />
-                                            {isPyrusLinkedTicket && !item.is_private && (
-                                              <Alert
-                                                type="warning"
-                                                showIcon
-                                                message="Публичный комментарий будет синхронизирован в Pyrus от имени бота интеграции."
-                                              />
-                                            )}
-                                            <Space>
-                                              <Button
-                                                type="primary"
-                                                loading={updateCommentMutation.isPending}
-                                                disabled={!hasEditorContent(editingCommentDraft)}
-                                                onClick={() => updateCommentMutation.mutate()}
-                                              >
-                                                Сохранить
-                                              </Button>
-                                              <Button
-                                                onClick={() => {
-                                                  setEditingCommentUUID('');
-                                                  setEditingCommentDraft('');
-                                                }}
-                                              >
-                                                Отмена
-                                              </Button>
+                                              {canManageComment(item) && !isManagerFlowLocked && (
+                                                <Tooltip title="Редактировать">
+                                                  <Button
+                                                    type="text"
+                                                    size="small"
+                                                    aria-label="Редактировать комментарий"
+                                                    icon={<EditOutlined />}
+                                                    onClick={() => {
+                                                      setEditingCommentUUID(item.uuid);
+                                                      setEditingCommentDraft(item.text || '');
+                                                    }}
+                                                  />
+                                                </Tooltip>
+                                              )}
+                                              {canDeleteComment(item) && !isManagerFlowLocked && (
+                                                <Popconfirm
+                                                  title="Удалить комментарий?"
+                                                  okText="Удалить"
+                                                  cancelText="Отмена"
+                                                  onConfirm={() => deleteCommentMutation.mutate(item.uuid)}
+                                                >
+                                                  <Tooltip title="Удалить">
+                                                    <Button
+                                                      type="text"
+                                                      size="small"
+                                                      danger
+                                                      aria-label="Удалить комментарий"
+                                                      icon={<DeleteOutlined />}
+                                                      loading={deleteCommentMutation.isPending}
+                                                    />
+                                                  </Tooltip>
+                                                </Popconfirm>
+                                              )}
                                             </Space>
                                           </Space>
-                                        ) : (
-                                          <SafeHtmlContent html={item.text} style={{ whiteSpace: 'pre-wrap' }} />
-                                        )}
-                                      </Space>
-                                    </List.Item>
-                                  )}
+                                        </div>
+                                      </List.Item>
+                                    );
+                                  }}
                                 />
                               ) : null}
                               {!commentsNewFirst && commentComposer}
-                            </>
+                            </div>
                           ),
                         },
                         {
@@ -1592,421 +2260,48 @@ const TicketDetailsPage: React.FC = () => {
                   </Card>
                 </div>
 
-                <Card size="small" className="ticket-overview-side-card" title="Подключения и оборудование">
+                <Card size="small" className="ticket-overview-side-card" title="Контекст компании">
                   <Tabs
                     size="small"
+                    defaultActiveKey="overview-equipment"
                     items={[
                       {
-                        key: 'overview-connections',
-                        label: 'Подключения',
-                        children: (
-                          (isInfraLoading || isParentInfraLoading) ? (
-                            <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                          ) : ownConnectionCards.length === 0 && parentConnectionCards.length === 0 ? (
-                            <Empty description="Подключения не найдены" />
-                          ) : (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              {parentConnectionCards.length > 0 && (
-                                <Card size="small" className="glass-panel" title="Серверы родительской компании">
-                                  
-                                  <div className="ticket-overview-connection-grid" style={{ marginTop: 8 }}>
-                                    {parentConnectionCards.map((group) => (
-                                      <Card key={group.key} size="small" className="glass-panel">
-                                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                                            <a href={group.entityPath} target="_blank" rel="noreferrer">
-                                              <Text strong>{group.title}</Text>
-                                            </a>
-                                            <Tag color="geekblue">Сервер</Tag>
-                                          </Space>
-                                          {group.rows.map((row) => (
-                                            <Paragraph
-                                              key={`${group.key}-${row.field}-${row.value}`}
-                                              style={{ margin: 0 }}
-                                              copyable={{
-                                                text: row.value,
-                                                onCopy: () => {
-                                                  copyConnectionMutation.mutate({
-                                                    label: row.label,
-                                                    value: row.value,
-                                                    entityType: group.entityType,
-                                                    entityID: group.entityID,
-                                                    connectionField: row.field,
-                                                  });
-                                                },
-                                              }}
-                                            >
-                                              <Text type="secondary">{row.label}:</Text> {row.value}
-                                            </Paragraph>
-                                          ))}
-                                          {group.iikoWebMeta || group.partnersLink ? (
-                                            <Space size={4} wrap>
-                                              {group.iikoWebMeta ? (
-                                                <Button
-                                                  type="link"
-                                                  size="small"
-                                                  href={group.iikoWebMeta.url}
-                                                  target="_blank"
-                                                  icon={<LinkOutlined />}
-                                                  style={{ paddingInline: 0 }}
-                                                >
-                                                  {group.iikoWebMeta.label}
-                                                </Button>
-                                              ) : null}
-                                              {group.partnersLink ? (
-                                                <Button
-                                                  type="link"
-                                                  size="small"
-                                                  href={group.partnersLink}
-                                                  target="_blank"
-                                                  icon={<LinkOutlined />}
-                                                  style={{ paddingInline: 0 }}
-                                                >
-                                                  Партнёрский портал
-                                                </Button>
-                                              ) : null}
-                                            </Space>
-                                          ) : null}
-                                        </Space>
-                                      </Card>
-                                    ))}
-                                  </div>
-                                </Card>
-                              )}
-
-                              {ownConnectionCards.length > 0 && (
-                                <div className="ticket-overview-connection-grid">
-                                  {ownConnectionCards.map((group) => (
-                                    <Card key={group.key} size="small" className="glass-panel">
-                                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                        <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                                          <a href={group.entityPath} target="_blank" rel="noreferrer">
-                                            <Text strong>{group.title}</Text>
-                                          </a>
-                                          <Tag color={group.entityType === 'Server' ? 'geekblue' : 'cyan'}>
-                                            {group.entityType === 'Server' ? 'Сервер' : 'Станция'}
-                                          </Tag>
-                                        </Space>
-                                        {group.rows.map((row) => (
-                                          <Paragraph
-                                            key={`${group.key}-${row.field}-${row.value}`}
-                                            style={{ margin: 0 }}
-                                            copyable={{
-                                              text: row.value,
-                                              onCopy: () => {
-                                                copyConnectionMutation.mutate({
-                                                  label: row.label,
-                                                  value: row.value,
-                                                  entityType: group.entityType,
-                                                  entityID: group.entityID,
-                                                  connectionField: row.field,
-                                                });
-                                              },
-                                            }}
-                                          >
-                                            <Text type="secondary">{row.label}:</Text> {row.value}
-                                          </Paragraph>
-                                        ))}
-                                        {group.entityType === 'Server' && ('iikoWebMeta' in group) && (group.iikoWebMeta || group.partnersLink) ? (
-                                          <Space size={4} wrap>
-                                            {group.iikoWebMeta ? (
-                                              <Button
-                                                type="link"
-                                                size="small"
-                                                href={group.iikoWebMeta.url}
-                                                target="_blank"
-                                                icon={<LinkOutlined />}
-                                                style={{ paddingInline: 0 }}
-                                              >
-                                                {group.iikoWebMeta.label}
-                                              </Button>
-                                            ) : null}
-                                            {group.partnersLink ? (
-                                              <Button
-                                                type="link"
-                                                size="small"
-                                                href={group.partnersLink}
-                                                target="_blank"
-                                                icon={<LinkOutlined />}
-                                                style={{ paddingInline: 0 }}
-                                              >
-                                                Партнёрский портал
-                                              </Button>
-                                            ) : null}
-                                          </Space>
-                                        ) : null}
-                                      </Space>
-                                    </Card>
-                                  ))}
-                                </div>
-                              )}
-                            </Space>
-                          )
-                        ),
+                        key: 'overview-equipment',
+                        label: 'Оборудование',
+                        children: equipmentTabContent,
+                      },
+                      {
+                        key: 'overview-tickets',
+                        label: 'Тикеты',
+                        children: latestTicketsTabContent,
                       },
                       {
                         key: 'overview-calls',
                         label: 'Звонки',
-                        children: (
-                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                            {ticketCalls.length === 0 ? (
-                              <Empty description="Звонки по тикету пока не привязаны" />
-                            ) : (
-                              <List
-                                dataSource={ticketCalls}
-                                renderItem={(call) => {
-                                  const phoneDisplay = getTelephonyContactPhoneDisplay(call.contact, call.client_phone) || 'Номер не определён';
-                                  const phoneForCopy = getTelephonyContactPhoneForCopy(call.contact, call.client_phone) || '';
-                                  const contactName = String(call.contact?.name || '').trim();
-                                  const employeeName = String(call.employee_name || call.employee_login || '').trim();
-                                  const startedAt = call.started_at || call.answered_at || call.completed_at;
-                                  return (
-                                     <List.Item
-                                      actions={[
-                                        <Button
-                                          key="recording"
-                                          type="link"
-                                          size="small"
-                                          href={call.recording_url}
-                                          target="_blank"
-                                          disabled={!call.recording_url}
-                                        >
-                                          Открыть запись
-                                        </Button>,
-                                        !isManagerFlowLocked ? (
-                                          <Popconfirm
-                                            key="unlink"
-                                            title="Отвязать звонок от тикета?"
-                                            okText="Отвязать"
-                                            cancelText="Отмена"
-                                            onConfirm={() => unbindTicketCallMutation.mutate(call)}
-                                          >
-                                            <Button
-                                              type="link"
-                                              size="small"
-                                              danger
-                                              loading={unbindTicketCallMutation.isPending && unbindTicketCallMutation.variables?.id === call.id}
-                                            >
-                                              Отвязать
-                                            </Button>
-                                          </Popconfirm>
-                                        ) : null,
-                                      ]}
-                                    >
-                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                        <Space size={8} wrap>
-                                          <Button
-                                            type="link"
-                                            size="small"
-                                            icon={<CopyOutlined />}
-                                            style={{ paddingInline: 0 }}
-                                            onClick={() => copyTicketPhone(phoneForCopy)}
-                                          >
-                                            {phoneDisplay}
-                                          </Button>
-                                          {contactName ? <Tag color="blue">{contactName}</Tag> : <Text type="secondary">Имя не указано</Text>}
-                                          {employeeName ? <Tag>{employeeName}</Tag> : <Tag>Сотрудник не определён</Tag>}
-                                        </Space>
-                                        <Text type="secondary">
-                                          {[
-                                            startedAt ? dayjs(startedAt).format('DD.MM.YYYY HH:mm') : '',
-                                            String(call.direction || '').trim(),
-                                            String(call.status || '').trim(),
-                                          ].filter(Boolean).join(' · ')}
-                                        </Text>
-                                      </Space>
-                                    </List.Item>
-                                  );
-                                }}
-                              />
-                            )}
-                            {isAdminRole && !isManagerFlowLocked ? (
-                              <Button
-                                type="dashed"
-                                block
-                                icon={<PlusOutlined />}
-                                onClick={() => setIsAttachCallModalOpen(true)}
-                                style={{ height: 44 }}
-                              >
-                                Прикрепить звонок за последние 24 часа
-                              </Button>
-                            ) : null}
-                          </Space>
-                        ),
-                      },
-                      {
-                        key: 'overview-equipment',
-                        label: 'Оборудование',
-                        children: (
-                          isInfraLoading ? (
-                            <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
-                          ) : (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              {serverItems.length > 0 && (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text strong>Серверы</Text>
-                                  <div className="ticket-overview-equipment-grid">
-                                    {serverItems.map((item) => {
-                                      const dataRow = item.data as Record<string, string | undefined>;
-                                      const path = resolveEntityPath(item);
-                                      const iikoWebMeta = getIikoWebAppLinkMeta(dataRow.iiko_web_link || dataRow.ip);
-                                      return (
-                                        <Card
-                                          key={`equip-server-${dataRow.uuid || resolveEntityTitle(item)}`}
-                                          size="small"
-                                          hoverable
-                                          className="glass-panel"
-                                          onClick={() => {
-                                            if (!path) return;
-                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                          }}
-                                        >
-                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                              <Text strong>{resolveEntityTitle(item)}</Text>
-                                              <Tag color="geekblue">Сервер</Tag>
-                                            </Space>
-                                            <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
-                                              {iikoWebMeta ? (
-                                                <Button
-                                                  type="link"
-                                                  size="small"
-                                                  href={iikoWebMeta.url}
-                                                  target="_blank"
-                                                  icon={<LinkOutlined />}
-                                                  style={{ paddingInline: 0 }}
-                                                  onClick={(event) => event.stopPropagation()}
-                                                >
-                                                  {iikoWebMeta.label}
-                                                </Button>
-                                              ) : null}
-                                              {dataRow.partners_link ? (
-                                                <Button
-                                                  type="link"
-                                                  size="small"
-                                                  href={dataRow.partners_link}
-                                                  target="_blank"
-                                                  icon={<LinkOutlined />}
-                                                  style={{ paddingInline: 0 }}
-                                                  onClick={(event) => event.stopPropagation()}
-                                                >
-                                                  Партнёрский портал
-                                                </Button>
-                                              ) : null}
-                                            </Space>
-                                            {!dataRow.partners_link && !iikoWebMeta ? (
-                                              <Text type="secondary">Веб-ссылки: -</Text>
-                                            ) : null}
-                                            <Paragraph copyable={dataRow.unique_id ? { text: dataRow.unique_id } : false} style={{ margin: 0 }}>
-                                              <Text type="secondary">UniqueID:</Text> {dataRow.unique_id || '-'}
-                                            </Paragraph>
-                                            <Paragraph copyable={dataRow.server_version ? { text: dataRow.server_version } : false} style={{ margin: 0 }}>
-                                              <Text type="secondary">Версия:</Text> {dataRow.server_version || '-'}
-                                            </Paragraph>
-                                            <Paragraph copyable={dataRow.ip ? { text: dataRow.ip } : false} style={{ margin: 0 }}>
-                                              <Text type="secondary">Адрес:</Text> {dataRow.ip || '-'}
-                                            </Paragraph>
-                                          </Space>
-                                        </Card>
-                                      );
-                                    })}
-                                  </div>
-                                </Space>
-                              )}
-
-                              {workstationItems.length > 0 && (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text strong>Рабочие станции</Text>
-                                  <div className="ticket-overview-equipment-grid">
-                                    {workstationItems.map((item) => {
-                                      const dataRow = item.data as Record<string, string | undefined>;
-                                      const path = resolveEntityPath(item);
-                                      const workstationID = String(dataRow.uuid || '').trim();
-                                      return (
-                                        <Card
-                                          key={`equip-workstation-${workstationID || resolveEntityTitle(item)}`}
-                                          size="small"
-                                          hoverable
-                                          className="glass-panel"
-                                          onClick={() => {
-                                            if (!path) return;
-                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                          }}
-                                        >
-                                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                              <Text strong>Рабочая станция</Text>
-                                              <Tag color="cyan">РС</Tag>
-                                            </Space>
-                                            <div onClick={(event) => event.stopPropagation()}>
-                                              <InlineFieldEditor
-                                                value={dataRow.device_name || workstationID || 'Рабочая станция'}
-                                                onSave={(value) => {
-                                                  if (!workstationID) return;
-                                                  updateWorkstationNameMutation.mutate({ workstationID, deviceName: value });
-                                                }}
-                                                saving={updateWorkstationNameMutation.isPending}
-                                              />
-                                            </div>
-                                            <Text type="secondary">AnyDesk: {dataRow.anydesk || '-'}</Text>
-                                            <Text type="secondary">TeamViewer: {dataRow.teamviewer || '-'}</Text>
-                                            <Text type="secondary">LiteManager: {dataRow.litemanager || '-'}</Text>
-                                            <Text type="secondary">RustDesk: {dataRow.rustdesk || '-'}</Text>
-                                          </Space>
-                                        </Card>
-                                      );
-                                    })}
-                                  </div>
-                                </Space>
-                              )}
-
-                              {fiscalItems.length > 0 && (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text strong>Фискальные регистраторы</Text>
-                                  <div className="ticket-overview-equipment-grid">
-                                    {fiscalItems.map((item) => {
-                                      const dataRow = item.data as Record<string, string | undefined>;
-                                      const path = resolveEntityPath(item);
-                                      return (
-                                        <Card
-                                          key={`equip-fiscal-${dataRow.uuid || dataRow.serial_number || dataRow.rn_kkt}`}
-                                          size="small"
-                                          hoverable
-                                          className="glass-panel"
-                                          onClick={() => {
-                                            if (!path) return;
-                                            navigate(path, { state: { backTo: `${location.pathname}${location.search}` } });
-                                          }}
-                                        >
-                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                              <Text strong>{dataRow.model_kkt || 'ККТ'}</Text>
-                                              <Tag color="gold">ФР</Tag>
-                                            </Space>
-                                            <Text type="secondary">РНМ: {dataRow.rn_kkt || '-'}</Text>
-                                            <Text type="secondary">SN: {dataRow.serial_number || '-'}</Text>
-                                            <Text type="secondary">
-                                              ФН до: {dataRow.fn_expire_date ? dayjs(dataRow.fn_expire_date).format('DD.MM.YYYY') : '-'}
-                                            </Text>
-                                          </Space>
-                                        </Card>
-                                      );
-                                    })}
-                                  </div>
-                                </Space>
-                              )}
-
-                              {serverItems.length === 0 && workstationItems.length === 0 && fiscalItems.length === 0 && (
-                                <Empty description="Оборудование не найдено" />
-                              )}
-                            </Space>
-                          )
-                        ),
+                        children: callsTabContent,
                       },
                     ]}
                   />
                 </Card>
       </div>
+
+      <AgentObservationRawModal
+        open={Boolean(observationTarget?.agentID)}
+        observationID={latestAgentObservation?.observation_id}
+        onClose={() => setObservationTarget(null)}
+        title={observationTarget?.agentID ? 'Последнее наблюдение агента' : undefined}
+        lookupLoading={isAgentObservationLookupLoading}
+        lookupError={isAgentObservationLookupError ? getLookupErrorMessage(agentObservationLookupError) : undefined}
+        emptyDescription="Для этого агента пока нет наблюдений"
+        summary={{
+          agentUUID: observationTarget?.agentID,
+          serverURL: latestAgentObservation?.server_url,
+          currentTime: latestAgentObservation?.current_time || latestAgentObservation?.current_time_parsed,
+          vTime: latestAgentObservation?.v_time || latestAgentObservation?.v_time_parsed,
+          workstation: latestAgentObservation?.workstation_name || latestAgentObservation?.workstation_id,
+          fr: latestAgentObservation?.fr_name || latestAgentObservation?.fr_id,
+        }}
+      />
 
       {isBitrixEnabled && (
         <Modal
@@ -2123,6 +2418,7 @@ const TicketDetailsPage: React.FC = () => {
             placeholder="Поиск по номеру"
             value={attachCallPhoneSearch}
             onChange={(event) => setAttachCallPhoneSearch(event.target.value)}
+            onSearch={(value) => setAttachCallAppliedPhoneSearch(value.trim())}
           />
           <Select
             allowClear
@@ -2210,7 +2506,7 @@ const TicketDetailsPage: React.FC = () => {
           />
         </Suspense>
       )}
-    </Space>
+    </div>
   );
 };
 

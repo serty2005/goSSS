@@ -53,19 +53,18 @@ const buildPlainTextContent = (value: string): JSONContent[] => {
     return [];
   }
 
-  return normalized.split(/\n{2,}/).map((paragraph) => {
-    const lines = paragraph.split('\n');
-    const content: JSONContent[] = [];
-    lines.forEach((line, index) => {
-      if (line) {
-        content.push({ type: 'text', text: line });
-      }
-      if (index < lines.length - 1) {
-        content.push({ type: 'hardBreak' });
-      }
-    });
-    return content.length > 0 ? { type: 'paragraph', content } : { type: 'paragraph' };
+  const lines = normalized.split('\n');
+  const content: JSONContent[] = [];
+  lines.forEach((line, index) => {
+    if (line) {
+      content.push({ type: 'text', text: line });
+    }
+    if (index < lines.length - 1) {
+      content.push({ type: 'hardBreak' });
+    }
   });
+
+  return content;
 };
 
 const SmartTicketEditor: React.FC<Props> = ({

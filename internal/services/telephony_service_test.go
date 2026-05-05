@@ -215,6 +215,65 @@ func TestTelephonyServiceGetLineViewSkipsEmployeesWithoutActiveMegafonIntegratio
 	require.Len(t, lineView.Employees, 0)
 }
 
+func TestTelephonyServiceGetLineViewDerivesInCallFromActiveCalls(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	statusOffline := "offline"
+	require.NoError(t, env.telephonyRepo.ReplaceProviderEmployees(ctx, telephony.ProviderMegafonVATS, []telephony.ProviderEmployee{
+		{
+			Provider:      telephony.ProviderMegafonVATS,
+			EmployeeLogin: "alice",
+			EmployeeName:  "Алиса",
+			Status:        &statusOffline,
+			LastSeenAt:    time.Now(),
+		},
+	}))
+
+	now := time.Now()
+	clientPhone := "79990001124"
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-active-offline-operator",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-active-offline-operator",
+		Direction:      "incoming",
+		Status:         "accepted",
+		ClientPhone:    &clientPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &now,
+	}))
+
+	lineView, err := env.service.GetLineView(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lineView)
+	require.Equal(t, "yellow", lineView.Color)
+	require.Equal(t, 1, lineView.OnLineCount)
+	require.Len(t, lineView.Employees, 1)
+	require.Equal(t, "in_call", lineView.Employees[0].Status)
+
+	completedAt := now.Add(time.Minute)
+	require.NoError(t, env.telephonyRepo.UpsertCall(ctx, &telephony.Call{
+		ID:             "call-active-offline-operator",
+		Provider:       telephony.ProviderMegafonVATS,
+		ExternalCallID: "call-active-offline-operator",
+		Direction:      "incoming",
+		Status:         "completed",
+		ClientPhone:    &clientPhone,
+		EmployeeUserID: &operator.ID,
+		StartedAt:      &now,
+		CompletedAt:    &completedAt,
+	}))
+
+	lineView, err = env.service.GetLineView(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lineView)
+	require.Equal(t, "red", lineView.Color)
+	require.Equal(t, 0, lineView.OnLineCount)
+	require.Len(t, lineView.Employees, 1)
+	require.Equal(t, "offline", lineView.Employees[0].Status)
+}
+
 func TestTelephonyServiceBindPendingContextToTicket(t *testing.T) {
 	ctx := context.Background()
 	env := newTelephonyServiceTestEnv(t)

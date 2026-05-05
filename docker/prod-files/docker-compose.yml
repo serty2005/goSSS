@@ -2,7 +2,7 @@ name: gosss-prod
 
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.6.15
     restart: unless-stopped
     command:
       - --api=true
@@ -46,6 +46,7 @@ services:
       - traefik.http.routers.traefik-admin.middlewares=admin-auth,etalon-secure-headers
 
       - traefik.http.middlewares.admin-auth.basicauth.users=${TRAEFIK_ADMIN_AUTH}
+      - traefik.http.middlewares.admin-auth.basicauth.removeheader=true
 
       - traefik.http.middlewares.etalon-secure-headers.headers.stsSeconds=31536000
       - traefik.http.middlewares.etalon-secure-headers.headers.stsIncludeSubdomains=true
@@ -102,7 +103,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL}
+      MINIO_BROWSER_REDIRECT_URL: https://${TRAEFIK_DOMAIN}/minio/
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -143,13 +144,14 @@ services:
       - traefik.http.routers.minio-recordings.tls.certresolver=le
       - traefik.http.routers.minio-recordings.priority=179
       - traefik.http.routers.minio-recordings.service=minio-recordings
-      - traefik.http.routers.minio-recordings.middlewares=minio-recordings-slash,minio-recordings-rewrite,etalon-secure-headers
+      - traefik.http.routers.minio-recordings.middlewares=minio-recordings-slash,minio-recordings-rewrite,minio-recordings-strip-auth,etalon-secure-headers
       - traefik.http.services.minio-recordings.loadbalancer.server.port=9000
       - traefik.http.middlewares.minio-recordings-slash.redirectregex.regex=^https://([^/]+)/recordings$$
       - traefik.http.middlewares.minio-recordings-slash.redirectregex.replacement=https://$${1}/recordings/
       - traefik.http.middlewares.minio-recordings-slash.redirectregex.permanent=true
       - traefik.http.middlewares.minio-recordings-rewrite.replacepathregex.regex=^/recordings/(.*)
       - traefik.http.middlewares.minio-recordings-rewrite.replacepathregex.replacement=/telephony-recordings/$${1}
+      - traefik.http.middlewares.minio-recordings-strip-auth.headers.customrequestheaders.Authorization=
 
   minio-init:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1

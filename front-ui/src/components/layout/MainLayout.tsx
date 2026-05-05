@@ -57,6 +57,7 @@ import {
   useTicketRealtime,
   type TicketRealtimePayload,
 } from "@/features/realtime/useTicketRealtime";
+import { THEME_COLOR_SAVE_DEBOUNCE_MS } from "@/hooks/useDebouncedValue";
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -201,6 +202,8 @@ const MainLayout: React.FC = () => {
     bgContainer: null,
     borderColor: null,
   });
+  const themeColorSaveTimerRef = useRef<number | null>(null);
+  const themeConfigSaveIDRef = useRef(0);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -392,6 +395,14 @@ const MainLayout: React.FC = () => {
       profileApi.updateConfig(payload),
   });
 
+  const clearThemeColorSaveTimer = useCallback(() => {
+    if (themeColorSaveTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(themeColorSaveTimerRef.current);
+    themeColorSaveTimerRef.current = null;
+  }, []);
+
   const persistProfileConfig = async (
     nextMode: ThemeMode,
     nextPalettes?: Record<
@@ -399,6 +410,9 @@ const MainLayout: React.FC = () => {
       Pick<ThemePalette, "primary" | "bgLayout" | "bgContainer" | "borderColor">
     >,
   ) => {
+    clearThemeColorSaveTimer();
+    themeConfigSaveIDRef.current += 1;
+
     if (!user) {
       setTheme(nextMode);
       return;
@@ -444,18 +458,66 @@ const MainLayout: React.FC = () => {
     await persistProfileConfig(nextMode);
   };
 
-  const handleSetColor = async (key: EditableColorKey, value: string) => {
+  const handleSetColor = (key: EditableColorKey, value: string) => {
     const nextLight = { ...lightPalette };
     const nextDark = { ...darkPalette };
     const target = themeMode === "light" ? nextLight : nextDark;
 
     target[key] = value;
 
-    await persistProfileConfig(themeMode, {
-      light: nextLight,
-      dark: nextDark,
-    });
+    if (!user) {
+      setTheme(themeMode);
+      return;
+    }
+
+    const nextConfig = buildProfileConfigWithPalettes(
+      user.profile_config,
+      {
+        light: nextLight,
+        dark: nextDark,
+      },
+      themeMode,
+    );
+    const prevUser = user;
+    const saveID = themeConfigSaveIDRef.current + 1;
+    themeConfigSaveIDRef.current = saveID;
+
+    setUser({ ...user, profile_config: nextConfig });
+    clearThemeColorSaveTimer();
+    themeColorSaveTimerRef.current = window.setTimeout(() => {
+      themeColorSaveTimerRef.current = null;
+      void updateConfigMutation
+        .mutateAsync({
+          profile_config: nextConfig,
+        })
+        .then((response) => {
+          if (themeConfigSaveIDRef.current !== saveID) {
+            return;
+          }
+          const dtoUser = (response as any)?.data;
+          if (dtoUser && typeof dtoUser === "object" && "id" in dtoUser) {
+            setUser({ ...prevUser, ...dtoUser });
+          }
+        })
+        .catch((error: unknown) => {
+          if (themeConfigSaveIDRef.current !== saveID) {
+            return;
+          }
+          setUser(prevUser);
+          setTheme(themeMode);
+          message.error(
+            resolveSettingsErrorMessage(
+              "layout:notifications.themeSaveError",
+              error,
+            ),
+          );
+        });
+    }, THEME_COLOR_SAVE_DEBOUNCE_MS);
   };
+
+  useEffect(() => () => {
+    clearThemeColorSaveTimer();
+  }, [clearThemeColorSaveTimer]);
 
   useEffect(() => {
     if (screens.lg && mobileNavGroupKey) {

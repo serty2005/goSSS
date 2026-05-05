@@ -1108,6 +1108,9 @@ func normalizeMegafonPhone(value string) string {
 		return ""
 	}
 	normalized := string(digits)
+	if len(normalized) == 10 && strings.HasPrefix(normalized, "9") {
+		return "7" + normalized
+	}
 	if len(normalized) == 11 && strings.HasPrefix(normalized, "8") {
 		return "7" + normalized[1:]
 	}

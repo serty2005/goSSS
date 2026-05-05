@@ -207,7 +207,6 @@ func (s *megafonVATSRecordingService) recordingStorageKey(call *telephony.Call, 
 	eventTime := recordingEventTime(call).UTC()
 	return path.Join(
 		"megafon-vats",
-		"recordings",
 		eventTime.Format("2006"),
 		eventTime.Format("01"),
 		eventTime.Format("02"),

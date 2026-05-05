@@ -69,7 +69,7 @@ func TestMegafonVATSRecordingService_SyncCallRecordingStoresLocalCopy(t *testing
 			MegafonVATSRecordings: config.MegafonVATSRecordingsConfig{
 				Enabled:       true,
 				PublicBaseURL: "https://storage.local/records",
-				RetentionDays: 7,
+				RetentionDays: 365,
 			},
 			RequestTimeout: 2 * time.Second,
 		},
@@ -89,7 +89,7 @@ func TestMegafonVATSRecordingService_SyncCallRecordingStoresLocalCopy(t *testing
 	if persistedCall == nil || persistedCall.RecordingURL == nil {
 		t.Fatal("ожидали локальный URL записи звонка")
 	}
-	expectedURL := "https://storage.local/records/megafon-vats/recordings/2026/04/05/call-local-copy.mp3"
+	expectedURL := "https://storage.local/records/megafon-vats/2026/04/05/call-local-copy.mp3"
 	if *persistedCall.RecordingURL != expectedURL {
 		t.Fatalf("ожидали локальный URL %q, получили %q", expectedURL, *persistedCall.RecordingURL)
 	}

@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Row, Col, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
@@ -78,12 +78,14 @@ const CompanyPage: React.FC = () => {
     queryKey: ['company', id],
     queryFn: () => companiesApi.getCompany(id!),
     enabled: !!id,
+    placeholderData: (previous) => previous,
   });
 
   const { data: infraRes, isLoading: loadingInfra } = useQuery({
     queryKey: ['company', id, 'infra'],
     queryFn: () => companiesApi.getInfrastructure(id!),
     enabled: !!id,
+    placeholderData: (previous) => previous,
   });
 
   const { data: companyDeletionCandidateRes } = useQuery({
@@ -268,19 +270,18 @@ const CompanyPage: React.FC = () => {
     return nodes;
   }, [networkCompanyByID, networkGraphNodes, networkRootCompany, networkRootID]);
 
-  const networkNodesByDepth = useMemo(() => {
-    const map = new Map<number, NetworkCompanyNode[]>();
-    networkNodes.forEach((node) => {
-      if (node.depth === 0) {
-        return;
-      }
-      const levelNodes = map.get(node.depth) || [];
-      levelNodes.push(node);
-      map.set(node.depth, levelNodes);
-    });
-    return Array.from(map.entries())
-      .sort((left, right) => left[0] - right[0])
-      .map((entry) => entry[1]);
+  const networkChildNodes = useMemo(() => {
+    return networkNodes
+      .filter((node) => node.depth > 0)
+      .sort((left, right) => {
+        const depthDelta = left.depth - right.depth;
+        if (depthDelta !== 0) {
+          return depthDelta;
+        }
+        const leftTitle = String(left.company?.title || left.company?.additional_name || left.id);
+        const rightTitle = String(right.company?.title || right.company?.additional_name || right.id);
+        return leftTitle.localeCompare(rightTitle, 'ru');
+      });
   }, [networkNodes]);
 
   const networkInfrastructureQueries = useQueries({
@@ -605,37 +606,37 @@ const CompanyPage: React.FC = () => {
           {renderSection(
             'Серверы',
             groupedInfra.servers.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid">
               {groupedInfra.servers.map((srv) => (
-                <Col key={srv.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={srv.uuid} className="company-equipment-grid__item">
                   <ServerCard data={srv} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {renderSection(
             'Фискальные регистраторы',
             groupedInfra.fiscals.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid">
               {groupedInfra.fiscals.map((fr) => (
-                <Col key={fr.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={fr.uuid} className="company-equipment-grid__item">
                   <FiscalCard data={fr} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {renderSection(
             'Рабочие станции',
             groupedInfra.workstations.length,
-            <Row gutter={[12, 12]}>
+            <div className="company-equipment-grid company-equipment-grid--compact">
               {groupedInfra.workstations.map((ws) => (
-                <Col key={ws.uuid} xs={24} sm={12} lg={8} xl={6}>
+                <div key={ws.uuid} className="company-equipment-grid__item">
                   <WorkstationCard data={ws} />
-                </Col>
+                </div>
               ))}
-            </Row>,
+            </div>,
           )}
 
           {(infraRes?.data || []).length === 0 && <Empty description="Оборудование не найдено" />}
@@ -683,18 +684,16 @@ const CompanyPage: React.FC = () => {
       <Card
         key={cardCompanyID || cardTitle}
         size="small"
+        className="company-network-card"
         style={{
           borderColor: isCurrent ? token.colorPrimary : token.colorBorder,
           boxShadow: isCurrent ? `0 0 0 1px ${token.colorPrimary}` : undefined,
-          minWidth: 280,
-          maxWidth: 360,
         }}
       >
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <Space size={8} wrap>
-            {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
-            {isCurrent && <Tag color="gold" style={{ marginRight: 0 }}>Текущая</Tag>}
-            <Tag
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space size={8} wrap>
+              {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
+              <Tag
               color={contractBadge.color}
               style={{ marginRight: 0, cursor: 'pointer' }}
               onClick={() => openNetworkContractModal(cardCompanyID)}
@@ -766,29 +765,14 @@ const CompanyPage: React.FC = () => {
       ) : !rootNode ? (
         <Empty description="Структура сети не найдена" />
       ) : (
-        <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, minWidth: 760 }}>
-            {renderNetworkCompanyCard(rootNode, true)}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-              {networkNodesByDepth.length > 0 ? networkNodesByDepth.map((nodesAtDepth, depthIndex) => (
-                <div
-                  key={`depth-${depthIndex + 1}`}
-                  style={{
-                    display: 'grid',
-                    gridTemplateRows: 'repeat(3, minmax(0, auto))',
-                    gridAutoFlow: 'column',
-                    gridAutoColumns: 'minmax(280px, 360px)',
-                    gap: 12,
-                  }}
-                >
-                  {nodesAtDepth.map((node) => renderNetworkCompanyCard(node))}
-                </div>
-              )) : (
-                <Card size="small" style={{ minWidth: 280, maxWidth: 360 }}>
-                  <Text type="secondary">Дочерние компании отсутствуют</Text>
-                </Card>
-              )}
-            </div>
+        <div className="company-network-tree">
+          {renderNetworkCompanyCard(rootNode, true)}
+          <div className="company-network-children-grid">
+            {networkChildNodes.length > 0 ? networkChildNodes.map((node) => renderNetworkCompanyCard(node)) : (
+              <Card size="small">
+                <Text type="secondary">Дочерние компании отсутствуют</Text>
+              </Card>
+            )}
           </div>
         </div>
       )}
@@ -842,115 +826,140 @@ const CompanyPage: React.FC = () => {
     },
   ];
 
-  if (hasNetwork) {
-    items.unshift({
-      key: 'infrastructure',
-      label: 'Инфраструктура',
-      children: renderNetworkTab,
-    });
-  }
+  const renderNetworkBlock = hasNetwork ? (
+    <Card
+      size="small"
+      className="glass-panel company-network-aside-card"
+      title="Инфраструктура сети"
+    >
+      {renderNetworkTab}
+    </Card>
+  ) : null;
 
-  return (
-    <div>
-      <Card className="glass-panel company-summary-card" style={{ marginBottom: 12 }} size="small" bodyStyle={{ padding: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <Button type="link" onClick={goBack} style={{ padding: 0, color: token.colorTextSecondary }}>
-            <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад
-          </Button>
-          {canEditBase && (
-            <Button icon={<EditOutlined />} size="small" onClick={openCompanyEdit}>Редактировать</Button>
-          )}
-        </div>
+  const renderCompanyTabs = (
+    <Tabs defaultActiveKey="equipment" items={items} />
+  );
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-            <div
-              style={{
-                width: 38,
-                height: 38,
-                background: 'var(--app-color-primary-soft)',
-                borderRadius: 8,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 10,
-                fontSize: 18,
-                color: token.colorPrimary,
-                flexShrink: 0,
-              }}
-            >
-              <BankOutlined />
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <Title level={5} style={{ margin: 0 }}>{company.title}</Title>
-              <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>{company.address || '-'}</Text>
-            </div>
+  const companySummaryCard = (
+    <Card className="glass-panel company-summary-card" style={{ marginBottom: 12 }} size="small" bodyStyle={{ padding: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Button type="link" onClick={goBack} style={{ padding: 0, color: token.colorTextSecondary }}>
+          <ArrowLeftOutlined style={{ marginRight: 8 }} /> Назад
+        </Button>
+        {canEditBase && (
+          <Button icon={<EditOutlined />} size="small" onClick={openCompanyEdit}>Редактировать</Button>
+        )}
+      </div>
+    
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          <div
+            style={{
+              width: 38,
+              height: 38,
+              background: 'var(--app-color-primary-soft)',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 10,
+              fontSize: 18,
+              color: token.colorPrimary,
+              flexShrink: 0,
+            }}
+          >
+            <BankOutlined />
           </div>
-
-          <div style={{ textAlign: 'right', flexShrink: 0 }}>
-            <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
-              {companyDeletionCandidate && (
-                <Tag
-                  color="orange"
-                  style={{ marginRight: 0, cursor: canOpenDeletionCandidateInTasks ? 'pointer' : 'default' }}
-                  onClick={() => {
-                    if (!canOpenDeletionCandidateInTasks) return;
-                    navigate(`/tasks?deletion_candidate_id=${companyDeletionCandidate.id}`);
-                  }}
-                >
-                  Кандидат на удаление
-                </Tag>
-              )}
-              {company.active_contract ? (
-                <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginRight: 0 }}>Активен</Tag>
+          <div style={{ minWidth: 0 }}>
+            <Title level={5} style={{ margin: 0 }}>{company.title}</Title>
+            <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>{company.address || '-'}</Text>
+          </div>
+        </div>
+    
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
+            {companyDeletionCandidate && (
+              <Tag
+                color="orange"
+                style={{ marginRight: 0, cursor: canOpenDeletionCandidateInTasks ? 'pointer' : 'default' }}
+                onClick={() => {
+                  if (!canOpenDeletionCandidateInTasks) return;
+                  navigate(`/tasks?deletion_candidate_id=${companyDeletionCandidate.id}`);
+                }}
+              >
+                Кандидат на удаление
+              </Tag>
+            )}
+            {company.active_contract ? (
+              <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginRight: 0 }}>Активен</Tag>
+            ) : (
+              <Tag icon={<CloseCircleOutlined />} color="default" style={{ marginRight: 0 }}>Завершён</Tag>
+            )}
+          </Space>
+        </div>
+      </div>
+    
+      <Descriptions bordered size="small" column={2} className="compact-descriptions" style={{ marginTop: 10 }}>
+        <Descriptions.Item label="Юр. название">{company.additional_name || '-'}</Descriptions.Item>
+        <Descriptions.Item label="Родительская компания">
+          {company.parent_id && parentTitle ? <Link to={`/companies/${company.parent_id}`}>{parentTitle}</Link> : parentTitle || '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="Контракт" span={2}>
+          {contractID ? (
+            <Space size={8}>
+              {canEditContract ? (
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
+                  {contractType || 'Не указан'}
+                </Button>
               ) : (
-                <Tag icon={<CloseCircleOutlined />} color="default" style={{ marginRight: 0 }}>Завершён</Tag>
+                <Text>{contractType || 'Не указан'}</Text>
               )}
             </Space>
+          ) : canEditContract ? (
+            <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
+              Создать контракт
+            </Button>
+          ) : '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="Точка обслуживания B24" span={2}>
+          {bitrixMapping?.bitrix_service_point_id ? (
+            <Space size={8} wrap>
+              <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
+              {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}
+              {typeof bitrixMapping.bitrix_service_point_enabled === 'boolean' && (
+                <Tag color={bitrixMapping.bitrix_service_point_enabled ? 'success' : 'default'}>
+                  {bitrixMapping.bitrix_service_point_enabled ? 'контракт активен' : 'контракт не активен'}
+                </Tag>
+              )}
+            </Space>
+          ) : (
+            <Text type="secondary">Не сопоставлена</Text>
+          )}
+        </Descriptions.Item>
+      </Descriptions>
+    </Card>
+  );
+
+  return (
+    <div className="company-details-page">
+      {hasNetwork ? (
+        <div className="company-network-layout company-details-content">
+          <div className="company-network-main">
+            {companySummaryCard}
+            {renderCompanyTabs}
           </div>
+          <aside className="company-network-aside">
+            {renderNetworkBlock}
+          </aside>
         </div>
-
-        <Descriptions bordered size="small" column={2} className="compact-descriptions" style={{ marginTop: 10 }}>
-          <Descriptions.Item label="Юр. название">{company.additional_name || '-'}</Descriptions.Item>
-          <Descriptions.Item label="Родительская компания">
-            {company.parent_id && parentTitle ? <Link to={`/companies/${company.parent_id}`}>{parentTitle}</Link> : parentTitle || '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="Контракт" span={2}>
-            {contractID ? (
-              <Space size={8}>
-                {canEditContract ? (
-                  <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
-                    {contractType || 'Не указан'}
-                  </Button>
-                ) : (
-                  <Text>{contractType || 'Не указан'}</Text>
-                )}
-              </Space>
-            ) : canEditContract ? (
-              <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
-                Создать контракт
-              </Button>
-            ) : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="Точка обслуживания B24" span={2}>
-            {bitrixMapping?.bitrix_service_point_id ? (
-              <Space size={8} wrap>
-                <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
-                {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}
-                {typeof bitrixMapping.bitrix_service_point_enabled === 'boolean' && (
-                  <Tag color={bitrixMapping.bitrix_service_point_enabled ? 'success' : 'default'}>
-                    {bitrixMapping.bitrix_service_point_enabled ? 'контракт активен' : 'контракт не активен'}
-                  </Tag>
-                )}
-              </Space>
-            ) : (
-              <Text type="secondary">Не сопоставлена</Text>
-            )}
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
-
-      <Tabs defaultActiveKey={hasNetwork ? 'infrastructure' : 'equipment'} items={items} />
+      ) : (
+        <>
+          {companySummaryCard}
+          <div className="company-details-content company-details-content--single">
+          {renderCompanyTabs}
+          </div>
+        </>
+      )}
 
       <Modal
         title="Параметры контракта компании"

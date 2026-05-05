@@ -631,6 +631,7 @@ export interface TicketCommentDTO {
   uuid: string;
   text: string;
   author_name: string;
+  author_user_id?: number;
   creation_date: string;
   is_internal: boolean;
   is_private?: boolean;
@@ -805,6 +806,7 @@ export interface UserProfileConfigDTO {
   };
   tickets?: {
     comments_new_first?: boolean;
+    parse_phone_from_description?: boolean;
     subscriptions?: string[];
     filters?: {
       presets?: Array<{

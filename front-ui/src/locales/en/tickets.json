@@ -32,6 +32,7 @@
     "private": "Private",
     "privateXenionOnly": "Private (Xenion only)",
     "showing": "Showing: {{visible}} of {{total}}",
+    "searching": "Searching and loading results...",
     "created": "Created",
     "updated": "Updated",
     "assignee": "Assignee: {{name}}"

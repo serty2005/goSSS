@@ -123,6 +123,27 @@ const ticketDetails = {
   attachments: [],
 };
 
+const latestCompanyTicket = {
+  id: 'ticket-1003',
+  number: 1003,
+  subject: 'Проверить связь с агентом кассы',
+  description: '<p>Повторная диагностика оборудования.</p>',
+  reporter_name: 'Смена ресторана',
+  created_source: 'ui',
+  status: 'in_progress',
+  last_comment: 'Агент прислал новое наблюдение',
+  last_comment_author: 'Администратор ServiceDesk',
+  last_activity: '2026-04-27T10:10:00Z',
+  created_at: '2026-04-27T10:00:00Z',
+  company_id: 'company-1',
+  company_name: 'Ресторан Север',
+  sync_with_bitrix: false,
+  assignee: {
+    id: 1,
+    full_name: 'Администратор ServiceDesk',
+  },
+};
+
 const companyList = [
   {
     id: 'company-1',
@@ -137,6 +158,40 @@ const companyList = [
     additional_name: 'ООО Восток',
     address: 'Москва, пр-т Техподдержки, 7',
     active_contract: true,
+  },
+];
+
+const networkChildren = [
+  {
+    id: 'company-child-1',
+    title: 'Ресторан Север Бар',
+    additional_name: 'ООО Север Бар',
+    address: 'Москва, ул. Сервисная, 12',
+    parent_id: 'company-1',
+    parent_title: 'Ресторан Север',
+    active_contract: true,
+    contract_id: 'contract-1',
+    contract_type: 'TS Standart',
+  },
+  {
+    id: 'company-child-2',
+    title: 'Ресторан Север Доставка',
+    additional_name: 'ООО Север Доставка',
+    address: 'Москва, ул. Сервисная, 14',
+    parent_id: 'company-1',
+    parent_title: 'Ресторан Север',
+    active_contract: true,
+    contract_id: 'contract-1',
+    contract_type: 'TS Standart',
+  },
+  {
+    id: 'company-child-3',
+    title: 'Ресторан Север Склад',
+    additional_name: 'ООО Север Склад',
+    address: 'Москва, ул. Складская, 4',
+    parent_id: 'company-1',
+    parent_title: 'Ресторан Север',
+    active_contract: false,
   },
 ];
 
@@ -383,6 +438,22 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
     }
 
     if (method === 'GET' && path === '/tickets') {
+      const companyID = url.searchParams.get('company_id') || '';
+      const companyIDs = (url.searchParams.get('company_ids') || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (companyID === 'company-1' || companyIDs.includes('company-1')) {
+        const items = [ticketList[0], latestCompanyTicket];
+        await route.fulfill(json(ok(items, {
+          total: items.length,
+          limit: Number(url.searchParams.get('limit') || 20),
+          offset: Number(url.searchParams.get('offset') || 0),
+          has_next: false,
+        })));
+        return;
+      }
+
       await route.fulfill(json(ok(ticketList, {
         total: ticketList.length,
         limit: Number(url.searchParams.get('limit') || 20),
@@ -424,7 +495,46 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
         id: 'company-1',
         title: 'Ресторан Север',
         additional_name: '',
+        address: 'Москва, ул. Сервисная, 10',
+        active_contract: true,
+        contract_id: 'contract-1',
+        contract_type: 'TS Standart',
       })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/companies/company-1/children') {
+      await route.fulfill(json(ok(networkChildren)));
+      return;
+    }
+
+    const networkChildChildrenPath = networkChildren.find((item) => method === 'GET' && path === `/companies/${item.id}/children`);
+    if (networkChildChildrenPath) {
+      await route.fulfill(json(ok([])));
+      return;
+    }
+
+    const networkChild = networkChildren.find((item) => method === 'GET' && path === `/companies/${item.id}`);
+    if (networkChild) {
+      await route.fulfill(json(ok(networkChild)));
+      return;
+    }
+
+    const networkChildByInfrastructurePath = networkChildren.find((item) => method === 'GET' && path === `/companies/${item.id}/infrastructure`);
+    if (networkChildByInfrastructurePath) {
+      await route.fulfill(json(ok([
+        {
+          entity_type: 'Server',
+          data: {
+            uuid: `server-${networkChildByInfrastructurePath.id}`,
+            server_name: `srv-${networkChildByInfrastructurePath.id}`,
+            ip: '10.10.2.10:443',
+            server_version: '2026.4',
+            crm_id: `crm-${networkChildByInfrastructurePath.id}`,
+            unique_id: `uid-${networkChildByInfrastructurePath.id}`,
+          },
+        },
+      ])));
       return;
     }
 
@@ -435,12 +545,136 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
           data: {
             uuid: 'server-1',
             server_name: 'srv-rest-sever',
-            ip: '10.10.1.10',
+            ip: '10.10.1.10:443',
             anydesk: '123 456 789',
             rdp: '10.10.1.10',
+            crm_id: 'CRM-501',
+            server_version: '2026.4',
+            unique_id: 'UID-SRV-001',
+            partners_link: 'https://partners.example.test/server-1',
+            iiko_web_link: 'https://demo.syrve.app/',
+          },
+        },
+        {
+          entity_type: 'Workstation',
+          data: {
+            uuid: 'workstation-1',
+            device_name: 'Касса 1',
+            anydesk: '111 222 333',
+            teamviewer: 'tv-444',
+            litemanager: 'lm-555',
+            rustdesk: 'rd-666',
+            last_updated_by: 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            last_modified_date: '2026-04-27T10:05:00Z',
+          },
+        },
+        {
+          entity_type: 'FiscalRegister',
+          data: {
+            uuid: 'fiscal-1',
+            model_kkt: 'АТОЛ 55Ф',
+            serial_number: 'SN123456789',
+            rn_kkt: '0001234567890123',
+            legal_name: 'ООО Север',
+            inn: '7700000000',
+            address: 'Москва, ул. Сервисная, дом 10, помещение 1, кассовая зона',
+            last_updated_by: 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            last_modified_date: '2026-04-27T10:05:00Z',
+          },
+        },
+        {
+          entity_type: 'Workstation',
+          data: {
+            uuid: 'workstation-uuid-agent',
+            device_name: 'Касса с агентским UUID',
+            anydesk: '777 888 999',
+            last_updated_by: '56de9576-b988-d422-e8d3-3264ae6a5409',
+            last_modified_date: '2026-05-01T00:12:13+03:00',
+          },
+        },
+        {
+          entity_type: 'FiscalRegister',
+          data: {
+            uuid: 'fiscal-uuid-agent',
+            model_kkt: 'АТОЛ UUID',
+            serial_number: 'SNUUIDAGENT',
+            rn_kkt: '0001112223334445',
+            legal_name: 'ООО Север',
+            inn: '7700000000',
+            address: 'Москва, ул. Сервисная, дом 10, помещение UUID',
+            last_updated_by: '56de9576-b988-d422-e8d3-3264ae6a5409',
+            last_modified_date: '2026-05-01T00:12:13+03:00',
+          },
+        },
+        {
+          entity_type: 'Workstation',
+          data: {
+            uuid: 'workstation-agent-type-only',
+            device_name: 'Фастфуд 4 (Пицца 2)',
+            anydesk: '621466312',
+            teamviewer: '1817149145',
+            last_updated_by: 'agent',
+            last_modified_date: '2026-05-01T00:12:13+03:00',
+          },
+        },
+        {
+          entity_type: 'FiscalRegister',
+          data: {
+            uuid: 'fiscal-agent-type-only',
+            model_kkt: 'ШТРИХ-М-01Ф',
+            serial_number: 'FRWITHOUTAGENTID',
+            rn_kkt: '0009876543210000',
+            legal_name: 'ООО Север',
+            inn: '7700000000',
+            address: 'Москва, ул. Сервисная, дом 10, помещение 2',
+            last_updated_by: 'agent',
+            last_modified_date: '2026-05-01T00:12:13+03:00',
           },
         },
       ])));
+      return;
+    }
+
+    if (method === 'GET' && path === '/agent-observations') {
+      const agentUUID = url.searchParams.get('agent_uuid') || '';
+      const workstationID = url.searchParams.get('workstation_id') || '';
+      const frID = url.searchParams.get('fr_id') || '';
+      const shouldReturnObservation = agentUUID === 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+        || workstationID === 'workstation-uuid-agent'
+        || workstationID === 'workstation-1'
+        || frID === 'fiscal-uuid-agent'
+        || frID === 'fiscal-1';
+      await route.fulfill(json(ok(shouldReturnObservation ? [
+          {
+            observation_id: 9001,
+            agent_uuid: agentUUID || 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            vc: '1.8.0',
+            workstation_id: workstationID || 'workstation-1',
+            workstation_name: workstationID === 'workstation-uuid-agent' ? 'Касса с агентским UUID' : 'Касса 1',
+            fr_id: frID || 'fiscal-1',
+            fr_name: frID === 'fiscal-uuid-agent' ? 'АТОЛ UUID' : 'АТОЛ 55Ф',
+            owner_match: true,
+            observed_at: '2026-04-27T10:05:00Z',
+            current_time: '2026-04-27T13:05:00+03:00',
+            v_time: '2026-04-27T13:05:00+03:00',
+            server_url: 'https://srv-rest-sever.example.test',
+          },
+        ] : [])));
+      return;
+    }
+
+    if (method === 'GET' && path === '/agent-observations/9001') {
+      await route.fulfill(json(ok({
+        id: 9001,
+        status: 'processed',
+        observed_at: '2026-04-27T10:05:00Z',
+        source: 'agent',
+        payload_json: {
+          agent_uuid: 'agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+          workstation: 'Касса 1',
+          fiscal_register: 'АТОЛ 55Ф',
+        },
+      })));
       return;
     }
 

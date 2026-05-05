@@ -34,6 +34,7 @@ type CredentialsForm = {
   notifications_common_ticket_updates?: boolean;
   notifications_common_deferred_due?: boolean;
   comments_new_first?: boolean;
+  parse_phone_from_description?: boolean;
   integrations?: Array<{
     integration_type?: string;
     external_id?: string;
@@ -146,6 +147,7 @@ const ProfilePage: React.FC = () => {
       };
       tickets?: {
         comments_new_first?: boolean;
+        parse_phone_from_description?: boolean;
       };
       interface?: {
         locale?: string;
@@ -166,6 +168,7 @@ const ProfilePage: React.FC = () => {
         || cfg.notifications?.ticket_subscriptions_only === true,
       commonDeferredDue: cfg.notifications?.common_deferred_due !== false,
       commentsNewFirst: cfg.tickets?.comments_new_first !== false,
+      parsePhoneFromDescription: cfg.tickets?.parse_phone_from_description !== false,
     };
   }, [locale, user?.profile_config]);
 
@@ -180,6 +183,7 @@ const ProfilePage: React.FC = () => {
       notifications_common_ticket_updates: notificationsConfig.commonTicketUpdates,
       notifications_common_deferred_due: notificationsConfig.commonDeferredDue,
       comments_new_first: notificationsConfig.commentsNewFirst,
+      parse_phone_from_description: notificationsConfig.parsePhoneFromDescription,
     });
   }, [form, initialIntegrations, notificationsConfig, user?.username]);
 
@@ -311,10 +315,12 @@ const ProfilePage: React.FC = () => {
 
     const currentTicketsConfig = {
       comments_new_first: (user.profile_config as any)?.tickets?.comments_new_first !== false,
+      parse_phone_from_description: (user.profile_config as any)?.tickets?.parse_phone_from_description !== false,
     };
 
     const nextTicketsConfig = {
       comments_new_first: values.comments_new_first !== false,
+      parse_phone_from_description: values.parse_phone_from_description !== false,
     };
 
     const configChanged = (
@@ -327,6 +333,7 @@ const ProfilePage: React.FC = () => {
       'interface_locale',
       'cards_columns',
       'comments_new_first',
+      'parse_phone_from_description',
       'notifications_personal_enabled',
       'notifications_common_enabled',
       'notifications_common_ticket_updates',
@@ -586,6 +593,15 @@ const ProfilePage: React.FC = () => {
                   label="Комментарии в тикете: новые сверху"
                   valuePropName="checked"
                   style={{ marginBottom: 0 }}
+                >
+                  <Switch />
+                </Form.Item>
+
+                <Form.Item
+                  name="parse_phone_from_description"
+                  label="Искать телефон клиента в описании и комментариях тикета"
+                  valuePropName="checked"
+                  style={{ marginTop: 12, marginBottom: 0 }}
                 >
                   <Switch />
                 </Form.Item>

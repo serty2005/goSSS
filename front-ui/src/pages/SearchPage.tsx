@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Input, Space, Typography } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import SearchResultsContent from '@/components/search/SearchResultsContent';
+import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const { Title, Text } = Typography;
 
@@ -12,19 +13,27 @@ const SearchPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const currentTerm = searchParams.get('term') || '';
   const [term, setTerm] = useState(currentTerm);
+  const debouncedTerm = useDebouncedValue(term, TEXT_SEARCH_DEBOUNCE_MS);
 
   useEffect(() => {
     setTerm(currentTerm);
   }, [currentTerm]);
 
-  const updateSearchParams = (nextTerm: string) => {
+  const updateSearchParams = useCallback((nextTerm: string) => {
     const params = new URLSearchParams();
     if (nextTerm.trim()) {
       params.set('term', nextTerm.trim());
     }
     const query = params.toString();
     navigate(query ? `/search?${query}` : '/search');
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (debouncedTerm.trim() === currentTerm.trim()) {
+      return;
+    }
+    updateSearchParams(debouncedTerm);
+  }, [currentTerm, debouncedTerm, updateSearchParams]);
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
