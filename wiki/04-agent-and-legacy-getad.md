@@ -24,8 +24,9 @@
 Для старых пассивных агентов сохранен отдельный flow:
 
 - endpoint: `POST /api/submit_json`;
-- авторизация: `X-API-Key` против `AGENT_API_KEY`;
+- авторизация: `X-API-Key` против `AGENT_API_KEY` только когда `AGENT_API_KEY` задан;
 - UUID из `agent_uuid` или legacy `uuid`;
+- если `AGENT_API_KEY` пустой, проверка ключа отключена и запрос не отклоняется по `X-API-Key`;
 - `agent_type` принудительно трактуется как `getad`.
 
 Этот путь совместимости нельзя смешивать с bootstrap/access-token flow `sssruner` без явного архитектурного решения.
