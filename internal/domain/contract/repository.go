@@ -11,8 +11,10 @@ type Repository interface {
 	Delete(ctx context.Context, internalID string) (bool, error)
 
 	GetByID(ctx context.Context, internalID string) (*Contract, error)
+	GetByIDUnscoped(ctx context.Context, internalID string) (*Contract, error)
 	GetByServiceDeskUUID(ctx context.Context, sdUUID string) (*Contract, error)
 	ListByLastUpdatedBy(ctx context.Context, lastUpdatedBy string) ([]Contract, error)
+	Restore(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error)
 
 	// ReplaceCompanyLinks обновляет связи Many-to-Many для контракта.
 	// companies: список моделей компаний, которые должны быть привязаны к контракту.

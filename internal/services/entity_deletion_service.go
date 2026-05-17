@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/contextkeys"
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
@@ -934,6 +935,10 @@ func snapshotFromContract(item *contract.Contract) *entitySnapshot {
 
 func (s *entityDeletionServiceImpl) cascadeDeleteCompanyDependencies(ctx context.Context, companyID string) error {
 	db := s.dbOrTx(ctx)
+
+	if err := db.Where("company_id = ?", companyID).Delete(&bitrix.CompanyServicePointMapping{}).Error; err != nil {
+		return err
+	}
 
 	var serverIDs []string
 	if err := db.Model(&server.Server{}).Where("owner_id = ?", companyID).Pluck("id", &serverIDs).Error; err != nil {

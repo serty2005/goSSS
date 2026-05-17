@@ -30,8 +30,8 @@
 
 ## 3. Технологии и версии
 
-- Backend: Go module `etalon-server`, `go 1.24.0`.
-- Agent: Go module `etalon-agent`, `go 1.23.4`.
+- Backend: Go module `etalon-server`, `go 1.26.2`.
+- Agent: Go module `etalon-agent`, `go 1.26.2`.
 - Backend HTTP: `chi/v5`.
 - Backend DB: PostgreSQL + GORM.
 - Очереди интеграций: Redis Streams.

@@ -26,10 +26,19 @@ func (s *serviceImpl) SyncDailySnapshots(ctx context.Context, snapshots []contra
 		snapshotByContractID := make(map[string]contract.DailyCompanyContractSnapshot, len(snapshots))
 		upsertedContracts := 0
 		deactivatedContracts := 0
+		skippedCompanies := 0
 
 		for _, snapshot := range snapshots {
-			if strings.TrimSpace(snapshot.CompanyID) == "" {
+			snapshot.CompanyID = strings.TrimSpace(snapshot.CompanyID)
+			if snapshot.CompanyID == "" {
 				continue
+			}
+			if _, err := s.companyRepo.GetByID(txCtx, snapshot.CompanyID); err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					skippedCompanies++
+					continue
+				}
+				return fmt.Errorf("не удалось проверить компанию %s перед применением почтового контракта: %w", snapshot.CompanyID, err)
 			}
 			contractID := mailManagedContractID(snapshot.CompanyID)
 			snapshotByContractID[contractID] = snapshot
@@ -75,6 +84,7 @@ func (s *serviceImpl) SyncDailySnapshots(ctx context.Context, snapshots []contra
 			"snapshots_received", len(snapshots),
 			"contracts_upserted", upsertedContracts,
 			"contracts_deactivated", deactivatedContracts,
+			"companies_skipped", skippedCompanies,
 			"companies_recalculated", len(affectedCompanyIDs),
 		)
 
@@ -112,7 +122,23 @@ func (s *serviceImpl) upsertDailySnapshot(ctx context.Context, contractID string
 		return err
 	}
 	if errors.Is(err, domain.ErrNotFound) {
-		existing = nil
+		existing, err = s.contractRepo.GetByIDUnscoped(ctx, contractID)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			existing = nil
+		}
+	}
+
+	updates := map[string]interface{}{
+		"state":              state,
+		"state_start_time":   firstNonNilTime(snapshot.StartDate, snapshot.EndDate, time.Now().UTC()),
+		"services":           datatypes.JSON(servicesJSON),
+		"recipients":         datatypes.JSON(recipientsJSON),
+		"last_modified_date": firstNonNilTime(snapshot.EndDate, snapshot.StartDate, time.Now().UTC()),
+		"last_updated_by":    contractMailSyncUpdatedBy,
+		"attributes":         attributesJSON,
 	}
 
 	if existing == nil {
@@ -137,19 +163,20 @@ func (s *serviceImpl) upsertDailySnapshot(ctx context.Context, contractID string
 		return nil
 	}
 
-	updates := map[string]interface{}{
-		"state":              state,
-		"state_start_time":   firstNonNilTime(snapshot.StartDate, snapshot.EndDate, time.Now().UTC()),
-		"services":           datatypes.JSON(servicesJSON),
-		"recipients":         datatypes.JSON(recipientsJSON),
-		"last_modified_date": firstNonNilTime(snapshot.EndDate, snapshot.StartDate, time.Now().UTC()),
-		"last_updated_by":    contractMailSyncUpdatedBy,
-		"attributes":         attributesJSON,
+	var updated bool
+	if existing.DeletedAt.Valid {
+		updated, err = s.contractRepo.Restore(ctx, contractID, updates)
+	} else {
+		updated, err = s.contractRepo.Update(ctx, contractID, updates)
 	}
-	if _, err := s.contractRepo.Update(ctx, contractID, updates); err != nil {
+	if err != nil {
 		return fmt.Errorf("не удалось обновить контракт %s: %w", contractID, err)
 	}
+	if !updated {
+		return fmt.Errorf("не удалось обновить контракт %s: %w", contractID, domain.ErrNotFound)
+	}
 	existing.ID = contractID
+	existing.DeletedAt.Valid = false
 	if err := s.contractRepo.ReplaceCompanyLinks(ctx, existing, []string{snapshot.CompanyID}); err != nil {
 		return fmt.Errorf("не удалось обновить привязку контракта %s: %w", contractID, err)
 	}

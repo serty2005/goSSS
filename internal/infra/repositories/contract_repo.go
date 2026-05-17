@@ -45,6 +45,20 @@ func (r *contractRepo) Update(ctx context.Context, internalID string, updateData
 	return res.RowsAffected > 0, nil
 }
 
+func (r *contractRepo) Restore(ctx context.Context, internalID string, updateData map[string]interface{}) (bool, error) {
+	delete(updateData, "meta_class")
+	updateData["deleted_at"] = nil
+	res := r.getDB(ctx).WithContext(ctx).Unscoped().Model(&contract.Contract{}).Where("id = ?", internalID).Updates(updateData)
+	if res.Error != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(res.Error, &pgErr) && pgErr.Code == "23505" {
+			return false, domain.ErrAlreadyExists
+		}
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (r *contractRepo) Delete(ctx context.Context, internalID string) (bool, error) {
 	res := r.getDB(ctx).WithContext(ctx).Where("id = ?", internalID).Delete(&contract.Contract{})
 	if res.Error != nil {
@@ -60,6 +74,18 @@ func (r *contractRepo) Delete(ctx context.Context, internalID string) (bool, err
 func (r *contractRepo) GetByID(ctx context.Context, internalID string) (*contract.Contract, error) {
 	var c contract.Contract
 	err := r.getDB(ctx).WithContext(ctx).Preload("Companies").Where("id = ?", internalID).First(&c).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (r *contractRepo) GetByIDUnscoped(ctx context.Context, internalID string) (*contract.Contract, error) {
+	var c contract.Contract
+	err := r.getDB(ctx).WithContext(ctx).Unscoped().Preload("Companies").Where("id = ?", internalID).First(&c).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound

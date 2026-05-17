@@ -5,7 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/common"
+	domainCompany "etalon-server/internal/domain/company"
+	"etalon-server/internal/domain/contract"
+	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/workstation"
@@ -183,6 +187,74 @@ func TestCleanupStalePendingCandidates_ConfirmsAlreadyDeletedEntries(t *testing.
 	}
 	if refreshed.Status != models.EntityDeletionCandidateStatusConfirmed {
 		t.Fatalf("ожидали подтверждение устаревшего кандидата, получили %q", refreshed.Status)
+	}
+}
+
+func TestConfirmDeletion_RemovesCompanyBitrixMapping(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:TestConfirmDeletionRemovesCompanyBitrixMapping?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&domainCompany.Company{},
+		&server.Server{},
+		&workstation.Workstation{},
+		&fiscal.FiscalRegister{},
+		&contract.Contract{},
+		&models.CompanyContract{},
+		&bitrix.CompanyServicePointMapping{},
+		&models.EntityDeletionCandidate{},
+	); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := t.Context()
+	companyRepo := repositories.NewCompanyRepo(db)
+	contractRepo := repositories.NewContractRepo(db)
+	bitrixRepo := repositories.NewBitrixRepo(db)
+
+	title := "Компания с mapping Bitrix24"
+	comp := &domainCompany.Company{Title: &title}
+	if err := companyRepo.Create(ctx, comp); err != nil {
+		t.Fatalf("не удалось создать компанию: %v", err)
+	}
+	if err := bitrixRepo.UpsertCompanyServicePointMapping(ctx, &bitrix.CompanyServicePointMapping{
+		CompanyID:            comp.ID,
+		BitrixServicePointID: 11059,
+	}); err != nil {
+		t.Fatalf("не удалось создать mapping компании: %v", err)
+	}
+
+	svc := NewEntityDeletionService(
+		nil,
+		db,
+		dbpkg.NewGormTransactor(db),
+		nil,
+		nil,
+		nil,
+		companyRepo,
+		contractRepo,
+		nil,
+	)
+	candidate := createTestCandidate(t, db, models.EntityDeletionCandidate{
+		EntityType:  "Company",
+		EntityID:    comp.ID,
+		Status:      models.EntityDeletionCandidateStatusPending,
+		Reason:      edsStringPtrOrNil("Ручное удаление компании"),
+		Source:      models.EntityDeletionSourceManual,
+		RequestedAt: time.Now(),
+	})
+
+	if _, err := svc.ConfirmDeletion(ctx, candidate.ID); err != nil {
+		t.Fatalf("подтверждение удаления компании завершилось ошибкой: %v", err)
+	}
+
+	mapping, err := bitrixRepo.GetCompanyServicePointMappingByCompanyID(ctx, comp.ID)
+	if err != nil {
+		t.Fatalf("не удалось проверить mapping компании: %v", err)
+	}
+	if mapping != nil {
+		t.Fatalf("ожидали удаление mapping компании, получили %+v", mapping)
 	}
 }
 

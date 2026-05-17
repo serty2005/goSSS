@@ -214,11 +214,11 @@ func New() *Config {
 		ConcurrentRequests: getEnvAsInt("CONCURRENT_REQUESTS", 10),
 		ServiceDeskDryRun:  getEnvAsBool("SD_DRY_RUN", false),
 
-		EnableSDeskGateway: getEnvAsBool("ENABLE_SDESK_GATEWAY", true),
+		EnableSDeskGateway: getEnvAsBool("ENABLE_SDESK_GATEWAY", false),
 		SDeskSyncInterval:  time.Duration(getEnvAsInt("SDESK_SYNC_INTERVAL_MIN", 10)) * time.Minute,
 		TicketStoragePath:  getEnv("TICKET_STORAGE_PATH", "./storage/tickets"),
 
-		EnableContractGateway:              getEnvAsBool("ENABLE_CONTRACT_GATEWAY", true),
+		EnableContractGateway:              getEnvAsBool("ENABLE_CONTRACT_GATEWAY", false),
 		ContractSyncInterval:               time.Duration(max(1, getEnvAsInt("CONTRACT_SYNC_INTERVAL_MIN", 720))) * time.Minute,
 		EnableContractBitrixAutoSync:       getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC", false),
 		ContractBitrixAutoSyncApplyDeletes: getEnvAsBool("ENABLE_CONTRACT_BITRIX_AUTO_SYNC_DELETES", false),
@@ -231,14 +231,14 @@ func New() *Config {
 
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 
-		EnablePollingGateway:   getEnvAsBool("ENABLE_POLLING_GATEWAY", true),
+		EnablePollingGateway:   getEnvAsBool("ENABLE_POLLING_GATEWAY", false),
 		ServerPollingInterval:  time.Duration(getEnvAsInt("SERVER_POLLING_INTERVAL_HOURS", 12)) * time.Hour,
 		ServerPollingBatchSize: getEnvAsInt("SERVER_POLLING_BATCH_SIZE", 50),
 		RMSLogin:               getEnv("RMS_LOGIN", ""),
 		RMSPassword1:           getEnv("RMS_PASSWORD_1", ""),
 		RMSPassword2:           getEnv("RMS_PASSWORD_2", ""),
 
-		EnableAgentFTPGateway: getEnvAsBool("ENABLE_AGENT_FTP_GATEWAY", true),
+		EnableAgentFTPGateway: getEnvAsBool("ENABLE_AGENT_FTP_GATEWAY", false),
 		AgentFTPInterval:      time.Duration(getEnvAsInt("AGENT_FTP_INTERVAL_MIN", 60)) * time.Minute,
 		FTPHost:               getEnv("FTP_HOST", "localhost"),
 		FTPUser:               getEnv("FTP_USER", "user"),
@@ -247,13 +247,13 @@ func New() *Config {
 		FTPPath:               getEnv("FTP_PATH", "/"),
 		FTPCachePath:          getEnv("FTP_CACHE_PATH", "./ftp_cache"),
 
-		EnableDuplicatesGateway:  getEnvAsBool("ENABLE_DUPLICATES_GATEWAY", true),
+		EnableDuplicatesGateway:  getEnvAsBool("ENABLE_DUPLICATES_GATEWAY", false),
 		DuplicatesSearchInterval: time.Duration(getEnvAsInt("DUPLICATES_SEARCH_INTERVAL_HOURS", 24)) * time.Hour,
 
-		EnableFRDiscrepancyFinder:  getEnvAsBool("ENABLE_FR_DISCREPANCY_FINDER", true),
+		EnableFRDiscrepancyFinder:  getEnvAsBool("ENABLE_FR_DISCREPANCY_FINDER", false),
 		FRDiscrepancyCheckInterval: time.Duration(getEnvAsInt("FR_DISCREPANCY_CHECK_INTERVAL_HOURS", 6)) * time.Hour,
 
-		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", true),
+		EnableStatusWorker:   getEnvAsBool("ENABLE_STATUS_WORKER", false),
 		StatusWorkerInterval: time.Duration(getEnvAsInt("STATUS_WORKER_INTERVAL_MIN", 2)) * time.Minute,
 
 		EnableBitrixGateway:         getEnvAsBool("ENABLE_BITRIX_GATEWAY", false),
