@@ -1,10 +1,11 @@
 package contract
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
 	"testing"
 	"time"
+
+	"github.com/xuri/excelize/v2"
 )
 
 func TestParseContractReportHTML(t *testing.T) {
@@ -69,13 +70,10 @@ func TestParseContractReportHTML(t *testing.T) {
 func TestParseContractReportSpreadsheet_IDFormat(t *testing.T) {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "Для Александра Маслова (XLS)2.xls"))
-	if err != nil {
-		t.Fatalf("не удалось прочитать пример xls-отчёта: %v", err)
-	}
+	content := buildIDFormatContractReportXLSX(t)
 
 	rows, err := parseContractReportSpreadsheet(
-		"Для Александра Маслова (XLS)2.xls",
+		"contract-report-id-format.xlsx",
 		content,
 		time.Date(2026, time.April, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -132,6 +130,44 @@ func TestParseContractReportSpreadsheet_IDFormat(t *testing.T) {
 	if !frangi.ContractOn {
 		t.Fatal("ожидали активный контракт TS Cloud для FRANGI.Br & Coffee")
 	}
+}
+
+func buildIDFormatContractReportXLSX(t *testing.T) []byte {
+	t.Helper()
+
+	book := excelize.NewFile()
+	defer func() { _ = book.Close() }()
+
+	sheet := book.GetSheetName(0)
+	rows := [][]string{
+		{
+			"Точка обслуживания.Код",
+			"Точка обслуживания",
+			"Обслуживается",
+			"Дата окончания",
+		},
+		{"000000053", "Hedonist TS", "Да", "31.12.2026"},
+		{"000000054", "Hedonist Syrve", "Нет", "31.12.2026"},
+		{"000000030", "Harvey Bar TS", "Нет", "31.12.2025"},
+		{"000000031", "Harvey Bar Syrve", "Нет", "31.12.2025"},
+		{"000000264", "FRANGI.Br & Coffee TS", "Нет", "31.12.2026"},
+		{"000000265", "FRANGI.Br & Coffee Syrve", "Да", "31.12.2026"},
+	}
+	for rowIndex, row := range rows {
+		cell, err := excelize.CoordinatesToCellName(1, rowIndex+1)
+		if err != nil {
+			t.Fatalf("не удалось вычислить координаты ячейки: %v", err)
+		}
+		if err := book.SetSheetRow(sheet, cell, &row); err != nil {
+			t.Fatalf("не удалось записать строку XLSX: %v", err)
+		}
+	}
+
+	var out bytes.Buffer
+	if _, err := book.WriteTo(&out); err != nil {
+		t.Fatalf("не удалось сериализовать XLSX-отчёт: %v", err)
+	}
+	return out.Bytes()
 }
 
 func TestAggregateContractReportRowsPrefersActiveRow(t *testing.T) {

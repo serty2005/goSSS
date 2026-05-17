@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,13 +105,171 @@ func (s *memoryAgentAdapterObjectStore) StatObject(_ context.Context, key string
 	}, nil
 }
 
+func setupAgentAdapterCatalogFixture(t *testing.T, name string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	writeObject := func(key string, body []byte) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(key))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, body, 0o644))
+	}
+
+	switch name {
+	case "valid":
+		index := AgentAdapterCatalogIndex{
+			SchemaVersion: 1,
+			Adapters: []AgentAdapterCatalogIndexAdapter{
+				{
+					AdapterID: "fiscal-atol",
+					Releases: []AgentAdapterCatalogIndexRelease{
+						{
+							Version:    "1.2.3",
+							TargetOS:   "windows",
+							TargetArch: "amd64",
+							ReleaseKey: buildAgentAdapterReleaseKey("fiscal-atol", "1.2.3", "windows", "amd64"),
+						},
+						{
+							Version:    "1.3.0",
+							TargetOS:   "windows",
+							TargetArch: "amd64",
+							ReleaseKey: buildAgentAdapterReleaseKey("fiscal-atol", "1.3.0", "windows", "amd64"),
+						},
+					},
+				},
+				{
+					AdapterID: "fiscal-mitsu",
+					Releases: []AgentAdapterCatalogIndexRelease{
+						{
+							Version:    "2.0.0",
+							TargetOS:   "windows",
+							TargetArch: "amd64",
+							ReleaseKey: buildAgentAdapterReleaseKey("fiscal-mitsu", "2.0.0", "windows", "amd64"),
+						},
+					},
+				},
+			},
+		}
+		writeJSONFixture(t, writeObject, "catalog/index.json", index)
+		writeReleaseFixture(t, writeObject, "fiscal-atol", "1.2.3", "Фискальный адаптер АТОЛ", "windows", "amd64")
+		writeReleaseFixture(t, writeObject, "fiscal-atol", "1.3.0", "Фискальный адаптер АТОЛ", "windows", "amd64")
+		writeReleaseFixture(t, writeObject, "fiscal-mitsu", "2.0.0", "Фискальный адаптер Mitsu", "windows", "amd64")
+		writeChannelFixture(t, writeObject, "fiscal-atol", "stable", "1.2.3", "windows", "amd64")
+		writeChannelFixture(t, writeObject, "fiscal-atol", "latest", "1.3.0", "windows", "amd64")
+		writeChannelFixture(t, writeObject, "fiscal-mitsu", "stable", "2.0.0", "windows", "amd64")
+		writeChannelFixture(t, writeObject, "fiscal-mitsu", "latest", "2.0.0", "windows", "amd64")
+	case "incomplete":
+		releaseKey := buildAgentAdapterReleaseKey("broken-adapter", "0.1.0", "windows", "amd64")
+		index := AgentAdapterCatalogIndex{
+			SchemaVersion: 1,
+			Adapters: []AgentAdapterCatalogIndexAdapter{
+				{
+					AdapterID: "broken-adapter",
+					Releases: []AgentAdapterCatalogIndexRelease{
+						{
+							Version:    "0.1.0",
+							TargetOS:   "windows",
+							TargetArch: "amd64",
+							ReleaseKey: releaseKey,
+						},
+					},
+				},
+			},
+		}
+		writeJSONFixture(t, writeObject, "catalog/index.json", index)
+		writeJSONFixture(t, writeObject, releaseKey, AgentAdapterReleaseManifest{
+			AdapterID:       "broken-adapter",
+			Version:         "0.1.0",
+			Title:           "Неполный адаптер",
+			AdapterType:     "broken-adapter",
+			TargetOS:        "windows",
+			TargetArch:      "amd64",
+			ProtocolVersion: "1",
+			FileName:        "broken-adapter-0.1.0.exe",
+			SourceKey:       buildAgentAdapterBinaryKey("broken-adapter", "0.1.0", "windows", "amd64", "broken-adapter-0.1.0.exe"),
+			Published:       true,
+		})
+		writeChannelFixture(t, writeObject, "broken-adapter", "stable", "0.1.0", "windows", "amd64")
+	case "broken-index":
+		writeObject("catalog/index.json", []byte(`{"schema_version":1,"adapters":[`))
+	default:
+		t.Fatalf("неизвестная фикстура каталога адаптеров: %s", name)
+	}
+
+	return root
+}
+
+func writeReleaseFixture(
+	t *testing.T,
+	writeObject func(string, []byte),
+	adapterID string,
+	version string,
+	title string,
+	targetOS string,
+	targetArch string,
+) {
+	t.Helper()
+
+	fileName := fmt.Sprintf("%s-%s.exe", adapterID, version)
+	sourceKey := buildAgentAdapterBinaryKey(adapterID, version, targetOS, targetArch, fileName)
+	binary := []byte(fmt.Sprintf("%s/%s/%s/%s", adapterID, version, targetOS, targetArch))
+	sum := sha256.Sum256(binary)
+	digest := hex.EncodeToString(sum[:])
+	writeObject(sourceKey, binary)
+	writeObject(buildAgentAdapterSHA256Key(adapterID, version, targetOS, targetArch), []byte(digest))
+	writeJSONFixture(t, writeObject, buildAgentAdapterReleaseKey(adapterID, version, targetOS, targetArch), AgentAdapterReleaseManifest{
+		AdapterID:       adapterID,
+		Version:         version,
+		Title:           title,
+		Description:     "Тестовый релиз каталога адаптеров",
+		AdapterType:     adapterID,
+		TargetOS:        targetOS,
+		TargetArch:      targetArch,
+		ProtocolVersion: "1",
+		FileName:        fileName,
+		SHA256:          digest,
+		SourceKey:       sourceKey,
+		Published:       true,
+	})
+}
+
+func writeChannelFixture(
+	t *testing.T,
+	writeObject func(string, []byte),
+	adapterID string,
+	channel string,
+	version string,
+	targetOS string,
+	targetArch string,
+) {
+	t.Helper()
+
+	writeJSONFixture(t, writeObject, buildAgentAdapterChannelKey(adapterID, channel), AgentAdapterChannelPointer{
+		AdapterID:  adapterID,
+		Channel:    channel,
+		Version:    version,
+		TargetOS:   targetOS,
+		TargetArch: targetArch,
+		ReleaseKey: buildAgentAdapterReleaseKey(adapterID, version, targetOS, targetArch),
+	})
+}
+
+func writeJSONFixture(t *testing.T, writeObject func(string, []byte), key string, payload any) {
+	t.Helper()
+
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	require.NoError(t, err)
+	writeObject(key, raw)
+}
+
 func TestAgentAdapterCatalogSync_СинхронизируетФикстуруИзS3ВБД(t *testing.T) {
 	ctx := t.Context()
 	database := setupAgentAdapterCatalogDB(t)
 	service := NewAgentAdapterCatalogSyncService(
 		database,
 		logger.New("", "test", "error", true),
-		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "valid")},
+		fileAgentAdapterObjectStore{root: setupAgentAdapterCatalogFixture(t, "valid")},
 		&config.Config{
 			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
 				Enabled:        true,
@@ -148,7 +308,7 @@ func TestAgentAdapterCatalogSync_ResolveSelectedAdapterManifestsИспользу
 	service := NewAgentAdapterCatalogSyncService(
 		database,
 		logger.New("", "test", "error", true),
-		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "valid")},
+		fileAgentAdapterObjectStore{root: setupAgentAdapterCatalogFixture(t, "valid")},
 		&config.Config{
 			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
 				Enabled:        true,
@@ -187,7 +347,7 @@ func TestAgentAdapterCatalogSync_ПропускаетНеполныйRelease(t *
 	service := NewAgentAdapterCatalogSyncService(
 		database,
 		logger.New("", "test", "error", true),
-		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "incomplete")},
+		fileAgentAdapterObjectStore{root: setupAgentAdapterCatalogFixture(t, "incomplete")},
 		&config.Config{
 			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
 				Enabled:        true,
@@ -227,7 +387,7 @@ func TestAgentAdapterCatalogSync_БитыйCatalogIndexНеЗатираетТе�
 	service := NewAgentAdapterCatalogSyncService(
 		database,
 		logger.New("", "test", "error", true),
-		fileAgentAdapterObjectStore{root: filepath.Join("testdata", "agent_adapter_catalog", "broken-index")},
+		fileAgentAdapterObjectStore{root: setupAgentAdapterCatalogFixture(t, "broken-index")},
 		&config.Config{
 			AgentAdapterCatalog: config.AgentAdapterCatalogConfig{
 				Enabled:        true,
