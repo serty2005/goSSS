@@ -374,6 +374,7 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			commentIDByExternal: make(map[string]string),
 			commentTicketByExt:  make(map[string]string),
 		}
+		createdExternalLinks = make(map[string]struct{})
 	)
 
 	flushTickets := func() error {
@@ -409,6 +410,25 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		}
 		linkBatch = linkBatch[:0]
 		return nil
+	}
+
+	appendExternalLink := func(link models.ExternalSystemLink) {
+		link.ServiceDeskUUID = strings.TrimSpace(link.ServiceDeskUUID)
+		if link.ServiceDeskUUID == "" {
+			return
+		}
+		key := link.SystemName + "|" + link.ServiceDeskUUID
+		if _, exists := createdExternalLinks[key]; exists {
+			s.logger.Warn(
+				"Пропуск повторной внешней связи при сидинге тикетов",
+				"system", link.SystemName,
+				"service_desk_uuid", link.ServiceDeskUUID,
+				"entity_type", link.EntityType,
+			)
+			return
+		}
+		createdExternalLinks[key] = struct{}{}
+		linkBatch = append(linkBatch, link)
 	}
 
 	for dec.More() {
@@ -475,8 +495,10 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		}
 
 		ticketBatch = append(ticketBatch, ticket)
-		seedResult.ticketIDByExternal[raw.UUID] = ticketID
-		linkBatch = append(linkBatch, models.ExternalSystemLink{
+		if _, exists := seedResult.ticketIDByExternal[raw.UUID]; !exists {
+			seedResult.ticketIDByExternal[raw.UUID] = ticketID
+		}
+		appendExternalLink(models.ExternalSystemLink{
 			InternalID:      ticketID,
 			SystemName:      "naumen",
 			ServiceDeskUUID: raw.UUID,
@@ -516,9 +538,11 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			}
 			commentBatch = append(commentBatch, comment)
 			if c.UUID != "" {
-				seedResult.commentIDByExternal[c.UUID] = comment.ID
-				seedResult.commentTicketByExt[c.UUID] = ticketID
-				linkBatch = append(linkBatch, models.ExternalSystemLink{
+				if _, exists := seedResult.commentIDByExternal[c.UUID]; !exists {
+					seedResult.commentIDByExternal[c.UUID] = comment.ID
+					seedResult.commentTicketByExt[c.UUID] = ticketID
+				}
+				appendExternalLink(models.ExternalSystemLink{
 					InternalID:      comment.ID,
 					SystemName:      "naumen",
 					ServiceDeskUUID: c.UUID,
