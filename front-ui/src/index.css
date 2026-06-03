@@ -1177,11 +1177,42 @@ body .ant-message .ant-message-notice-content {
   min-width: 0;
 }
 
+.search-ticket-section__header {
+  width: 100%;
+  justify-content: space-between;
+  min-width: 0;
+}
+
 .search-ticket-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 10px;
   min-width: 0;
+}
+
+.search-result-company-card .ant-card-head {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.search-result-company-card .ant-card-head-title,
+.search-result-company-card .ant-card-extra {
+  min-width: 0;
+  padding-block: 10px;
+}
+
+.search-result-company-card__title {
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.search-result-company-card__name {
+  min-width: 0;
+  max-width: min(520px, 100%);
+}
+
+.search-result-company-card__actions {
+  justify-content: flex-end;
 }
 
 .ticket-search-card.ant-card {

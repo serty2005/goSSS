@@ -311,6 +311,7 @@ type ticketExport struct {
 	RequestDate      string          `json:"requestDate"`
 	LastModifiedDate string          `json:"lastModifiedDate"`
 	State            string          `json:"state"`
+	IsArchived       *bool           `json:"isArchived"`
 	Comments         []commentExport `json:"comments_list"`
 }
 
@@ -452,6 +453,11 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 		}
 
 		ticketID := uuid.New().String()
+		isArchived := true
+		if raw.IsArchived != nil {
+			isArchived = *raw.IsArchived
+		}
+
 		ticket := tickets.Ticket{
 			Base:            common.Base{ID: ticketID},
 			Number:          number,
@@ -462,9 +468,11 @@ func (s *Seeder) seedTicketsWithComments(tx *gorm.DB, extToIntID map[string]stri
 			Priority:        tickets.PriorityMedium,
 			Type:            tickets.TypeIncident,
 			ServiceDeskUUID: raw.UUID,
-			IsArchived:      true,
-			ArchivedAt:      utils.ParseServiceDeskTime(raw.LastModifiedDate),
+			IsArchived:      isArchived,
 			SyncWithBitrix:  false,
+		}
+		if isArchived {
+			ticket.ArchivedAt = utils.ParseServiceDeskTime(raw.LastModifiedDate)
 		}
 
 		if raw.RequestDate != "" {

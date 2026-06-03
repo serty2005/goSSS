@@ -38,5 +38,5 @@ export const loginAsAdmin = async (page: Page, options: LoginMockOptions = {}) =
   await page.getByPlaceholder('Пароль').fill('admin');
   await page.getByRole('button', { name: 'Войти' }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByText('Обзор системы')).toBeVisible();
+  await expect(page.getByText('Всего тикетов')).toBeVisible();
 };

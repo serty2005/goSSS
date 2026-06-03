@@ -124,100 +124,103 @@ const SearchResultsContent: React.FC<Props> = ({
               </div>
             </Card>
           ) : null}
-          {results.map((group) => (
+          {results.map((group) => {
+            const companyTicketsURL = `/tickets?company=${encodeURIComponent(group.owner.uuid)}&archive_mode=active`;
+            return (
             <Card
               key={group.owner.uuid}
-            className="glass-panel"
-            size="small"
-            title={(
-              <Link to={`/companies/${group.owner.uuid}`} style={{ color: 'inherit' }}>
-                <Space size={8} align="start" style={{ lineHeight: 1.1 }} wrap>
-                  {getEntityIcon('Company')}
-                  <Space direction="vertical" size={0}>
-                    <Text strong style={{ cursor: 'pointer', textDecoration: 'underline' }}>
-                      {group.owner.name}
-                    </Text>
-                    <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
-                      {group.owner.address || '-'}
-                    </Text>
+              className="glass-panel search-result-company-card"
+              size="small"
+              title={(
+                <Link to={`/companies/${group.owner.uuid}`} style={{ color: 'inherit' }}>
+                  <Space size={8} align="start" className="search-result-company-card__title" wrap>
+                    {getEntityIcon('Company')}
+                    <Space direction="vertical" size={0} className="search-result-company-card__name">
+                      <Text strong style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+                        {group.owner.name}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+                        {group.owner.address || '-'}
+                      </Text>
+                    </Space>
+                    <Tag color={group.owner.active_contract ? 'success' : 'default'} style={{ marginTop: 1 }}>
+                      {group.owner.active_contract ? 'Активен' : 'Завершён'}
+                    </Tag>
                   </Space>
-                  <Tag color={group.owner.active_contract ? 'success' : 'default'} style={{ marginTop: 1 }}>
-                    {group.owner.active_contract ? 'Активен' : 'Завершён'}
-                  </Tag>
-                </Space>
-              </Link>
-            )}
-            extra={(
-              <Space size={6} wrap>
-                <Button
-                  type="link"
-                  size="small"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    setPresetCompany({ id: group.owner.uuid, title: group.owner.name });
-                    setIsCreateOpen(true);
-                  }}
-                >
-                  Создать заявку
-                </Button>
-                <Link to={`/companies/${group.owner.uuid}`}>
-                  <Button type="link" size="small">К компании <ArrowRightOutlined /></Button>
                 </Link>
-              </Space>
-            )}
-            bodyStyle={{ paddingTop: 12 }}
-          >
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              {group.matched_tickets?.length ? (
-                <div className="search-ticket-section">
-                  <Space style={{ justifyContent: 'space-between', width: '100%' }} align="center">
-                    <Text strong>Найденные заявки</Text>
-                    <Link to={`/tickets?company_ids=${encodeURIComponent(group.owner.uuid)}&archive_mode=all`}>
-                      <Button type="link" size="small">Все заявки компании</Button>
-                    </Link>
-                  </Space>
-                  <div className="search-ticket-grid">
-                    {group.matched_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
-                      <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {group.active_tickets?.length ? (
-                <div className="search-ticket-section">
-                  <Space style={{ justifyContent: 'space-between', width: '100%' }} align="center">
-                    <Text strong>Активные заявки</Text>
-                    <Link to={`/tickets?company_ids=${encodeURIComponent(group.owner.uuid)}&archive_mode=active`}>
-                      <Button type="link" size="small">Все активные</Button>
-                    </Link>
-                  </Space>
-                  <div className="search-ticket-grid">
-                    {group.active_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
-                      <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {group.found_entities.length ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                    gap: 12,
-                  }}
-                >
-                  {group.found_entities.map((item, idx) => (
-                    <div key={`${item.entity_type}-${idx}`}>
-                      {renderEntityCard(item)}
+              )}
+              extra={(
+                <Space size={6} wrap className="search-result-company-card__actions">
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setPresetCompany({ id: group.owner.uuid, title: group.owner.name });
+                      setIsCreateOpen(true);
+                    }}
+                  >
+                    Создать заявку
+                  </Button>
+                  <Link to={`/companies/${group.owner.uuid}`}>
+                    <Button type="link" size="small">К компании <ArrowRightOutlined /></Button>
+                  </Link>
+                </Space>
+              )}
+              bodyStyle={{ paddingTop: 12 }}
+            >
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                {group.matched_tickets?.length ? (
+                  <div className="search-ticket-section">
+                    <Space className="search-ticket-section__header" align="center">
+                      <Text strong>Найденные заявки</Text>
+                      <Link to={companyTicketsURL}>
+                        <Button type="link" size="small">Все заявки компании</Button>
+                      </Link>
+                    </Space>
+                    <div className="search-ticket-grid">
+                      {group.matched_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
+                        <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : null}
-            </Space>
+                  </div>
+                ) : null}
+
+                {group.active_tickets?.length ? (
+                  <div className="search-ticket-section">
+                    <Space className="search-ticket-section__header" align="center">
+                      <Text strong>Активные заявки</Text>
+                      <Link to={companyTicketsURL}>
+                        <Button type="link" size="small">Все активные</Button>
+                      </Link>
+                    </Space>
+                    <div className="search-ticket-grid">
+                      {group.active_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
+                        <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {group.found_entities.length ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                      gap: 12,
+                    }}
+                  >
+                    {group.found_entities.map((item, idx) => (
+                      <div key={`${item.entity_type}-${idx}`}>
+                        {renderEntityCard(item)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </Space>
             </Card>
-          ))}
+            );
+          })}
         </>
       )}
 

@@ -163,8 +163,9 @@ const HeaderSearch: React.FC = () => {
     if (!isTicketsPage || !location.search) {
       return;
     }
+    setTicketParamsRaw(location.search.slice(1));
     navigate(location.pathname, { replace: true });
-  }, [isTicketsPage, location.pathname, location.search, navigate]);
+  }, [isTicketsPage, location.pathname, location.search, navigate, setTicketParamsRaw]);
 
   useEffect(() => {
     if (!isTicketsPage && selectedTicketIDs.length > 0) {
@@ -382,16 +383,33 @@ const HeaderSearch: React.FC = () => {
     setTicketParamsRaw(params.toString());
   }, [setTicketParamsRaw, ticketParams]);
 
+  const applyTicketSearch = useCallback((value: string) => {
+    const normalized = value.trim();
+    setTicketTerm(normalized);
+    updateTicketParams({ q: normalized || undefined });
+  }, [updateTicketParams]);
+
+  const handleTicketSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.target.value;
+    setTicketTerm(nextValue);
+    if (nextValue === '' && appliedSearch) {
+      updateTicketParams({ q: undefined });
+    }
+  }, [appliedSearch, updateTicketParams]);
+
   useEffect(() => {
     if (!isTicketsPage) {
       return;
     }
     const normalized = debouncedTicketTerm.trim();
+    if (normalized !== ticketTerm.trim()) {
+      return;
+    }
     if (normalized === appliedSearch) {
       return;
     }
     updateTicketParams({ q: normalized || undefined });
-  }, [appliedSearch, debouncedTicketTerm, isTicketsPage, updateTicketParams]);
+  }, [appliedSearch, debouncedTicketTerm, isTicketsPage, ticketTerm, updateTicketParams]);
 
   useEffect(() => {
     if (!isTicketsListPage) {
@@ -947,8 +965,8 @@ const HeaderSearch: React.FC = () => {
             allowClear
             loading={isTicketSearchLoading}
             value={ticketTerm}
-            onChange={(event) => setTicketTerm(event.target.value)}
-            onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
+            onChange={handleTicketSearchChange}
+            onSearch={applyTicketSearch}
           />
           {renderMobileSettingsButton(filterContent)}
         </div>
@@ -973,8 +991,8 @@ const HeaderSearch: React.FC = () => {
           allowClear
           loading={isTicketSearchLoading}
           value={ticketTerm}
-          onChange={(event) => setTicketTerm(event.target.value)}
-          onSearch={(value) => updateTicketParams({ q: value.trim() || undefined })}
+          onChange={handleTicketSearchChange}
+          onSearch={applyTicketSearch}
           style={{ width: isHeaderMobile ? 88 : (isCompact ? 240 : 320) }}
         />
         {!isHeaderNarrow && archiveMode !== 'archive' && (

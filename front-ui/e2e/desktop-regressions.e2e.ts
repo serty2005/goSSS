@@ -190,6 +190,47 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     expectNoBrowserErrors(browserErrors);
   });
 
+  test('ищет неархивные тикеты в глобальном поиске и повторно фильтрует меню заявок', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-поиск в боковой панели и header');
+
+    const browserErrors = collectBrowserErrors(page);
+    await loginAsAdmin(page);
+
+    const globalSearch = page.getByPlaceholder('Поиск по IP, серийному номеру, имени...');
+    await globalSearch.fill('архивконтроль');
+    const globalPopover = page.locator('.global-search-popover');
+    await expect(globalPopover).toBeVisible();
+    await expect(globalPopover.getByText('#99001')).toBeVisible();
+    await expect(globalPopover.getByText('#99002')).toBeVisible();
+    await expect(globalPopover.getByText('#99003')).toHaveCount(0);
+    await expectVisibleBoxInsideViewport(globalPopover, 'popover глобального поиска');
+    await expectDocumentHasNoHorizontalOverflow(page);
+
+    await globalPopover.getByRole('button', { name: 'Все заявки компании' }).click();
+    await expect(page).toHaveURL(/\/tickets\?company=company-1&archive_mode=active/);
+
+    const ticketSearch = page.getByPlaceholder('Поиск по заявкам...');
+    await expect(page.getByRole('link', { name: '#1003' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '#1002' })).toHaveCount(0);
+
+    await ticketSearch.fill('архивконтроль');
+    await ticketSearch.press('Enter');
+    await expect(page.getByRole('link', { name: '#99001' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '#99002' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '#99003' })).toHaveCount(0);
+
+    await page.locator('.ticket-header-search-controls .ant-input-clear-icon').click();
+    await expect(page.getByRole('link', { name: '#99001' })).toHaveCount(0);
+
+    await ticketSearch.fill('RDP');
+    await ticketSearch.press('Enter');
+    await expect(page.getByRole('link', { name: '#1002' })).toBeVisible();
+    await expect(page.getByText('У сотрудника нет доступа к RDP на рабочую станцию.')).toBeVisible();
+
+    await expectDocumentHasNoHorizontalOverflow(page);
+    expectNoBrowserErrors(browserErrors);
+  });
+
   test('объединяет оборудование тикета с подключениями и показывает последние тикеты компании', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-карточку тикета');
 

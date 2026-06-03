@@ -144,6 +144,75 @@ const latestCompanyTicket = {
   },
 };
 
+const globalSearchActiveTicket = {
+  id: 'ticket-archive-control-active',
+  number: 99001,
+  subject: 'архивконтроль: неархивная заявка по кассе',
+  description: '<p>архивконтроль: неархивная заявка по кассе для проверки глобального поиска.</p>',
+  reporter_name: 'Администратор ServiceDesk',
+  created_source: 'ui',
+  status: 'new',
+  last_comment: 'архивконтроль: комментарий виден в глобальном поиске',
+  last_comment_author: 'Администратор ServiceDesk',
+  last_activity: '2026-06-02T11:10:00Z',
+  created_at: '2026-06-02T10:55:00Z',
+  updated_at: '2026-06-02T11:10:00Z',
+  company_id: 'company-1',
+  company_name: 'Ресторан Север',
+  is_archived: false,
+  sync_with_bitrix: false,
+  assignee: {
+    id: 1,
+    full_name: 'Администратор ServiceDesk',
+  },
+};
+
+const globalSearchClosedTicket = {
+  id: 'ticket-archive-control-closed',
+  number: 99002,
+  subject: 'архивконтроль: закрытая, но еще не архивная заявка',
+  description: '<p>архивконтроль: закрытая заявка остается в неархивной выдаче.</p>',
+  reporter_name: 'Администратор ServiceDesk',
+  created_source: 'ui',
+  status: 'closed',
+  last_comment: '',
+  last_comment_author: '',
+  last_activity: '2026-06-02T11:20:00Z',
+  created_at: '2026-06-02T11:05:00Z',
+  updated_at: '2026-06-02T11:20:00Z',
+  company_id: 'company-1',
+  company_name: 'Ресторан Север',
+  is_archived: false,
+  sync_with_bitrix: false,
+  assignee: {
+    id: 1,
+    full_name: 'Администратор ServiceDesk',
+  },
+};
+
+const globalSearchArchivedTicket = {
+  id: 'ticket-archive-control-archived',
+  number: 99003,
+  subject: 'архивконтроль: архивная заявка не должна попадать в глобальный поиск',
+  description: '<p>архивконтроль: архивная заявка скрыта из неархивной выдачи.</p>',
+  reporter_name: 'Администратор ServiceDesk',
+  created_source: 'ui',
+  status: 'closed',
+  last_comment: '',
+  last_comment_author: '',
+  last_activity: '2026-06-02T11:30:00Z',
+  created_at: '2026-06-02T11:15:00Z',
+  updated_at: '2026-06-02T11:30:00Z',
+  company_id: 'company-1',
+  company_name: 'Ресторан Север',
+  is_archived: true,
+  sync_with_bitrix: false,
+  assignee: {
+    id: 1,
+    full_name: 'Администратор ServiceDesk',
+  },
+};
+
 const companyList = [
   {
     id: 'company-1',
@@ -305,6 +374,38 @@ const ok = (data: unknown, meta?: Record<string, unknown>) => ({
   ...(meta ? { meta } : {}),
 });
 
+const ticketMatchesSearch = (ticket: Record<string, unknown>, rawSearch: string) => {
+  const search = rawSearch.trim().toLowerCase();
+  if (!search) {
+    return true;
+  }
+  return [
+    ticket.number,
+    ticket.subject,
+    ticket.description,
+    ticket.last_comment,
+    ticket.company_name,
+  ].some((value) => String(value || '').toLowerCase().includes(search));
+};
+
+const toSearchTicket = (ticket: typeof ticketList[number] | typeof latestCompanyTicket | typeof globalSearchActiveTicket) => ({
+  id: ticket.id,
+  number: ticket.number,
+  subject: ticket.subject,
+  description: ticket.description,
+  status: ticket.status,
+  company_id: ticket.company_id,
+  company_name: ticket.company_name,
+  assignee_name: ticket.assignee?.full_name || '',
+  reporter_name: ticket.reporter_name,
+  last_comment: ticket.last_comment,
+  last_activity: ticket.last_activity,
+  created_at: ticket.created_at,
+  updated_at: 'updated_at' in ticket ? ticket.updated_at : ticket.last_activity,
+  is_archived: 'is_archived' in ticket ? ticket.is_archived : false,
+  created_source: ticket.created_source,
+});
+
 const readJsonBody = async (route: Route) => {
   const postData = route.request().postData();
   if (!postData) {
@@ -443,6 +544,22 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
+      const search = url.searchParams.get('search') || '';
+      if (search.trim()) {
+        const items = [
+          ...ticketList,
+          latestCompanyTicket,
+          globalSearchActiveTicket,
+          globalSearchClosedTicket,
+        ].filter((ticket) => ticketMatchesSearch(ticket, search));
+        await route.fulfill(json(ok(items, {
+          total: items.length,
+          limit: Number(url.searchParams.get('limit') || 20),
+          offset: Number(url.searchParams.get('offset') || 0),
+          has_next: false,
+        })));
+        return;
+      }
       if (companyID === 'company-1' || companyIDs.includes('company-1')) {
         const items = [ticketList[0], latestCompanyTicket];
         await route.fulfill(json(ok(items, {
@@ -459,6 +576,38 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
         limit: Number(url.searchParams.get('limit') || 20),
         offset: Number(url.searchParams.get('offset') || 0),
         has_next: false,
+      })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/search') {
+      const term = url.searchParams.get('term') || '';
+      const matchedTickets = [
+        globalSearchActiveTicket,
+        globalSearchClosedTicket,
+        globalSearchArchivedTicket,
+      ]
+        .filter((ticket) => !ticket.is_archived && ticketMatchesSearch(ticket, term))
+        .map(toSearchTicket);
+
+      await route.fulfill(json(ok({
+        search_results: matchedTickets.length > 0
+          ? [
+              {
+                owner: {
+                  uuid: 'company-1',
+                  external_uuid: null,
+                  name: 'Ресторан Север',
+                  address: 'Москва, ул. Сервисная, 10',
+                  active_contract: true,
+                },
+                found_entities: [],
+                matched_tickets: matchedTickets,
+                active_tickets: [toSearchTicket(latestCompanyTicket)],
+              },
+            ]
+          : [],
+        ticket_results_without_company: [],
       })));
       return;
     }

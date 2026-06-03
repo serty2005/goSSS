@@ -97,7 +97,6 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		}
 		matchedTickets, ticketSearchErr = h.ticketRepo.Find(ctx, tickets.TicketFilter{
 			SearchQuery: term,
-			ArchiveMode: "all",
 			Limit:       ticketLimit,
 			SortBy:      "updated_at desc",
 		})
