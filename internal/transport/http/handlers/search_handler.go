@@ -8,6 +8,8 @@ import (
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
+	"etalon-server/internal/domain/tickets"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/domain/workstation"
 	"etalon-server/internal/pkg/utils"
 	api "etalon-server/internal/transport/http/dtos"
@@ -30,6 +32,7 @@ type SearchHandler struct {
 	workstationRepo workstation.Repository
 	frRepo          fiscal.Repository
 	linkRepo        repositories.LinkRepo
+	ticketRepo      tickets.TicketRepository
 }
 
 // NewSearchHandler создает новый экземпляр обработчика.
@@ -39,8 +42,9 @@ func NewSearchHandler(
 	workstationRepo workstation.Repository,
 	frRepo fiscal.Repository,
 	linkRepo repositories.LinkRepo,
+	ticketRepo tickets.TicketRepository,
 ) *SearchHandler {
-	return &SearchHandler{companyRepo, serverRepo, workstationRepo, frRepo, linkRepo}
+	return &SearchHandler{companyRepo, serverRepo, workstationRepo, frRepo, linkRepo, ticketRepo}
 }
 
 // RegisterRoutes регистрирует роут для поиска.
@@ -78,12 +82,30 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var initialServers []server.Server
 	var initialWorkstations []workstation.Workstation
 	var initialFRs []fiscal.FiscalRegister
-	wg.Add(4)
+	var matchedTickets []tickets.Ticket
+	var ticketSearchErr error
+	ticketLimit := min(limit, 50)
+	wg.Add(5)
 	go func() { defer wg.Done(); initialCompanies, _ = h.companyRepo.Search(ctx, term, showInactive, limit, 0) }()
 	go func() { defer wg.Done(); initialServers, _ = h.serverRepo.Search(ctx, term, limit, 0, nil, nil, nil) }()
 	go func() { defer wg.Done(); initialWorkstations, _ = h.workstationRepo.Search(ctx, term, limit, 0) }()
 	go func() { defer wg.Done(); initialFRs, _ = h.frRepo.Search(ctx, term, limit, 0) }()
+	go func() {
+		defer wg.Done()
+		if h.ticketRepo == nil {
+			return
+		}
+		matchedTickets, ticketSearchErr = h.ticketRepo.Find(ctx, tickets.TicketFilter{
+			SearchQuery: term,
+			ArchiveMode: "all",
+			Limit:       ticketLimit,
+			SortBy:      "updated_at desc",
+		})
+	}()
 	wg.Wait()
+	if ticketSearchErr != nil {
+		log.Warn("Не удалось выполнить поиск по тикетам", "error", ticketSearchErr)
+	}
 
 	ownerIDs := make(map[string]bool)
 	for _, company := range initialCompanies {
@@ -104,10 +126,27 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			ownerIDs[*fr.OwnerID] = true
 		}
 	}
+	matchedTicketIDs := make([]string, 0, len(matchedTickets))
+	matchedTicketsByCompany := make(map[string][]tickets.Ticket)
+	var matchedTicketsWithoutCompany []tickets.Ticket
+	for _, ticket := range matchedTickets {
+		matchedTicketIDs = append(matchedTicketIDs, ticket.ID)
+		companyID := strings.TrimSpace(ticket.CompanyID)
+		if companyID == "" {
+			matchedTicketsWithoutCompany = append(matchedTicketsWithoutCompany, ticket)
+			continue
+		}
+		ownerIDs[companyID] = true
+		matchedTicketsByCompany[companyID] = append(matchedTicketsByCompany[companyID], ticket)
+	}
 
 	if len(ownerIDs) == 0 {
 		log.Debug("Поисковый запрос выполнен, результатов не найдено", "search_term", term)
-		response.RespondWithJSON(w, http.StatusOK, api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}})
+		finalResponse := api.FinalSearchResponseDTO{SearchResults: []api.SearchGroupDTO{}}
+		if len(matchedTicketsWithoutCompany) > 0 {
+			finalResponse.TicketResultsWithoutCompany = h.mapTicketsToSearchDTO(ctx, matchedTicketsWithoutCompany)
+		}
+		response.RespondWithJSON(w, http.StatusOK, finalResponse)
 		return
 	}
 
@@ -211,6 +250,10 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			},
 			FoundEntities: []api.FoundEntityDTO{},
 		}
+		if ticketsForOwner := matchedTicketsByCompany[ownerID]; len(ticketsForOwner) > 0 {
+			group.MatchedTickets = h.mapTicketsToSearchDTO(ctx, ticketsForOwner)
+		}
+		group.ActiveTickets = h.loadActiveTicketSearchDTOs(ctx, ownerID, matchedTicketIDs, log)
 
 		currentAndParentIDs := map[string]struct{}{ownerID: {}}
 		parents, _ := h.companyRepo.GetAllParentIDs(ctx, ownerID)
@@ -379,4 +422,100 @@ func (h *SearchHandler) groupFRsByOwner(ctx context.Context, frs []fiscal.Fiscal
 		}
 	}
 	return result
+}
+
+func (h *SearchHandler) loadActiveTicketSearchDTOs(ctx context.Context, ownerID string, matchedTicketIDs []string, log anyLogger) []api.TicketSearchDTO {
+	if h.ticketRepo == nil {
+		return nil
+	}
+	activeTickets, err := h.ticketRepo.Find(ctx, tickets.TicketFilter{
+		CompanyID: ownerID,
+		ExcludeStatuses: []string{
+			tickets.StatusResolved,
+			tickets.StatusClosed,
+			tickets.StatusSpam,
+			tickets.StatusExecution,
+		},
+		Limit:  10,
+		SortBy: "updated_at desc",
+	})
+	if err != nil {
+		log.Warn("Не удалось получить активные тикеты компании", "company_id", ownerID, "error", err)
+		return nil
+	}
+
+	matched := make(map[string]struct{}, len(matchedTicketIDs))
+	for _, id := range matchedTicketIDs {
+		matched[id] = struct{}{}
+	}
+	filtered := make([]tickets.Ticket, 0, len(activeTickets))
+	for _, ticket := range activeTickets {
+		if _, exists := matched[ticket.ID]; exists {
+			continue
+		}
+		filtered = append(filtered, ticket)
+		if len(filtered) == 5 {
+			break
+		}
+	}
+	return h.mapTicketsToSearchDTO(ctx, filtered)
+}
+
+type anyLogger interface {
+	Warn(msg string, args ...any)
+}
+
+func (h *SearchHandler) mapTicketsToSearchDTO(ctx context.Context, items []tickets.Ticket) []api.TicketSearchDTO {
+	if len(items) == 0 {
+		return []api.TicketSearchDTO{}
+	}
+	ticketIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		ticketIDs = append(ticketIDs, item.ID)
+	}
+	lastComments, err := h.ticketRepo.GetLastComments(ctx, ticketIDs)
+	if err != nil {
+		lastComments = map[string]tickets.LastCommentInfo{}
+	}
+
+	result := make([]api.TicketSearchDTO, 0, len(items))
+	for _, item := range items {
+		lastComment := lastComments[item.ID]
+		lastCommentText := ""
+		if !lastComment.IsPrivate {
+			lastCommentText = lastComment.Text
+		}
+		result = append(result, api.TicketSearchDTO{
+			ID:           item.ID,
+			Number:       item.Number,
+			Subject:      item.Subject,
+			Description:  item.Description,
+			Status:       item.Status,
+			CompanyID:    item.CompanyID,
+			CompanyName:  item.CompanyName,
+			AssigneeName: formatTicketUserName(item.Assignee),
+			ReporterName: resolveTicketReporterName(item),
+			LastComment:  lastCommentText,
+			LastActivity: item.UpdatedAt,
+			CreatedAt:    item.CreatedAt,
+			UpdatedAt:    item.UpdatedAt,
+			IsArchived:   item.IsArchived,
+		})
+	}
+	return result
+}
+
+func formatTicketUserName(item *user.User) string {
+	if item == nil {
+		return ""
+	}
+	name := strings.TrimSpace(item.FullName)
+	if name != "" {
+		return name
+	}
+	name = strings.TrimSpace(strings.Join([]string{item.FirstName, item.LastName}, " "))
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(item.Username)
 }

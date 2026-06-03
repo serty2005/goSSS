@@ -817,7 +817,7 @@ type GlobalTranslationLocaleDTO struct {
 }
 
 type GlobalTranslationsDTO struct {
-	Locales   []GlobalTranslationLocaleDTO          `json:"locales"`
+	Locales   []GlobalTranslationLocaleDTO            `json:"locales"`
 	Overrides map[string]map[string]map[string]string `json:"overrides"`
 }
 
@@ -825,13 +825,16 @@ type GlobalTranslationsDTO struct {
 
 // FinalSearchResponseDTO - корневой объект для нового ответа поиска.
 type FinalSearchResponseDTO struct {
-	SearchResults []SearchGroupDTO `json:"search_results"`
+	SearchResults               []SearchGroupDTO  `json:"search_results"`
+	TicketResultsWithoutCompany []TicketSearchDTO `json:"ticket_results_without_company,omitempty"`
 }
 
 // SearchGroupDTO представляет одну группу в результатах поиска (сущности, сгруппированные по владельцу).
 type SearchGroupDTO struct {
-	Owner         OwnerFullDTO     `json:"owner"`
-	FoundEntities []FoundEntityDTO `json:"found_entities"`
+	Owner          OwnerFullDTO      `json:"owner"`
+	FoundEntities  []FoundEntityDTO  `json:"found_entities"`
+	MatchedTickets []TicketSearchDTO `json:"matched_tickets,omitempty"`
+	ActiveTickets  []TicketSearchDTO `json:"active_tickets,omitempty"`
 }
 
 // OwnerFullDTO содержит расширенную информацию о компании-владельце.
@@ -855,6 +858,24 @@ type ParentInfo struct {
 type FoundEntityDTO struct {
 	EntityType string      `json:"entity_type"`
 	Data       interface{} `json:"data"`
+}
+
+type TicketSearchDTO struct {
+	ID            string    `json:"id"`
+	Number        int       `json:"number"`
+	Subject       string    `json:"subject"`
+	Description   string    `json:"description,omitempty"`
+	Status        string    `json:"status"`
+	CompanyID     string    `json:"company_id,omitempty"`
+	CompanyName   string    `json:"company_name,omitempty"`
+	AssigneeName  string    `json:"assignee_name,omitempty"`
+	ReporterName  string    `json:"reporter_name,omitempty"`
+	LastComment   string    `json:"last_comment,omitempty"`
+	LastActivity  time.Time `json:"last_activity"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	IsArchived    bool      `json:"is_archived"`
+	CreatedSource string    `json:"created_source,omitempty"`
 }
 
 // --- DTO для данных внутри FoundEntityDTO ---

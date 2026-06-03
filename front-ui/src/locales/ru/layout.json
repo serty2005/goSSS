@@ -1,6 +1,7 @@
 {
   "menu": {
     "search": "Поиск",
+    "info": "База знаний",
     "tickets": "Тикеты",
     "companies": "Компании",
     "acceptance": "Принятие на АО",
@@ -147,6 +148,7 @@
     "openThemeSettings": "Открыть настройки оформления",
     "openMobileSettings": "Открыть настройки и профиль",
     "openMobileNavGroup": "Открыть раздел {{name}}",
+    "openInfo": "Открыть базу знаний",
     "openProfileMenu": "Открыть меню профиля",
     "selectLanguage": "Выбрать язык интерфейса"
   }

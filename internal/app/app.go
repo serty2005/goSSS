@@ -116,6 +116,7 @@ type Application struct {
 	EntityDeletionHandler     *handlers.EntityDeletionHandler
 	IntegrationSyncHandler    *handlers.IntegrationSyncHandler
 	MaterialHandler           *handlers.MaterialHandler
+	ArticleHandler            *handlers.ArticleHandler
 	TranslationsHandler       *handlers.TranslationsHandler
 
 	AgentAdapterCatalogSync services.AgentAdapterCatalogSyncService
@@ -597,7 +598,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService, srvs.EntityDeletionService)
 	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService, srvs.EntityDeletionService)
 	app.CompanyHandler = handlers.NewCompanyHandler(srvs.CompanyService)
-	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
+	app.SearchHandler = handlers.NewSearchHandler(repos.CompanyRepo, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo, repos.TicketRepo)
 	app.SyncHandler = handlers.NewSyncHandler(app.Seeder, app.Config.SeederKey)
 	app.TaskHandler = handlers.NewTaskHandler(srvs.TaskResolutionService, app.SDEditor, srvs.TaskService, repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo, repos.LinkRepo)
 	agentAuthService := agentauthsvc.NewService(app.DB, app.Logger.With("component", "agent_auth_service"), repos.AgentRepo, srvs.AgentService)
@@ -625,6 +626,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.IntegrationSyncHandler = handlers.NewIntegrationSyncHandler(srvs.IntegrationSyncControl)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
+	app.ArticleHandler = handlers.NewArticleHandler(app.DB, repos.UserRepo)
 	app.TranslationsHandler = handlers.NewTranslationsHandler(app.DB)
 }
 
@@ -760,6 +762,16 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.MaterialHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.MaterialHandler.Update)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/{id}", a.MaterialHandler.Delete)
+		})
+		r.Route("/articles", func(r chi.Router) {
+			r.Get("/", a.ArticleHandler.List)
+			r.Get("/featured", a.ArticleHandler.Featured)
+			r.Get("/{id}", a.ArticleHandler.Get)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.ArticleHandler.Create)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.ArticleHandler.Update)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/{id}", a.ArticleHandler.Delete)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Patch("/{id}/publish", a.ArticleHandler.Publish)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Patch("/{id}/archive", a.ArticleHandler.Archive)
 		})
 
 		r.Route("/candidates", func(r chi.Router) {

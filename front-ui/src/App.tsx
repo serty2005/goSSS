@@ -16,6 +16,10 @@ import { SSEProvider } from '@/features/realtime/SSEProvider';
 const MainLayout = lazy(() => import('@/components/layout/MainLayout'));
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage'));
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const InfoPage = lazy(() => import('@/pages/InfoPage'));
+const ArticlesListPage = lazy(() => import('@/pages/articles/ArticlesListPage'));
+const ArticleDetailsPage = lazy(() => import('@/pages/articles/ArticleDetailsPage'));
+const ArticleEditorPage = lazy(() => import('@/pages/articles/ArticleEditorPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const TasksPage = lazy(() => import('@/pages/TasksPage'));
 const TicketsPage = lazy(() => import('@/pages/TicketsPage'));
@@ -176,6 +180,28 @@ const App: React.FC = () => {
                     )}
                   >
                     <Route index element={<Dashboard />} />
+                    <Route path="info" element={<InfoPage />} />
+                    <Route path="info/articles" element={<ArticlesListPage />} />
+                    <Route
+                      path="info/articles/new"
+                      element={(
+                        <SupportOrAdminRoute>
+                          <ArticleEditorPage />
+                        </SupportOrAdminRoute>
+                      )}
+                    />
+                    <Route path="info/articles/:id" element={<ArticleDetailsPage />} />
+                    <Route
+                      path="info/articles/:id/edit"
+                      element={(
+                        <SupportOrAdminRoute>
+                          <ArticleEditorPage />
+                        </SupportOrAdminRoute>
+                      )}
+                    />
+                    <Route path="info/releases" element={<Navigate to="/info/articles?type=release_note" replace />} />
+                    <Route path="info/news" element={<Navigate to="/info/articles?type=company_news" replace />} />
+                    <Route path="info/wiki" element={<Navigate to="/info/articles?type=wiki" replace />} />
                     <Route path="search" element={<SearchPage />} />
                     <Route
                       path="tasks"

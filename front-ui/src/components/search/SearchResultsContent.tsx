@@ -10,6 +10,7 @@ import { getEntityIcon } from '@/utils/mappers';
 import ServerCard from '@/components/entities/ServerCard';
 import WorkstationCard from '@/components/entities/WorkstationCard';
 import FiscalCard from '@/components/entities/FiscalCard';
+import TicketSearchCard from '@/components/tickets/TicketSearchCard';
 
 const { Text, Title } = Typography;
 const { useBreakpoint } = Grid;
@@ -58,6 +59,7 @@ const SearchResultsContent: React.FC<Props> = ({
     : 5;
   const actualColumns = Math.max(1, Math.min(configuredColumns, responsiveColumns));
   const results = data?.data?.search_results || [];
+  const ticketsWithoutCompany = data?.data?.ticket_results_without_company || [];
 
   const renderEntityCard = (item: SearchFoundEntity) => {
     switch (item.entity_type) {
@@ -109,12 +111,22 @@ const SearchResultsContent: React.FC<Props> = ({
         </Text>
       )}
 
-      {results.length === 0 ? (
+      {results.length === 0 && ticketsWithoutCompany.length === 0 ? (
         <Empty description="Ничего не найдено" />
       ) : (
-        results.map((group) => (
-          <Card
-            key={group.owner.uuid}
+        <>
+          {ticketsWithoutCompany.length ? (
+            <Card className="glass-panel" size="small" title="Заявки без компании">
+              <div className="search-ticket-grid">
+                {ticketsWithoutCompany.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
+                  <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
+                ))}
+              </div>
+            </Card>
+          ) : null}
+          {results.map((group) => (
+            <Card
+              key={group.owner.uuid}
             className="glass-panel"
             size="small"
             title={(
@@ -155,21 +167,58 @@ const SearchResultsContent: React.FC<Props> = ({
             )}
             bodyStyle={{ paddingTop: 12 }}
           >
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                gap: 12,
-              }}
-            >
-              {group.found_entities.map((item, idx) => (
-                <div key={`${item.entity_type}-${idx}`}>
-                  {renderEntityCard(item)}
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              {group.matched_tickets?.length ? (
+                <div className="search-ticket-section">
+                  <Space style={{ justifyContent: 'space-between', width: '100%' }} align="center">
+                    <Text strong>Найденные заявки</Text>
+                    <Link to={`/tickets?company_ids=${encodeURIComponent(group.owner.uuid)}&archive_mode=all`}>
+                      <Button type="link" size="small">Все заявки компании</Button>
+                    </Link>
+                  </Space>
+                  <div className="search-ticket-grid">
+                    {group.matched_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
+                      <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </Card>
-        ))
+              ) : null}
+
+              {group.active_tickets?.length ? (
+                <div className="search-ticket-section">
+                  <Space style={{ justifyContent: 'space-between', width: '100%' }} align="center">
+                    <Text strong>Активные заявки</Text>
+                    <Link to={`/tickets?company_ids=${encodeURIComponent(group.owner.uuid)}&archive_mode=active`}>
+                      <Button type="link" size="small">Все активные</Button>
+                    </Link>
+                  </Space>
+                  <div className="search-ticket-grid">
+                    {group.active_tickets.slice(0, variant === 'popover' ? 3 : 5).map((ticket) => (
+                      <TicketSearchCard key={ticket.id} ticket={ticket} compact={variant === 'popover'} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {group.found_entities.length ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                    gap: 12,
+                  }}
+                >
+                  {group.found_entities.map((item, idx) => (
+                    <div key={`${item.entity_type}-${idx}`}>
+                      {renderEntityCard(item)}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </Space>
+            </Card>
+          ))}
+        </>
       )}
 
       {isCreateOpen && (

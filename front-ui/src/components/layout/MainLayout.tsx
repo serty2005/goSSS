@@ -29,6 +29,7 @@ import {
   SunOutlined,
   MoonOutlined,
   CloseOutlined,
+  InfoCircleOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -548,6 +549,9 @@ const MainLayout: React.FC = () => {
     if (location.pathname.startsWith("/telephony/users/")) {
       return "/tickets";
     }
+    if (location.pathname.startsWith("/info")) {
+      return "/info";
+    }
     return location.pathname;
   })();
 
@@ -607,6 +611,11 @@ const MainLayout: React.FC = () => {
   }
 
   const menuItems = [
+    {
+      key: "/info",
+      icon: <InfoCircleOutlined />,
+      label: t("layout:menu.info"),
+    },
     {
       key: "/tickets",
       icon: <CustomerServiceOutlined />,
@@ -1043,6 +1052,12 @@ const MainLayout: React.FC = () => {
                 minWidth: 0,
               }}
             >
+              <Button
+                shape="circle"
+                icon={<InfoCircleOutlined />}
+                onClick={() => navigate("/info")}
+                aria-label={t("layout:accessibility.openInfo")}
+              />
               <Popover
                 trigger="click"
                 placement="leftTop"

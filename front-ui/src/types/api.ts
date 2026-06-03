@@ -184,13 +184,34 @@ export interface SearchFoundEntity {
   data: EntityData;
 }
 
+export interface TicketSearchDTO {
+  id: string;
+  number: number;
+  subject: string;
+  description?: string;
+  status: TicketStatus;
+  company_id?: string;
+  company_name?: string;
+  assignee_name?: string;
+  reporter_name?: string;
+  last_comment?: string;
+  last_activity: string;
+  created_at: string;
+  updated_at: string;
+  is_archived: boolean;
+  created_source?: string;
+}
+
 export interface SearchResultGroup {
   owner: CompanyOwner;
   found_entities: SearchFoundEntity[];
+  matched_tickets?: TicketSearchDTO[];
+  active_tickets?: TicketSearchDTO[];
 }
 
 export interface SearchResponseData {
   search_results: SearchResultGroup[];
+  ticket_results_without_company?: TicketSearchDTO[];
 }
 
 // --- Tasks DTO ---
@@ -699,6 +720,67 @@ export interface TicketListParams {
   closed_from?: string;
   closed_to?: string;
   assignee_ids?: string | string[];
+}
+
+export type ArticleType =
+  | "wiki"
+  | "release_note"
+  | "company_news"
+  | "incident_note"
+  | "internal_doc";
+
+export type ArticleStatus = "draft" | "published" | "archived";
+export type ArticleContentFormat = "markdown" | "tiptap_json";
+
+export interface ArticleLinkDTO {
+  entity_type: "Company" | "Server" | "Workstation" | "FiscalRegister" | "Ticket";
+  entity_id: string;
+}
+
+export interface ArticleDTO {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  content: string;
+  content_format: ArticleContentFormat;
+  type: ArticleType;
+  status: ArticleStatus;
+  project_key?: string;
+  version?: string;
+  tags: string[];
+  is_pinned: boolean;
+  published_at?: string;
+  author_id?: number;
+  author_name: string;
+  links?: ArticleLinkDTO[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArticlePayload {
+  slug?: string;
+  title: string;
+  summary: string;
+  content: string;
+  content_format: ArticleContentFormat;
+  type: ArticleType;
+  status?: ArticleStatus;
+  project_key?: string;
+  version?: string;
+  tags: string[];
+  is_pinned: boolean;
+  links?: ArticleLinkDTO[];
+}
+
+export interface ArticleListParams {
+  term?: string;
+  type?: ArticleType;
+  status?: ArticleStatus;
+  tag?: string;
+  project_key?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface TicketCompanyFilterItem {

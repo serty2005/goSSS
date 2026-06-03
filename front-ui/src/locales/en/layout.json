@@ -1,6 +1,7 @@
 {
   "menu": {
     "search": "Search",
+    "info": "Knowledge base",
     "tickets": "Tickets",
     "companies": "Companies",
     "acceptance": "Acceptance to AO",
@@ -147,6 +148,7 @@
     "openThemeSettings": "Open appearance settings",
     "openMobileSettings": "Open settings and profile",
     "openMobileNavGroup": "Open {{name}}",
+    "openInfo": "Open knowledge base",
     "openProfileMenu": "Open profile menu",
     "selectLanguage": "Select interface language"
   }
