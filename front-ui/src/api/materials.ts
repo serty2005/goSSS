@@ -1,7 +1,18 @@
 import apiClient from './axios';
 import { ApiResponse, MaterialDTO, MaterialPayload } from '@/types/api';
 
+type MaterialListParams = {
+  term?: string;
+  limit?: number;
+  offset?: number;
+};
+
 export const materialsApi = {
+  list: async (params: MaterialListParams = {}) => {
+    const response = await apiClient.get<ApiResponse<MaterialDTO[]>>('/materials', { params });
+    return response.data;
+  },
+
   listByEntity: async (
     entityType: 'Company' | 'Server' | 'Workstation' | 'FiscalRegister',
     entityID: string,

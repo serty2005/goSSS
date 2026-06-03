@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/contextkeys"
@@ -22,12 +23,13 @@ import (
 )
 
 type ArticleHandler struct {
-	db       *gorm.DB
-	userRepo user.Repository
+	db                *gorm.DB
+	userRepo          user.Repository
+	articleWebhookKey string
 }
 
-func NewArticleHandler(db *gorm.DB, userRepo user.Repository) *ArticleHandler {
-	return &ArticleHandler{db: db, userRepo: userRepo}
+func NewArticleHandler(db *gorm.DB, userRepo user.Repository, articleWebhookKey string) *ArticleHandler {
+	return &ArticleHandler{db: db, userRepo: userRepo, articleWebhookKey: strings.TrimSpace(articleWebhookKey)}
 }
 
 type articleLinkDTO struct {
@@ -48,6 +50,7 @@ type articleDTO struct {
 	Version       string           `json:"version,omitempty"`
 	Tags          []string         `json:"tags"`
 	IsPinned      bool             `json:"is_pinned"`
+	ShowOnHome    bool             `json:"show_on_home"`
 	PublishedAt   *time.Time       `json:"published_at,omitempty"`
 	AuthorID      *uint            `json:"author_id,omitempty"`
 	AuthorName    string           `json:"author_name"`
@@ -68,7 +71,13 @@ type articlePayload struct {
 	Version       string           `json:"version"`
 	Tags          []string         `json:"tags"`
 	IsPinned      bool             `json:"is_pinned"`
+	ShowOnHome    bool             `json:"show_on_home"`
 	Links         []articleLinkDTO `json:"links"`
+}
+
+type articleWebhookPayload struct {
+	articlePayload
+	AuthorName string `json:"author_name"`
 }
 
 var allowedArticleEntityTypes = map[string]string{
@@ -98,13 +107,13 @@ func (h *ArticleHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	tx := h.filteredArticlesQuery(r.Context(), filter, h.canManageArticles(r), h.currentUserID(r))
 	var total int64
-	if err := tx.Distinct("articles.id").Count(&total).Error; err != nil {
+	if err := tx.Count(&total).Error; err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить количество публикаций")
 		return
 	}
 
 	var items []models.Article
-	if err := tx.Distinct("articles.*").
+	if err := tx.
 		Preload("Links").
 		Order("articles.is_pinned DESC").
 		Order("COALESCE(articles.published_at, articles.updated_at) DESC").
@@ -139,6 +148,7 @@ func (h *ArticleHandler) Featured(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.WithContext(r.Context()).
 		Model(&models.Article{}).
 		Where("status = ?", models.ArticleStatusPublished).
+		Where("show_on_home = ?", true).
 		Preload("Links").
 		Order("is_pinned DESC").
 		Order("COALESCE(published_at, updated_at) DESC").
@@ -188,6 +198,47 @@ func (h *ArticleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	authorID, authorName := h.resolveAuthor(r.Context())
+
+	item, err := h.createArticle(r.Context(), normalized, authorID, authorName)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать публикацию")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusCreated, toArticleDTO(*item))
+}
+
+func (h *ArticleHandler) CreateFromWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.validWebhookKey(r.Header.Get("X-API-Key")) {
+		response.RespondWithError(w, http.StatusUnauthorized, "Некорректный ключ webhook публикаций")
+		return
+	}
+
+	var payload articleWebhookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, "Некорректное тело запроса")
+		return
+	}
+
+	normalized, err := h.normalizeArticlePayload(payload.articlePayload, true)
+	if err != nil {
+		response.RespondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	authorName := strings.TrimSpace(payload.AuthorName)
+	if authorName == "" {
+		authorName = "Внешний сервис"
+	}
+
+	item, err := h.createArticle(r.Context(), normalized, nil, authorName)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать публикацию")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusCreated, toArticleDTO(*item))
+}
+
+func (h *ArticleHandler) createArticle(ctx context.Context, normalized articlePayload, authorID *uint, authorName string) (*models.Article, error) {
 	now := time.Now()
 	status := normalized.Status
 	var publishedAt *time.Time
@@ -207,12 +258,13 @@ func (h *ArticleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Version:       normalized.Version,
 		Tags:          joinArticleTags(normalized.Tags),
 		IsPinned:      normalized.IsPinned,
+		ShowOnHome:    normalized.ShowOnHome,
 		PublishedAt:   publishedAt,
 		AuthorID:      authorID,
-		AuthorName:    authorName,
+		AuthorName:    strings.TrimSpace(authorName),
 	}
 
-	err = h.db.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+	err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(item).Error; err != nil {
 			return err
 		}
@@ -222,10 +274,18 @@ func (h *ArticleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return tx.Preload("Links").First(item, "id = ?", item.ID).Error
 	})
 	if err != nil {
-		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось создать публикацию")
-		return
+		return nil, err
 	}
-	response.RespondWithJSON(w, http.StatusCreated, toArticleDTO(*item))
+	return item, nil
+}
+
+func (h *ArticleHandler) validWebhookKey(provided string) bool {
+	expected := strings.TrimSpace(h.articleWebhookKey)
+	provided = strings.TrimSpace(provided)
+	if expected == "" || provided == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
 func (h *ArticleHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +322,7 @@ func (h *ArticleHandler) Update(w http.ResponseWriter, r *http.Request) {
 		item.Version = normalized.Version
 		item.Tags = joinArticleTags(normalized.Tags)
 		item.IsPinned = normalized.IsPinned
+		item.ShowOnHome = normalized.ShowOnHome
 		if oldStatus != models.ArticleStatusPublished && item.Status == models.ArticleStatusPublished {
 			now := time.Now()
 			item.PublishedAt = &now
@@ -440,6 +501,7 @@ func (h *ArticleHandler) normalizeArticlePayload(payload articlePayload, create 
 		Version:       version,
 		Tags:          normalizeArticleTags(payload.Tags),
 		IsPinned:      payload.IsPinned,
+		ShowOnHome:    payload.ShowOnHome,
 		Links:         links,
 	}, nil
 }
@@ -675,6 +737,7 @@ func toArticleDTO(item models.Article) articleDTO {
 		Version:       item.Version,
 		Tags:          splitArticleTags(item.Tags),
 		IsPinned:      item.IsPinned,
+		ShowOnHome:    item.ShowOnHome,
 		PublishedAt:   item.PublishedAt,
 		AuthorID:      item.AuthorID,
 		AuthorName:    item.AuthorName,

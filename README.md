@@ -66,7 +66,7 @@ HTTP-запросы идут через `chi`: middleware CORS, request id, real
 - `models.Agent*` - агенты, регистрации, сессии, команды, наблюдения, адаптеры и релизы.
 - `Candidate*`, `NetworkCandidate*` - операторская приемка найденных рабочих станций и ФР.
 - `bitrix`, `pyrus`, `telephony` - проекции и очереди внешних интеграций.
-- `Material`, `AppLocalization`, `EntityDeletionCandidate` - материалы, переводы UI, безопасное удаление сущностей.
+- `Material`, `Article`, `AppLocalization`, `EntityDeletionCandidate` - старые материалы карточек сущностей, статьи базы знаний, переводы UI, безопасное удаление сущностей.
 
 Миграции выполняются через `gorm.AutoMigrate` при старте сервера.
 
@@ -77,6 +77,9 @@ Frontend находится в `front-ui`, стек: React 19, TypeScript, Vite,
 Основные маршруты UI:
 
 - `/tickets`, `/tickets/:id` - список и карточка заявки;
+- `/` - главная с публикациями базы знаний, отмеченными флагом "На главную";
+- `/info` - агрегатор статей базы знаний и старых материалов карточек сущностей;
+- `/info/articles/:id`, `/info/articles/new`, `/info/articles/:id/edit` - просмотр и редактор статей;
 - `/companies`, `/companies/:id` - компании и инфраструктура;
 - `/acceptance`, `/network-acceptance` - приемка кандидатов от агентов;
 - `/servers`, `/workstations`, `/fiscals` - оборудование;
@@ -127,6 +130,7 @@ Backend поддерживает следующие фоновые контур�
 
 - `POST /api/auth/login` - вход пользователя;
 - `POST /api/submit_json` - legacy-прием данных от getad-агентов;
+- `POST /api/articles/webhook` - создание публикации внешним сервисом по `X-API-Key`;
 - `POST /api/agents/register` - bootstrap-регистрация агента;
 - `POST /api/agents/auth/refresh` - обновление токенов агента;
 - `POST /api/agents/{uuid}/data` - heartbeat и данные агента;
@@ -137,7 +141,7 @@ Backend поддерживает следующие фоновые контур�
 
 Основные защищенные группы `/api`:
 
-- `/tickets`, `/companies`, `/servers`, `/workstations`, `/fiscals`, `/contracts`, `/materials`;
+- `/tickets`, `/companies`, `/servers`, `/workstations`, `/fiscals`, `/contracts`, `/materials`, `/articles`;
 - `/candidates`, `/network-candidates`, `/deletion-candidates`;
 - `/agent-diagnostics`, `/agent-observations`, `/agents-list`;
 - `/tasks`, `/duplicates`, `/search`, `/events`, `/reports`;
@@ -165,6 +169,50 @@ Backend поддерживает следующие фоновые контур�
 
 Эта ручка нужна для обратной совместимости. Новый активный агент должен использовать `/api/agents/register`, `/api/agents/auth/refresh` и `/api/agents/{uuid}/data`.
 
+### 8.2. Webhook создания публикаций `/api/articles/webhook`
+
+`POST /api/articles/webhook` - публичная ручка для создания статей базы знаний внешними сервисами без пользовательского JWT.
+
+Авторизация:
+
+- ключ передается в заголовке `X-API-Key`;
+- значение сравнивается с backend-переменной `ARTICLE_WEBHOOK_KEY`;
+- если `ARTICLE_WEBHOOK_KEY` пустой или заголовок не совпадает, публикация не создается и возвращается `401`;
+- ключ не связан с `AGENT_API_KEY` и не дает доступ к агентским маршрутам.
+
+Тело запроса:
+
+```json
+{
+  "title": "Заголовок публикации",
+  "summary": "Короткое описание",
+  "content": "Markdown-содержимое",
+  "content_format": "markdown",
+  "type": "wiki",
+  "status": "published",
+  "tags": ["wiki", "release"],
+  "is_pinned": false,
+  "show_on_home": true,
+  "author_name": "Название внешнего сервиса"
+}
+```
+
+Поддерживаемые значения:
+
+- `type`: `wiki`, `release_note`, `company_news`, `incident_note`, `internal_doc`;
+- `status`: `draft`, `published`, `archived`;
+- `content_format`: `markdown`, `tiptap_json`.
+
+Дополнительные поля:
+
+- `slug` можно передать явно; если не передан, backend сгенерирует уникальный slug из `title`;
+- для `release_note` обязательны `project_key` и `version`;
+- `links` принимает массив объектов `{ "entity_type": "...", "entity_id": "..." }` с теми же типами сущностей, что и обычные статьи: `Company`, `Server`, `Workstation`, `FiscalRegister`, `Ticket`;
+- `author_name` необязателен, по умолчанию используется `Внешний сервис`;
+- `show_on_home=true` публикует статью в блоке базы знаний на главной странице, если `status=published`.
+
+Успешный ответ возвращается в стандартном JSON-конверте со статусом `201` и DTO созданной статьи.
+
 ## 9. Конфигурация
 
 Backend читает первый найденный `.env`, поднимаясь от текущей директории к корню. Основной шаблон - `.env.example`.
@@ -172,7 +220,7 @@ Backend читает первый найденный `.env`, поднимаяс�
 Минимальные группы настроек:
 
 - приложение: `PORT`, `DATABASE_URL`, `LOG_LEVEL`, `ALLOWED_ORIGINS`;
-- безопасность: `JWT_SECRET`, `JWT_EXPIRATION_MIN`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `AGENT_API_KEY`;
+- безопасность: `JWT_SECRET`, `JWT_EXPIRATION_MIN`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `AGENT_API_KEY`, `ARTICLE_WEBHOOK_KEY`;
 - Naumen ServiceDesk: `BASE_URL`, `SDKEY`, `SD_DRY_RUN`, rate limit и retry;
 - хранилища: `TICKET_STORAGE_PATH`, `FTP_CACHE_PATH`, `S3_*`, `AGENT_ADAPTER_CATALOG_*`;
 - фоновые контуры: `ENABLE_SDESK_GATEWAY`, `ENABLE_AGENT_FTP_GATEWAY`, `ENABLE_POLLING_GATEWAY`, `ENABLE_CONTRACT_GATEWAY`;

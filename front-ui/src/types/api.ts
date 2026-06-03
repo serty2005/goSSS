@@ -750,6 +750,7 @@ export interface ArticleDTO {
   version?: string;
   tags: string[];
   is_pinned: boolean;
+  show_on_home: boolean;
   published_at?: string;
   author_id?: number;
   author_name: string;
@@ -770,6 +771,7 @@ export interface ArticlePayload {
   version?: string;
   tags: string[];
   is_pinned: boolean;
+  show_on_home: boolean;
   links?: ArticleLinkDTO[];
 }
 

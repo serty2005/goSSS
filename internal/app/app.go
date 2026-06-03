@@ -626,7 +626,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.IntegrationSyncHandler = handlers.NewIntegrationSyncHandler(srvs.IntegrationSyncControl)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
-	app.ArticleHandler = handlers.NewArticleHandler(app.DB, repos.UserRepo)
+	app.ArticleHandler = handlers.NewArticleHandler(app.DB, repos.UserRepo, app.Config.ArticleWebhookKey)
 	app.TranslationsHandler = handlers.NewTranslationsHandler(app.DB)
 }
 
@@ -670,7 +670,7 @@ func (a *Application) setupRouter() *chi.Mux {
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins:   a.Config.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-API-Key"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	})
@@ -689,6 +689,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 	// Без Auth Middleware, авторизация внутри хендлера
 	r.Post("/api/submit_json", a.AgentHandler.HandleSubmitJSON)
+	r.Post("/api/articles/webhook", a.ArticleHandler.CreateFromWebhook)
 
 	r.Route("/api/auth", func(r chi.Router) {
 		a.AuthHandler.RegisterRoutes(r)

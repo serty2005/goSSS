@@ -46,14 +46,15 @@ type Config struct {
 	RequestTimeout     time.Duration
 	AllowedOrigins     []string
 
-	AgentAPIKey      string
-	BrandName        string
-	SeederKey        string
-	JWTSecret        string
-	JWTExpirationMin int
-	AdminUsername    string
-	AdminPassword    string
-	AdminFullName    string
+	AgentAPIKey       string
+	ArticleWebhookKey string
+	BrandName         string
+	SeederKey         string
+	JWTSecret         string
+	JWTExpirationMin  int
+	AdminUsername     string
+	AdminPassword     string
+	AdminFullName     string
 
 	S3                  S3Config
 	AgentAdapterCatalog AgentAdapterCatalogConfig
@@ -184,14 +185,15 @@ func New() *Config {
 		RequestTimeout:     time.Duration(getEnvAsInt("REQUEST_TIMEOUT_SEC", 15)) * time.Second,
 		AllowedOrigins:     strings.Split(allowedOriginsStr, ","),
 
-		AgentAPIKey:      getEnv("AGENT_API_KEY", ""),
-		BrandName:        getEnv("BRAND_NAME", "MyHoreca_Xenion"),
-		SeederKey:        getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
-		JWTSecret:        getEnv("JWT_SECRET", "mhrcadmin994525"),
-		JWTExpirationMin: getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
-		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword:    getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
-		AdminFullName:    getEnv("ADMIN_FULLNAME", "Главный"),
+		AgentAPIKey:       getEnv("AGENT_API_KEY", ""),
+		ArticleWebhookKey: strings.TrimSpace(getEnv("ARTICLE_WEBHOOK_KEY", "")),
+		BrandName:         getEnv("BRAND_NAME", "MyHoreca_Xenion"),
+		SeederKey:         getEnv("SEEDER_KEY", "super-secret-key-for-seeding"),
+		JWTSecret:         getEnv("JWT_SECRET", "mhrcadmin994525"),
+		JWTExpirationMin:  getEnvAsInt("JWT_EXPIRATION_MIN", 1440),
+		AdminUsername:     getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:     getEnv("ADMIN_PASSWORD", "mhrcadmin994525"),
+		AdminFullName:     getEnv("ADMIN_FULLNAME", "Главный"),
 		S3: S3Config{
 			Endpoint:  strings.TrimSpace(getEnv("S3_ENDPOINT", "")),
 			Region:    strings.TrimSpace(getEnv("S3_REGION", "us-east-1")),

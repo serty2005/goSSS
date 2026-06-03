@@ -29,7 +29,7 @@ import {
   SunOutlined,
   MoonOutlined,
   CloseOutlined,
-  InfoCircleOutlined,
+  HomeOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -583,6 +583,7 @@ const MainLayout: React.FC = () => {
 
   const companiesChildren = [
     { key: "/companies", label: t("layout:menu.companies") },
+    { key: "/info", label: t("layout:menu.knowledgeBase") },
   ];
 
   if (canAccessAcceptance) {
@@ -612,9 +613,9 @@ const MainLayout: React.FC = () => {
 
   const menuItems = [
     {
-      key: "/info",
-      icon: <InfoCircleOutlined />,
-      label: t("layout:menu.info"),
+      key: "/",
+      icon: <HomeOutlined />,
+      label: t("layout:menu.home"),
     },
     {
       key: "/tickets",
@@ -1054,9 +1055,9 @@ const MainLayout: React.FC = () => {
             >
               <Button
                 shape="circle"
-                icon={<InfoCircleOutlined />}
-                onClick={() => navigate("/info")}
-                aria-label={t("layout:accessibility.openInfo")}
+                icon={<HomeOutlined />}
+                onClick={() => navigate("/")}
+                aria-label={t("layout:accessibility.openHome")}
               />
               <Popover
                 trigger="click"

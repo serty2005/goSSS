@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect } from 'react';
 import { App as AntdApp, ConfigProvider, Spin, message } from 'antd';
-import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
+import { Routes, Route, Navigate, BrowserRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { translationsApi } from '@/api/translations';
@@ -17,7 +17,6 @@ const MainLayout = lazy(() => import('@/components/layout/MainLayout'));
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage'));
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const InfoPage = lazy(() => import('@/pages/InfoPage'));
-const ArticlesListPage = lazy(() => import('@/pages/articles/ArticlesListPage'));
 const ArticleDetailsPage = lazy(() => import('@/pages/articles/ArticleDetailsPage'));
 const ArticleEditorPage = lazy(() => import('@/pages/articles/ArticleEditorPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
@@ -90,6 +89,11 @@ const SupportOrAdminRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;
+};
+
+const InfoArticlesRedirect = () => {
+  const location = useLocation();
+  return <Navigate to={`/info${location.search}`} replace />;
 };
 
 const App: React.FC = () => {
@@ -181,7 +185,7 @@ const App: React.FC = () => {
                   >
                     <Route index element={<Dashboard />} />
                     <Route path="info" element={<InfoPage />} />
-                    <Route path="info/articles" element={<ArticlesListPage />} />
+                    <Route path="info/articles" element={<InfoArticlesRedirect />} />
                     <Route
                       path="info/articles/new"
                       element={(
@@ -199,9 +203,9 @@ const App: React.FC = () => {
                         </SupportOrAdminRoute>
                       )}
                     />
-                    <Route path="info/releases" element={<Navigate to="/info/articles?type=release_note" replace />} />
-                    <Route path="info/news" element={<Navigate to="/info/articles?type=company_news" replace />} />
-                    <Route path="info/wiki" element={<Navigate to="/info/articles?type=wiki" replace />} />
+                    <Route path="info/releases" element={<Navigate to="/info?type=release_note" replace />} />
+                    <Route path="info/news" element={<Navigate to="/info?type=company_news" replace />} />
+                    <Route path="info/wiki" element={<Navigate to="/info?type=wiki" replace />} />
                     <Route path="search" element={<SearchPage />} />
                     <Route
                       path="tasks"

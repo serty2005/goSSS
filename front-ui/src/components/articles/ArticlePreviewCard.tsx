@@ -26,6 +26,7 @@ const ArticlePreviewCard: React.FC<Props> = ({ article, showStatus = false, comp
       <Space size={6} wrap>
         <ArticleTypeTag type={article.type} />
         {showStatus ? <ArticleStatusTag status={article.status} /> : null}
+        {showStatus && article.show_on_home ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>На главной</Tag> : null}
         {article.is_pinned ? <Tag color="gold" style={{ marginInlineEnd: 0 }}>Закреплено</Tag> : null}
       </Space>
       <Link to={`/info/articles/${article.id}`} style={{ color: 'inherit' }}>

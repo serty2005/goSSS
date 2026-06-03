@@ -56,6 +56,7 @@ const defaultValues: FormValues = {
   version: '',
   tags: [],
   is_pinned: false,
+  show_on_home: false,
   links: [],
 };
 
@@ -89,6 +90,7 @@ const ArticleEditorPage: React.FC = () => {
         version: article.version || '',
         tags: article.tags || [],
         is_pinned: article.is_pinned,
+        show_on_home: article.show_on_home,
         links: article.links || [],
       });
     }
@@ -133,6 +135,7 @@ const ArticleEditorPage: React.FC = () => {
       version: values.version || '',
       tags: values.tags || [],
       is_pinned: Boolean(values.is_pinned),
+      show_on_home: Boolean(values.show_on_home),
       links: [],
     });
   };
@@ -168,6 +171,9 @@ const ArticleEditorPage: React.FC = () => {
               </Form.Item>
               <Form.Item name="is_pinned" valuePropName="checked" label="Закрепление">
                 <Checkbox>Закрепить</Checkbox>
+              </Form.Item>
+              <Form.Item name="show_on_home" valuePropName="checked" label="Главная">
+                <Checkbox>На главную</Checkbox>
               </Form.Item>
             </Space>
             {articleType === 'release_note' ? (

@@ -53,6 +53,7 @@ type Article struct {
 	Version       string        `json:"version" gorm:"type:varchar(96);index"`
 	Tags          string        `json:"tags" gorm:"type:text"`
 	IsPinned      bool          `json:"is_pinned" gorm:"not null;default:false;index"`
+	ShowOnHome    bool          `json:"show_on_home" gorm:"not null;default:false;index"`
 	PublishedAt   *time.Time    `json:"published_at,omitempty" gorm:"index"`
 	AuthorID      *uint         `json:"author_id,omitempty" gorm:"index"`
 	AuthorName    string        `json:"author_name" gorm:"type:text"`

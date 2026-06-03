@@ -1,7 +1,8 @@
 {
   "menu": {
     "search": "Search",
-    "info": "Knowledge base",
+    "home": "Home",
+    "knowledgeBase": "Knowledge base",
     "tickets": "Tickets",
     "companies": "Companies",
     "acceptance": "Acceptance to AO",
@@ -148,7 +149,7 @@
     "openThemeSettings": "Open appearance settings",
     "openMobileSettings": "Open settings and profile",
     "openMobileNavGroup": "Open {{name}}",
-    "openInfo": "Open knowledge base",
+    "openHome": "Open home",
     "openProfileMenu": "Open profile menu",
     "selectLanguage": "Select interface language"
   }

@@ -57,6 +57,7 @@ const ArticleDetailsPage: React.FC = () => {
           <Space size={6} wrap>
             <ArticleTypeTag type={article.type} />
             <ArticleStatusTag status={article.status} />
+            {article.show_on_home ? <Tag color="blue">На главной</Tag> : null}
             {article.is_pinned ? <Tag color="gold">Закреплено</Tag> : null}
           </Space>
           <Title level={2} style={{ margin: 0 }}>{article.title}</Title>
@@ -97,7 +98,7 @@ const ArticleDetailsPage: React.FC = () => {
       </Card>
 
       <Divider />
-      <Link to="/info/articles">К списку публикаций</Link>
+      <Link to="/info">К базе знаний</Link>
     </Space>
   );
 };
