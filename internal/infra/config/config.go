@@ -13,6 +13,11 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const (
+	DefaultContractReportArchiveMaxBytes = 5 * 1024 * 1024
+	DefaultContractReportTableMaxBytes   = 20 * 1024 * 1024
+)
+
 type S3Config struct {
 	Endpoint  string
 	Region    string
@@ -79,7 +84,8 @@ type Config struct {
 	ContractIMAPUsername               string
 	ContractIMAPPassword               string
 	ContractIMAPMailbox                string
-	ContractZipMaxBytes                int
+	ContractReportArchiveMaxBytes      int
+	ContractReportTableMaxBytes        int
 
 	CommonContractID string
 
@@ -175,6 +181,10 @@ func New() *Config {
 	if bitrixIntegrationUserID <= 0 {
 		bitrixIntegrationUserID = detectBitrixIntegrationUserID(bitrixBaseURL)
 	}
+	legacyArchiveMaxBytes := max(
+		DefaultContractReportArchiveMaxBytes,
+		getPositiveIntEnv("CONTRACT_ZIP_MAX_BYTES", DefaultContractReportArchiveMaxBytes),
+	)
 
 	return &Config{
 		ServerPort:         getEnv("PORT", "8080"),
@@ -229,7 +239,8 @@ func New() *Config {
 		ContractIMAPUsername:               strings.TrimSpace(getEnv("CONTRACT_IMAP_USERNAME", "")),
 		ContractIMAPPassword:               getEnv("CONTRACT_IMAP_PASSWORD", ""),
 		ContractIMAPMailbox:                strings.TrimSpace(getEnv("CONTRACT_IMAP_INBOX", "INBOX")),
-		ContractZipMaxBytes:                getEnvAsInt("CONTRACT_ZIP_MAX_BYTES", 102400),
+		ContractReportArchiveMaxBytes:      getPositiveIntEnv("CONTRACT_REPORT_ARCHIVE_MAX_BYTES", legacyArchiveMaxBytes),
+		ContractReportTableMaxBytes:        getPositiveIntEnv("CONTRACT_REPORT_TABLE_MAX_BYTES", DefaultContractReportTableMaxBytes),
 
 		CommonContractID: getEnv("COMMON_CONTRACT_ID", "common-contract"),
 
@@ -386,6 +397,14 @@ func getEnvAsInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func getPositiveIntEnv(key string, fallback int) int {
+	value := getEnvAsInt(key, fallback)
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func getEnvAsBool(key string, fallback bool) bool {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/infra/repositories"
@@ -195,6 +196,117 @@ func TestContractGateway_BuildDailySnapshots_MatchesPointByNormalizedName(t *tes
 	}
 	if snapshots[0].ContractType != "TS Cloud" {
 		t.Fatalf("ожидали контракт TS Cloud, получили %q", snapshots[0].ContractType)
+	}
+}
+
+func TestSelectLatestReportsBySource_KeepsAllReportsFromLatestMessage(t *testing.T) {
+	older := time.Date(2026, time.March, 10, 8, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, time.March, 11, 8, 0, 0, 0, time.UTC)
+	reports := []contractsvc.ContractMailReport{
+		{
+			MessageID:      "older-message",
+			ReceivedAt:     &older,
+			AttachmentName: "old-company.html",
+			AttachmentHash: "hash-old",
+			Rows: []contractsvc.ContractReportRow{{
+				ServicePointCode: "ru001",
+				ServicePointName: "Старая точка",
+			}},
+		},
+		{
+			MessageID:      "latest-message",
+			ReceivedAt:     &latest,
+			AttachmentName: "company-a.html",
+			AttachmentHash: "hash-a",
+			Rows: []contractsvc.ContractReportRow{{
+				ServicePointCode: "ru002",
+				ServicePointName: "Точка А",
+			}},
+		},
+		{
+			MessageID:      "latest-message",
+			ReceivedAt:     &latest,
+			AttachmentName: "company-b.html",
+			AttachmentHash: "hash-b",
+			Rows: []contractsvc.ContractReportRow{{
+				ServicePointCode: "ru003",
+				ServicePointName: "Точка Б",
+			}},
+		},
+	}
+
+	selected := selectLatestReportsBySource(reports)
+	if len(selected) != 2 {
+		t.Fatalf("ожидали два отчёта из последнего письма, получили %d: %+v", len(selected), selected)
+	}
+
+	selectedByHash := make(map[string]struct{}, len(selected))
+	for _, report := range selected {
+		selectedByHash[report.AttachmentHash] = struct{}{}
+		if report.MessageID != "latest-message" {
+			t.Fatalf("ожидали только отчёты из последнего письма, получили message_id=%q", report.MessageID)
+		}
+	}
+	if _, ok := selectedByHash["hash-a"]; !ok {
+		t.Fatal("не выбран первый отчёт из последнего письма")
+	}
+	if _, ok := selectedByHash["hash-b"]; !ok {
+		t.Fatal("не выбран второй отчёт из последнего письма")
+	}
+	if _, ok := selectedByHash["hash-old"]; ok {
+		t.Fatal("старый отчёт того же источника не должен попадать в актуальный набор")
+	}
+}
+
+func TestSelectLatestReportsBySource_FiltersStaleSourceRowsFromOlderMixedReport(t *testing.T) {
+	older := time.Date(2026, time.March, 10, 8, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, time.March, 11, 8, 0, 0, 0, time.UTC)
+	reports := []contractsvc.ContractMailReport{
+		{
+			MessageID:      "mixed-old",
+			ReceivedAt:     &older,
+			AttachmentName: "mixed.zip",
+			AttachmentHash: "hash-mixed",
+			Rows: []contractsvc.ContractReportRow{
+				{
+					ServicePointCode: "ru100",
+					ContractorID:     "ru100",
+					ServicePointName: "Актуальная RU-точка из ZIP",
+				},
+				{
+					ServicePointCode: "id100",
+					ContractorID:     "id100",
+					ServicePointName: "Устаревшая ID-точка из ZIP",
+				},
+			},
+		},
+		{
+			MessageID:      "id-new",
+			ReceivedAt:     &latest,
+			AttachmentName: "id-new.xlsx",
+			AttachmentHash: "hash-id-new",
+			Rows: []contractsvc.ContractReportRow{{
+				ServicePointCode: "id200",
+				ContractorID:     "id200",
+				ServicePointName: "Новая ID-точка",
+			}},
+		},
+	}
+
+	selected := selectLatestReportsBySource(reports)
+	combined := buildCombinedContractMailReport(selected)
+	rowByName := make(map[string]contractsvc.ContractReportRow, len(combined.Rows))
+	for _, row := range combined.Rows {
+		rowByName[row.ServicePointName] = row
+	}
+	if _, ok := rowByName["Новая ID-точка"]; !ok {
+		t.Fatal("новая строка source id не попала в объединенный отчет")
+	}
+	if _, ok := rowByName["Актуальная RU-точка из ZIP"]; !ok {
+		t.Fatal("строка source ru из ZIP не попала в объединенный отчет")
+	}
+	if _, ok := rowByName["Устаревшая ID-точка из ZIP"]; ok {
+		t.Fatal("устаревшая строка source id из ZIP не должна попадать в объединенный отчет")
 	}
 }
 

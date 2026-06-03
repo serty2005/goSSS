@@ -1,6 +1,7 @@
 package gateways
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -159,7 +160,7 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 			g.logger.Error("Не удалось проверить историю обработки почтового отчёта", "attachment_hash", report.AttachmentHash, "error", err)
 			continue
 		}
-		if existing != nil && existing.Status == contractdom.MailImportStatusProcessed {
+		if existing != nil && existing.Status == contractdom.MailImportStatusProcessed && mailImportRowsMatchReport(existing, report) {
 			g.logger.Info(
 				"Актуальный отчёт по контрактам для источника уже обработан ранее",
 				"attachment_name", report.AttachmentName,
@@ -167,6 +168,14 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 				"message_id", report.MessageID,
 			)
 			continue
+		}
+		if existing != nil && existing.Status == contractdom.MailImportStatusProcessed {
+			g.logger.Info(
+				"Почтовый отчёт по контрактам будет обработан повторно из-за изменения состава строк",
+				"attachment_name", report.AttachmentName,
+				"attachment_hash", report.AttachmentHash,
+				"message_id", report.MessageID,
+			)
 		}
 		reportsToMark = append(reportsToMark, report)
 	}
@@ -405,6 +414,27 @@ func (g *contractGatewayImpl) storeMailImportStatus(ctx context.Context, report 
 	}
 }
 
+func mailImportRowsMatchReport(item *contractdom.MailImport, report contractsvc.ContractMailReport) bool {
+	if item == nil || len(item.ReportRows) == 0 {
+		return true
+	}
+
+	storedRows := make([]contractsvc.ContractReportRow, 0)
+	if err := json.Unmarshal(item.ReportRows, &storedRows); err != nil {
+		return false
+	}
+	return contractReportRowsEqual(storedRows, report.Rows)
+}
+
+func contractReportRowsEqual(left, right []contractsvc.ContractReportRow) bool {
+	leftJSON, leftErr := json.Marshal(contractsvc.AggregateContractReportRows(left))
+	rightJSON, rightErr := json.Marshal(contractsvc.AggregateContractReportRows(right))
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return bytes.Equal(leftJSON, rightJSON)
+}
+
 func buildReportRowIndexes(rows []contractsvc.ContractReportRow) (map[string]contractsvc.ContractReportRow, map[string][]contractsvc.ContractReportRow) {
 	aggregated := contractsvc.AggregateContractReportRows(rows)
 	rowsByCode := make(map[string]contractsvc.ContractReportRow, len(aggregated))
@@ -505,28 +535,140 @@ func selectLatestReportsBySource(reports []contractsvc.ContractMailReport) []con
 
 	latestBySource := make(map[string]contractsvc.ContractMailReport, len(reports))
 	for _, report := range reports {
-		source := contractReportSourceKey(report.Rows)
-		latestBySource[source] = report
+		for _, source := range contractReportSourceKeys(report.Rows) {
+			latestBySource[source] = report
+		}
 	}
 
-	selected := make([]contractsvc.ContractMailReport, 0, len(latestBySource))
-	for _, report := range latestBySource {
-		selected = append(selected, report)
+	latestBatchBySource := make(map[string]string, len(latestBySource))
+	for source, report := range latestBySource {
+		latestBatchBySource[source] = contractReportBatchKey(report)
+	}
+
+	selected := make([]contractsvc.ContractMailReport, 0, len(reports))
+	seen := make(map[string]struct{}, len(reports))
+	for _, report := range reports {
+		reportBatchKey := contractReportBatchKey(report)
+		selectedSources := make([]string, 0, 2)
+		for _, source := range contractReportSourceKeys(report.Rows) {
+			batchKey := latestBatchBySource[source]
+			if batchKey == "" || reportBatchKey != batchKey {
+				continue
+			}
+			selectedSources = append(selectedSources, source)
+		}
+		if len(selectedSources) == 0 {
+			continue
+		}
+
+		reportKey := contractMailReportIdentityKey(report)
+		if _, exists := seen[reportKey]; exists {
+			continue
+		}
+		seen[reportKey] = struct{}{}
+
+		selectedReport := report
+		selectedReport.Rows = filterContractReportRowsBySources(report.Rows, selectedSources)
+		if len(selectedReport.Rows) == 0 {
+			continue
+		}
+		selected = append(selected, selectedReport)
 	}
 	slices.SortFunc(selected, compareContractMailReports)
 	return selected
 }
 
+func contractReportBatchKey(report contractsvc.ContractMailReport) string {
+	if messageID := strings.TrimSpace(report.MessageID); messageID != "" {
+		return "message:" + messageID
+	}
+	if report.ReceivedAt != nil {
+		return "received:" + report.ReceivedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return "attachment:" + strings.TrimSpace(report.AttachmentHash)
+}
+
+func contractMailReportIdentityKey(report contractsvc.ContractMailReport) string {
+	if attachmentHash := strings.TrimSpace(report.AttachmentHash); attachmentHash != "" {
+		return "attachment:" + attachmentHash
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(report.MessageID),
+		strings.TrimSpace(report.AttachmentName),
+		contractReportBatchKey(report),
+	}, "|")
+}
+
 func contractReportSourceKey(rows []contractsvc.ContractReportRow) string {
+	sources := contractReportSourceKeys(rows)
+	if len(sources) == 0 {
+		return "ru"
+	}
+	return sources[0]
+}
+
+func contractReportSourceKeys(rows []contractsvc.ContractReportRow) []string {
+	sourceSet := make(map[string]struct{}, 2)
 	for _, row := range rows {
-		if source := contractReportSourceKeyByCode(row.ServicePointCode); source != "" {
-			return source
-		}
-		if source := contractReportSourceKeyByCode(row.ContractorID); source != "" {
-			return source
+		for _, source := range contractReportRowSourceKeys(row) {
+			sourceSet[source] = struct{}{}
 		}
 	}
-	return "ru"
+	if len(sourceSet) == 0 && len(rows) > 0 {
+		sourceSet["ru"] = struct{}{}
+	}
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	return sources
+}
+
+func filterContractReportRowsBySources(rows []contractsvc.ContractReportRow, sources []string) []contractsvc.ContractReportRow {
+	if len(rows) == 0 || len(sources) == 0 {
+		return nil
+	}
+	sourceSet := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if strings.TrimSpace(source) == "" {
+			continue
+		}
+		sourceSet[source] = struct{}{}
+	}
+	if len(sourceSet) == 0 {
+		return nil
+	}
+
+	filtered := make([]contractsvc.ContractReportRow, 0, len(rows))
+	for _, row := range rows {
+		for _, source := range contractReportRowSourceKeys(row) {
+			if _, ok := sourceSet[source]; ok {
+				filtered = append(filtered, row)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func contractReportRowSourceKeys(row contractsvc.ContractReportRow) []string {
+	sourceSet := make(map[string]struct{}, 2)
+	if source := contractReportSourceKeyByCode(row.ServicePointCode); source != "" {
+		sourceSet[source] = struct{}{}
+	}
+	if source := contractReportSourceKeyByCode(row.ContractorID); source != "" {
+		sourceSet[source] = struct{}{}
+	}
+	if len(sourceSet) == 0 {
+		sourceSet["ru"] = struct{}{}
+	}
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	return sources
 }
 
 func contractReportSourceKeyByCode(code string) string {

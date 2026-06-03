@@ -145,6 +145,7 @@ func parseContractReportZIP(log logger.LoggerInterface, fileName string, content
 		return nil, fmt.Errorf("в архиве %q не найден поддерживаемый отчет", fileName)
 	}
 
+	parsedRows := make([]ContractReportRow, 0, 128)
 	var lastErr error
 	for _, file := range files {
 		if file == nil {
@@ -166,7 +167,7 @@ func parseContractReportZIP(log logger.LoggerInterface, fileName string, content
 			}
 			continue
 		}
-		htmlContent, readErr := io.ReadAll(rc)
+		fileContent, readErr := io.ReadAll(rc)
 		_ = rc.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("не удалось прочитать файл %q внутри архива: %w", file.Name, readErr)
@@ -175,7 +176,7 @@ func parseContractReportZIP(log logger.LoggerInterface, fileName string, content
 			}
 			continue
 		}
-		rows, err := parseContractReportFile(log, file.Name, htmlContent, now)
+		rows, err := parseContractReportFile(log, file.Name, fileContent, now)
 		if err != nil {
 			lastErr = fmt.Errorf("не удалось разобрать файл %q внутри архива: %w", file.Name, err)
 			if log != nil {
@@ -186,7 +187,20 @@ func parseContractReportZIP(log logger.LoggerInterface, fileName string, content
 		if log != nil {
 			log.Debug("контракты: файл внутри архива успешно разобран", "archive_name", fileName, "inner_file_name", file.Name, "rows_count", len(rows))
 		}
-		return rows, nil
+		parsedRows = append(parsedRows, rows...)
+	}
+
+	if len(parsedRows) > 0 {
+		aggregatedRows := AggregateContractReportRows(parsedRows)
+		if log != nil {
+			log.Debug(
+				"контракты: zip-архив успешно разобран",
+				"archive_name", fileName,
+				"rows_count", len(aggregatedRows),
+				"raw_rows_count", len(parsedRows),
+			)
+		}
+		return aggregatedRows, nil
 	}
 
 	if lastErr != nil {

@@ -166,8 +166,9 @@ func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *i
 	parseErrors := make([]error, 0, len(attachments))
 	now := time.Now().UTC()
 	for _, attachment := range attachments {
-		if len(attachment.Content) > c.cfg.ContractZipMaxBytes {
-			parseErrors = append(parseErrors, fmt.Errorf("вложение %q превышает допустимый размер %d байт", attachment.FileName, c.cfg.ContractZipMaxBytes))
+		maxBytes, limitKind := contractReportAttachmentMaxBytes(c.cfg, attachment)
+		if len(attachment.Content) > maxBytes {
+			parseErrors = append(parseErrors, fmt.Errorf("вложение %q превышает допустимый размер для %s: %d байт при лимите %d байт", attachment.FileName, limitKind, len(attachment.Content), maxBytes))
 			continue
 		}
 
@@ -214,8 +215,9 @@ func (c *contractMailboxClient) extractReportsFromMessage(raw []byte, message *i
 }
 
 type reportAttachment struct {
-	FileName string
-	Content  []byte
+	FileName  string
+	MediaType string
+	Content   []byte
 }
 
 // extractReportAttachments запускает рекурсивный поиск поддерживаемых вложений в MIME-письме.
@@ -303,8 +305,9 @@ func collectReportAttachments(log logger.LoggerInterface, header textproto.MIMEH
 	}
 
 	return []reportAttachment{{
-		FileName: fileName,
-		Content:  decodedBody,
+		FileName:  fileName,
+		MediaType: mediaType,
+		Content:   decodedBody,
 	}}, nil
 }
 
@@ -403,6 +406,30 @@ func isReportAttachment(mediaType string, fileName string) bool {
 	default:
 		return false
 	}
+}
+
+func contractReportAttachmentMaxBytes(cfg *config.Config, attachment reportAttachment) (int, string) {
+	if isArchiveReportAttachment(attachment.MediaType, attachment.FileName) {
+		limit := config.DefaultContractReportArchiveMaxBytes
+		if cfg != nil && cfg.ContractReportArchiveMaxBytes > 0 {
+			limit = cfg.ContractReportArchiveMaxBytes
+		}
+		return limit, "архива"
+	}
+
+	limit := config.DefaultContractReportTableMaxBytes
+	if cfg != nil && cfg.ContractReportTableMaxBytes > 0 {
+		limit = cfg.ContractReportTableMaxBytes
+	}
+	return limit, "таблицы"
+}
+
+func isArchiveReportAttachment(mediaType, fileName string) bool {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "application/zip", "application/x-zip", "application/x-zip-compressed":
+		return true
+	}
+	return strings.EqualFold(filepathExt(fileName), ".zip")
 }
 
 // extractAttachmentNameFromHeader извлекает имя вложения даже из нестандартных MIME-заголовков.

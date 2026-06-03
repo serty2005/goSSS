@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -557,7 +558,9 @@ func mapMailImportsToDTO(items []contractdom.MailImport) []api.ContractMailImpor
 
 func findActiveReportImports(items []contractdom.MailImport) ([]contractdom.MailImport, []contractsvc.ContractReportRow, error) {
 	activeImports := make([]contractdom.MailImport, 0, 2)
+	mergedRows := make([]contractsvc.ContractReportRow, 0, 1024)
 	seenSources := make(map[string]struct{}, 2)
+	seenImports := make(map[string]struct{}, 2)
 	for i := range items {
 		if items[i].Status != contractdom.MailImportStatusProcessed {
 			continue
@@ -570,24 +573,31 @@ func findActiveReportImports(items []contractdom.MailImport) ([]contractdom.Mail
 		if err != nil {
 			return nil, nil, err
 		}
-		source := reportImportSourceKey(rows)
-		if _, exists := seenSources[source]; exists {
+
+		sources := reportImportSourceKeys(rows)
+		newSources := make([]string, 0, len(sources))
+		for _, source := range sources {
+			if _, exists := seenSources[source]; exists {
+				continue
+			}
+			seenSources[source] = struct{}{}
+			newSources = append(newSources, source)
+		}
+		if len(newSources) == 0 {
 			continue
 		}
-		seenSources[source] = struct{}{}
+
+		importKey := mailImportIdentityKey(items[i])
+		if _, exists := seenImports[importKey]; exists {
+			continue
+		}
+		seenImports[importKey] = struct{}{}
 		activeImports = append(activeImports, items[i])
+
+		mergedRows = append(mergedRows, filterContractReportRowsBySources(rows, newSources)...)
 	}
 	if len(activeImports) == 0 {
 		return nil, nil, nil
-	}
-
-	mergedRows := make([]contractsvc.ContractReportRow, 0, 1024)
-	for _, item := range activeImports {
-		rows, err := decodeContractReportRows(item.ReportRows)
-		if err != nil {
-			return nil, nil, err
-		}
-		mergedRows = append(mergedRows, rows...)
 	}
 	mergedRows = contractsvc.AggregateContractReportRows(mergedRows)
 	return activeImports, mergedRows, nil
@@ -613,15 +623,79 @@ func countMailImportRows(raw []byte) int {
 }
 
 func reportImportSourceKey(rows []contractsvc.ContractReportRow) string {
+	sources := reportImportSourceKeys(rows)
+	if len(sources) == 0 {
+		return ""
+	}
+	return strings.Join(sources, ",")
+}
+
+func reportImportSourceKeys(rows []contractsvc.ContractReportRow) []string {
+	sourceSet := make(map[string]struct{}, 2)
 	for _, row := range rows {
 		if source := reportImportSourceKeyByCode(row.ServicePointCode); source != "" {
-			return source
+			sourceSet[source] = struct{}{}
 		}
 		if source := reportImportSourceKeyByCode(row.ContractorID); source != "" {
-			return source
+			sourceSet[source] = struct{}{}
 		}
 	}
-	return "ru"
+	if len(sourceSet) == 0 && len(rows) > 0 {
+		sourceSet["ru"] = struct{}{}
+	}
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	return sources
+}
+
+func filterContractReportRowsBySources(rows []contractsvc.ContractReportRow, sources []string) []contractsvc.ContractReportRow {
+	if len(rows) == 0 || len(sources) == 0 {
+		return nil
+	}
+	sourceSet := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if strings.TrimSpace(source) == "" {
+			continue
+		}
+		sourceSet[source] = struct{}{}
+	}
+	if len(sourceSet) == 0 {
+		return nil
+	}
+
+	filtered := make([]contractsvc.ContractReportRow, 0, len(rows))
+	for _, row := range rows {
+		for _, source := range reportImportRowSourceKeys(row) {
+			if _, ok := sourceSet[source]; ok {
+				filtered = append(filtered, row)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func reportImportRowSourceKeys(row contractsvc.ContractReportRow) []string {
+	sourceSet := make(map[string]struct{}, 2)
+	if source := reportImportSourceKeyByCode(row.ServicePointCode); source != "" {
+		sourceSet[source] = struct{}{}
+	}
+	if source := reportImportSourceKeyByCode(row.ContractorID); source != "" {
+		sourceSet[source] = struct{}{}
+	}
+	if len(sourceSet) == 0 {
+		sourceSet["ru"] = struct{}{}
+	}
+
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	return sources
 }
 
 func reportImportSourceKeyByCode(code string) string {
@@ -984,6 +1058,19 @@ func mailImportSourceKey(item contractdom.MailImport) string {
 		return ""
 	}
 	return reportImportSourceKey(rows)
+}
+
+func mailImportIdentityKey(item contractdom.MailImport) string {
+	if item.ID != "" {
+		return "id:" + item.ID
+	}
+	if attachmentHash := strings.TrimSpace(item.AttachmentHash); attachmentHash != "" {
+		return "attachment:" + attachmentHash
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(item.MessageID),
+		strings.TrimSpace(item.AttachmentName),
+	}, "|")
 }
 
 func marshalContractSyncRunActiveImports(items []contractdom.MailImport) ([]byte, error) {

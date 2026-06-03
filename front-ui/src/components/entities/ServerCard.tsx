@@ -13,6 +13,8 @@ import {
   normalizeServerAddress,
 } from '@/utils/formatters';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
+import { useAuthStore } from '@/store/authStore';
+import { canManageServerActions } from '@/utils/permissions';
 
 interface Props {
   data: ServerEntity;
@@ -28,6 +30,9 @@ const getPollBadge = (status?: string) => {
   if (normalized === 'offline') {
     return { status: 'error' as const, text: 'Офлайн' };
   }
+  if (normalized === 'license') {
+    return { status: 'warning' as const, text: 'Нужна лицензия' };
+  }
   return { status: 'default' as const, text: 'неизвестно' };
 };
 
@@ -35,6 +40,8 @@ const ServerCard: React.FC<Props> = ({ data }) => {
   const { token } = antTheme.useToken();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const canRunServerActions = canManageServerActions(user?.roles);
 
   const rawAddress = data.ip || '';
   const displayAddress = normalizeServerAddress(rawAddress, { dropPort443: true });
@@ -44,8 +51,10 @@ const ServerCard: React.FC<Props> = ({ data }) => {
   const hasAccessData = Boolean(data.anydesk || data.teamviewer || data.rdp || data.litemanager);
   const agentUpdate = getAgentUpdateMeta(data);
 
-  const pollBadge = getPollBadge(data.operational_status);
-  const licenseStatus = String(data.operational_status || data.status || '').trim().toLowerCase();
+  const operationalStatus = String(data.operational_status || '').trim().toLowerCase();
+  const baseStatus = String(data.status || '').trim().toLowerCase();
+  const licenseStatus = baseStatus === 'license' ? baseStatus : (operationalStatus || baseStatus);
+  const pollBadge = getPollBadge(licenseStatus);
 
   const pollMutation = useMutation({
     mutationFn: () => equipmentApi.pollServer(data.uuid),
@@ -150,15 +159,15 @@ const ServerCard: React.FC<Props> = ({ data }) => {
               />
             </Tooltip>
           ) : null}
-          <Badge status={pollBadge.status} text={pollBadge.text} />
           <ServerLicenseStatusTag
             serverID={String(data.uuid || '')}
             status={licenseStatus}
             uniqueID={String(data.unique_id || '')}
+            displayStatus={pollBadge.text}
           />
         </Space>
       )}
-      actions={[
+      actions={canRunServerActions ? [
         <Button
           key="poll"
           type="text"
@@ -169,7 +178,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
         >
           {pollMutation.isPending ? 'Опрос...' : 'Обновить статус'}
         </Button>,
-      ]}
+      ] : []}
     >
       <div style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>

@@ -13,3 +13,6 @@ export const canEditCompanyContract = (roles: string[] | undefined): boolean =>
 
 export const canEditEquipment = (roles: string[] | undefined): boolean =>
   hasRole(roles, 'admin');
+
+export const canManageServerActions = (roles: string[] | undefined): boolean =>
+  hasRole(roles, 'admin') || hasRole(roles, 'support_specialist');

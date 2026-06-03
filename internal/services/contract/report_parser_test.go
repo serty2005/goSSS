@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"archive/zip"
 	"bytes"
 	"testing"
 	"time"
@@ -67,6 +68,33 @@ func TestParseContractReportHTML(t *testing.T) {
 	}
 }
 
+func TestParseContractReportZIP_ReadsAllSupportedReports(t *testing.T) {
+	now := time.Date(2026, time.March, 12, 12, 0, 0, 0, time.UTC)
+	content := buildContractReportZIP(t, map[string]string{
+		"company-a.html": legacyContractReportHTML("111", "Кафе на Рябиновой"),
+		"company-b.html": legacyContractReportHTML("222", "Бар на Лесной"),
+	})
+
+	rows, err := parseContractReportZIP(nil, "reports.zip", content, now)
+	if err != nil {
+		t.Fatalf("не удалось разобрать zip-архив с несколькими отчётами: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ожидали две строки из двух внутренних отчётов, получили %d", len(rows))
+	}
+
+	rowByName := make(map[string]ContractReportRow, len(rows))
+	for _, row := range rows {
+		rowByName[row.ServicePointName] = row
+	}
+	if rowByName["Кафе на Рябиновой"].ServicePointCode != "ru111" {
+		t.Fatalf("не найдена строка первого внутреннего отчёта: %+v", rowByName)
+	}
+	if rowByName["Бар на Лесной"].ServicePointCode != "ru222" {
+		t.Fatalf("не найдена строка второго внутреннего отчёта: %+v", rowByName)
+	}
+}
+
 func TestParseContractReportSpreadsheet_IDFormat(t *testing.T) {
 	t.Helper()
 
@@ -130,6 +158,55 @@ func TestParseContractReportSpreadsheet_IDFormat(t *testing.T) {
 	if !frangi.ContractOn {
 		t.Fatal("ожидали активный контракт TS Cloud для FRANGI.Br & Coffee")
 	}
+}
+
+func buildContractReportZIP(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+	writer := zip.NewWriter(&out)
+	for name, content := range files {
+		fileWriter, err := writer.Create(name)
+		if err != nil {
+			t.Fatalf("не удалось создать файл %q внутри zip: %v", name, err)
+		}
+		if _, err := fileWriter.Write([]byte(content)); err != nil {
+			t.Fatalf("не удалось записать файл %q внутри zip: %v", name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("не удалось закрыть zip-архив: %v", err)
+	}
+	return out.Bytes()
+}
+
+func legacyContractReportHTML(pointCode string, pointName string) string {
+	return `
+		<html><body>
+		<table>
+			<tr>
+				<th>Идентификатор контрагента</th>
+				<th>Точка обслуживания.Код</th>
+				<th>Точка обслуживания</th>
+				<th>Обслуживается</th>
+				<th>Бесплатное обслуживание</th>
+				<th>Дата начала</th>
+				<th>Дата окончания</th>
+				<th>Заказ клиента</th>
+			</tr>
+			<tr>
+				<td>` + pointCode + `</td>
+				<td>` + pointCode + `</td>
+				<td>` + pointName + `</td>
+				<td>Да</td>
+				<td>Нет</td>
+				<td>01.03.2026</td>
+				<td>31.12.2026</td>
+				<td>Заказ</td>
+			</tr>
+		</table>
+		</body></html>
+	`
 }
 
 func buildIDFormatContractReportXLSX(t *testing.T) []byte {

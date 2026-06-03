@@ -5,6 +5,8 @@ import (
 	"net/textproto"
 	"strings"
 	"testing"
+
+	"etalon-server/internal/infra/config"
 )
 
 // TestExtractReportAttachmentsHandlesFoldedFilename проверяет разбор вложения с нестандартным заголовком REG.RU.
@@ -89,6 +91,60 @@ func TestCollectReportAttachmentsSkipsInlineHTMLBody(t *testing.T) {
 	}
 	if len(attachments) != 0 {
 		t.Fatalf("html-тело письма не должно считаться вложением отчёта, получено вложений: %d", len(attachments))
+	}
+}
+
+func TestContractReportAttachmentMaxBytes(t *testing.T) {
+	cfg := &config.Config{
+		ContractReportArchiveMaxBytes: 5 * 1024 * 1024,
+		ContractReportTableMaxBytes:   20 * 1024 * 1024,
+	}
+
+	testCases := []struct {
+		name       string
+		attachment reportAttachment
+		expected   int
+		kind       string
+	}{
+		{
+			name: "zip",
+			attachment: reportAttachment{
+				FileName:  "рассылка.zip",
+				MediaType: "application/zip",
+			},
+			expected: 5 * 1024 * 1024,
+			kind:     "архива",
+		},
+		{
+			name: "xlsx",
+			attachment: reportAttachment{
+				FileName:  "отчёт.xlsx",
+				MediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+			},
+			expected: 20 * 1024 * 1024,
+			kind:     "таблицы",
+		},
+		{
+			name: "zip-by-extension",
+			attachment: reportAttachment{
+				FileName:  "отчёт.zip",
+				MediaType: "application/octet-stream",
+			},
+			expected: 5 * 1024 * 1024,
+			kind:     "архива",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual, kind := contractReportAttachmentMaxBytes(cfg, tc.attachment)
+			if actual != tc.expected {
+				t.Fatalf("ожидался лимит %d байт, получено %d", tc.expected, actual)
+			}
+			if kind != tc.kind {
+				t.Fatalf("ожидался тип лимита %q, получено %q", tc.kind, kind)
+			}
+		})
 	}
 }
 

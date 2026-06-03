@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Form, Input, Modal, Tag, Tooltip, message } from 'antd';
+import { Badge, Form, Input, Modal, Tag, Tooltip, message } from 'antd';
+import { KeyOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { equipmentApi } from '@/api/equipment';
 import { InstallServerLicensePayload } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
-import { canEditEquipment } from '@/utils/permissions';
+import { canManageServerActions } from '@/utils/permissions';
 
 interface ServerLicenseStatusTagProps {
   serverID: string;
@@ -22,6 +23,22 @@ const getTagColor = (status: string) => {
   return 'default';
 };
 
+const getBadgeStatus = (status: string) => {
+  if (status === 'active') return 'success' as const;
+  if (status === 'offline') return 'error' as const;
+  if (status === 'license') return 'warning' as const;
+  return 'default' as const;
+};
+
+const getStatusLabel = (status: string, displayStatus?: string) => {
+  const customLabel = String(displayStatus || '').trim();
+  if (customLabel) return customLabel;
+  if (status === 'active') return 'Онлайн';
+  if (status === 'offline') return 'Офлайн';
+  if (status === 'license') return 'Нужна лицензия';
+  return String(status || 'unknown').trim().toUpperCase();
+};
+
 const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
   serverID,
   status,
@@ -34,14 +51,14 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [licenseForm] = Form.useForm<InstallServerLicensePayload>();
   const user = useAuthStore((state) => state.user);
-  const canEdit = canEditEquipment(user?.roles);
+  const canManageActions = canManageServerActions(user?.roles);
 
   const normalizedStatus = useMemo(() => String(status || '').trim().toLowerCase() || 'unknown', [status]);
   const statusLabel = useMemo(
-    () => String(displayStatus || normalizedStatus || 'unknown').trim().toUpperCase(),
+    () => getStatusLabel(normalizedStatus, displayStatus),
     [displayStatus, normalizedStatus],
   );
-  const canInstallLicense = canEdit && (normalizedStatus === 'active' || normalizedStatus === 'license');
+  const canInstallLicense = canManageActions && (normalizedStatus === 'active' || normalizedStatus === 'license');
 
   const installLicenseMutation = useMutation({
     mutationFn: (payload: InstallServerLicensePayload) => equipmentApi.installServerLicense(serverID, payload),
@@ -59,8 +76,8 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
   });
 
   const tooltipText = canInstallLicense
-    ? 'Нажмите для установки лицензии'
-    : 'Установка лицензии доступна только для статусов active или license и прав редактирования';
+    ? 'Установить лицензию'
+    : 'Установка лицензии доступна для статусов active или license пользователям с должностью администратора или сотрудника техподдержки';
 
   const openModal = (event: React.MouseEvent) => {
     if (stopPropagation) {
@@ -76,15 +93,42 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
     setIsModalOpen(true);
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (!canInstallLicense) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (stopPropagation) {
+        event.stopPropagation();
+      }
+      licenseForm.setFieldsValue({
+        login: '',
+        password: '',
+        fallback_password: '',
+        unique_id: String(uniqueID || '').trim(),
+      });
+      setIsModalOpen(true);
+    }
+  };
+
   return (
     <>
       <Tooltip title={tooltipText}>
         <Tag
           color={getTagColor(normalizedStatus)}
-          style={canInstallLicense ? { cursor: 'pointer' } : undefined}
+          role={canInstallLicense ? 'button' : undefined}
+          tabIndex={canInstallLicense ? 0 : undefined}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            marginInlineEnd: 0,
+            cursor: canInstallLicense ? 'pointer' : undefined,
+          }}
           onClick={openModal}
+          onKeyDown={handleKeyDown}
         >
-          {statusLabel}
+          <Badge status={getBadgeStatus(normalizedStatus)} text={<span>{statusLabel}</span>} />
+          {canInstallLicense ? <KeyOutlined style={{ fontSize: 12 }} /> : null}
         </Tag>
       </Tooltip>
 

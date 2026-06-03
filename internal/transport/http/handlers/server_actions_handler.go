@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"etalon-server/internal/domain"
+	"etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/iiko"
 	"etalon-server/internal/services"
 	"etalon-server/internal/transport/http/middleware"
@@ -28,8 +29,8 @@ func NewServerActionsHandler(actionsSvc services.ServerActionsService) *ServerAc
 
 // RegisterRoutes регистрирует роуты для действий с серверами.
 func (h *ServerActionsHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/servers/{id}/license", h.installLicense)
-	r.Post("/servers/{id}/poll", h.pollServerStatus)
+	r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/servers/{id}/license", h.installLicense)
+	r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/servers/{id}/poll", h.pollServerStatus)
 	r.Post("/servers/{serverID}/additional_owners", h.addAdditionalOwner)
 	r.Delete("/servers/{serverID}/additional_owners/{companyID}", h.removeAdditionalOwner)
 }

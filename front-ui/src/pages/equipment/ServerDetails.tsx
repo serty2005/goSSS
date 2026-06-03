@@ -11,7 +11,7 @@ import { formatDate, getIikoWebAppLinkMeta, normalizeIikoWebAppUrl } from '@/uti
 import { EntityOwnerHistoryItemDTO, UpdateServerPayload } from '@/types/api';
 import InlineFieldEditor from '@/components/common/InlineFieldEditor';
 import { useAuthStore } from '@/store/authStore';
-import { canEditEquipment } from '@/utils/permissions';
+import { canEditEquipment, canManageServerActions } from '@/utils/permissions';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import EntityHierarchyExplorer from '@/components/entities/EntityHierarchyExplorer';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
@@ -103,6 +103,7 @@ const ServerDetails: React.FC = () => {
   const [companySearch, setCompanySearch] = useState<string>('');
   const user = useAuthStore((state) => state.user);
   const canEdit = canEditEquipment(user?.roles);
+  const canRunServerActions = canManageServerActions(user?.roles);
 
   const { data: serverRes, isLoading } = useQuery({
     queryKey: ['server', id],
@@ -330,21 +331,25 @@ const ServerDetails: React.FC = () => {
           {pendingDeletion ? <Tag color="orange">Ожидает удаления #{pendingDeletion.id}</Tag> : null}
         </Space>
 
-        {canEdit && (
+        {(canRunServerActions || canEdit) && (
           <Space>
-            <Button icon={<SyncOutlined spin={pollMutation.isPending} />} onClick={() => pollMutation.mutate()}>
-              Опросить
-            </Button>
-            <Popconfirm
-              title="Добавить сервер в кандидаты на удаление?"
-              description="Фактическое удаление подтверждает другой администратор в разделе «Проблемы»."
-              okText="Добавить"
-              cancelText="Отмена"
-              okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
-              onConfirm={() => deleteMutation.mutate()}
-            >
-              <Button danger icon={<DeleteOutlined />} disabled={Boolean(pendingDeletion)}>Удалить</Button>
-            </Popconfirm>
+            {canRunServerActions ? (
+              <Button icon={<SyncOutlined spin={pollMutation.isPending} />} onClick={() => pollMutation.mutate()}>
+                Опросить
+              </Button>
+            ) : null}
+            {canEdit ? (
+              <Popconfirm
+                title="Добавить сервер в кандидаты на удаление?"
+                description="Фактическое удаление подтверждает другой администратор в разделе «Проблемы»."
+                okText="Добавить"
+                cancelText="Отмена"
+                okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+                onConfirm={() => deleteMutation.mutate()}
+              >
+                <Button danger icon={<DeleteOutlined />} disabled={Boolean(pendingDeletion)}>Удалить</Button>
+              </Popconfirm>
+            ) : null}
           </Space>
         )}
       </div>
