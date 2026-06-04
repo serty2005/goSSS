@@ -2,9 +2,23 @@ package fiscal
 
 import (
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 )
+
+type ListFilter struct {
+	Limit        int
+	Offset       int
+	SearchQuery  string
+	CompanyIDs   []string
+	Models       []string
+	FNExpireFrom *time.Time
+	FNExpireTo   *time.Time
+	FNExpireMin  *time.Time
+	SortBy       string
+	SortOrder    string
+}
 
 // Repository определяет интерфейс для работы с хранилищем фискальных регистраторов.
 type Repository interface {
@@ -16,7 +30,8 @@ type Repository interface {
 	GetByIDUnscoped(ctx context.Context, internalID string) (*FiscalRegister, error)
 
 	GetAllIDsAndDates(ctx context.Context) (map[string]*FiscalRegister, error)
-	List(ctx context.Context, limit, offset int) ([]FiscalRegister, int64, error)
+	List(ctx context.Context, filter ListFilter) ([]FiscalRegister, int64, error)
+	ListModels(ctx context.Context) ([]string, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]FiscalRegister, error)
 	SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]FiscalRegister, int64, error)
 

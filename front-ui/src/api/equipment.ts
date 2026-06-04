@@ -12,6 +12,22 @@ import {
   UpdateFiscalPayload 
 } from '@/types/api';
 
+export interface FiscalListParams {
+  term?: string;
+  limit?: number;
+  offset?: number;
+  companyIDs?: string[];
+  models?: string[];
+  fnExpireFrom?: string;
+  fnExpireTo?: string;
+  sortBy?: string;
+  sortOrder?: 'ascend' | 'descend';
+}
+
+export interface FiscalFilterOptions {
+  models: string[];
+}
+
 export const equipmentApi = {
   // --- Servers ---
   listServers: async (
@@ -84,10 +100,36 @@ export const equipmentApi = {
   },
 
   // --- Fiscals ---
-  listFiscals: async (term = '', limit = 50, offset = 0) => {
+  listFiscals: async (params: FiscalListParams = {}) => {
+    const {
+      term = '',
+      limit = 50,
+      offset = 0,
+      companyIDs = [],
+      models = [],
+      fnExpireFrom,
+      fnExpireTo,
+      sortBy,
+      sortOrder,
+    } = params;
     const response = await apiClient.get<ApiResponse<Record<string, unknown>[]>>('/fiscals', {
-      params: { term, limit, offset },
+      params: {
+        term,
+        limit,
+        offset,
+        ...(companyIDs.length > 0 ? { company_ids: companyIDs.join(',') } : {}),
+        ...(models.length > 0 ? { models: models.join(',') } : {}),
+        ...(fnExpireFrom ? { fn_expire_from: fnExpireFrom } : {}),
+        ...(fnExpireTo ? { fn_expire_to: fnExpireTo } : {}),
+        ...(sortBy ? { sort_by: sortBy } : {}),
+        ...(sortOrder ? { sort_order: sortOrder } : {}),
+      },
     });
+    return response.data;
+  },
+
+  getFiscalFilterOptions: async () => {
+    const response = await apiClient.get<ApiResponse<FiscalFilterOptions>>('/fiscals/filter-options');
     return response.data;
   },
 

@@ -744,6 +744,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/fiscals", func(r chi.Router) {
 			r.Get("/", a.FiscalHandler.List)
+			r.Get("/filter-options", a.FiscalHandler.FilterOptions)
 			r.Get("/{id}", a.FiscalHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.FiscalHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.FiscalHandler.Update)

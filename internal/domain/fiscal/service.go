@@ -10,6 +10,7 @@ type Service interface {
 	Update(ctx context.Context, id string, data map[string]interface{}) error
 	Delete(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (*FiscalRegister, error)
-	List(ctx context.Context, limit, offset int) ([]FiscalRegister, int64, error)
+	List(ctx context.Context, filter ListFilter) ([]FiscalRegister, int64, error)
+	ListModels(ctx context.Context) ([]string, error)
 	Search(ctx context.Context, term string, limit, offset int) ([]FiscalRegister, int64, error)
 }

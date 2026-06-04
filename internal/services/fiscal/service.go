@@ -138,8 +138,12 @@ func (s *serviceImpl) Get(ctx context.Context, id string) (*fiscal.FiscalRegiste
 	return s.repo.GetByID(ctx, id)
 }
 
-func (s *serviceImpl) List(ctx context.Context, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
-	return s.repo.List(ctx, limit, offset)
+func (s *serviceImpl) List(ctx context.Context, filter fiscal.ListFilter) ([]fiscal.FiscalRegister, int64, error) {
+	return s.repo.List(ctx, filter)
+}
+
+func (s *serviceImpl) ListModels(ctx context.Context) ([]string, error) {
+	return s.repo.ListModels(ctx)
 }
 
 func (s *serviceImpl) Search(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {

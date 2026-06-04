@@ -7,6 +7,7 @@ import (
 	"etalon-server/internal/domain/fiscal"
 	infraDB "etalon-server/internal/infra/db"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -18,6 +19,111 @@ type frRepo struct {
 
 func NewFiscalRegisterRepo(db *gorm.DB) fiscal.Repository {
 	return &frRepo{db: db}
+}
+
+func (r *frRepo) listBaseQuery(ctx context.Context) *gorm.DB {
+	return r.dbOrTx(ctx, nil).WithContext(ctx).
+		Model(&fiscal.FiscalRegister{}).
+		Joins("LEFT JOIN companies owner_comp ON owner_comp.id = fiscal_registers.owner_id").
+		Joins("LEFT JOIN companies owner_parent ON owner_parent.id = owner_comp.parent_id")
+}
+
+func (r *frRepo) applyFiscalListSelect(query *gorm.DB) *gorm.DB {
+	return query.Select("fiscal_registers.*, owner_comp.title AS owner_title, owner_comp.parent_id AS owner_parent_id, owner_parent.title AS owner_parent_title")
+}
+
+func cleanStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (r *frRepo) applyCompanyFilter(query *gorm.DB, companyIDs []string) *gorm.DB {
+	cleanIDs := cleanStringSlice(companyIDs)
+	if len(cleanIDs) == 0 {
+		return query
+	}
+	return query.Where(`
+		fiscal_registers.owner_id IN (
+			WITH RECURSIVE company_tree(id) AS (
+				SELECT companies.id
+				FROM companies
+				WHERE companies.id IN ?
+				UNION ALL
+				SELECT child.id
+				FROM companies child
+				JOIN company_tree parent ON child.parent_id = parent.id
+			)
+			SELECT id FROM company_tree
+		)
+	`, cleanIDs)
+}
+
+func (r *frRepo) applyModelFilter(query *gorm.DB, models []string) *gorm.DB {
+	cleanModels := cleanStringSlice(models)
+	if len(cleanModels) == 0 {
+		return query
+	}
+	return query.Where("fiscal_registers.model_kkt IN ?", cleanModels)
+}
+
+func (r *frRepo) applyFNExpireFilter(query *gorm.DB, from, to, minDate *time.Time) *gorm.DB {
+	lowerBound := from
+	if minDate != nil && (lowerBound == nil || lowerBound.Before(*minDate)) {
+		lowerBound = minDate
+	}
+	if lowerBound != nil {
+		query = query.Where("fiscal_registers.fn_expire_date >= ?", lowerBound)
+	}
+	if to != nil {
+		query = query.Where("fiscal_registers.fn_expire_date <= ?", to)
+	}
+	return query
+}
+
+func (r *frRepo) applySearchFilter(query *gorm.DB, term string) *gorm.DB {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return query
+	}
+	pattern := "%" + term + "%"
+	return query.Where(`
+		fiscal_registers.address ILIKE ?
+		OR fiscal_registers.legal_name ILIKE ?
+		OR fiscal_registers.fr_serial_number ILIKE ?
+		OR fiscal_registers.rn_kkt ILIKE ?
+		OR owner_comp.title ILIKE ?
+		OR owner_parent.title ILIKE ?
+		OR fiscal_registers.id::text ILIKE ?
+		OR fiscal_registers.fn_number ILIKE ?
+		OR fiscal_registers.model_kkt ILIKE ?
+	`, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+}
+
+func (r *frRepo) applyListFilters(query *gorm.DB, filter fiscal.ListFilter) *gorm.DB {
+	query = r.applySearchFilter(query, filter.SearchQuery)
+	query = r.applyCompanyFilter(query, filter.CompanyIDs)
+	query = r.applyModelFilter(query, filter.Models)
+	query = r.applyFNExpireFilter(query, filter.FNExpireFrom, filter.FNExpireTo, filter.FNExpireMin)
+	return query
+}
+
+func (r *frRepo) applyListOrder(query *gorm.DB, filter fiscal.ListFilter) *gorm.DB {
+	if strings.TrimSpace(filter.SortBy) != "fn_expire_date" {
+		return query.Order("fiscal_registers.updated_at DESC")
+	}
+
+	direction := "ASC"
+	switch strings.ToLower(strings.TrimSpace(filter.SortOrder)) {
+	case "desc", "descend":
+		direction = "DESC"
+	}
+	return query.Order("fiscal_registers.fn_expire_date " + direction + " NULLS LAST").Order("fiscal_registers.updated_at DESC")
 }
 
 func (r *frRepo) dbOrTx(ctx context.Context, tx *gorm.DB) *gorm.DB {
@@ -94,25 +200,35 @@ func (r *frRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*fiscal.Fisc
 }
 
 func (r *frRepo) Search(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, error) {
-	var frs []fiscal.FiscalRegister
-	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
-			"%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%", "%"+term+"%").
-		Limit(limit).Offset(offset).Find(&frs).Error
+	frs, _, err := r.List(ctx, fiscal.ListFilter{
+		Limit:       limit,
+		Offset:      offset,
+		SearchQuery: term,
+	})
 	return frs, err
 }
 
-func (r *frRepo) List(ctx context.Context, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
+func (r *frRepo) List(ctx context.Context, filter fiscal.ListFilter) ([]fiscal.FiscalRegister, int64, error) {
+	limit := filter.Limit
+	offset := filter.Offset
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	var total int64
-	if err := r.dbOrTx(ctx, nil).WithContext(ctx).Model(&fiscal.FiscalRegister{}).Count(&total).Error; err != nil {
+	countQuery := r.applyListFilters(r.listBaseQuery(ctx), filter)
+	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var frs []fiscal.FiscalRegister
-	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
+	listQuery := r.applyListFilters(r.listBaseQuery(ctx), filter)
+	if err := r.applyListOrder(r.applyFiscalListSelect(listQuery), filter).
 		Limit(limit).
 		Offset(offset).
-		Order("updated_at DESC").
 		Find(&frs).Error; err != nil {
 		return nil, 0, err
 	}
@@ -120,30 +236,27 @@ func (r *frRepo) List(ctx context.Context, limit, offset int) ([]fiscal.FiscalRe
 	return frs, total, nil
 }
 
-func (r *frRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
-	pattern := "%" + term + "%"
-	base := r.dbOrTx(ctx, nil).WithContext(ctx).
+func (r *frRepo) ListModels(ctx context.Context) ([]string, error) {
+	var models []string
+	err := r.dbOrTx(ctx, nil).WithContext(ctx).
 		Model(&fiscal.FiscalRegister{}).
-		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern)
-
-	var total int64
-	if err := base.Count(&total).Error; err != nil {
-		return nil, 0, err
+		Where("model_kkt IS NOT NULL AND BTRIM(model_kkt) <> ''").
+		Distinct("model_kkt").
+		Order("model_kkt ASC").
+		Pluck("model_kkt", &models).Error
+	if err != nil {
+		return nil, err
 	}
 
-	var frs []fiscal.FiscalRegister
-	if err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("id::text ILIKE ? OR rn_kkt ILIKE ? OR fr_serial_number ILIKE ? OR fn_number ILIKE ? OR legal_name ILIKE ? OR model_kkt ILIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern).
-		Limit(limit).
-		Offset(offset).
-		Order("updated_at DESC").
-		Find(&frs).Error; err != nil {
-		return nil, 0, err
-	}
+	return models, nil
+}
 
-	return frs, total, nil
+func (r *frRepo) SearchWithTotal(ctx context.Context, term string, limit, offset int) ([]fiscal.FiscalRegister, int64, error) {
+	return r.List(ctx, fiscal.ListFilter{
+		Limit:       limit,
+		Offset:      offset,
+		SearchQuery: term,
+	})
 }
 
 func (r *frRepo) FindBySerialNumber(ctx context.Context, sn string) (*fiscal.FiscalRegister, error) {

@@ -133,7 +133,7 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   });
   const { data: fiscalsRes } = useQuery({
     queryKey: ['materials-fiscal-search', fiscalAppliedSearch],
-    queryFn: () => equipmentApi.listFiscals(fiscalAppliedSearch, 20, 0),
+    queryFn: () => equipmentApi.listFiscals({ term: fiscalAppliedSearch, limit: 20, offset: 0 }),
     staleTime: 20_000,
   });
 

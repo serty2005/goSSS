@@ -12,6 +12,8 @@ import (
 	"etalon-server/internal/transport/http/response"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -28,6 +30,7 @@ func NewFiscalHandler(service fiscal.Service, deletionService services.EntityDel
 func (h *FiscalHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/fiscals", func(r chi.Router) {
 		r.Get("/", h.List)
+		r.Get("/filter-options", h.FilterOptions)
 		r.Get("/{id}", h.Get)
 		r.Post("/", h.Create)
 		r.Put("/{id}", h.Update)
@@ -46,24 +49,35 @@ func (h *FiscalHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	var (
-		items []fiscal.FiscalRegister
-		total int64
-		err   error
-	)
-	if term != "" {
-		items, total, err = h.service.Search(r.Context(), term, limit, offset)
-	} else {
-		items, total, err = h.service.List(r.Context(), limit, offset)
+	filter := fiscal.ListFilter{
+		Limit:       limit,
+		Offset:      offset,
+		SearchQuery: term,
+		CompanyIDs:  parseCSVQuery(r.URL.Query().Get("company_ids")),
+		Models:      parseCSVQuery(r.URL.Query().Get("models")),
+		SortBy:      strings.TrimSpace(r.URL.Query().Get("sort_by")),
+		SortOrder:   strings.TrimSpace(r.URL.Query().Get("sort_order")),
 	}
+	if fnExpireFrom := parseDateTimeParam(r.URL.Query().Get("fn_expire_from"), false); fnExpireFrom != nil {
+		filter.FNExpireFrom = fnExpireFrom
+	}
+	if fnExpireTo := parseDateTimeParam(r.URL.Query().Get("fn_expire_to"), true); fnExpireTo != nil {
+		filter.FNExpireTo = fnExpireTo
+	}
+	if filter.FNExpireFrom != nil || filter.FNExpireTo != nil {
+		cutoff := time.Now().AddDate(-1, 0, 0)
+		filter.FNExpireMin = &cutoff
+	}
+
+	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Error("не найдена запись", "error", err)
 			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
-		middleware.GetLogger(r.Context()).Error("list failed", "error", err)
-		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		middleware.GetLogger(r.Context()).Error("не удалось получить список фискальных регистраторов", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения списка фискальных регистраторов")
 		return
 	}
 	dtos := make([]map[string]interface{}, 0, len(items))
@@ -79,6 +93,18 @@ func (h *FiscalHandler) List(w http.ResponseWriter, r *http.Request) {
 		Offset:  offset,
 		HasNext: hasNext,
 		HasPrev: hasPrev,
+	})
+}
+
+func (h *FiscalHandler) FilterOptions(w http.ResponseWriter, r *http.Request) {
+	models, err := h.service.ListModels(r.Context())
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("не удалось получить фильтры фискальных регистраторов", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка получения фильтров фискальных регистраторов")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"models": models,
 	})
 }
 
@@ -192,6 +218,9 @@ func toFiscalResponse(item fiscal.FiscalRegister) map[string]interface{} {
 		"health_status":             item.HealthStatus,
 		"status_details":            statusDetails,
 		"owner_id":                  item.OwnerID,
+		"owner_title":               item.OwnerTitle,
+		"owner_parent_id":           item.OwnerParentID,
+		"owner_parent_title":        item.OwnerParentTitle,
 		"licenses":                  licenses,
 		"address":                   item.Address,
 		"attribute_excise":          item.AttributeExcise,

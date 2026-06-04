@@ -38,6 +38,11 @@ type FiscalRegister struct {
 	OFDName                *string        `gorm:"type:text" json:"ofd_name"`
 	WorkstationID          *string        `gorm:"column:workstation_id;type:text;index"`
 	OwnerBindingMode       string         `gorm:"column:owner_binding_mode;type:varchar(16);default:'auto';index" json:"owner_binding_mode"`
+
+	// Поля только для списков заполняются JOIN-ами и не хранятся в таблице fiscal_registers.
+	OwnerTitle       *string `gorm:"->;column:owner_title" json:"owner_title,omitempty"`
+	OwnerParentID    *string `gorm:"->;column:owner_parent_id" json:"owner_parent_id,omitempty"`
+	OwnerParentTitle *string `gorm:"->;column:owner_parent_title" json:"owner_parent_title,omitempty"`
 }
 
 func (fr *FiscalRegister) BeforeCreate(tx *gorm.DB) (err error) {
