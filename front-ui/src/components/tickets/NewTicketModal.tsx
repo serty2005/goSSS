@@ -29,6 +29,39 @@ const ACTIVE_TICKET_STATUSES = ['new', 'in_progress', 'pending', 'deferred', 'on
 const RESOLVED_OR_CLOSED_TICKET_STATUSES = ['resolved', 'closed'];
 const MODAL_BODY_MAX_HEIGHT = 'calc(100vh - 240px)';
 
+type CompanyMeta = {
+  address?: string;
+  additional?: string;
+  title?: string;
+  parent_title?: string;
+  parent_id?: string;
+  active_contract?: boolean;
+  contract_type?: string;
+};
+
+const getContractTypeBadgeMeta = (value?: string) => {
+  const raw = String(value || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('cloud')) {
+    return { label: 'TS Cloud', color: 'blue' };
+  }
+  if (normalized.includes('standart') || normalized.includes('standard')) {
+    return { label: 'TS Standart', color: 'green' };
+  }
+  return { label: raw || 'Тип не указан', color: 'default' };
+};
+
+const renderCompanyContractTags = (activeContract?: boolean, contractType?: string) => {
+  if (activeContract === false) {
+    return <Tag color="default" style={{ marginInlineEnd: 0 }}>Контракт завершён</Tag>;
+  }
+  if (activeContract !== true && !String(contractType || '').trim()) {
+    return <Tag color="default" style={{ marginInlineEnd: 0 }}>Контракт не задан</Tag>;
+  }
+  const meta = getContractTypeBadgeMeta(contractType);
+  return <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.label}</Tag>;
+};
+
 const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreated }) => {
   const { t } = useTranslation(['common', 'tickets']);
   const queryClient = useQueryClient();
@@ -37,7 +70,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
   const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [companyOptions, setCompanyOptions] = useState<Array<{ value: string; label: React.ReactNode; title: string }>>([]);
-  const [companyMeta, setCompanyMeta] = useState<Record<string, { address?: string; additional?: string; title?: string; parent_title?: string; parent_id?: string; active_contract?: boolean }>>({});
+  const [companyMeta, setCompanyMeta] = useState<Record<string, CompanyMeta>>({});
   const [selectedCompanyOption, setSelectedCompanyOption] = useState<{ value: string; label: React.ReactNode; title: string } | null>(null);
   const selectedCompanyId = Form.useWatch('company_id', form) as string | undefined;
   const selectedTelephonyCallID = Form.useWatch('telephony_call_id', form) as string | undefined;
@@ -120,12 +153,23 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     );
   };
 
-  const selectCompany = (companyId: string, title?: string, parentTitle?: string) => {
+  const selectCompany = (companyId: string, title?: string, parentTitle?: string, nextMeta?: CompanyMeta) => {
     const selectedLabel = String(title || companyId).trim();
     const label = renderCompanyOptionLabel(selectedLabel, parentTitle);
     const option = { value: companyId, label, title: selectedLabel };
     form.setFieldValue('company_id', companyId);
     setSelectedCompanyOption(option);
+    if (nextMeta) {
+      setCompanyMeta((prev) => ({
+        ...prev,
+        [companyId]: {
+          ...prev[companyId],
+          ...nextMeta,
+          title: nextMeta.title ?? selectedLabel,
+          parent_title: nextMeta.parent_title ?? parentTitle,
+        },
+      }));
+    }
     setCompanyOptions((prev) => {
       const exists = prev.some((item) => item.value === companyId);
       return exists ? prev : [option, ...prev];
@@ -146,7 +190,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   useEffect(() => {
     if (!companiesData?.data) return;
 
-    const nextMeta: Record<string, { address?: string; additional?: string; title?: string; parent_title?: string; parent_id?: string; active_contract?: boolean }> = {};
+    const nextMeta: Record<string, CompanyMeta> = {};
     const nextOptions = companiesData.data
       .map((company) => {
         const item = company as CompanyModel;
@@ -157,6 +201,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         const rawAdditional = company.additional_name;
         const rawAddress = company.address;
         const rawActiveContract = company.active_contract;
+        const rawContractType = company.contract_type;
         const id = rawId ? String(rawId) : '';
         const title = rawTitle || rawAdditional || id;
         const labelNode = renderCompanyOptionLabel(title, rawParentTitle);
@@ -171,6 +216,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
           parent_title: rawParentTitle ?? undefined,
           parent_id: rawParentID ?? undefined,
           active_contract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
+          contract_type: rawContractType ?? undefined,
         };
         return {
           value: id,
@@ -322,6 +368,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     const rawAdditional = company.additional_name;
     const rawAddress = company.address;
     const rawActiveContract = company.active_contract;
+    const rawContractType = company.contract_type;
 
     setCompanyMeta((prev) => ({
       ...prev,
@@ -332,6 +379,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         parent_title: rawParentTitle ?? undefined,
         parent_id: rawParentID ?? undefined,
         active_contract: typeof rawActiveContract === 'boolean' ? rawActiveContract : undefined,
+        contract_type: rawContractType ?? undefined,
       },
     }));
 
@@ -668,7 +716,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                             type={selectedCompanyId === item.company_id ? 'primary' : 'default'}
                             block
                             style={{ height: 'auto', textAlign: 'left', paddingBlock: 10 }}
-                            onClick={() => selectCompany(item.company_id, item.title, item.parent_title)}
+                            onClick={() => selectCompany(item.company_id, item.title, item.parent_title, {
+                              active_contract: item.active_contract,
+                              contract_type: (item as TelephonyContactCompanyDTO & { contract_type?: string }).contract_type,
+                            })}
                           >
                             <Space direction="vertical" size={2} style={{ width: '100%', alignItems: 'flex-start' }}>
                               <Text strong style={{ color: selectedCompanyId === item.company_id ? '#fff' : undefined }}>
@@ -682,11 +733,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                                   value: new Date(item.last_seen_at).toLocaleString(),
                                 })}
                               </Text>
-                              <Tag color={item.active_contract === false ? 'default' : 'success'} style={{ marginInlineEnd: 0 }}>
-                                {item.active_contract === false
-                                  ? t('tickets:newTicket.telephony.contractEnded')
-                                  : t('tickets:newTicket.telephony.contractActive')}
-                              </Tag>
+                              {renderCompanyContractTags(
+                                item.active_contract,
+                                (item as TelephonyContactCompanyDTO & { contract_type?: string }).contract_type,
+                              )}
                             </Space>
                           </Button>
                         ))}
@@ -866,11 +916,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
             </Form.Item>
             {selectedCompanyMeta && (
               <div style={{ marginTop: -6, marginBottom: 12 }}>
-                <Tag color={selectedCompanyMeta.active_contract ? 'success' : 'default'}>
-                  {selectedCompanyMeta.active_contract
-                    ? t('tickets:newTicket.form.companyStatusActive')
-                    : t('tickets:newTicket.form.companyStatusEnded')}
-                </Tag>
+                {renderCompanyContractTags(selectedCompanyMeta.active_contract, selectedCompanyMeta.contract_type)}
                 {selectedCompanyMeta.address && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                     {t('tickets:newTicket.form.address', { value: selectedCompanyMeta.address })}
@@ -1025,4 +1071,3 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 };
 
 export default NewTicketModal;
-

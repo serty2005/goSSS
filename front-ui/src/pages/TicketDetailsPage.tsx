@@ -24,6 +24,7 @@ import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import TicketTable from '@/components/tickets/TicketTable';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 
@@ -228,6 +229,61 @@ const getAgentSourceMeta = (data: {
 
 const isDigitsOnly = (value: string) => /^\d+$/.test(value.trim());
 
+const getContractTypeBadgeMeta = (value?: string) => {
+  const raw = normalizeTextValue(value);
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('cloud')) {
+    return { label: 'TS Cloud', color: 'blue' };
+  }
+  if (normalized.includes('standart') || normalized.includes('standard')) {
+    return { label: 'TS Standart', color: 'green' };
+  }
+  return { label: raw || 'Тип не указан', color: 'default' };
+};
+
+const renderContractTypeBadge = (value?: string, onClick?: () => void) => {
+  const meta = getContractTypeBadgeMeta(value);
+  return (
+    <Tooltip title={onClick ? 'Открыть информацию о контракте' : undefined}>
+      <Tag
+        color={meta.color}
+        style={{ marginInlineEnd: 0, cursor: onClick ? 'pointer' : undefined }}
+        onClick={onClick}
+      >
+        {meta.label}
+      </Tag>
+    </Tooltip>
+  );
+};
+
+const renderFiscalFnBadge = (dateStr?: string) => {
+  const raw = normalizeTextValue(dateStr);
+  if (!raw) return <Tag style={{ marginInlineEnd: 0 }}>Нет ФН</Tag>;
+  const expireDate = dayjs(raw);
+  if (!expireDate.isValid()) return <Tag style={{ marginInlineEnd: 0 }}>ФН: дата не распознана</Tag>;
+  const daysLeft = expireDate.diff(dayjs(), 'day');
+
+  let color = 'green';
+  let label = 'ФН OK';
+
+  if (daysLeft < 0) {
+    color = 'red';
+    label = 'ФН истёк';
+  } else if (daysLeft < 30) {
+    color = 'orange';
+    label = `ФН: ${daysLeft} дн.`;
+  }
+
+  return (
+    <Space size={4} wrap>
+      <Tag color={color} style={{ marginInlineEnd: 0 }}>{label}</Tag>
+      <Text type="secondary" style={{ fontSize: 11 }}>
+        до {expireDate.format('DD.MM.YYYY')}
+      </Text>
+    </Space>
+  );
+};
+
 const shortenAddress = (value: string) => {
   const trimmed = value.trim();
   if (trimmed.length <= 48) {
@@ -267,6 +323,7 @@ const TicketDetailsPage: React.FC = () => {
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
   const [isDescriptionEditMode, setIsDescriptionEditMode] = useState(false);
+  const [isContractInfoModalOpen, setIsContractInfoModalOpen] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isAttachCallModalOpen, setIsAttachCallModalOpen] = useState(false);
@@ -1188,6 +1245,29 @@ const TicketDetailsPage: React.FC = () => {
     );
   };
 
+  const renderOpenLinkRow = (params: { key: string; label: string; value?: string; displayValue?: string }) => {
+    const value = normalizeTextValue(params.value);
+    if (!value) {
+      return null;
+    }
+    return (
+      <button
+        key={params.key}
+        type="button"
+        className="ticket-equipment-copy-row"
+        onClick={() => window.open(value, '_blank', 'noopener,noreferrer')}
+      >
+        <span className="ticket-equipment-copy-row__content">
+          <Text type="secondary" className="ticket-equipment-copy-row__label">{params.label}</Text>
+          <Text className="ticket-equipment-copy-row__value">{params.displayValue || 'Открыть в новой вкладке'}</Text>
+        </span>
+        <span className="ticket-equipment-copy-row__indicator" aria-hidden="true">
+          <LinkOutlined />
+        </span>
+      </button>
+    );
+  };
+
   const renderEditLink = (path: string, title: string) => (
     <Tooltip title={title}>
       <Button
@@ -1230,13 +1310,16 @@ const TicketDetailsPage: React.FC = () => {
     const crmID = normalizeTextValue(dataRow.crm_id);
     const partnersLink = normalizeTextValue(dataRow.partners_link);
     const iikoWebMeta = getIikoWebAppLinkMeta(server.iiko_web_link);
-    const titleHref = partnersLink || path;
+    const baseStatus = normalizeTextValue(dataRow.status).toLowerCase();
+    const operationalStatus = normalizeTextValue(server.operational_status || dataRow.operational_status).toLowerCase();
+    const licenseStatus = baseStatus === 'license' ? baseStatus : (operationalStatus || baseStatus);
+    const uniqueID = normalizeTextValue(dataRow.unique_id);
     return (
       <Card key={`${keyPrefix}-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space className="ticket-equipment-card__header">
-            <Tooltip title={partnersLink ? 'Partners' : 'Открыть карточку сервера'}>
-              <a href={titleHref || undefined} target="_blank" rel="noreferrer">
+            <Tooltip title={path ? 'Открыть карточку сервера' : undefined}>
+              <a href={path || undefined} target="_blank" rel="noreferrer">
                 <Text strong>{title}</Text>
               </a>
             </Tooltip>
@@ -1247,7 +1330,6 @@ const TicketDetailsPage: React.FC = () => {
                   <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{iikoWebMeta.label}</Tag>
                 </a>
               ) : null}
-              {path ? renderEditLink(path, 'Открыть карточку сервера') : null}
             </Space>
           </Space>
           {renderCopyValueRow({
@@ -1278,11 +1360,32 @@ const TicketDetailsPage: React.FC = () => {
             renderCopyValueRow({
               key: `${keyPrefix}-${entityID}-uid`,
               label: 'UID',
-              value: normalizeTextValue(dataRow.unique_id),
+              value: uniqueID,
               entityType: 'Server',
               entityID,
               connectionField: 'unique_id',
             }),
+            renderOpenLinkRow({
+              key: `${keyPrefix}-${entityID}-partners`,
+              label: 'Partners',
+              value: partnersLink,
+            }),
+            entityID ? (
+              <div key={`${keyPrefix}-${entityID}-license`} className="ticket-equipment-license-action">
+                <ServerLicenseStatusTag
+                  serverID={entityID}
+                  status={licenseStatus}
+                  uniqueID={uniqueID}
+                  displayStatus="Установить лицензии"
+                  stopPropagation={false}
+                  onInstalled={() => {
+                    void queryClient.invalidateQueries({ queryKey: ['company-infra'] });
+                    void queryClient.invalidateQueries({ queryKey: ['company-parent-infra'] });
+                    void queryClient.invalidateQueries({ queryKey: ['ticket', id] });
+                  }}
+                />
+              </div>
+            ) : null,
           ])}
         </Space>
       </Card>
@@ -1331,6 +1434,7 @@ const TicketDetailsPage: React.FC = () => {
     const title = normalizeTextValue(dataRow.model_kkt) || 'Фискальный регистратор';
     const organizationName = normalizeTextValue(dataRow.legal_name) || normalizeTextValue(dataRow.organization_name);
     const address = normalizeTextValue(dataRow.address);
+    const fnExpireDate = normalizeTextValue(dataRow.fn_expire_date);
     return (
       <Card key={`fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1338,6 +1442,7 @@ const TicketDetailsPage: React.FC = () => {
             <Text strong>{title}</Text>
             <Space size={4}>
               <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
+              {renderFiscalFnBadge(fnExpireDate)}
               {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
             </Space>
           </Space>
@@ -1411,6 +1516,7 @@ const TicketDetailsPage: React.FC = () => {
           const title = normalizeTextValue(dataRow.model_kkt) || 'Фискальный регистратор';
           const organizationName = normalizeTextValue(dataRow.legal_name) || normalizeTextValue(dataRow.organization_name);
           const address = normalizeTextValue(dataRow.address);
+          const fnExpireDate = normalizeTextValue(dataRow.fn_expire_date);
 
           return (
             <div key={`agent-fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} className="ticket-agent-equipment-card__section">
@@ -1418,6 +1524,7 @@ const TicketDetailsPage: React.FC = () => {
                 <Text strong>{title}</Text>
                 <Space size={4}>
                   <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
+                  {renderFiscalFnBadge(fnExpireDate)}
                   {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
                 </Space>
               </Space>
@@ -1827,7 +1934,10 @@ const TicketDetailsPage: React.FC = () => {
                       <Descriptions.Item label="Контракт">
                         <Space direction="vertical" size={0}>
                           <Text>{metadata.is_common_contract ? 'Общий контракт' : (metadata.contract_id || '-')}</Text>
-                          <Text type="secondary">Тип: {contractType}</Text>
+                          <Space size={6} wrap>
+                            <Text type="secondary">Тип:</Text>
+                            {renderContractTypeBadge(contractType, () => setIsContractInfoModalOpen(true))}
+                          </Space>
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="Контакт" span={serviceInfoColumns}>
@@ -2302,6 +2412,57 @@ const TicketDetailsPage: React.FC = () => {
           fr: latestAgentObservation?.fr_name || latestAgentObservation?.fr_id,
         }}
       />
+
+      <Modal
+        open={isContractInfoModalOpen}
+        title="Информация о контракте"
+        onCancel={() => setIsContractInfoModalOpen(false)}
+        footer={<Button onClick={() => setIsContractInfoModalOpen(false)}>Закрыть</Button>}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary">Компания</Text>
+            <Text strong style={{ display: 'block' }}>{companyTitle || metadata.company_name || '-'}</Text>
+          </div>
+          <div>
+            <Text type="secondary">Контракт</Text>
+            <Space size={8} wrap style={{ display: 'flex', marginTop: 2 }}>
+              <Text strong>{metadata.is_common_contract ? 'Общий контракт' : (contractID || metadata.contract_id || '-')}</Text>
+              {metadata.is_common_contract && <Tag color="gold" style={{ marginInlineEnd: 0 }}>Платный</Tag>}
+            </Space>
+          </div>
+          <div>
+            <Text type="secondary">Тип контракта</Text>
+            <div style={{ marginTop: 4 }}>
+              {renderContractTypeBadge(contractType)}
+            </div>
+          </div>
+          <div>
+            <Text type="secondary">Статус</Text>
+            <Text strong style={{ display: 'block' }}>
+              {contractResponse?.data?.state === 'active'
+                ? 'Активен'
+                : contractResponse?.data?.state
+                  ? String(contractResponse.data.state)
+                  : ((companyResponse?.data as { active_contract?: boolean } | undefined)?.active_contract ? 'Активен' : 'Неактивен')}
+            </Text>
+          </div>
+          <div>
+            <Text type="secondary">Компании в контракте</Text>
+            {(contractResponse?.data?.companies || []).length > 0 ? (
+              <Space direction="vertical" size={4} style={{ display: 'flex', marginTop: 4 }}>
+                {(contractResponse?.data?.companies || []).map((recipient) => (
+                  <Link key={recipient.id} to={`/companies/${recipient.id}`}>
+                    {recipient.title || recipient.id}
+                  </Link>
+                ))}
+              </Space>
+            ) : (
+              <Text strong style={{ display: 'block' }}>-</Text>
+            )}
+          </div>
+        </Space>
+      </Modal>
 
       {isBitrixEnabled && (
         <Modal

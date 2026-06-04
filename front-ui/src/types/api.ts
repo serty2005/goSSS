@@ -386,6 +386,7 @@ export interface TelephonyContactCompanyDTO {
   parent_title?: string;
   last_seen_at: string;
   active_contract?: boolean;
+  contract_type?: string;
 }
 
 export interface TelephonyCallListResponseDTO {
