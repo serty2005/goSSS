@@ -13,6 +13,8 @@ interface ServerLicenseStatusTagProps {
   uniqueID?: string;
   displayStatus?: string;
   stopPropagation?: boolean;
+  variant?: 'tag' | 'action';
+  actionLabel?: string;
   onInstalled?: () => void;
 }
 
@@ -45,6 +47,8 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
   uniqueID,
   displayStatus,
   stopPropagation = true,
+  variant = 'tag',
+  actionLabel = 'Лицензия',
   onInstalled,
 }) => {
   const queryClient = useQueryClient();
@@ -113,23 +117,40 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
   return (
     <>
       <Tooltip title={tooltipText}>
-        <Tag
-          color={getTagColor(normalizedStatus)}
-          role={canInstallLicense ? 'button' : undefined}
-          tabIndex={canInstallLicense ? 0 : undefined}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            marginInlineEnd: 0,
-            cursor: canInstallLicense ? 'pointer' : undefined,
-          }}
-          onClick={openModal}
-          onKeyDown={handleKeyDown}
-        >
-          <Badge status={getBadgeStatus(normalizedStatus)} text={<span>{statusLabel}</span>} />
-          {canInstallLicense ? <KeyOutlined style={{ fontSize: 12 }} /> : null}
-        </Tag>
+        {variant === 'action' ? (
+          <button
+            type="button"
+            className="ticket-equipment-copy-row ticket-equipment-action-button"
+            disabled={!canInstallLicense}
+            onClick={openModal}
+            onKeyDown={handleKeyDown}
+          >
+            <span className="ticket-equipment-copy-row__content">
+              <span className="ticket-equipment-copy-row__label ticket-equipment-copy-row__label--single">{actionLabel}</span>
+            </span>
+            <span className="ticket-equipment-copy-row__indicator" aria-hidden="true">
+              <KeyOutlined />
+            </span>
+          </button>
+        ) : (
+          <Tag
+            color={getTagColor(normalizedStatus)}
+            role={canInstallLicense ? 'button' : undefined}
+            tabIndex={canInstallLicense ? 0 : undefined}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              marginInlineEnd: 0,
+              cursor: canInstallLicense ? 'pointer' : undefined,
+            }}
+            onClick={openModal}
+            onKeyDown={handleKeyDown}
+          >
+            <Badge status={getBadgeStatus(normalizedStatus)} text={<span>{statusLabel}</span>} />
+            {canInstallLicense ? <KeyOutlined style={{ fontSize: 12 }} /> : null}
+          </Tag>
+        )}
       </Tooltip>
 
       <Modal

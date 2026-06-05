@@ -1,7 +1,7 @@
-﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -11,6 +11,7 @@ import { profileApi } from '@/api/profile';
 import { companiesApi } from '@/api/companies';
 import { contractsApi } from '@/api/contracts';
 import { usersApi } from '@/api/users';
+import { equipmentApi } from '@/api/equipment';
 import { agentObservationsApi } from '@/api/agentObservations';
 import { AgentObservationFeedRowDTO, ApiResponse, CompanyModel, FiscalEntity, InfrastructureItem, ServerEntity, TelephonyCallDTO, TicketCommentDTO, TicketDetailsDTO, TicketHistoryDTO, TicketStatus, WorkstationEntity } from '@/types/api';
 import { getCompanyHierarchyParts, resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
@@ -27,6 +28,7 @@ import AgentObservationRawModal from '@/components/agents/AgentObservationRawMod
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import TicketTable from '@/components/tickets/TicketTable';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { canManageServerActions } from '@/utils/permissions';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -299,6 +301,101 @@ const getLookupErrorMessage = (error: unknown) => {
   return 'Не удалось найти последнее наблюдение агента';
 };
 
+const getServerOperationalStatusMeta = (status?: string) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'active') {
+    return { label: 'Онлайн', badge: 'success' as const };
+  }
+  if (normalized === 'offline') {
+    return { label: 'Офлайн', badge: 'error' as const };
+  }
+  if (normalized === 'license') {
+    return { label: 'Нужна лицензия', badge: 'warning' as const };
+  }
+  return { label: 'Неизвестно', badge: 'default' as const };
+};
+
+type TicketServerPollButtonProps = {
+  serverID: string;
+  currentStatus?: string;
+  currentPollStamp?: string;
+  onRefresh: () => Promise<void> | void;
+};
+
+const POLL_CONFIRMATION_INTERVAL_MS = 2500;
+const POLL_CONFIRMATION_MAX_ATTEMPTS = 8;
+
+const TicketServerPollButton: React.FC<TicketServerPollButtonProps> = ({ serverID, currentStatus, currentPollStamp, onRefresh }) => {
+  const [waitingForStatus, setWaitingForStatus] = useState(false);
+  const [statusAtPollStart, setStatusAtPollStart] = useState('');
+  const [pollStampAtStart, setPollStampAtStart] = useState('');
+  const [refreshAttempts, setRefreshAttempts] = useState(0);
+  const normalizedStatus = String(currentStatus || '').trim().toLowerCase() || 'unknown';
+  const normalizedPollStamp = String(currentPollStamp || '').trim();
+  const statusMeta = getServerOperationalStatusMeta(normalizedStatus);
+
+  const pollMutation = useMutation({
+    mutationFn: () => equipmentApi.pollServer(serverID),
+    onSuccess: () => {
+      message.success('Опрос сервера отправлен');
+      setStatusAtPollStart(normalizedStatus);
+      setPollStampAtStart(normalizedPollStamp);
+      setRefreshAttempts(0);
+      setWaitingForStatus(true);
+      void onRefresh();
+    },
+    onError: () => message.error('Не удалось отправить опрос сервера'),
+  });
+
+  useEffect(() => {
+    if (!waitingForStatus) {
+      return undefined;
+    }
+    if (normalizedStatus !== statusAtPollStart) {
+      setWaitingForStatus(false);
+      return undefined;
+    }
+    if (normalizedPollStamp && normalizedPollStamp !== pollStampAtStart) {
+      setWaitingForStatus(false);
+      return undefined;
+    }
+    if (refreshAttempts >= POLL_CONFIRMATION_MAX_ATTEMPTS) {
+      setWaitingForStatus(false);
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      Promise.resolve().then(onRefresh).finally(() => {
+        setRefreshAttempts((current) => current + 1);
+      });
+    }, POLL_CONFIRMATION_INTERVAL_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [normalizedPollStamp, normalizedStatus, onRefresh, pollStampAtStart, refreshAttempts, statusAtPollStart, waitingForStatus]);
+
+  return (
+    <button
+      type="button"
+      className="ticket-equipment-copy-row ticket-equipment-action-button"
+      disabled={pollMutation.isPending || waitingForStatus}
+      onClick={() => pollMutation.mutate()}
+    >
+      <span className="ticket-equipment-copy-row__content">
+        <span className="ticket-equipment-copy-row__label">Опрос</span>
+        <span className="ticket-equipment-status-value">
+          <span className={`ticket-equipment-status-dot ticket-equipment-status-dot--${statusMeta.badge}`} />
+          <span className="ticket-equipment-copy-row__value">
+            {pollMutation.isPending ? 'Отправка...' : waitingForStatus ? `Ожидание: ${statusMeta.label}` : statusMeta.label}
+          </span>
+        </span>
+      </span>
+      <span className="ticket-equipment-copy-row__indicator" aria-hidden="true">
+        <SyncOutlined spin={pollMutation.isPending || waitingForStatus} />
+      </span>
+    </button>
+  );
+};
+
 const TicketDetailsPage: React.FC = () => {
   const screens = useBreakpoint();
   const { id = '' } = useParams();
@@ -375,6 +472,14 @@ const TicketDetailsPage: React.FC = () => {
   const serviceInfoColumns = screens.lg ? 2 : 1;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
+  const canRunServerActions = canManageServerActions(userRoles);
+  const refreshTicketInfrastructure = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['company-infra'] }),
+      queryClient.invalidateQueries({ queryKey: ['company-parent-infra'] }),
+      queryClient.invalidateQueries({ queryKey: ['ticket', id] }),
+    ]);
+  }, [id, queryClient]);
   const isCommentAuthor = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => {
     const authorUserID = Number(comment?.author_user_id || 0);
     if (authorUserID > 0 && user?.id) {
@@ -1245,7 +1350,7 @@ const TicketDetailsPage: React.FC = () => {
     );
   };
 
-  const renderOpenLinkRow = (params: { key: string; label: string; value?: string; displayValue?: string }) => {
+  const renderOpenLinkRow = (params: { key: string; label: string; value?: string; displayValue?: string; compact?: boolean }) => {
     const value = normalizeTextValue(params.value);
     if (!value) {
       return null;
@@ -1259,7 +1364,9 @@ const TicketDetailsPage: React.FC = () => {
       >
         <span className="ticket-equipment-copy-row__content">
           <Text type="secondary" className="ticket-equipment-copy-row__label">{params.label}</Text>
-          <Text className="ticket-equipment-copy-row__value">{params.displayValue || 'Открыть в новой вкладке'}</Text>
+          {!params.compact ? (
+            <Text className="ticket-equipment-copy-row__value">{params.displayValue || 'Открыть в новой вкладке'}</Text>
+          ) : null}
         </span>
         <span className="ticket-equipment-copy-row__indicator" aria-hidden="true">
           <LinkOutlined />
@@ -1314,6 +1421,7 @@ const TicketDetailsPage: React.FC = () => {
     const operationalStatus = normalizeTextValue(server.operational_status || dataRow.operational_status).toLowerCase();
     const licenseStatus = baseStatus === 'license' ? baseStatus : (operationalStatus || baseStatus);
     const uniqueID = normalizeTextValue(dataRow.unique_id);
+    const pollStamp = normalizeTextValue(server.last_polled_at || dataRow.last_polled_at || server.updated_at || dataRow.updated_at || server.last_modified_date || dataRow.last_modified_date);
     return (
       <Card key={`${keyPrefix}-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1369,6 +1477,7 @@ const TicketDetailsPage: React.FC = () => {
               key: `${keyPrefix}-${entityID}-partners`,
               label: 'Partners',
               value: partnersLink,
+              compact: true,
             }),
             entityID ? (
               <div key={`${keyPrefix}-${entityID}-license`} className="ticket-equipment-license-action">
@@ -1376,15 +1485,21 @@ const TicketDetailsPage: React.FC = () => {
                   serverID={entityID}
                   status={licenseStatus}
                   uniqueID={uniqueID}
-                  displayStatus="Установить лицензии"
+                  actionLabel="Установка лицензии"
+                  variant="action"
                   stopPropagation={false}
-                  onInstalled={() => {
-                    void queryClient.invalidateQueries({ queryKey: ['company-infra'] });
-                    void queryClient.invalidateQueries({ queryKey: ['company-parent-infra'] });
-                    void queryClient.invalidateQueries({ queryKey: ['ticket', id] });
-                  }}
+                  onInstalled={refreshTicketInfrastructure}
                 />
               </div>
+            ) : null,
+            entityID && canRunServerActions ? (
+              <TicketServerPollButton
+                key={`${keyPrefix}-${entityID}-poll`}
+                serverID={entityID}
+                currentStatus={licenseStatus}
+                currentPollStamp={pollStamp}
+                onRefresh={refreshTicketInfrastructure}
+              />
             ) : null,
           ])}
         </Space>
@@ -1410,7 +1525,6 @@ const TicketDetailsPage: React.FC = () => {
           <Space className="ticket-equipment-card__header">
             <Text strong>{title}</Text>
             <Space size={4}>
-              <Tag color="cyan" style={{ marginInlineEnd: 0 }}>РС</Tag>
               {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
             </Space>
           </Space>
@@ -1441,7 +1555,6 @@ const TicketDetailsPage: React.FC = () => {
           <Space className="ticket-equipment-card__header">
             <Text strong>{title}</Text>
             <Space size={4}>
-              <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
               {renderFiscalFnBadge(fnExpireDate)}
               {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
             </Space>
@@ -1494,7 +1607,6 @@ const TicketDetailsPage: React.FC = () => {
               <Space className="ticket-equipment-card__header">
                 <Text strong>{title}</Text>
                 <Space size={4}>
-                  <Tag color="cyan" style={{ marginInlineEnd: 0 }}>РС</Tag>
                   {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
                 </Space>
               </Space>
@@ -1523,7 +1635,6 @@ const TicketDetailsPage: React.FC = () => {
               <Space className="ticket-equipment-card__header">
                 <Text strong>{title}</Text>
                 <Space size={4}>
-                  <Tag color="gold" style={{ marginInlineEnd: 0 }}>ФР</Tag>
                   {renderFiscalFnBadge(fnExpireDate)}
                   {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
                 </Space>
@@ -1720,6 +1831,76 @@ const TicketDetailsPage: React.FC = () => {
           </Button>
         </Space>
       </Space>
+    </div>
+  );
+
+  const descriptionPanelContent = (
+    <div className="ticket-overview-description-panel">
+      <Space align="center" size={6} style={{ marginBottom: 8 }}>
+        <Text strong>Описание</Text>
+        {!isManagerFlowLocked && !isDescriptionEditMode && (
+          <Tooltip title="Редактировать описание">
+            <Button
+              type="text"
+              size="small"
+              aria-label="Редактировать описание"
+              icon={<EditOutlined />}
+              onClick={() => {
+                setDescriptionDraft(metadata.description || '');
+                setIsDescriptionEditMode(true);
+              }}
+            />
+          </Tooltip>
+        )}
+      </Space>
+      <div className="ticket-overview-description-body" style={highlightedFields.description ? fieldHighlightStyle : undefined}>
+        {!isDescriptionEditMode ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <SafeHtmlContent
+              html={metadata.description || '<span>Нет описания</span>'}
+              onClick={handleDescriptionClick}
+              style={{ whiteSpace: 'pre-wrap' }}
+            />
+          </Space>
+        ) : (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <SmartTicketEditor
+              value={descriptionDraft}
+              onChange={setDescriptionDraft}
+              placeholder="Введите описание тикета"
+              mentions={mentionOptions}
+              onImageUpload={uploadInlineImage}
+              onFileUpload={uploadInlineFile}
+            />
+            <Space>
+              <Button
+                type="primary"
+                loading={updateDescriptionMutation.isPending}
+                onClick={() => updateDescriptionMutation.mutate()}
+              >
+                Сохранить
+              </Button>
+              <Button
+                onClick={() => {
+                  setDescriptionDraft(metadata.description || '');
+                  setIsDescriptionEditMode(false);
+                }}
+              >
+                Отмена
+              </Button>
+            </Space>
+          </Space>
+        )}
+      </div>
+
+      {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
+        <div style={{ marginTop: 16 }}>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>Результат</Text>
+          <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
+            <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -2079,75 +2260,7 @@ const TicketDetailsPage: React.FC = () => {
                       </Descriptions>
                     </div>
 
-                    <div className="ticket-overview-description-panel">
-                    <div>
-                      <Space align="center" size={6} style={{ marginBottom: 8 }}>
-                        <Text strong>Описание</Text>
-                        {!isManagerFlowLocked && !isDescriptionEditMode && (
-                          <Tooltip title="Редактировать описание">
-                            <Button
-                              type="text"
-                              size="small"
-                              aria-label="Редактировать описание"
-                              icon={<EditOutlined />}
-                              onClick={() => {
-                                setDescriptionDraft(metadata.description || '');
-                                setIsDescriptionEditMode(true);
-                              }}
-                            />
-                          </Tooltip>
-                        )}
-                      </Space>
-                      <div style={highlightedFields.description ? fieldHighlightStyle : undefined}>
-                        {!isDescriptionEditMode ? (
-                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                            <SafeHtmlContent
-                              html={metadata.description || '<span>Нет описания</span>'}
-                              onClick={handleDescriptionClick}
-                              style={{ whiteSpace: 'pre-wrap' }}
-                            />
-                          </Space>
-                        ) : (
-                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                            <SmartTicketEditor
-                              value={descriptionDraft}
-                              onChange={setDescriptionDraft}
-                              placeholder="Введите описание тикета"
-                              mentions={mentionOptions}
-                              onImageUpload={uploadInlineImage}
-                              onFileUpload={uploadInlineFile}
-                            />
-                            <Space>
-                              <Button
-                                type="primary"
-                                loading={updateDescriptionMutation.isPending}
-                                onClick={() => updateDescriptionMutation.mutate()}
-                              >
-                                Сохранить
-                              </Button>
-                              <Button
-                                onClick={() => {
-                                  setDescriptionDraft(metadata.description || '');
-                                  setIsDescriptionEditMode(false);
-                                }}
-                              >
-                                Отмена
-                              </Button>
-                            </Space>
-                          </Space>
-                        )}
-                        </div>
-                      </div>
-
-                    {isClosedLikeTicketStatus(metadata.status) && Boolean((metadata.result || '').trim()) && (
-                      <div style={{ marginTop: 16 }}>
-                        <Text strong style={{ display: 'block', marginBottom: 8 }}>Результат</Text>
-                        <div style={highlightedFields.result ? fieldHighlightStyle : undefined}>
-                          <SafeHtmlContent html={metadata.result || ''} style={{ whiteSpace: 'pre-wrap' }} />
-                        </div>
-                      </div>
-                    )}
-                    </div>
+                    {descriptionPanelContent}
                   </Card>
 
                   <Card size="small" className="ticket-overview-comments-card">

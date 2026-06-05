@@ -468,10 +468,15 @@ body .ant-message .ant-message-notice-content {
 
 .ticket-overview-description-panel {
   flex: 0 0 auto;
-  min-height: max-content;
   margin-top: 12px;
-  overflow: visible;
   padding-right: 4px;
+}
+
+.ticket-overview-description-body {
+  max-height: 14.5em;
+  overflow: auto;
+  padding-right: 4px;
+  line-height: 1.45;
 }
 
 .ticket-overview-comments-card > .ant-card-body {
@@ -490,6 +495,10 @@ body .ant-message .ant-message-notice-content {
 .ticket-overview-comments-card .ant-tabs-content,
 .ticket-overview-comments-card .ant-tabs-tabpane {
   min-height: 0;
+}
+
+.ticket-overview-comments-card .ant-tabs-content-holder {
+  min-height: 14.5em;
 }
 
 .ticket-overview-comments-card .ant-tabs-content-holder,
@@ -1406,6 +1415,48 @@ body .ant-message .ant-message-notice-content {
   align-items: center;
   justify-content: center;
   color: var(--app-color-primary);
+}
+
+.ticket-equipment-action-button .ticket-equipment-copy-row__label {
+  color: var(--app-color-muted-text);
+  font-size: 12px;
+}
+
+.ticket-equipment-action-button .ticket-equipment-copy-row__label--single {
+  align-self: center;
+  color: inherit;
+  font-size: 13px;
+}
+
+.ticket-equipment-action-button .ant-badge {
+  min-width: 0;
+}
+
+.ticket-equipment-status-value {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.ticket-equipment-status-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--app-color-muted-text);
+}
+
+.ticket-equipment-status-dot--success {
+  background: #52c41a;
+}
+
+.ticket-equipment-status-dot--error {
+  background: #ff4d4f;
+}
+
+.ticket-equipment-status-dot--warning {
+  background: #faad14;
 }
 
 .ticket-equipment-license-action {
