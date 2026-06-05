@@ -1,5 +1,13 @@
 import apiClient from './axios';
-import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, ManagerTransferContactType, ManagerTransferTarget, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+
+type TicketStatusChangeOptions = {
+  comment?: string;
+  deferredUntil?: string;
+  managerTransferTarget?: ManagerTransferTarget;
+  clientContactType?: ManagerTransferContactType;
+  clientContactValue?: string;
+};
 
 export const ticketsApi = {
   getTickets: async (params: TicketListParams = {}) => {
@@ -38,11 +46,14 @@ export const ticketsApi = {
     return response.data;
   },
 
-  changeStatus: async (id: number | string, status: string, comment?: string, deferredUntil?: string) => {
+  changeStatus: async (id: number | string, status: string, options: TicketStatusChangeOptions = {}) => {
     const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/status`, {
       status,
-      comment,
-      deferred_until: deferredUntil,
+      comment: options.comment,
+      deferred_until: options.deferredUntil,
+      manager_transfer_target: options.managerTransferTarget,
+      client_contact_type: options.clientContactType,
+      client_contact_value: options.clientContactValue,
     });
     return response.data;
   },

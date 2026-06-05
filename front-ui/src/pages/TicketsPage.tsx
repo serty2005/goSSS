@@ -1,4 +1,11 @@
-﻿import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+﻿import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -54,6 +61,9 @@ import { usersApi } from "@/api/users";
 import { profileApi } from "@/api/profile";
 import { useLayoutHeader } from "@/components/layout/LayoutHeaderContext";
 import TelephonyLineIndicator from "@/components/telephony/TelephonyLineIndicator";
+import ManagerTransferModal, {
+  ManagerTransferPayload,
+} from "@/components/tickets/ManagerTransferModal";
 import { TicketDetailsDTO, TicketStatus } from "@/types/api";
 import SmartTicketEditor from "@/features/tickets/editor/SmartTicketEditor";
 import { hasEditorContent } from "@/features/tickets/editor/content";
@@ -464,6 +474,12 @@ const TicketsPage: React.FC = () => {
   const [pendingDeferredAt, setPendingDeferredAt] = useState<string>("");
   const [isResizingColumn, setIsResizingColumn] = useState(false);
 
+  const resetPendingStatusState = useCallback(() => {
+    setPendingStatus(null);
+    setStatusComment("");
+    setPendingDeferredAt("");
+  }, []);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
@@ -784,18 +800,17 @@ const TicketsPage: React.FC = () => {
       status: TicketStatus;
       comment?: string;
       deferredUntil?: string;
-    }) =>
-      ticketsApi.changeStatus(
-        payload.id,
-        payload.status,
-        payload.comment,
-        payload.deferredUntil,
-      ),
+    } & Partial<ManagerTransferPayload>) =>
+      ticketsApi.changeStatus(payload.id, payload.status, {
+        comment: payload.comment,
+        deferredUntil: payload.deferredUntil,
+        managerTransferTarget: payload.managerTransferTarget,
+        clientContactType: payload.clientContactType,
+        clientContactValue: payload.clientContactValue,
+      }),
     onSuccess: () => {
       message.success(t("tickets:messages.statusUpdated"));
-      setPendingStatus(null);
-      setStatusComment("");
-      setPendingDeferredAt("");
+      resetPendingStatusState();
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
@@ -902,16 +917,14 @@ const TicketsPage: React.FC = () => {
       .replace(/^static\//, "/api/static/");
   };
 
-  const closeQuickModal = () => {
+  const closeQuickModal = useCallback(() => {
     setSelectedTicketId(null);
     setCommentDraft("");
     setCommentIsPrivate(false);
     setEditingCommentID("");
     setEditingCommentDraft("");
-    setPendingStatus(null);
-    setStatusComment("");
-    setPendingDeferredAt("");
-  };
+    resetPendingStatusState();
+  }, [resetPendingStatusState]);
 
   useEffect(() => {
     if (createTicketRequestID === 0) {
@@ -965,7 +978,7 @@ const TicketsPage: React.FC = () => {
     };
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [selectedTicketId]);
+  }, [closeQuickModal, selectedTicketId]);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -2043,6 +2056,10 @@ const TicketsPage: React.FC = () => {
                       );
                       return;
                     }
+                    if (nextStatus === "to_manager") {
+                      setPendingStatus(nextStatus);
+                      return;
+                    }
                     if (nextStatus === "resolved") {
                       const hasComments = (details?.comments || []).length > 0;
                       if (!hasComments) {
@@ -2347,12 +2364,8 @@ const TicketsPage: React.FC = () => {
       </Drawer>
 
       <Drawer
-        open={Boolean(pendingStatus)}
-        onClose={() => {
-          setPendingStatus(null);
-          setStatusComment("");
-          setPendingDeferredAt("");
-        }}
+        open={Boolean(pendingStatus && pendingStatus !== "to_manager")}
+        onClose={resetPendingStatusState}
         width="min(420px, 100vw)"
         title={
           pendingStatus === "deferred"
@@ -2414,6 +2427,21 @@ const TicketsPage: React.FC = () => {
           </Button>
         </Space>
       </Drawer>
+      <ManagerTransferModal
+        open={pendingStatus === "to_manager"}
+        initialTarget={details?.metadata.manager_transfer_target}
+        initialContactPhone={getTelephonyContactPhoneForCopy(details?.contact)}
+        confirmLoading={changeStatusMutation.isPending}
+        onCancel={resetPendingStatusState}
+        onSubmit={(payload) => {
+          if (!selectedTicketId) return;
+          changeStatusMutation.mutate({
+            id: selectedTicketId,
+            status: "to_manager",
+            ...payload,
+          });
+        }}
+      />
       {isCreateOpen && (
         <Suspense fallback={null}>
           <LazyNewTicketModal

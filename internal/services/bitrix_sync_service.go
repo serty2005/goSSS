@@ -647,7 +647,7 @@ func (s *bitrixSyncService) pullCommentsForDeal(ctx context.Context, ticket *tic
 }
 
 func (s *bitrixSyncService) buildDealFields(ctx context.Context, ticket *tickets.Ticket) (map[string]interface{}, error) {
-	stageCode := mapTicketStatusToStage(ticket.Status)
+	stageCode := mapTicketToBitrixStage(ticket)
 	categoryID := s.cfg.BitrixCategoryID
 	stageID := fmt.Sprintf("C%d:%s", categoryID, stageCode)
 	connections := s.buildDealConnections(ctx, ticket)
@@ -1705,6 +1705,21 @@ func mapTicketStatusToStage(status string) string {
 	}
 }
 
+func mapTicketToBitrixStage(ticket *tickets.Ticket) string {
+	if ticket == nil {
+		return mapTicketStatusToStage("")
+	}
+	if strings.TrimSpace(ticket.Status) == tickets.StatusToManager {
+		switch normalizeManagerTransferTarget(ticket.ManagerTransferTarget) {
+		case tickets.ManagerTransferTargetPaymentReview:
+			return "1"
+		default:
+			return "FINAL_INVOICE"
+		}
+	}
+	return mapTicketStatusToStage(ticket.Status)
+}
+
 func mapStageToTicketStatus(stageID string) string {
 	stage := strings.TrimSpace(strings.ToUpper(stageID))
 	if _, rest, ok := strings.Cut(stage, ":"); ok {
@@ -1721,12 +1736,29 @@ func mapStageToTicketStatus(stageID string) string {
 		return tickets.StatusOnsite
 	case "FINAL_INVOICE":
 		return tickets.StatusToManager
+	case "1":
+		return tickets.StatusToManager
 	case "WON":
 		return tickets.StatusResolved
 	case "APOLOGY":
 		return tickets.StatusSpam
 	case "LOSE":
 		return tickets.StatusExecution
+	default:
+		return ""
+	}
+}
+
+func mapStageToManagerTransferTarget(stageID string) string {
+	stage := strings.TrimSpace(strings.ToUpper(stageID))
+	if _, rest, ok := strings.Cut(stage, ":"); ok {
+		stage = rest
+	}
+	switch stage {
+	case "1":
+		return tickets.ManagerTransferTargetPaymentReview
+	case "FINAL_INVOICE":
+		return tickets.ManagerTransferTargetSales
 	default:
 		return ""
 	}

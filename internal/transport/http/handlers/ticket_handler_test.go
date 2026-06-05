@@ -47,7 +47,7 @@ func (s *ticketHandlerServiceStub) CreateInternal(context.Context, api.TicketCre
 func (s *ticketHandlerServiceStub) CreateFromPyrus(context.Context, services.TicketCreateFromPyrusInput) (*tickets.Ticket, error) {
 	return nil, nil
 }
-func (s *ticketHandlerServiceStub) ChangeStatus(context.Context, string, string, string, string, uint) (*tickets.Ticket, error) {
+func (s *ticketHandlerServiceStub) ChangeStatus(context.Context, string, string, string, services.TicketStatusChangeOptions, uint) (*tickets.Ticket, error) {
 	return nil, nil
 }
 func (s *ticketHandlerServiceStub) AddComment(context.Context, string, string, bool, bool, uint) (*tickets.TicketComment, error) {

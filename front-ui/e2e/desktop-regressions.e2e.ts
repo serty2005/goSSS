@@ -148,6 +148,96 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     expectNoBrowserErrors(browserErrors);
   });
 
+  test('передаёт тикет менеджеру с выбором направления и Telegram-контактом', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-карточку тикета');
+
+    const browserErrors = collectBrowserErrors(page);
+    await loginAsAdmin(page);
+    await page.goto('/tickets/ticket-1001');
+
+    await page.locator('.ant-select').filter({ hasText: 'Новая' }).first().click();
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press('ArrowDown');
+    }
+    await page.keyboard.press('Enter');
+
+    const transferDialog = page.getByRole('dialog', { name: 'Передать менеджеру' });
+    await expect(transferDialog).toBeVisible();
+    await expect(transferDialog.getByText('Продажи клиентам (Ирина)')).toBeVisible();
+
+    await transferDialog.locator('.ant-select').first().click();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await transferDialog.locator('.ant-radio-button-wrapper', { hasText: 'Telegram' }).click();
+    await expect(transferDialog.getByRole('button', { name: 'Передать' })).toBeDisabled();
+    await transferDialog.getByPlaceholder('@telegram_login').fill('@client_payments');
+
+    const [statusRequest] = await Promise.all([
+      page.waitForRequest((item) =>
+        item.method() === 'PATCH'
+        && item.url().includes('/api/tickets/ticket-1001/status'),
+      ),
+      transferDialog.getByRole('button', { name: 'Передать' }).click(),
+    ]);
+    const payload = JSON.parse(statusRequest.postData() || '{}') as {
+      status?: string;
+      manager_transfer_target?: string;
+      client_contact_type?: string;
+      client_contact_value?: string;
+    };
+    expect(payload.status).toBe('to_manager');
+    expect(payload.manager_transfer_target).toBe('payment_review');
+    expect(payload.client_contact_type).toBe('telegram');
+    expect(payload.client_contact_value).toBe('@client_payments');
+
+    await expectDocumentHasNoHorizontalOverflow(page);
+    expectNoBrowserErrors(browserErrors);
+  });
+
+  test('передаёт тикет менеджеру из быстрого просмотра', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-быстрый просмотр');
+
+    const browserErrors = collectBrowserErrors(page);
+    await loginAsAdmin(page);
+    await page.goto('/tickets');
+
+    await page.getByRole('row', { name: /Касса не печатает чек/ }).getByText('Касса не печатает чек').click();
+    const quickDrawer = page.locator('.ticket-quick-preview-drawer');
+    await expect(quickDrawer).toBeVisible();
+
+    await quickDrawer.locator('.ant-select').filter({ hasText: 'Новая' }).first().click();
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press('ArrowDown');
+    }
+    await page.keyboard.press('Enter');
+
+    const transferDialog = page.getByRole('dialog', { name: 'Передать менеджеру' });
+    await expect(transferDialog).toBeVisible();
+    await transferDialog.locator('.ant-radio-button-wrapper', { hasText: 'Telegram' }).click();
+    await transferDialog.getByPlaceholder('@telegram_login').fill('@quick_preview_contact');
+
+    const [statusRequest] = await Promise.all([
+      page.waitForRequest((item) =>
+        item.method() === 'PATCH'
+        && item.url().includes('/api/tickets/ticket-1001/status'),
+      ),
+      transferDialog.getByRole('button', { name: 'Передать' }).click(),
+    ]);
+    const payload = JSON.parse(statusRequest.postData() || '{}') as {
+      status?: string;
+      manager_transfer_target?: string;
+      client_contact_type?: string;
+      client_contact_value?: string;
+    };
+    expect(payload.status).toBe('to_manager');
+    expect(payload.manager_transfer_target).toBe('sales');
+    expect(payload.client_contact_type).toBe('telegram');
+    expect(payload.client_contact_value).toBe('@quick_preview_contact');
+
+    await expectDocumentHasNoHorizontalOverflow(page);
+    expectNoBrowserErrors(browserErrors);
+  });
+
   test('показывает сетевую инфраструктуру компании в правом блоке', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-компоновку компании');
 

@@ -429,9 +429,12 @@ type TicketChangeCompanyDTO struct {
 
 // TicketStatusChangeDTO - запрос на смену статуса.
 type TicketStatusChangeDTO struct {
-	Status        string `json:"status" validate:"required"`
-	Comment       string `json:"comment"` // Опциональный комментарий при смене статуса
-	DeferredUntil string `json:"deferred_until"`
+	Status                string `json:"status" validate:"required"`
+	Comment               string `json:"comment"` // Опциональный комментарий при смене статуса
+	DeferredUntil         string `json:"deferred_until"`
+	ManagerTransferTarget string `json:"manager_transfer_target"`
+	ClientContactType     string `json:"client_contact_type"`
+	ClientContactValue    string `json:"client_contact_value"`
 }
 
 // TicketCreateInternalDTO - создание тикета вручную (через API).

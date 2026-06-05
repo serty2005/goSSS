@@ -72,6 +72,69 @@ func TestBitrixSyncService_BuildDealFields_PutsDescriptionIntoCommentsAndOmitsTi
 	}
 }
 
+func TestBitrixSyncService_BuildDealFields_MapsManagerTransferTargets(t *testing.T) {
+	cfg := &config.Config{
+		BitrixCategoryID:   17,
+		BitrixOriginatorID: "ETALON_SD",
+	}
+	svc := &bitrixSyncService{
+		cfg: cfg,
+		log: logger.New("", "test", "error", true),
+	}
+
+	pointID := int64(21953)
+	tests := []struct {
+		name   string
+		target string
+		stage  string
+	}{
+		{
+			name:   "продажи",
+			target: tickets.ManagerTransferTargetSales,
+			stage:  "C17:FINAL_INVOICE",
+		},
+		{
+			name:   "разбор оплат",
+			target: tickets.ManagerTransferTargetPaymentReview,
+			stage:  "C17:1",
+		},
+		{
+			name:   "пустое направление использует старый путь",
+			target: "",
+			stage:  "C17:FINAL_INVOICE",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ticket := &tickets.Ticket{
+				Status:                tickets.StatusToManager,
+				Type:                  tickets.TypeConsultation,
+				BitrixServicePointID:  &pointID,
+				ManagerTransferTarget: tc.target,
+			}
+			ticket.ID = "c9d7917a-3c16-4966-b8f1-63e2a73efe48"
+
+			fields, err := svc.buildDealFields(context.Background(), ticket)
+			if err != nil {
+				t.Fatalf("buildDealFields завершился ошибкой: %v", err)
+			}
+			if got := fields["STAGE_ID"]; got != tc.stage {
+				t.Fatalf("ожидали STAGE_ID=%q, получили %v", tc.stage, got)
+			}
+		})
+	}
+}
+
+func TestBitrixStageMapping_MapsPaymentReviewToManagerFlow(t *testing.T) {
+	if got := mapStageToTicketStatus("C17:1"); got != tickets.StatusToManager {
+		t.Fatalf("ожидали статус %q, получили %q", tickets.StatusToManager, got)
+	}
+	if got := mapStageToManagerTransferTarget("C17:1"); got != tickets.ManagerTransferTargetPaymentReview {
+		t.Fatalf("ожидали направление %q, получили %q", tickets.ManagerTransferTargetPaymentReview, got)
+	}
+}
+
 func TestBitrixSyncService_UpsertDealAndLink_UsesExistingDealLinkWithoutCreatingDuplicate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {

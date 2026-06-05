@@ -26,6 +26,7 @@ import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
+import ManagerTransferModal, { ManagerTransferPayload } from '@/components/tickets/ManagerTransferModal';
 import TicketTable from '@/components/tickets/TicketTable';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { canManageServerActions } from '@/utils/permissions';
@@ -943,6 +944,16 @@ const TicketDetailsPage: React.FC = () => {
       .filter((item) => item.filePath !== '');
   }, [details?.attachments]);
 
+  const resetPendingStatusState = () => {
+    setPendingStatus(null);
+    setStatusComment('');
+    setPendingDeferredAt('');
+  };
+
+  const openManagerTransferModal = () => {
+    setPendingStatus('to_manager');
+  };
+
   const addCommentMutation = useMutation({
     mutationFn: async () => {
       if (!id || !hasEditorContent(commentDraft)) return;
@@ -1019,13 +1030,22 @@ const TicketDetailsPage: React.FC = () => {
   });
 
   const changeStatusMutation = useMutation({
-    mutationFn: async (payload: { id: string; status: TicketStatus; comment?: string; deferredUntil?: string }) =>
-      ticketsApi.changeStatus(payload.id, payload.status, payload.comment, payload.deferredUntil),
+    mutationFn: async (payload: {
+      id: string;
+      status: TicketStatus;
+      comment?: string;
+      deferredUntil?: string;
+    } & Partial<ManagerTransferPayload>) =>
+      ticketsApi.changeStatus(payload.id, payload.status, {
+        comment: payload.comment,
+        deferredUntil: payload.deferredUntil,
+        managerTransferTarget: payload.managerTransferTarget,
+        clientContactType: payload.clientContactType,
+        clientContactValue: payload.clientContactValue,
+      }),
     onSuccess: () => {
       message.success('Статус обновлён');
-      setPendingStatus(null);
-      setStatusComment('');
-      setPendingDeferredAt('');
+      resetPendingStatusState();
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
@@ -1963,6 +1983,10 @@ const TicketDetailsPage: React.FC = () => {
                     setPendingDeferredAt(dayjs().add(1, 'hour').toISOString());
                     return;
                   }
+                  if (nextStatus === 'to_manager') {
+                    openManagerTransferModal();
+                    return;
+                  }
                   if (nextStatus === 'resolved') {
                     const hasComments = (details?.comments || []).length > 0;
                     if (!hasComments) {
@@ -2611,15 +2635,11 @@ const TicketDetailsPage: React.FC = () => {
       )}
 
       <Modal
-        open={Boolean(pendingStatus)}
+        open={Boolean(pendingStatus && pendingStatus !== 'to_manager')}
         title={pendingStatus === 'deferred' ? 'Отложить заявку' : 'Отчёт по заявке'}
         okText={pendingStatus === 'deferred' ? 'Отложить' : 'Завершить заявку'}
         cancelText="Отмена"
-        onCancel={() => {
-          setPendingStatus(null);
-          setStatusComment('');
-          setPendingDeferredAt('');
-        }}
+        onCancel={resetPendingStatusState}
         confirmLoading={changeStatusMutation.isPending}
         okButtonProps={{ disabled: pendingStatus === 'deferred' ? !pendingDeferredAt : !statusComment.trim() }}
         onOk={() => {
@@ -2651,6 +2671,21 @@ const TicketDetailsPage: React.FC = () => {
           />
         )}
       </Modal>
+      <ManagerTransferModal
+        open={pendingStatus === 'to_manager'}
+        initialTarget={metadata?.manager_transfer_target}
+        initialContactPhone={getTelephonyContactPhoneForCopy(details?.contact)}
+        confirmLoading={changeStatusMutation.isPending}
+        onCancel={resetPendingStatusState}
+        onSubmit={(payload) => {
+          if (!id) return;
+          changeStatusMutation.mutate({
+            id,
+            status: 'to_manager',
+            ...payload,
+          });
+        }}
+      />
       <Modal
         open={isContactEditModalOpen}
         title="Контакт тикета"

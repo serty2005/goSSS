@@ -255,6 +255,9 @@ export type TicketStatus =
   | "execution"
   | "closed";
 
+export type ManagerTransferTarget = "sales" | "payment_review";
+export type ManagerTransferContactType = "phone" | "telegram";
+
 export interface TicketListItemDTO {
   id: string;
   number: number;
@@ -279,6 +282,7 @@ export interface TicketListItemDTO {
   archived_at?: string;
   bitrix_service_point_id?: number;
   bitrix_deal_title?: string;
+  manager_transfer_target?: ManagerTransferTarget | string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
   pyrus_task_id?: number;
@@ -319,6 +323,7 @@ export interface TicketDTO {
   archived_at?: string;
   bitrix_service_point_id?: number;
   bitrix_deal_title?: string;
+  manager_transfer_target?: ManagerTransferTarget | string;
   bitrix_deal_id?: number;
   bitrix_deal_url?: string;
   pyrus_task_id?: number;

@@ -1074,6 +1074,14 @@ func (s *bitrixIncomingService) applyDealSnapshotToTicket(ctx context.Context, t
 			ticket.Status = nextStatus
 			changed = true
 		}
+		nextManagerTransferTarget := ""
+		if nextStatus == tickets.StatusToManager {
+			nextManagerTransferTarget = mapStageToManagerTransferTarget(deal.StageID)
+		}
+		if strings.TrimSpace(ticket.ManagerTransferTarget) != nextManagerTransferTarget {
+			ticket.ManagerTransferTarget = nextManagerTransferTarget
+			changed = true
+		}
 		if nextStatus != tickets.StatusDeferred && (ticket.DeferredUntil != nil || ticket.DeferredByID != nil) {
 			ticket.DeferredUntil = nil
 			ticket.DeferredByID = nil

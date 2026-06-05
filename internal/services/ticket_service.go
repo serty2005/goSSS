@@ -57,7 +57,7 @@ type TicketService interface {
 	// Действия
 	CreateInternal(ctx context.Context, dto api.TicketCreateInternalDTO, authorID uint) (*tickets.Ticket, error)
 	CreateFromPyrus(ctx context.Context, input TicketCreateFromPyrusInput) (*tickets.Ticket, error)
-	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error)
+	ChangeStatus(ctx context.Context, ticketID string, status string, comment string, options TicketStatusChangeOptions, userID uint) (*tickets.Ticket, error)
 	AddComment(ctx context.Context, ticketID string, comment string, isPrivate bool, replyToClient bool, userID uint) (*tickets.TicketComment, error)
 	UpdateComment(ctx context.Context, ticketID string, commentUUID string, comment string, replyToClient bool, userID uint, roles []string) (*tickets.TicketComment, error)
 	DeleteComment(ctx context.Context, ticketID string, commentUUID string, userID uint, roles []string) error
@@ -82,6 +82,13 @@ type TicketService interface {
 	AutoCloseResolvedTickets(ctx context.Context, threshold time.Duration) (int, error)
 	ProcessExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]DeferredStatusActivation, error)
 	LinkToAsset(ctx context.Context, ticketID string, assetID string, assetType string) error
+}
+
+type TicketStatusChangeOptions struct {
+	DeferredUntilRaw      string
+	ManagerTransferTarget string
+	ClientContactType     string
+	ClientContactValue    string
 }
 
 type DeferredStatusActivation struct {
@@ -400,7 +407,7 @@ func (s *ticketServiceImpl) applyContractForTicket(ctx context.Context, ticket *
 }
 
 // ChangeStatus меняет статус тикета и пишет историю.
-func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, deferredUntilRaw string, userID uint) (*tickets.Ticket, error) {
+func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, status string, comment string, options TicketStatusChangeOptions, userID uint) (*tickets.Ticket, error) {
 	_, _ = s.ticketRepo.ArchiveStale(ctx, 14*24*time.Hour)
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
@@ -434,10 +441,19 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		}
 	}
 
+	managerTransferTarget := ""
+	managerTelegramComment := ""
+	if status == tickets.StatusToManager {
+		managerTransferTarget, managerTelegramComment, err = s.prepareManagerTransfer(ctx, ticket, options)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	nextDeferredUntil := ticket.DeferredUntil
 	nextDeferredByID := ticket.DeferredByID
 	if status == tickets.StatusDeferred {
-		deferredUntil, parseErr := parseDeferredUntil(deferredUntilRaw)
+		deferredUntil, parseErr := parseDeferredUntil(options.DeferredUntilRaw)
 		if parseErr != nil {
 			return nil, parseErr
 		}
@@ -451,6 +467,11 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	ticket.Status = status
 	ticket.DeferredUntil = nextDeferredUntil
 	ticket.DeferredByID = nextDeferredByID
+	if status == tickets.StatusToManager {
+		ticket.ManagerTransferTarget = managerTransferTarget
+	} else {
+		ticket.ManagerTransferTarget = ""
+	}
 	if isReturnFromArchive {
 		ticket.IsArchived = false
 		ticket.ArchivedAt = nil
@@ -466,26 +487,16 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 
 	// Отчёт о смене статуса сохраняем как обычный комментарий в тикете.
 	if comment != "" {
-		authorName := "Сотрудник"
-		u, uErr := s.userRepo.GetByID(ctx, userID)
-		if uErr == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
-			authorName = strings.TrimSpace(u.FullName)
-		}
-		commentID := uuid.New().String()
-		newComment := tickets.TicketComment{
-			ID:              commentID,
-			TicketID:        ticket.ID,
-			ServiceDeskUUID: commentID,
-			Text:            comment,
-			AuthorName:      authorName,
-			CreationDate:    time.Now(),
-			IsInternal:      false,
-			IsPrivate:       false,
-		}
-		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
+		if err := s.addStatusComment(ctx, ticket.ID, comment, userID); err != nil {
 			return nil, err
 		}
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
+	}
+	if managerTelegramComment != "" {
+		if err := s.addStatusComment(ctx, ticket.ID, managerTelegramComment, userID); err != nil {
+			return nil, err
+		}
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", managerTelegramComment, nil)
 	}
 
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
@@ -494,6 +505,112 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	return ticket, nil
+}
+
+func (s *ticketServiceImpl) prepareManagerTransfer(ctx context.Context, ticket *tickets.Ticket, options TicketStatusChangeOptions) (string, string, error) {
+	target := normalizeManagerTransferTarget(options.ManagerTransferTarget)
+	if target == "" {
+		return "", "", fmt.Errorf("выберите направление передачи менеджеру")
+	}
+	contactType := normalizeManagerTransferContactType(options.ClientContactType)
+	if contactType == "" {
+		return "", "", fmt.Errorf("выберите тип контакта клиента")
+	}
+	contactValue := strings.TrimSpace(options.ClientContactValue)
+	if contactValue == "" {
+		return "", "", fmt.Errorf("укажите контакт клиента")
+	}
+
+	switch contactType {
+	case tickets.ManagerTransferContactPhone:
+		if s.telephonyRepo == nil {
+			return "", "", fmt.Errorf("сервис контактов недоступен")
+		}
+		phone := normalizeMegafonPhone(contactValue)
+		if phone == "" {
+			return "", "", fmt.Errorf("укажите корректный телефон клиента")
+		}
+		contact, err := s.telephonyRepo.EnsureContact(ctx, phone, phone)
+		if err != nil {
+			return "", "", err
+		}
+		if contact == nil {
+			return "", "", fmt.Errorf("не удалось сохранить контакт клиента")
+		}
+		ticket.ContactID = &contact.ID
+		if strings.TrimSpace(ticket.CompanyID) != "" {
+			if err := s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
+				return "", "", err
+			}
+		}
+		return target, "", nil
+	case tickets.ManagerTransferContactTelegram:
+		login := normalizeTelegramContact(contactValue)
+		if login == "" {
+			return "", "", fmt.Errorf("укажите логин Telegram клиента")
+		}
+		return target, "Контакт в телеграмм: " + login, nil
+	default:
+		return "", "", fmt.Errorf("неподдерживаемый тип контакта клиента")
+	}
+}
+
+func (s *ticketServiceImpl) addStatusComment(ctx context.Context, ticketID string, text string, userID uint) error {
+	authorName := "Сотрудник"
+	u, uErr := s.userRepo.GetByID(ctx, userID)
+	if uErr == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
+		authorName = strings.TrimSpace(u.FullName)
+	}
+	commentID := uuid.New().String()
+	newComment := tickets.TicketComment{
+		ID:              commentID,
+		TicketID:        ticketID,
+		ServiceDeskUUID: commentID,
+		Text:            strings.TrimSpace(text),
+		AuthorName:      authorName,
+		CreationDate:    time.Now(),
+		IsInternal:      false,
+		IsPrivate:       false,
+	}
+	return s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment})
+}
+
+func normalizeManagerTransferTarget(value string) string {
+	switch strings.TrimSpace(value) {
+	case tickets.ManagerTransferTargetSales:
+		return tickets.ManagerTransferTargetSales
+	case tickets.ManagerTransferTargetPaymentReview:
+		return tickets.ManagerTransferTargetPaymentReview
+	default:
+		return ""
+	}
+}
+
+func normalizeManagerTransferContactType(value string) string {
+	switch strings.TrimSpace(value) {
+	case tickets.ManagerTransferContactPhone:
+		return tickets.ManagerTransferContactPhone
+	case tickets.ManagerTransferContactTelegram:
+		return tickets.ManagerTransferContactTelegram
+	default:
+		return ""
+	}
+}
+
+func normalizeTelegramContact(value string) string {
+	login := strings.TrimSpace(value)
+	if login == "" {
+		return ""
+	}
+	for _, prefix := range []string{"https://t.me/", "http://t.me/", "t.me/"} {
+		login = strings.TrimPrefix(login, prefix)
+	}
+	login = strings.TrimPrefix(login, "@")
+	login = strings.Trim(login, "/ ")
+	if login == "" {
+		return ""
+	}
+	return "@" + login
 }
 
 // Assign назначает или снимает исполнителя.

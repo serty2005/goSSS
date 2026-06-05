@@ -110,7 +110,12 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := getUserIDFromContext(r)
-	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, dto.DeferredUntil, userID)
+	ticket, err := h.service.ChangeStatus(r.Context(), id, dto.Status, dto.Comment, services.TicketStatusChangeOptions{
+		DeferredUntilRaw:      dto.DeferredUntil,
+		ManagerTransferTarget: dto.ManagerTransferTarget,
+		ClientContactType:     dto.ClientContactType,
+		ClientContactValue:    dto.ClientContactValue,
+	}, userID)
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1001,23 +1006,24 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			ID       uint   `json:"id"`
 			FullName string `json:"full_name"`
 		} `json:"assignee,omitempty"`
-		ReporterID           *uint      `json:"reporter_id"`
-		ReporterName         string     `json:"reporter_name"`
-		ReporterEmail        string     `json:"reporter_email"`
-		CompanyID            string     `json:"company_id"`
-		CompanyName          string     `json:"company_name,omitempty"`
-		ContractID           *string    `json:"contract_id,omitempty"`
-		IsCommonContract     bool       `json:"is_common_contract,omitempty"`
-		ServiceDeskUUID      string     `json:"service_desk_uuid"`
-		SyncWithBitrix       bool       `json:"sync_with_bitrix"`
-		IsArchived           bool       `json:"is_archived"`
-		ArchivedAt           *time.Time `json:"archived_at,omitempty"`
-		BitrixServicePointID *int64     `json:"bitrix_service_point_id,omitempty"`
-		BitrixDealTitle      string     `json:"bitrix_deal_title"`
-		BitrixDealID         *int64     `json:"bitrix_deal_id,omitempty"`
-		BitrixDealURL        string     `json:"bitrix_deal_url,omitempty"`
-		PyrusTaskID          *int64     `json:"pyrus_task_id,omitempty"`
-		PyrusTaskURL         string     `json:"pyrus_task_url,omitempty"`
+		ReporterID            *uint      `json:"reporter_id"`
+		ReporterName          string     `json:"reporter_name"`
+		ReporterEmail         string     `json:"reporter_email"`
+		CompanyID             string     `json:"company_id"`
+		CompanyName           string     `json:"company_name,omitempty"`
+		ContractID            *string    `json:"contract_id,omitempty"`
+		IsCommonContract      bool       `json:"is_common_contract,omitempty"`
+		ServiceDeskUUID       string     `json:"service_desk_uuid"`
+		SyncWithBitrix        bool       `json:"sync_with_bitrix"`
+		IsArchived            bool       `json:"is_archived"`
+		ArchivedAt            *time.Time `json:"archived_at,omitempty"`
+		BitrixServicePointID  *int64     `json:"bitrix_service_point_id,omitempty"`
+		BitrixDealTitle       string     `json:"bitrix_deal_title"`
+		ManagerTransferTarget string     `json:"manager_transfer_target,omitempty"`
+		BitrixDealID          *int64     `json:"bitrix_deal_id,omitempty"`
+		BitrixDealURL         string     `json:"bitrix_deal_url,omitempty"`
+		PyrusTaskID           *int64     `json:"pyrus_task_id,omitempty"`
+		PyrusTaskURL          string     `json:"pyrus_task_url,omitempty"`
 	}
 
 	type safeCommentDTO struct {
@@ -1068,38 +1074,39 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 
 	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"metadata": safeMetadataDTO{
-			ID:                   details.Metadata.ID,
-			CreatedAt:            details.Metadata.CreatedAt,
-			UpdatedAt:            details.Metadata.UpdatedAt,
-			Number:               details.Metadata.Number,
-			Subject:              details.Metadata.Subject,
-			Description:          details.Metadata.Description,
-			Result:               details.Metadata.Result,
-			Status:               details.Metadata.Status,
-			Priority:             details.Metadata.Priority,
-			Type:                 details.Metadata.Type,
-			DeadlineAt:           details.Metadata.DeadlineAt,
-			DeferredUntil:        details.Metadata.DeferredUntil,
-			DeferredByID:         details.Metadata.DeferredByID,
-			AssigneeID:           details.Metadata.AssigneeID,
-			Assignee:             assignee,
-			ReporterID:           details.Metadata.ReporterID,
-			ReporterName:         details.Metadata.ReporterName,
-			ReporterEmail:        details.Metadata.ReporterEmail,
-			CompanyID:            details.Metadata.CompanyID,
-			CompanyName:          details.Metadata.CompanyName,
-			ContractID:           details.Metadata.ContractID,
-			IsCommonContract:     details.Metadata.IsCommonContract,
-			ServiceDeskUUID:      details.Metadata.ServiceDeskUUID,
-			SyncWithBitrix:       details.Metadata.SyncWithBitrix,
-			IsArchived:           details.Metadata.IsArchived,
-			ArchivedAt:           details.Metadata.ArchivedAt,
-			BitrixServicePointID: details.Metadata.BitrixServicePointID,
-			BitrixDealTitle:      details.Metadata.BitrixDealTitle,
-			BitrixDealID:         details.Metadata.BitrixDealID,
-			BitrixDealURL:        details.Metadata.BitrixDealURL,
-			PyrusTaskID:          details.Metadata.PyrusTaskID,
-			PyrusTaskURL:         details.Metadata.PyrusTaskURL,
+			ID:                    details.Metadata.ID,
+			CreatedAt:             details.Metadata.CreatedAt,
+			UpdatedAt:             details.Metadata.UpdatedAt,
+			Number:                details.Metadata.Number,
+			Subject:               details.Metadata.Subject,
+			Description:           details.Metadata.Description,
+			Result:                details.Metadata.Result,
+			Status:                details.Metadata.Status,
+			Priority:              details.Metadata.Priority,
+			Type:                  details.Metadata.Type,
+			DeadlineAt:            details.Metadata.DeadlineAt,
+			DeferredUntil:         details.Metadata.DeferredUntil,
+			DeferredByID:          details.Metadata.DeferredByID,
+			AssigneeID:            details.Metadata.AssigneeID,
+			Assignee:              assignee,
+			ReporterID:            details.Metadata.ReporterID,
+			ReporterName:          details.Metadata.ReporterName,
+			ReporterEmail:         details.Metadata.ReporterEmail,
+			CompanyID:             details.Metadata.CompanyID,
+			CompanyName:           details.Metadata.CompanyName,
+			ContractID:            details.Metadata.ContractID,
+			IsCommonContract:      details.Metadata.IsCommonContract,
+			ServiceDeskUUID:       details.Metadata.ServiceDeskUUID,
+			SyncWithBitrix:        details.Metadata.SyncWithBitrix,
+			IsArchived:            details.Metadata.IsArchived,
+			ArchivedAt:            details.Metadata.ArchivedAt,
+			BitrixServicePointID:  details.Metadata.BitrixServicePointID,
+			BitrixDealTitle:       details.Metadata.BitrixDealTitle,
+			ManagerTransferTarget: details.Metadata.ManagerTransferTarget,
+			BitrixDealID:          details.Metadata.BitrixDealID,
+			BitrixDealURL:         details.Metadata.BitrixDealURL,
+			PyrusTaskID:           details.Metadata.PyrusTaskID,
+			PyrusTaskURL:          details.Metadata.PyrusTaskURL,
 		},
 		"company_name": details.CompanyName,
 		"contact":      contact,

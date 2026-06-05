@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"testing"
-	"time"
 
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
@@ -15,12 +14,11 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestChangeStatus_ReturnFromArchiveClearsArchiveFlagWithoutStatusChange(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:ticket_service_return_from_archive?mode=memory&cache=shared"), &gorm.Config{})
+func TestChangeStatus_ToManagerWithTelegramStoresTargetAndComment(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:ticket_service_manager_transfer?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("не удалось открыть in-memory БД: %v", err)
 	}
-
 	if err := db.AutoMigrate(
 		&user.User{},
 		&user.Role{},
@@ -41,7 +39,7 @@ func TestChangeStatus_ReturnFromArchiveClearsArchiveFlagWithoutStatusChange(t *t
 	ticketRepo := repositories.NewTicketRepo(db)
 
 	actor := &user.User{
-		Username:     "archive_return_actor",
+		Username:     "manager_transfer_actor",
 		PasswordHash: "hash",
 		FullName:     "Оператор",
 	}
@@ -49,7 +47,7 @@ func TestChangeStatus_ReturnFromArchiveClearsArchiveFlagWithoutStatusChange(t *t
 		t.Fatalf("не удалось создать пользователя: %v", err)
 	}
 
-	title := "Компания для возврата из архива"
+	title := "Компания для передачи менеджеру"
 	activeContract := false
 	comp := &company.Company{
 		Title:          &title,
@@ -59,16 +57,12 @@ func TestChangeStatus_ReturnFromArchiveClearsArchiveFlagWithoutStatusChange(t *t
 		t.Fatalf("не удалось создать компанию: %v", err)
 	}
 
-	archivedAt := time.Now().Add(-48 * time.Hour)
 	ticket := &tickets.Ticket{
-		Subject:         "Архивный тикет",
-		Status:          tickets.StatusInProgress,
-		CompanyID:       comp.ID,
-		ReporterID:      &actor.ID,
-		SyncWithBitrix:  false,
-		IsArchived:      true,
-		ArchivedAt:      &archivedAt,
-		BitrixDealTitle: "",
+		Subject:        "Нужна консультация",
+		Status:         tickets.StatusInProgress,
+		CompanyID:      comp.ID,
+		ReporterID:     &actor.ID,
+		SyncWithBitrix: true,
 	}
 	if err := ticketRepo.Create(ctx, ticket); err != nil {
 		t.Fatalf("не удалось создать тикет: %v", err)
@@ -92,25 +86,32 @@ func TestChangeStatus_ReturnFromArchiveClearsArchiveFlagWithoutStatusChange(t *t
 		nil,
 	)
 
-	updated, err := svc.ChangeStatus(ctx, ticket.ID, tickets.StatusInProgress, "", TicketStatusChangeOptions{}, actor.ID)
+	updated, err := svc.ChangeStatus(ctx, ticket.ID, tickets.StatusToManager, "", TicketStatusChangeOptions{
+		ManagerTransferTarget: tickets.ManagerTransferTargetPaymentReview,
+		ClientContactType:     tickets.ManagerTransferContactTelegram,
+		ClientContactValue:    "t.me/client_login",
+	}, actor.ID)
 	if err != nil {
 		t.Fatalf("ChangeStatus вернул ошибку: %v", err)
 	}
-	if updated.IsArchived {
-		t.Fatalf("ожидали снятие флага архива у возвращённого тикета")
+	if updated.Status != tickets.StatusToManager {
+		t.Fatalf("ожидали статус %q, получили %q", tickets.StatusToManager, updated.Status)
 	}
-	if updated.ArchivedAt != nil {
-		t.Fatalf("ожидали очистку archived_at у возвращённого тикета, получили %v", updated.ArchivedAt)
+	if updated.ManagerTransferTarget != tickets.ManagerTransferTargetPaymentReview {
+		t.Fatalf("ожидали направление %q, получили %q", tickets.ManagerTransferTargetPaymentReview, updated.ManagerTransferTarget)
 	}
 
-	stored, err := ticketRepo.GetByID(ctx, ticket.ID)
+	comments, err := ticketRepo.GetComments(ctx, ticket.ID)
 	if err != nil {
-		t.Fatalf("не удалось перечитать тикет: %v", err)
+		t.Fatalf("не удалось получить комментарии: %v", err)
 	}
-	if stored.IsArchived {
-		t.Fatalf("после сохранения тикет остался архивным")
+	if len(comments) != 1 {
+		t.Fatalf("ожидали один комментарий с Telegram-контактом, получили %d", len(comments))
 	}
-	if stored.ArchivedAt != nil {
-		t.Fatalf("после сохранения archived_at не очистился: %v", stored.ArchivedAt)
+	if comments[0].Text != "Контакт в телеграмм: @client_login" {
+		t.Fatalf("неверный текст комментария: %q", comments[0].Text)
+	}
+	if comments[0].IsPrivate {
+		t.Fatalf("Telegram-контакт должен быть публичным комментарием для синхронизации")
 	}
 }

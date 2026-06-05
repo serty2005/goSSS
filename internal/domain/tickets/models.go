@@ -25,6 +25,16 @@ const (
 	StatusExecution  = "execution"
 )
 
+const (
+	ManagerTransferTargetSales         = "sales"
+	ManagerTransferTargetPaymentReview = "payment_review"
+)
+
+const (
+	ManagerTransferContactPhone    = "phone"
+	ManagerTransferContactTelegram = "telegram"
+)
+
 // Приоритеты.
 const (
 	PriorityCritical = "critical"
@@ -107,12 +117,13 @@ type Ticket struct {
 	ArchivedAt      *time.Time `json:"archived_at,omitempty" gorm:"index"`
 
 	// Точка обслуживания в Bitrix24 (ID элемента списка IBLOCK_ID=101).
-	BitrixServicePointID *int64 `json:"bitrix_service_point_id,omitempty" gorm:"index"`
-	BitrixDealTitle      string `json:"bitrix_deal_title" gorm:"type:text"`
-	BitrixDealID         *int64 `json:"bitrix_deal_id,omitempty" gorm:"-"`
-	BitrixDealURL        string `json:"bitrix_deal_url,omitempty" gorm:"-"`
-	PyrusTaskID          *int64 `json:"pyrus_task_id,omitempty" gorm:"-"`
-	PyrusTaskURL         string `json:"pyrus_task_url,omitempty" gorm:"-"`
+	BitrixServicePointID  *int64 `json:"bitrix_service_point_id,omitempty" gorm:"index"`
+	BitrixDealTitle       string `json:"bitrix_deal_title" gorm:"type:text"`
+	ManagerTransferTarget string `json:"manager_transfer_target,omitempty" gorm:"type:varchar(50)"`
+	BitrixDealID          *int64 `json:"bitrix_deal_id,omitempty" gorm:"-"`
+	BitrixDealURL         string `json:"bitrix_deal_url,omitempty" gorm:"-"`
+	PyrusTaskID           *int64 `json:"pyrus_task_id,omitempty" gorm:"-"`
+	PyrusTaskURL          string `json:"pyrus_task_url,omitempty" gorm:"-"`
 }
 
 // TicketDetails — составная структура для отображения на UI.
