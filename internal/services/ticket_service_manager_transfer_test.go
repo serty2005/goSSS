@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestChangeStatus_ToManagerWithTelegramStoresTargetAndComment(t *testing.T) {
+func TestChangeStatus_ToManagerWithTelegramStoresPrimaryContact(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:ticket_service_manager_transfer?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("не удалось открыть in-memory БД: %v", err)
@@ -26,6 +26,7 @@ func TestChangeStatus_ToManagerWithTelegramStoresTargetAndComment(t *testing.T) 
 		&company.Company{},
 		&contract.Contract{},
 		&tickets.Ticket{},
+		&tickets.TicketContact{},
 		&tickets.TicketHistory{},
 		&tickets.TicketComment{},
 	); err != nil {
@@ -111,7 +112,20 @@ func TestChangeStatus_ToManagerWithTelegramStoresTargetAndComment(t *testing.T) 
 	if comments[0].Text != "Контакт в телеграмм: @client_login" {
 		t.Fatalf("неверный текст комментария: %q", comments[0].Text)
 	}
-	if comments[0].IsPrivate {
-		t.Fatalf("Telegram-контакт должен быть публичным комментарием для синхронизации")
+	if comments[0].IsPrivate || comments[0].IsInternal {
+		t.Fatalf("комментарий с Telegram-контактом должен быть публичным: %+v", comments[0])
+	}
+	contacts, err := ticketRepo.ListTicketContacts(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось получить контакты тикета: %v", err)
+	}
+	if len(contacts) != 1 {
+		t.Fatalf("ожидали один Telegram-контакт, получили %d", len(contacts))
+	}
+	if contacts[0].ContactType != tickets.ManagerTransferContactTelegram || contacts[0].Value != "@client_login" {
+		t.Fatalf("неверный Telegram-контакт: %+v", contacts[0])
+	}
+	if !contacts[0].IsPrimary || contacts[0].PrimaryMode != tickets.TicketContactPrimaryModeManual {
+		t.Fatalf("Telegram-контакт должен быть ручным главным: %+v", contacts[0])
 	}
 }

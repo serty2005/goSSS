@@ -8,6 +8,7 @@ import (
 	"etalon-server/internal/core/events"
 	"etalon-server/internal/domain"
 	"etalon-server/internal/domain/pyrus"
+	"etalon-server/internal/domain/telephony"
 	"etalon-server/internal/domain/tickets"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
@@ -1012,6 +1013,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		CompanyID             string     `json:"company_id"`
 		CompanyName           string     `json:"company_name,omitempty"`
 		ContractID            *string    `json:"contract_id,omitempty"`
+		ContactID             *uint      `json:"contact_id,omitempty"`
 		IsCommonContract      bool       `json:"is_common_contract,omitempty"`
 		ServiceDeskUUID       string     `json:"service_desk_uuid"`
 		SyncWithBitrix        bool       `json:"sync_with_bitrix"`
@@ -1052,15 +1054,10 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	historyItems := filterTicketHistoryForRoles(details.History, getUserRolesFromContext(r))
-	var contact *api.TelephonyContactDTO
-	if details.Contact != nil {
-		contact = &api.TelephonyContactDTO{
-			ID:              details.Contact.ID,
-			PhoneNormalized: details.Contact.PhoneNormalized,
-			PhoneDisplay:    details.Contact.PhoneDisplay,
-			Name:            details.Contact.Name,
-			BitrixContactID: details.Contact.BitrixContactID,
-		}
+	contact := mapTelephonyContactDTOFromDomain(details.Contact)
+	contacts := make([]api.TicketContactDTO, 0, len(details.Contacts))
+	for _, item := range details.Contacts {
+		contacts = append(contacts, mapTicketContactDTO(item))
 	}
 	calls := make([]api.TelephonyCallDTO, 0, len(details.Calls))
 	for _, item := range details.Calls {
@@ -1095,6 +1092,7 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 			CompanyID:             details.Metadata.CompanyID,
 			CompanyName:           details.Metadata.CompanyName,
 			ContractID:            details.Metadata.ContractID,
+			ContactID:             details.Metadata.ContactID,
 			IsCommonContract:      details.Metadata.IsCommonContract,
 			ServiceDeskUUID:       details.Metadata.ServiceDeskUUID,
 			SyncWithBitrix:        details.Metadata.SyncWithBitrix,
@@ -1110,11 +1108,40 @@ func (h *TicketHandler) GetDetails(w http.ResponseWriter, r *http.Request) {
 		},
 		"company_name": details.CompanyName,
 		"contact":      contact,
+		"contacts":     contacts,
 		"calls":        calls,
 		"history":      historyItems,
 		"attachments":  details.Attachments,
 		"comments":     comments,
 	})
+}
+
+func mapTelephonyContactDTOFromDomain(contact *telephony.Contact) *api.TelephonyContactDTO {
+	if contact == nil {
+		return nil
+	}
+	return &api.TelephonyContactDTO{
+		ID:              contact.ID,
+		PhoneNormalized: contact.PhoneNormalized,
+		PhoneDisplay:    contact.PhoneDisplay,
+		Name:            contact.Name,
+		BitrixContactID: contact.BitrixContactID,
+	}
+}
+
+func mapTicketContactDTO(item tickets.TicketContact) api.TicketContactDTO {
+	return api.TicketContactDTO{
+		ID:                 item.ID,
+		ContactType:        item.ContactType,
+		TelephonyContactID: item.TelephonyContactID,
+		Value:              item.Value,
+		DisplayValue:       item.DisplayValue,
+		Name:               item.Name,
+		IsPrimary:          item.IsPrimary,
+		PrimaryMode:        item.PrimaryMode,
+		Source:             item.Source,
+		TelephonyContact:   mapTelephonyContactDTOFromDomain(item.TelephonyContact),
+	}
 }
 
 func filterTicketHistoryForRoles(items []tickets.TicketHistory, roles []string) []tickets.TicketHistory {

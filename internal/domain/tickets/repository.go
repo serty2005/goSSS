@@ -33,6 +33,27 @@ type DashboardStats struct {
 	AcceptedCalls24h    int64                         `json:"accepted_calls_24h"`
 }
 
+type TicketContactUpsertInput struct {
+	TicketID           string
+	ContactType        string
+	TelephonyContactID *uint
+	Value              string
+	DisplayValue       string
+	Name               string
+	IsPrimary          bool
+	Source             string
+}
+
+type TicketContactUpdateByIDInput struct {
+	ContactType        string
+	TelephonyContactID *uint
+	Value              string
+	DisplayValue       string
+	Name               string
+	IsPrimary          bool
+	Source             string
+}
+
 // TicketFilter содержит параметры для поиска заявок.
 type TicketFilter struct {
 	CompanyID       string
@@ -103,6 +124,13 @@ type TicketRepository interface {
 	ListExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]Ticket, error)
 	ArchiveStale(ctx context.Context, threshold time.Duration) (int64, error)
 	RebindBitrixServicePoint(ctx context.Context, fromID, toID int64) (int64, error)
+
+	UpsertTicketContact(ctx context.Context, input TicketContactUpsertInput) (*TicketContact, error)
+	UpdateTicketContact(ctx context.Context, ticketID string, contactID uint, input TicketContactUpdateByIDInput) (*TicketContact, error)
+	ListTicketContacts(ctx context.Context, ticketID string) ([]TicketContact, error)
+	DeleteTicketContact(ctx context.Context, ticketID string, contactID uint) error
+	DeleteTicketContacts(ctx context.Context, ticketID string) error
+	SetPrimaryTicketContact(ctx context.Context, ticketID string, contactID uint, manual bool) (*TicketContact, error)
 
 	AssociateAsset(ctx context.Context, ticketID, assetID, assetType string) error
 }

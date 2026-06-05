@@ -65,7 +65,15 @@ export const telephonyApi = {
 
   setTicketContact: async (
     ticketId: string,
-    payload: { phone?: string; contact_name?: string; clear?: boolean },
+    payload: {
+      contact_type?: 'phone' | 'telegram';
+      phone?: string;
+      telegram?: string;
+      contact_name?: string;
+      ticket_contact_id?: number;
+      is_primary?: boolean;
+      clear?: boolean;
+    },
   ) => {
     const response = await apiClient.patch<ApiResponse<{ status: string }>>(
       `/telephony/tickets/${ticketId}/contact`,

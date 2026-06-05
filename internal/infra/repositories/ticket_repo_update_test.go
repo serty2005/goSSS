@@ -147,3 +147,56 @@ func TestTicketRepoFind_SanitizesSortBy(t *testing.T) {
 		t.Fatalf("ожидали, что первым вернется более новый тикет, получили %s", items[0].ID)
 	}
 }
+
+func TestTicketRepoUpsertTicketContactKeepsManualPrimary(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:ticket_repo_contacts_manual_primary?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть БД: %v", err)
+	}
+	if err := db.AutoMigrate(&tickets.Ticket{}, &tickets.TicketContact{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := context.Background()
+	ticketRepo := NewTicketRepo(db)
+	ticket := &tickets.Ticket{Subject: "Контакты", Status: tickets.StatusNew, SyncWithBitrix: true}
+	if err := ticketRepo.Create(ctx, ticket); err != nil {
+		t.Fatalf("не удалось создать тикет: %v", err)
+	}
+
+	manual, err := ticketRepo.UpsertTicketContact(ctx, tickets.TicketContactUpsertInput{
+		TicketID:     ticket.ID,
+		ContactType:  tickets.ManagerTransferContactTelegram,
+		Value:        "@client",
+		DisplayValue: "@client",
+		IsPrimary:    true,
+		Source:       tickets.TicketContactSourceManual,
+	})
+	if err != nil {
+		t.Fatalf("не удалось сохранить ручной контакт: %v", err)
+	}
+	if manual == nil || !manual.IsPrimary || manual.PrimaryMode != tickets.TicketContactPrimaryModeManual {
+		t.Fatalf("ручной контакт должен стать главным: %+v", manual)
+	}
+
+	if _, err := ticketRepo.UpsertTicketContact(ctx, tickets.TicketContactUpsertInput{
+		TicketID:     ticket.ID,
+		ContactType:  tickets.ManagerTransferContactPhone,
+		Value:        "79990000000",
+		DisplayValue: "79990000000",
+		Source:       tickets.TicketContactSourceLinkedCall,
+	}); err != nil {
+		t.Fatalf("не удалось сохранить авто-контакт: %v", err)
+	}
+
+	contacts, err := ticketRepo.ListTicketContacts(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("не удалось получить контакты: %v", err)
+	}
+	if len(contacts) != 2 {
+		t.Fatalf("ожидали два контакта, получили %d", len(contacts))
+	}
+	if contacts[0].ID != manual.ID || !contacts[0].IsPrimary || contacts[0].PrimaryMode != tickets.TicketContactPrimaryModeManual {
+		t.Fatalf("ручной главный контакт не должен перебиваться автоподхватом: %+v", contacts)
+	}
+}

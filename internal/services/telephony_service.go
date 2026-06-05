@@ -73,12 +73,22 @@ type TelephonyLineView struct {
 	Employees       []TelephonyLineEmployeeView
 }
 
+type TicketContactUpdateInput struct {
+	ContactType     string
+	Phone           string
+	Telegram        string
+	ContactName     string
+	TicketContactID uint
+	IsPrimary       bool
+	Clear           bool
+}
+
 type TelephonyService interface {
 	GetPendingContextForUser(ctx context.Context, userID uint) (*TelephonyPendingContextView, error)
 	BindPendingContextToTicket(ctx context.Context, pendingContextID string, ticketID string, contactName string, actorID uint, roles []string) error
 	BindCallToTicket(ctx context.Context, callID string, ticketID string, contactName string, actorID uint, roles []string) error
 	UnbindCallFromTicket(ctx context.Context, callID string, ticketID string, actorID uint, roles []string) error
-	SetTicketContact(ctx context.Context, ticketID string, phone string, contactName string, clear bool, actorID uint, roles []string) error
+	SetTicketContact(ctx context.Context, ticketID string, input TicketContactUpdateInput, actorID uint, roles []string) error
 	ListContactCompanies(ctx context.Context, contactID uint) ([]TelephonyContactCompanyView, error)
 	ListCalls(ctx context.Context, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
 	ListUserCalls(ctx context.Context, userID uint, filter TelephonyCallFilter, actorID uint, roles []string) ([]TelephonyCallView, int64, error)
@@ -174,7 +184,7 @@ func (s *telephonyService) BindPendingContextToTicket(ctx context.Context, pendi
 		return s.telephonyRepo.UpdatePendingContext(ctx, pending.ID, telephony.PendingContextStatusExpired, nil, &reason)
 	}
 
-	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, pending.ClientPhone, contactName)
+	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, pending.ClientPhone, contactName, tickets.TicketContactSourceLinkedCall)
 	if err != nil {
 		return err
 	}
@@ -212,7 +222,7 @@ func (s *telephonyService) BindCallToTicket(ctx context.Context, callID string, 
 		return ErrTelephonyForbidden
 	}
 
-	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, safeTelephonyString(call.ClientPhone), contactName)
+	ticket, _, err := s.bindTicketContactByPhone(ctx, ticketID, safeTelephonyString(call.ClientPhone), contactName, tickets.TicketContactSourceLinkedCall)
 	if err != nil {
 		return err
 	}
@@ -265,8 +275,8 @@ func (s *telephonyService) UnbindCallFromTicket(ctx context.Context, callID stri
 	return s.refreshTicketContactFromLinkedCalls(ctx, ticket)
 }
 
-func (s *telephonyService) SetTicketContact(ctx context.Context, ticketID string, phone string, contactName string, clear bool, actorID uint, roles []string) error {
-	if s == nil || s.telephonyRepo == nil || s.ticketRepo == nil {
+func (s *telephonyService) SetTicketContact(ctx context.Context, ticketID string, input TicketContactUpdateInput, actorID uint, roles []string) error {
+	if s == nil || s.ticketRepo == nil {
 		return nil
 	}
 	if !hasUserRole(roles, user.RoleAdmin) && !hasUserRole(roles, user.RoleSupportSpecialist) {
@@ -284,21 +294,136 @@ func (s *telephonyService) SetTicketContact(ctx context.Context, ticketID string
 		return errors.New("тикет передан менеджеру: контакт менять нельзя")
 	}
 
-	if clear {
+	if input.Clear {
+		if input.TicketContactID > 0 {
+			if err := s.ticketRepo.DeleteTicketContact(ctx, ticket.ID, input.TicketContactID); err != nil {
+				return err
+			}
+			return syncTicketPrimaryContactID(ctx, s.ticketRepo, ticket)
+		}
+		if err := s.ticketRepo.DeleteTicketContacts(ctx, ticket.ID); err != nil {
+			return err
+		}
 		ticket.ContactID = nil
 		return s.ticketRepo.Update(ctx, ticket)
 	}
 
-	normalizedPhone := normalizeMegafonPhone(phone)
-	if normalizedPhone == "" {
-		return errors.New("не указан телефон контакта")
+	if input.TicketContactID > 0 && (strings.TrimSpace(input.Phone) != "" || strings.TrimSpace(input.Telegram) != "" || strings.TrimSpace(input.ContactName) != "") {
+		return s.updateTicketContact(ctx, ticket, input)
 	}
 
-	_, _, err = s.bindTicketContactByPhone(ctx, ticket.ID, normalizedPhone, contactName)
-	return err
+	if input.TicketContactID > 0 && input.IsPrimary {
+		if _, err := s.ticketRepo.SetPrimaryTicketContact(ctx, ticket.ID, input.TicketContactID, true); err != nil {
+			return err
+		}
+		return syncTicketPrimaryContactID(ctx, s.ticketRepo, ticket)
+	}
+
+	contactType := strings.TrimSpace(input.ContactType)
+	if contactType == "" {
+		contactType = tickets.ManagerTransferContactPhone
+	}
+	switch contactType {
+	case tickets.ManagerTransferContactPhone:
+		if s.telephonyRepo == nil {
+			return errors.New("сервис телефонных контактов недоступен")
+		}
+		normalizedPhone := normalizeMegafonPhone(input.Phone)
+		if normalizedPhone == "" {
+			return errors.New("не указан телефон контакта")
+		}
+		_, _, err := s.bindTicketContactByPhone(ctx, ticket.ID, normalizedPhone, input.ContactName, tickets.TicketContactSourceManual)
+		if err != nil {
+			return err
+		}
+		if input.IsPrimary {
+			contact, err := s.telephonyRepo.GetContactByPhone(ctx, normalizedPhone)
+			if err != nil {
+				return err
+			}
+			return saveTicketPhoneContact(ctx, s.ticketRepo, ticket, contact, input.ContactName, tickets.TicketContactSourceManual, true)
+		}
+		return nil
+	case tickets.ManagerTransferContactTelegram:
+		login := normalizeTelegramContact(input.Telegram)
+		if login == "" {
+			return errors.New("не указан Telegram контакта")
+		}
+		return saveTicketTelegramContact(ctx, s.ticketRepo, ticket, login, input.ContactName, tickets.TicketContactSourceManual, input.IsPrimary)
+	default:
+		return errors.New("неподдерживаемый тип контакта")
+	}
 }
 
-func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketID string, normalizedPhone string, contactName string) (*tickets.Ticket, *telephony.Contact, error) {
+func (s *telephonyService) updateTicketContact(ctx context.Context, ticket *tickets.Ticket, input TicketContactUpdateInput) error {
+	if s == nil || s.ticketRepo == nil || ticket == nil || input.TicketContactID == 0 {
+		return nil
+	}
+
+	contactType := strings.TrimSpace(input.ContactType)
+	if contactType == "" {
+		contactType = tickets.ManagerTransferContactPhone
+	}
+	switch contactType {
+	case tickets.ManagerTransferContactPhone:
+		if s.telephonyRepo == nil {
+			return errors.New("сервис телефонных контактов недоступен")
+		}
+		normalizedPhone := normalizeMegafonPhone(input.Phone)
+		if normalizedPhone == "" {
+			return errors.New("не указан телефон контакта")
+		}
+		contact, err := s.ensurePendingContact(ctx, normalizedPhone, input.ContactName)
+		if err != nil {
+			return err
+		}
+		if contact == nil {
+			return errors.New("не удалось сохранить телефонный контакт")
+		}
+		if strings.TrimSpace(ticket.CompanyID) != "" {
+			if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
+				return err
+			}
+		}
+		display := strings.TrimSpace(contact.PhoneDisplay)
+		if display == "" {
+			display = normalizedPhone
+		}
+		contactID := contact.ID
+		if _, err := s.ticketRepo.UpdateTicketContact(ctx, ticket.ID, input.TicketContactID, tickets.TicketContactUpdateByIDInput{
+			ContactType:        tickets.ManagerTransferContactPhone,
+			TelephonyContactID: &contactID,
+			Value:              normalizedPhone,
+			DisplayValue:       display,
+			Name:               strings.TrimSpace(input.ContactName),
+			IsPrimary:          input.IsPrimary,
+			Source:             tickets.TicketContactSourceManual,
+		}); err != nil {
+			return err
+		}
+		return syncTicketPrimaryContactID(ctx, s.ticketRepo, ticket)
+	case tickets.ManagerTransferContactTelegram:
+		login := normalizeTelegramContact(input.Telegram)
+		if login == "" {
+			return errors.New("не указан Telegram контакта")
+		}
+		if _, err := s.ticketRepo.UpdateTicketContact(ctx, ticket.ID, input.TicketContactID, tickets.TicketContactUpdateByIDInput{
+			ContactType:  tickets.ManagerTransferContactTelegram,
+			Value:        login,
+			DisplayValue: login,
+			Name:         strings.TrimSpace(input.ContactName),
+			IsPrimary:    input.IsPrimary,
+			Source:       tickets.TicketContactSourceManual,
+		}); err != nil {
+			return err
+		}
+		return syncTicketPrimaryContactID(ctx, s.ticketRepo, ticket)
+	default:
+		return errors.New("неподдерживаемый тип контакта")
+	}
+}
+
+func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketID string, normalizedPhone string, contactName string, source string) (*tickets.Ticket, *telephony.Contact, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, strings.TrimSpace(ticketID))
 	if err != nil {
 		return nil, nil, err
@@ -320,16 +445,13 @@ func (s *telephonyService) bindTicketContactByPhone(ctx context.Context, ticketI
 		return ticket, nil, nil
 	}
 
-	if ticket.ContactID == nil || *ticket.ContactID != contact.ID {
-		ticket.ContactID = &contact.ID
-		if err = s.ticketRepo.Update(ctx, ticket); err != nil {
-			return nil, nil, err
-		}
-	}
 	if strings.TrimSpace(ticket.CompanyID) != "" {
 		if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
 			return nil, nil, err
 		}
+	}
+	if err = saveTicketPhoneContact(ctx, s.ticketRepo, ticket, contact, contactName, source, false); err != nil {
+		return nil, nil, err
 	}
 	return ticket, contact, nil
 }
@@ -342,8 +464,8 @@ func (s *telephonyService) refreshTicketContactFromLinkedCalls(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	var nextContactID *uint
-	for _, item := range calls {
+	for i := len(calls) - 1; i >= 0; i-- {
+		item := calls[i]
 		phone := strings.TrimSpace(safeTelephonyString(item.ClientPhone))
 		if phone == "" {
 			continue
@@ -352,18 +474,14 @@ func (s *telephonyService) refreshTicketContactFromLinkedCalls(ctx context.Conte
 		if contactErr != nil {
 			return contactErr
 		}
-		if contact != nil {
-			id := contact.ID
-			nextContactID = &id
-			break
+		if contact == nil {
+			continue
+		}
+		if err = saveTicketPhoneContact(ctx, s.ticketRepo, ticket, contact, "", tickets.TicketContactSourceLinkedCall, false); err != nil {
+			return err
 		}
 	}
-	if (ticket.ContactID == nil && nextContactID == nil) ||
-		(ticket.ContactID != nil && nextContactID != nil && *ticket.ContactID == *nextContactID) {
-		return nil
-	}
-	ticket.ContactID = nextContactID
-	return s.ticketRepo.Update(ctx, ticket)
+	return syncTicketPrimaryContactID(ctx, s.ticketRepo, ticket)
 }
 
 func (s *telephonyService) ensurePendingContact(ctx context.Context, normalizedPhone string, contactName string) (*telephony.Contact, error) {

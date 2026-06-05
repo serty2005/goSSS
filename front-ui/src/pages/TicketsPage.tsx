@@ -34,7 +34,7 @@ import {
   message,
   theme as antTheme,
 } from "antd";
-import { CopyOutlined, LinkOutlined, MenuOutlined } from "@ant-design/icons";
+import { LinkOutlined, MenuOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import {
   DndContext,
@@ -64,6 +64,7 @@ import TelephonyLineIndicator from "@/components/telephony/TelephonyLineIndicato
 import ManagerTransferModal, {
   ManagerTransferPayload,
 } from "@/components/tickets/ManagerTransferModal";
+import TicketContactsControl from "@/components/tickets/TicketContactsControl";
 import { TicketDetailsDTO, TicketStatus } from "@/types/api";
 import SmartTicketEditor from "@/features/tickets/editor/SmartTicketEditor";
 import { hasEditorContent } from "@/features/tickets/editor/content";
@@ -71,11 +72,8 @@ import type { MentionOption } from "@/features/tickets/editor/mentions";
 import { useAuthStore } from "@/store/authStore";
 import { useTicketParamsStore } from "@/store/ticketParamsStore";
 import { SafeHtmlContent } from "@/utils/safeHtml";
-import {
-  getTelephonyContactLabel,
-  getTelephonyContactPhoneDisplay,
-  getTelephonyContactPhoneForCopy,
-} from "@/utils/telephony";
+import { getTelephonyContactPhoneForCopy } from "@/utils/telephony";
+import { getPrimaryTicketPhone, getPrimaryTicketTelegram } from "@/utils/ticketContacts";
 import {
   getTicketStatusMeta,
   isClosedLikeTicketStatus,
@@ -89,15 +87,6 @@ const { useBreakpoint } = Grid;
 const LazyNewTicketModal = React.lazy(
   () => import("@/components/tickets/NewTicketModal"),
 );
-
-const copyTicketPhone = async (phone: string) => {
-  if (!phone) {
-    message.warning(i18n.t("tickets:messages.phoneNotFound"));
-    return;
-  }
-  await navigator.clipboard.writeText(phone);
-  message.success(i18n.t("tickets:messages.phoneCopied"));
-};
 
 type ViewMode = "list" | "cards" | "table";
 
@@ -2134,31 +2123,12 @@ const TicketsPage: React.FC = () => {
             </div>
 
             <Card size="small" title={t("tickets:cards.contact")}>
-              <Space direction="vertical" size={6} style={{ width: "100%" }}>
-                <Text>
-                  {getTelephonyContactLabel(details.contact, details.contact?.phone_display) ||
-                    t("tickets:fallback.contactNotSpecified")}
-                </Text>
-                <Space size={8} wrap>
-                  <Text type="secondary">
-                    {getTelephonyContactPhoneDisplay(details.contact) ||
-                      t("tickets:fallback.phoneNotSpecified")}
-                  </Text>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CopyOutlined />}
-                    disabled={!getTelephonyContactPhoneForCopy(details.contact)}
-                    onClick={() => {
-                      void copyTicketPhone(
-                        getTelephonyContactPhoneForCopy(details.contact),
-                      );
-                    }}
-                  >
-                    {t("tickets:actions.copy")}
-                  </Button>
-                </Space>
-              </Space>
+              <TicketContactsControl
+                ticketId={selectedTicketId || undefined}
+                contacts={details.contacts}
+                legacyContact={details.contact}
+                disabled={metadata.status === "to_manager"}
+              />
             </Card>
 
             <Card size="small" title={t("tickets:cards.description")}>
@@ -2430,7 +2400,8 @@ const TicketsPage: React.FC = () => {
       <ManagerTransferModal
         open={pendingStatus === "to_manager"}
         initialTarget={details?.metadata.manager_transfer_target}
-        initialContactPhone={getTelephonyContactPhoneForCopy(details?.contact)}
+        initialContactPhone={getPrimaryTicketPhone(details?.contacts, getTelephonyContactPhoneForCopy(details?.contact))}
+        initialContactTelegram={getPrimaryTicketTelegram(details?.contacts)}
         confirmLoading={changeStatusMutation.isPending}
         onCancel={resetPendingStatusState}
         onSubmit={(payload) => {

@@ -107,6 +107,252 @@ func (r *ticketRepo) RebindBitrixServicePoint(ctx context.Context, fromID, toID 
 	return tx.RowsAffected, nil
 }
 
+func (r *ticketRepo) UpsertTicketContact(ctx context.Context, input tickets.TicketContactUpsertInput) (*tickets.TicketContact, error) {
+	input.TicketID = strings.TrimSpace(input.TicketID)
+	input.ContactType = normalizeTicketContactType(input.ContactType)
+	input.Value = strings.TrimSpace(input.Value)
+	input.DisplayValue = strings.TrimSpace(input.DisplayValue)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Source = strings.TrimSpace(input.Source)
+	if input.Source == "" {
+		input.Source = tickets.TicketContactSourceManual
+	}
+	if input.DisplayValue == "" {
+		input.DisplayValue = input.Value
+	}
+	if input.TicketID == "" || input.ContactType == "" || input.Value == "" {
+		return nil, nil
+	}
+
+	var result tickets.TicketContact
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item tickets.TicketContact
+		err := tx.
+			Where("ticket_id = ? AND contact_type = ? AND value = ?", input.TicketID, input.ContactType, input.Value).
+			First(&item).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			item = tickets.TicketContact{
+				TicketID:     input.TicketID,
+				ContactType:  input.ContactType,
+				Value:        input.Value,
+				PrimaryMode:  tickets.TicketContactPrimaryModeAuto,
+				Source:       input.Source,
+				DisplayValue: input.DisplayValue,
+			}
+		}
+
+		item.TelephonyContactID = input.TelephonyContactID
+		item.DisplayValue = input.DisplayValue
+		item.Name = input.Name
+		item.Source = input.Source
+
+		shouldBecomePrimary := input.IsPrimary
+		primaryMode := tickets.TicketContactPrimaryModeManual
+		if !shouldBecomePrimary {
+			if item.ID > 0 && item.IsPrimary && item.PrimaryMode == tickets.TicketContactPrimaryModeManual {
+				shouldBecomePrimary = true
+				primaryMode = tickets.TicketContactPrimaryModeManual
+			} else {
+				hasManualPrimary, err := hasManualPrimaryTicketContact(tx, input.TicketID, item.ID)
+				if err != nil {
+					return err
+				}
+				shouldBecomePrimary = !hasManualPrimary
+				primaryMode = tickets.TicketContactPrimaryModeAuto
+			}
+		}
+		if shouldBecomePrimary {
+			if err := tx.Model(&tickets.TicketContact{}).
+				Where("ticket_id = ?", input.TicketID).
+				Updates(map[string]any{
+					"is_primary":   false,
+					"primary_mode": tickets.TicketContactPrimaryModeAuto,
+				}).Error; err != nil {
+				return err
+			}
+			item.IsPrimary = true
+			item.PrimaryMode = primaryMode
+		}
+
+		if item.ID == 0 {
+			if err := tx.Create(&item).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Save(&item).Error; err != nil {
+			return err
+		}
+		result = item
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (r *ticketRepo) UpdateTicketContact(ctx context.Context, ticketID string, contactID uint, input tickets.TicketContactUpdateByIDInput) (*tickets.TicketContact, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	input.ContactType = normalizeTicketContactType(input.ContactType)
+	input.Value = strings.TrimSpace(input.Value)
+	input.DisplayValue = strings.TrimSpace(input.DisplayValue)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Source = strings.TrimSpace(input.Source)
+	if input.Source == "" {
+		input.Source = tickets.TicketContactSourceManual
+	}
+	if input.DisplayValue == "" {
+		input.DisplayValue = input.Value
+	}
+	if ticketID == "" || contactID == 0 || input.ContactType == "" || input.Value == "" {
+		return nil, nil
+	}
+
+	var result tickets.TicketContact
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item tickets.TicketContact
+		err := tx.Where("ticket_id = ? AND id = ?", ticketID, contactID).First(&item).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		if input.IsPrimary {
+			if err := tx.Model(&tickets.TicketContact{}).
+				Where("ticket_id = ?", ticketID).
+				Updates(map[string]any{
+					"is_primary":   false,
+					"primary_mode": tickets.TicketContactPrimaryModeAuto,
+				}).Error; err != nil {
+				return err
+			}
+			item.IsPrimary = true
+			item.PrimaryMode = tickets.TicketContactPrimaryModeManual
+		}
+
+		item.ContactType = input.ContactType
+		item.TelephonyContactID = input.TelephonyContactID
+		item.Value = input.Value
+		item.DisplayValue = input.DisplayValue
+		item.Name = input.Name
+		item.Source = input.Source
+
+		if err := tx.Save(&item).Error; err != nil {
+			return err
+		}
+		result = item
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.ID == 0 {
+		return nil, nil
+	}
+	return &result, nil
+}
+
+func (r *ticketRepo) ListTicketContacts(ctx context.Context, ticketID string) ([]tickets.TicketContact, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return []tickets.TicketContact{}, nil
+	}
+	items := make([]tickets.TicketContact, 0)
+	err := r.db.WithContext(ctx).
+		Preload("TelephonyContact").
+		Where("ticket_id = ?", ticketID).
+		Order("is_primary DESC").
+		Order("updated_at DESC").
+		Order("id DESC").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *ticketRepo) DeleteTicketContact(ctx context.Context, ticketID string, contactID uint) error {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" || contactID == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item tickets.TicketContact
+		err := tx.Where("ticket_id = ? AND id = ?", ticketID, contactID).First(&item).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Delete(&item).Error; err != nil {
+			return err
+		}
+		if item.IsPrimary {
+			return promoteLatestTicketContact(tx, ticketID)
+		}
+		return nil
+	})
+}
+
+func (r *ticketRepo) DeleteTicketContacts(ctx context.Context, ticketID string) error {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return nil
+	}
+	return r.db.WithContext(ctx).Where("ticket_id = ?", ticketID).Delete(&tickets.TicketContact{}).Error
+}
+
+func (r *ticketRepo) SetPrimaryTicketContact(ctx context.Context, ticketID string, contactID uint, manual bool) (*tickets.TicketContact, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" || contactID == 0 {
+		return nil, nil
+	}
+	var result tickets.TicketContact
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item tickets.TicketContact
+		err := tx.Where("ticket_id = ? AND id = ?", ticketID, contactID).First(&item).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		mode := tickets.TicketContactPrimaryModeAuto
+		if manual {
+			mode = tickets.TicketContactPrimaryModeManual
+		}
+		if err := tx.Model(&tickets.TicketContact{}).
+			Where("ticket_id = ?", ticketID).
+			Updates(map[string]any{
+				"is_primary":   false,
+				"primary_mode": tickets.TicketContactPrimaryModeAuto,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&tickets.TicketContact{}).
+			Where("id = ?", item.ID).
+			Updates(map[string]any{
+				"is_primary":   true,
+				"primary_mode": mode,
+			}).Error; err != nil {
+			return err
+		}
+		item.IsPrimary = true
+		item.PrimaryMode = mode
+		result = item
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.ID == 0 {
+		return nil, nil
+	}
+	return &result, nil
+}
+
 func (r *ticketRepo) GetByID(ctx context.Context, id string) (*tickets.Ticket, error) {
 	var ticket tickets.Ticket
 	err := r.db.WithContext(ctx).
@@ -773,6 +1019,50 @@ func parseTicketSort(rawSort string) (string, bool) {
 		return ticketSortFieldCreatedAt, true
 	}
 	return field, desc
+}
+
+func normalizeTicketContactType(value string) string {
+	switch strings.TrimSpace(value) {
+	case tickets.ManagerTransferContactPhone:
+		return tickets.ManagerTransferContactPhone
+	case tickets.ManagerTransferContactTelegram:
+		return tickets.ManagerTransferContactTelegram
+	default:
+		return ""
+	}
+}
+
+func hasManualPrimaryTicketContact(tx *gorm.DB, ticketID string, excludeID uint) (bool, error) {
+	query := tx.Model(&tickets.TicketContact{}).
+		Where("ticket_id = ? AND is_primary = ? AND primary_mode = ?", ticketID, true, tickets.TicketContactPrimaryModeManual)
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func promoteLatestTicketContact(tx *gorm.DB, ticketID string) error {
+	var next tickets.TicketContact
+	err := tx.Where("ticket_id = ?", ticketID).
+		Order("updated_at DESC").
+		Order("id DESC").
+		First(&next).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Model(&tickets.TicketContact{}).
+		Where("id = ?", next.ID).
+		Updates(map[string]any{
+			"is_primary":   true,
+			"primary_mode": tickets.TicketContactPrimaryModeAuto,
+		}).Error
 }
 
 func (r *ticketRepo) ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]tickets.Ticket, error) {

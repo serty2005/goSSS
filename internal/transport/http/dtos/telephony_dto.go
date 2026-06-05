@@ -13,9 +13,13 @@ type TelephonyBindCallDTO struct {
 }
 
 type TelephonySetTicketContactDTO struct {
-	Phone       string `json:"phone"`
-	ContactName string `json:"contact_name"`
-	Clear       bool   `json:"clear"`
+	ContactType     string `json:"contact_type"`
+	Phone           string `json:"phone"`
+	Telegram        string `json:"telegram"`
+	ContactName     string `json:"contact_name"`
+	TicketContactID uint   `json:"ticket_contact_id"`
+	IsPrimary       bool   `json:"is_primary"`
+	Clear           bool   `json:"clear"`
 }
 
 type TelephonyContactDTO struct {
@@ -24,6 +28,19 @@ type TelephonyContactDTO struct {
 	PhoneDisplay    string  `json:"phone_display"`
 	Name            *string `json:"name,omitempty"`
 	BitrixContactID *string `json:"bitrix_contact_id,omitempty"`
+}
+
+type TicketContactDTO struct {
+	ID                 uint                 `json:"id"`
+	ContactType        string               `json:"contact_type"`
+	TelephonyContactID *uint                `json:"telephony_contact_id,omitempty"`
+	Value              string               `json:"value"`
+	DisplayValue       string               `json:"display_value"`
+	Name               string               `json:"name"`
+	IsPrimary          bool                 `json:"is_primary"`
+	PrimaryMode        string               `json:"primary_mode"`
+	Source             string               `json:"source"`
+	TelephonyContact   *TelephonyContactDTO `json:"telephony_contact,omitempty"`
 }
 
 type TelephonyCallDTO struct {

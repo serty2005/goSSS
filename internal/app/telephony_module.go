@@ -55,6 +55,25 @@ func (m *telephonyModule) registerPublicRoutes(r chi.Router) {
 }
 
 func (m *telephonyModule) registerProtectedRoutes(r chi.Router) {
+	if m == nil {
+		return
+	}
+	if m.apiHandler != nil {
+		r.Route("/telephony", func(r chi.Router) {
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Patch("/tickets/{ticketId}/contact", m.apiHandler.SetTicketContact)
+			if !m.Enabled() {
+				return
+			}
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/line", m.apiHandler.GetLine)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/pending-context/me", m.apiHandler.GetPendingContextMe)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/pending-context/{id}/bind-ticket", m.apiHandler.BindPendingContext)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/calls/{id}/bind-ticket", m.apiHandler.BindCallToTicket)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/calls/{id}/bind-ticket", m.apiHandler.UnbindCallFromTicket)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/contacts/{contactId}/companies", m.apiHandler.ListContactCompanies)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/users/{id}/calls", m.apiHandler.ListUserCalls)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/calls", m.apiHandler.ListCalls)
+		})
+	}
 	if !m.Enabled() {
 		return
 	}
@@ -62,19 +81,6 @@ func (m *telephonyModule) registerProtectedRoutes(r chi.Router) {
 		r.Route("/megafon-vats", func(r chi.Router) {
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/users/refresh", m.telephonyHandler.RefreshUsers)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist, user.RoleIntern)).Get("/users/suggest", m.telephonyHandler.SuggestUser)
-		})
-	}
-	if m.apiHandler != nil {
-		r.Route("/telephony", func(r chi.Router) {
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/line", m.apiHandler.GetLine)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/pending-context/me", m.apiHandler.GetPendingContextMe)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/pending-context/{id}/bind-ticket", m.apiHandler.BindPendingContext)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/calls/{id}/bind-ticket", m.apiHandler.BindCallToTicket)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/calls/{id}/bind-ticket", m.apiHandler.UnbindCallFromTicket)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Patch("/tickets/{ticketId}/contact", m.apiHandler.SetTicketContact)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/contacts/{contactId}/companies", m.apiHandler.ListContactCompanies)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Get("/users/{id}/calls", m.apiHandler.ListUserCalls)
-			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Get("/calls", m.apiHandler.ListCalls)
 		})
 	}
 }

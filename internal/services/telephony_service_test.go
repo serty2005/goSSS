@@ -465,6 +465,53 @@ func TestTelephonyServiceBindCallToTicketAllowsDifferentContactForSameTicket(t *
 	require.Equal(t, ticket.CompanyID, companyLinks[0].CompanyID)
 }
 
+func TestTelephonyServiceSetTicketContactUpdatesExistingName(t *testing.T) {
+	ctx := t.Context()
+	env := newTelephonyServiceTestEnv(t)
+	operator := createMegafonTestUser(t, ctx, env.userRepo, "alice", "Алиса")
+
+	ticket := &tickets.Ticket{
+		Subject:     "Проблема с терминалом",
+		Description: "Нужно поправить имя контакта",
+		Status:      tickets.StatusNew,
+		Type:        tickets.TypeIncident,
+		CompanyID:   "company-1",
+	}
+	require.NoError(t, env.ticketRepo.Create(ctx, ticket))
+
+	require.NoError(t, env.service.SetTicketContact(ctx, ticket.ID, TicketContactUpdateInput{
+		ContactType: tickets.ManagerTransferContactPhone,
+		Phone:       "+79990000111",
+		ContactName: "Старое имя",
+		IsPrimary:   true,
+	}, operator.ID, []string{user.RoleSupportSpecialist}))
+
+	contacts, err := env.ticketRepo.ListTicketContacts(ctx, ticket.ID)
+	require.NoError(t, err)
+	require.Len(t, contacts, 1)
+	require.Equal(t, "Старое имя", contacts[0].Name)
+
+	require.NoError(t, env.service.SetTicketContact(ctx, ticket.ID, TicketContactUpdateInput{
+		TicketContactID: contacts[0].ID,
+		ContactType:     tickets.ManagerTransferContactPhone,
+		Phone:           "+79990000111",
+		ContactName:     "Новое имя",
+		IsPrimary:       true,
+	}, operator.ID, []string{user.RoleSupportSpecialist}))
+
+	contacts, err = env.ticketRepo.ListTicketContacts(ctx, ticket.ID)
+	require.NoError(t, err)
+	require.Len(t, contacts, 1)
+	require.Equal(t, "Новое имя", contacts[0].Name)
+	require.True(t, contacts[0].IsPrimary)
+
+	contact, err := env.telephonyRepo.GetContactByPhone(ctx, "79990000111")
+	require.NoError(t, err)
+	require.NotNil(t, contact)
+	require.NotNil(t, contact.Name)
+	require.Equal(t, "Новое имя", *contact.Name)
+}
+
 func TestTelephonyServiceListCallsAdminSeesAllCallsByDefault(t *testing.T) {
 	ctx := t.Context()
 	env := newTelephonyServiceTestEnv(t)
@@ -718,6 +765,7 @@ func newTelephonyServiceTestEnv(t *testing.T) *telephonyServiceTestEnv {
 		&user.User{},
 		&user.Integration{},
 		&tickets.Ticket{},
+		&tickets.TicketContact{},
 		&telephony.ProviderEmployee{},
 		&telephony.Call{},
 		&telephony.CallHistorySyncWindow{},

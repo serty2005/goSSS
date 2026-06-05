@@ -44,7 +44,7 @@ func TestBindTicketTelephonyByTextHonorsProfileFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("не удалось открыть sqlite: %v", err)
 	}
-	if err = db.AutoMigrate(&user.User{}, &user.Role{}, &user.Integration{}, &tickets.Ticket{}, &telephony.Contact{}, &telephony.ContactCompanyLink{}, &telephony.Call{}, &telephony.CallTicketLink{}); err != nil {
+	if err = db.AutoMigrate(&user.User{}, &user.Role{}, &user.Integration{}, &tickets.Ticket{}, &tickets.TicketContact{}, &telephony.Contact{}, &telephony.ContactCompanyLink{}, &telephony.Call{}, &telephony.CallTicketLink{}); err != nil {
 		t.Fatalf("не удалось подготовить схему: %v", err)
 	}
 

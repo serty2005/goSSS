@@ -171,9 +171,15 @@ func (h *TelephonyHandler) SetTicketContact(w http.ResponseWriter, r *http.Reque
 	err := h.service.SetTicketContact(
 		r.Context(),
 		ticketID,
-		dto.Phone,
-		dto.ContactName,
-		dto.Clear,
+		services.TicketContactUpdateInput{
+			ContactType:     dto.ContactType,
+			Phone:           dto.Phone,
+			Telegram:        dto.Telegram,
+			ContactName:     dto.ContactName,
+			TicketContactID: dto.TicketContactID,
+			IsPrimary:       dto.IsPrimary,
+			Clear:           dto.Clear,
+		},
 		getUserIDFromContext(r),
 		getUserRolesFromContext(r),
 	)

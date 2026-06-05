@@ -352,6 +352,22 @@ export interface TelephonyContactDTO {
   bitrix_contact_id?: string;
 }
 
+export type TicketContactType = "phone" | "telegram";
+export type TicketContactPrimaryMode = "auto" | "manual";
+
+export interface TicketContactDTO {
+  id: number;
+  contact_type: TicketContactType | string;
+  telephony_contact_id?: number;
+  value: string;
+  display_value: string;
+  name?: string;
+  is_primary: boolean;
+  primary_mode: TicketContactPrimaryMode | string;
+  source?: string;
+  telephony_contact?: TelephonyContactDTO;
+}
+
 export interface TelephonyCallDTO {
   id: string;
   external_call_id: string;
@@ -669,6 +685,7 @@ export interface TicketDetailsDTO {
   metadata: TicketDTO;
   company_name?: string;
   contact?: TelephonyContactDTO;
+  contacts?: TicketContactDTO[];
   calls?: TelephonyCallDTO[];
   comments: TicketCommentDTO[];
   history?: TicketHistoryDTO[];

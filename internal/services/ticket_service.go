@@ -442,9 +442,9 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	managerTransferTarget := ""
-	managerTelegramComment := ""
+	managerContactComment := ""
 	if status == tickets.StatusToManager {
-		managerTransferTarget, managerTelegramComment, err = s.prepareManagerTransfer(ctx, ticket, options)
+		managerTransferTarget, managerContactComment, err = s.prepareManagerTransfer(ctx, ticket, options)
 		if err != nil {
 			return nil, err
 		}
@@ -492,13 +492,12 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		}
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
-	if managerTelegramComment != "" {
-		if err := s.addStatusComment(ctx, ticket.ID, managerTelegramComment, userID); err != nil {
+	if managerContactComment != "" {
+		if err := s.addStatusComment(ctx, ticket.ID, managerContactComment, userID); err != nil {
 			return nil, err
 		}
-		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", managerTelegramComment, nil)
+		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", managerContactComment, nil)
 	}
-
 	// Если заявка синхронизирована с Naumen, нужно отправить обновление туда
 	if ticket.ServiceDeskUUID != "" {
 		// s.sdClient.UpdateEntity(...) // TODO: Реализовать обратную синхронизацию статуса
@@ -537,17 +536,22 @@ func (s *ticketServiceImpl) prepareManagerTransfer(ctx context.Context, ticket *
 		if contact == nil {
 			return "", "", fmt.Errorf("не удалось сохранить контакт клиента")
 		}
-		ticket.ContactID = &contact.ID
 		if strings.TrimSpace(ticket.CompanyID) != "" {
 			if err := s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
 				return "", "", err
 			}
+		}
+		if err := saveTicketPhoneContact(ctx, s.ticketRepo, ticket, contact, "", tickets.TicketContactSourceManagerTransfer, true); err != nil {
+			return "", "", err
 		}
 		return target, "", nil
 	case tickets.ManagerTransferContactTelegram:
 		login := normalizeTelegramContact(contactValue)
 		if login == "" {
 			return "", "", fmt.Errorf("укажите логин Telegram клиента")
+		}
+		if err := saveTicketTelegramContact(ctx, s.ticketRepo, ticket, login, "", tickets.TicketContactSourceManagerTransfer, true); err != nil {
+			return "", "", err
 		}
 		return target, "Контакт в телеграмм: " + login, nil
 	default:
@@ -1336,11 +1340,28 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 			return nil, err
 		}
 	}
+	contacts := make([]tickets.TicketContact, 0)
+	if s.ticketRepo != nil {
+		contacts, err = s.ticketRepo.ListTicketContacts(ctx, ticketID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range contacts {
+			if !contacts[i].IsPrimary {
+				continue
+			}
+			if contacts[i].ContactType == tickets.ManagerTransferContactPhone && contacts[i].TelephonyContact != nil {
+				contact = contacts[i].TelephonyContact
+			}
+			break
+		}
+	}
 
 	details := &tickets.TicketDetails{
 		Metadata: *ticket,
 		// CompanyName: ticket.CompanyName, // Если это поле есть РІ структуре (gorm ->)
 		Contact:     contact,
+		Contacts:    contacts,
 		Calls:       make([]tickets.TicketCall, 0),
 		History:     history,
 		Attachments: attachments,
@@ -1648,16 +1669,13 @@ func (s *ticketServiceImpl) bindTicketTelephonyByText(ctx context.Context, ticke
 		return err
 	}
 	if contact != nil {
-		if ticket.ContactID == nil || *ticket.ContactID != contact.ID {
-			ticket.ContactID = &contact.ID
-			if err = s.ticketRepo.Update(ctx, ticket); err != nil {
-				return err
-			}
-		}
 		if strings.TrimSpace(ticket.CompanyID) != "" {
 			if err = s.telephonyRepo.UpsertContactCompanyLink(ctx, contact.ID, ticket.CompanyID, time.Now()); err != nil {
 				return err
 			}
+		}
+		if err = saveTicketPhoneContact(ctx, s.ticketRepo, ticket, contact, "", tickets.TicketContactSourceParsedComment, false); err != nil {
+			return err
 		}
 	}
 

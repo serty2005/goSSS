@@ -12,6 +12,7 @@ type ManagerTransferModalProps = {
   open: boolean;
   initialTarget?: ManagerTransferTarget | string;
   initialContactPhone?: string;
+  initialContactTelegram?: string;
   confirmLoading?: boolean;
   onCancel: () => void;
   onSubmit: (payload: ManagerTransferPayload) => void;
@@ -29,6 +30,7 @@ const ManagerTransferModal: React.FC<ManagerTransferModalProps> = ({
   open,
   initialTarget,
   initialContactPhone,
+  initialContactTelegram,
   confirmLoading,
   onCancel,
   onSubmit,
@@ -40,12 +42,14 @@ const ManagerTransferModal: React.FC<ManagerTransferModalProps> = ({
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
+      const hasPhone = Boolean((initialContactPhone || '').trim());
+      const hasTelegram = Boolean((initialContactTelegram || '').trim());
       setTarget(normalizeInitialTarget(initialTarget));
-      setContactType('phone');
-      setContactValue(initialContactPhone || '');
+      setContactType(hasPhone || !hasTelegram ? 'phone' : 'telegram');
+      setContactValue(hasPhone || !hasTelegram ? initialContactPhone || '' : initialContactTelegram || '');
     }
     wasOpenRef.current = open;
-  }, [initialContactPhone, initialTarget, open]);
+  }, [initialContactPhone, initialContactTelegram, initialTarget, open]);
 
   const isReady = useMemo(
     () => Boolean(target) && Boolean(contactType) && contactValue.trim().length > 0,
@@ -83,7 +87,7 @@ const ManagerTransferModal: React.FC<ManagerTransferModalProps> = ({
           onChange={(event) => {
             const nextType = event.target.value as ManagerTransferContactType;
             setContactType(nextType);
-            setContactValue(nextType === 'phone' ? initialContactPhone || '' : '');
+            setContactValue(nextType === 'phone' ? initialContactPhone || '' : initialContactTelegram || '');
           }}
         >
           <Radio.Button value="phone">Телефон</Radio.Button>

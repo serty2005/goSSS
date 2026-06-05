@@ -35,6 +35,18 @@ const (
 	ManagerTransferContactTelegram = "telegram"
 )
 
+const (
+	TicketContactPrimaryModeAuto   = "auto"
+	TicketContactPrimaryModeManual = "manual"
+)
+
+const (
+	TicketContactSourceManual          = "manual"
+	TicketContactSourceLinkedCall      = "linked_call"
+	TicketContactSourceParsedComment   = "parsed_comment"
+	TicketContactSourceManagerTransfer = "manager_transfer"
+)
+
 // Приоритеты.
 const (
 	PriorityCritical = "critical"
@@ -131,10 +143,31 @@ type TicketDetails struct {
 	Metadata    Ticket             `json:"metadata"`
 	CompanyName string             `json:"company_name,omitempty"`
 	Contact     *telephony.Contact `json:"contact,omitempty"`
+	Contacts    []TicketContact    `json:"contacts,omitempty"`
 	Calls       []TicketCall       `json:"calls,omitempty"`
 	History     []TicketHistory    `json:"history"`
 	Attachments []Attachment       `json:"attachments"`
 	Comments    []Comment          `json:"comments"` // Оставляем пока для совместимости с легаси комментариями
+}
+
+type TicketContact struct {
+	ID                 uint               `json:"id" gorm:"primaryKey"`
+	TicketID           string             `json:"ticket_id" gorm:"type:text;not null;uniqueIndex:idx_ticket_contacts_ticket_type_value,priority:1;index"`
+	ContactType        string             `json:"contact_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_ticket_contacts_ticket_type_value,priority:2;index"`
+	TelephonyContactID *uint              `json:"telephony_contact_id,omitempty" gorm:"index"`
+	TelephonyContact   *telephony.Contact `json:"telephony_contact,omitempty" gorm:"foreignKey:TelephonyContactID"`
+	Value              string             `json:"value" gorm:"type:varchar(255);not null;uniqueIndex:idx_ticket_contacts_ticket_type_value,priority:3"`
+	DisplayValue       string             `json:"display_value" gorm:"type:varchar(255);not null;default:''"`
+	Name               string             `json:"name" gorm:"type:varchar(255);not null;default:''"`
+	IsPrimary          bool               `json:"is_primary" gorm:"not null;default:false;index"`
+	PrimaryMode        string             `json:"primary_mode" gorm:"type:varchar(32);not null;default:'auto';index"`
+	Source             string             `json:"source" gorm:"type:varchar(64);not null;default:'manual';index"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+}
+
+func (TicketContact) TableName() string {
+	return "ticket_contacts"
 }
 
 type TicketCall struct {

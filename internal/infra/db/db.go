@@ -41,7 +41,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&user.User{}, &user.Role{}, &user.Integration{},
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
-		&tickets.FileAsset{}, &tickets.TicketFileLink{},
+		&tickets.FileAsset{}, &tickets.TicketFileLink{}, &tickets.TicketContact{},
 		&company.Company{},
 		&server.Server{},
 		&workstation.Workstation{},
@@ -123,7 +123,71 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 	if err := ensureBitrixCompanyServicePointMappingIndexes(db); err != nil {
 		return err
 	}
+	if err := ensureLegacyTicketContacts(db); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func ensureLegacyTicketContacts(db *gorm.DB) error {
+	type ticketRow struct {
+		ID        string
+		ContactID uint
+	}
+
+	rows := make([]ticketRow, 0)
+	if err := db.Model(&tickets.Ticket{}).
+		Select("id, contact_id").
+		Where("contact_id IS NOT NULL").
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row.ID) == "" || row.ContactID == 0 {
+			continue
+		}
+
+		var contact telephony.Contact
+		if err := db.First(&contact, row.ContactID).Error; err != nil {
+			continue
+		}
+		name := ""
+		if contact.Name != nil {
+			name = strings.TrimSpace(*contact.Name)
+		}
+		display := strings.TrimSpace(contact.PhoneDisplay)
+		if display == "" {
+			display = strings.TrimSpace(contact.PhoneNormalized)
+		}
+		contactID := contact.ID
+		item := tickets.TicketContact{
+			TicketID:           row.ID,
+			ContactType:        tickets.ManagerTransferContactPhone,
+			TelephonyContactID: &contactID,
+			Value:              strings.TrimSpace(contact.PhoneNormalized),
+			DisplayValue:       display,
+			Name:               name,
+			IsPrimary:          true,
+			PrimaryMode:        tickets.TicketContactPrimaryModeAuto,
+			Source:             tickets.TicketContactSourceManual,
+		}
+		if item.Value == "" {
+			continue
+		}
+		var count int64
+		if err := db.Model(&tickets.TicketContact{}).
+			Where("ticket_id = ? AND contact_type = ? AND value = ?", row.ID, tickets.ManagerTransferContactPhone, item.Value).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if err := db.Create(&item).Error; err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
