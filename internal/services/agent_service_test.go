@@ -665,6 +665,46 @@ func TestProcessData_ИзменениеСущественногоAdapterStatusП
 	require.NotEqual(t, oldFingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
 }
 
+func TestProcessData_НовоеНеизвестноеПолеПубликуетObservation(t *testing.T) {
+	ctx := t.Context()
+	oldData := &api.AgentDataDTO{
+		AgentUUID: "agent-extra-field",
+		AgentType: "getad",
+		Hostname:  "ws-extra-field",
+		URLRms:    "cash-extra.local:8080",
+	}
+	oldFingerprint, err := buildHeartbeatFingerprint(oldData)
+	require.NoError(t, err)
+
+	repo := &fakeAgentRepo{
+		agent: &models.Agent{
+			UUID:                               "agent-extra-field",
+			Type:                               "getad",
+			Status:                             models.StatusActive,
+			LastHeartbeat:                      time.Date(2026, 3, 21, 9, 0, 0, 0, time.UTC),
+			LastMeaningfulHeartbeatFingerprint: oldFingerprint.Fingerprint,
+			LastMeaningfulHeartbeatState:       oldFingerprint.StateJSON,
+		},
+	}
+	bus := &fakeEventBus{}
+	svc := NewAgentService(logger.New("", "test", "error", true), repo, nil, bus)
+
+	newData := &api.AgentDataDTO{
+		AgentUUID: "agent-extra-field",
+		AgentType: "getad",
+		Hostname:  "ws-extra-field",
+		URLRms:    "cash-extra.local:8080",
+		AdditionalProperties: map[string]any{
+			"new_getad_field": "visible",
+		},
+	}
+
+	_, err = svc.ProcessData(ctx, "agent-extra-field", newData)
+	require.NoError(t, err)
+	require.Equal(t, 1, bus.count())
+	require.NotEqual(t, oldFingerprint.Fingerprint, repo.agent.LastMeaningfulHeartbeatFingerprint)
+}
+
 func TestProcessData_ПервыйHeartbeatПослеРегистрацииПубликуетObservation(t *testing.T) {
 	ctx := t.Context()
 	repo := &fakeAgentRepo{

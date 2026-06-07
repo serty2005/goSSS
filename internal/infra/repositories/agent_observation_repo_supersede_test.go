@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/models"
@@ -59,6 +60,39 @@ func setupObservationRepo(t *testing.T, opts ...AgentObservationRepoOption) (*go
 
 	repo := NewAgentObservationRepo(logger.New("", "test", "error", true), db, opts...)
 	return db, repo
+}
+
+func TestPayloadDigest_СохраняетИсходныеПоляPayload(t *testing.T) {
+	raw := []byte(`{
+		"uuid": "agent-raw",
+		"hostname": "cash-raw",
+		"attribute_excise": true,
+		"ofdName": "ОФД Тест",
+		"new_getad_field": {
+			"nested": true
+		}
+	}`)
+	var data api.AgentDataDTO
+	require.NoError(t, json.Unmarshal(raw, &data))
+
+	hash, payloadJSON, err := payloadDigest(&data)
+	require.NoError(t, err)
+	require.NotEmpty(t, hash)
+
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal(payloadJSON, &stored))
+	require.Equal(t, true, stored["attribute_excise"])
+	require.Equal(t, "ОФД Тест", stored["ofdName"])
+	require.Contains(t, stored, "new_getad_field")
+
+	data.RawPayload = nil
+	_, normalizedPayloadJSON, err := payloadDigest(&data)
+	require.NoError(t, err)
+
+	var normalized map[string]any
+	require.NoError(t, json.Unmarshal(normalizedPayloadJSON, &normalized))
+	require.NotContains(t, normalized, "new_getad_field")
+	require.NotContains(t, normalized, "ofdName")
 }
 
 func TestApplyObservation_SupersedesPreviousCandidateState(t *testing.T) {

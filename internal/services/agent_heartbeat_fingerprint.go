@@ -18,10 +18,11 @@ type heartbeatFingerprintResult struct {
 }
 
 type normalizedHeartbeatState struct {
-	Host          normalizedHeartbeatHost            `json:"host"`
-	Inventory     normalizedHeartbeatInventory       `json:"inventory,omitzero"`
-	Fiscal        normalizedHeartbeatFiscal          `json:"fiscal,omitzero"`
-	AdapterStatus []normalizedHeartbeatAdapterStatus `json:"adapter_statuses,omitzero"`
+	Host                 normalizedHeartbeatHost            `json:"host"`
+	Inventory            normalizedHeartbeatInventory       `json:"inventory,omitzero"`
+	Fiscal               normalizedHeartbeatFiscal          `json:"fiscal,omitzero"`
+	AdapterStatus        []normalizedHeartbeatAdapterStatus `json:"adapter_statuses,omitzero"`
+	AdditionalProperties map[string]any                     `json:"additional_properties,omitempty"`
 }
 
 type normalizedHeartbeatHost struct {
@@ -105,10 +106,11 @@ func buildHeartbeatFingerprint(data *api.AgentDataDTO) (heartbeatFingerprintResu
 	state := normalizedHeartbeatState{}
 	if data != nil {
 		state = normalizedHeartbeatState{
-			Host:          normalizeHeartbeatHost(data),
-			Inventory:     normalizeHeartbeatInventory(data),
-			Fiscal:        normalizeHeartbeatFiscal(data),
-			AdapterStatus: normalizeHeartbeatAdapterStatuses(data.AdapterStatuses),
+			Host:                 normalizeHeartbeatHost(data),
+			Inventory:            normalizeHeartbeatInventory(data),
+			Fiscal:               normalizeHeartbeatFiscal(data),
+			AdapterStatus:        normalizeHeartbeatAdapterStatuses(data.AdapterStatuses),
+			AdditionalProperties: normalizeHeartbeatAdditionalProperties(data),
 		}
 	}
 
@@ -122,6 +124,24 @@ func buildHeartbeatFingerprint(data *api.AgentDataDTO) (heartbeatFingerprintResu
 		Fingerprint: hex.EncodeToString(sum[:]),
 		StateJSON:   datatypes.JSON(raw),
 	}, nil
+}
+
+func normalizeHeartbeatAdditionalProperties(data *api.AgentDataDTO) map[string]any {
+	if data == nil || len(data.AdditionalProperties) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(data.AdditionalProperties))
+	for key, value := range data.AdditionalProperties {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey == "" {
+			continue
+		}
+		out[normalizedKey] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func normalizeHeartbeatHost(data *api.AgentDataDTO) normalizedHeartbeatHost {

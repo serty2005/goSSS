@@ -1,6 +1,7 @@
 package dtos
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"time"
@@ -333,6 +334,7 @@ type AgentDataDTO struct {
 	TaskResults     []AgentTaskResultDTO  `json:"task_results,omitempty"`
 
 	AdditionalProperties map[string]interface{} `json:"-"`
+	RawPayload           []byte                 `json:"-"`
 }
 
 type TaskExecutionResultDTO struct {
@@ -470,6 +472,8 @@ type TicketUpdateCommentDTO struct {
 
 // UnmarshalJSON для кастомной обработки JSON, чтобы собирать все неописанные поля.
 func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
+	a.RawPayload = bytes.Clone(data)
+
 	// Сначала парсим JSON в map для доступа к сырым значениям
 	var raw map[string]interface{}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -537,6 +541,14 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	if strings.TrimSpace(a.AgentUUID) == "" {
+		if rawVal, exists := raw["agent_uuid"]; exists && rawVal != nil {
+			if val, ok := rawVal.(string); ok {
+				a.AgentUUID = strings.TrimSpace(val)
+			}
+		}
+	}
+
 	// Удаляем из мапы те поля, которые уже были распарсены в основные поля структуры.
 	delete(raw, "modelName")
 	delete(raw, "serialNumber")
@@ -569,6 +581,9 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "inventory")
 	delete(raw, "adapter_statuses")
 	delete(raw, "task_results")
+	delete(raw, "uuid")
+	delete(raw, "agent_type")
+	delete(raw, "agent_uuid")
 
 	a.AdditionalProperties = raw
 	return nil

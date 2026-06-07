@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -3311,9 +3312,19 @@ func identityHash(tv, lm string) string {
 // payloadDigest вычисляет SHA256 хеш от всего payload и возвращает JSON.
 // Используется для идемпотентности — дубликаты по хешу пропускаются.
 func payloadDigest(data *api.AgentDataDTO) (string, datatypes.JSON, error) {
-	b, err := json.Marshal(data)
-	if err != nil {
-		return "", nil, err
+	b := bytes.TrimSpace(data.RawPayload)
+	if len(b) > 0 {
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, b); err != nil {
+			return "", nil, fmt.Errorf("исходный payload содержит невалидный JSON: %w", err)
+		}
+		b = compacted.Bytes()
+	} else {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			return "", nil, err
+		}
+		b = raw
 	}
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:]), datatypes.JSON(b), nil

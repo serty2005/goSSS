@@ -53,7 +53,26 @@ func TestAgentDataDTO_Unmarshal_LegacyFiscalPayloadБезРегрессии(t *t
 	require.Equal(t, "legacy-license", dto.Licenses.Legacy)
 	require.Nil(t, dto.Inventory)
 	require.Empty(t, dto.AdapterStatuses)
+	require.NotContains(t, dto.AdditionalProperties, "uuid")
+	require.NotContains(t, dto.AdditionalProperties, "agent_type")
 	require.Equal(t, "extra-value", dto.AdditionalProperties["extra_field"])
+	require.JSONEq(t, string(raw), string(dto.RawPayload))
+}
+
+func TestAgentDataDTO_Unmarshal_ПоддерживаетAgentUUIDAlias(t *testing.T) {
+	raw := []byte(`{
+		"agent_uuid": "agent-alias",
+		"hostname": "cash-alias",
+		"new_getad_field": "visible"
+	}`)
+
+	var dto AgentDataDTO
+	require.NoError(t, json.Unmarshal(raw, &dto))
+	require.Equal(t, "agent-alias", dto.AgentUUID)
+	require.Equal(t, "cash-alias", dto.Hostname)
+	require.NotContains(t, dto.AdditionalProperties, "agent_uuid")
+	require.Equal(t, "visible", dto.AdditionalProperties["new_getad_field"])
+	require.JSONEq(t, string(raw), string(dto.RawPayload))
 }
 
 func TestAgentDataDTO_Unmarshal_InventoryИAdapterStatusesКакТипизированныеПоля(t *testing.T) {
