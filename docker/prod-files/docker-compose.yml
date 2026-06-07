@@ -45,8 +45,8 @@ services:
       - traefik.http.routers.traefik-admin.service=api@internal
       - traefik.http.routers.traefik-admin.middlewares=admin-auth,etalon-secure-headers
 
-      - traefik.http.middlewares.admin-auth.basicauth.users=${TRAEFIK_ADMIN_AUTH}
       - traefik.http.middlewares.admin-auth.basicauth.removeheader=true
+      - traefik.http.middlewares.admin-auth.basicauth.users=${TRAEFIK_ADMIN_AUTH}
 
       - traefik.http.middlewares.etalon-secure-headers.headers.stsSeconds=31536000
       - traefik.http.middlewares.etalon-secure-headers.headers.stsIncludeSubdomains=true
@@ -88,13 +88,13 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 5s
       timeout: 5s
       retries: 10
     networks:
       - gosss-net
-      
+
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
     restart: unless-stopped
@@ -129,7 +129,7 @@ services:
       - traefik.http.middlewares.minio-console-slash.redirectregex.permanent=true
       - traefik.http.middlewares.minio-console-strip.stripprefix.prefixes=/minio
 
-      - traefik.http.routers.minio-agents.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/agents`)
+      - traefik.http.routers.minio-agents.rule=(Host(`${TRAEFIK_DOMAIN}`) || Host(`${TRAEFIK_SECONDARY_DOMAIN}`)) && PathPrefix(`/agents`)
       - traefik.http.routers.minio-agents.entrypoints=websecure
       - traefik.http.routers.minio-agents.tls=true
       - traefik.http.routers.minio-agents.tls.certresolver=le
@@ -138,7 +138,7 @@ services:
       - traefik.http.routers.minio-agents.middlewares=etalon-secure-headers
       - traefik.http.services.minio-agents.loadbalancer.server.port=9000
 
-      - traefik.http.routers.minio-recordings.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/recordings`)
+      - traefik.http.routers.minio-recordings.rule=(Host(`${TRAEFIK_DOMAIN}`) || Host(`${TRAEFIK_SECONDARY_DOMAIN}`)) && PathPrefix(`/recordings`)
       - traefik.http.routers.minio-recordings.entrypoints=websecure
       - traefik.http.routers.minio-recordings.tls=true
       - traefik.http.routers.minio-recordings.tls.certresolver=le
@@ -171,11 +171,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: [ "redis-server", "--appendonly", "yes" ]
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -215,7 +215,7 @@ services:
       - traefik.enable=true
       - traefik.docker.network=gosss-prod_edge
 
-      - traefik.http.routers.etalon-web.rule=Host(`${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.etalon-web.rule=Host(`${TRAEFIK_DOMAIN}`) || Host(`${TRAEFIK_SECONDARY_DOMAIN}`)
       - traefik.http.routers.etalon-web.entrypoints=websecure
       - traefik.http.routers.etalon-web.tls=true
       - traefik.http.routers.etalon-web.tls.certresolver=le

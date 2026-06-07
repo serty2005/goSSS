@@ -19,6 +19,7 @@
 `traefik` продолжает маршрутизировать весь трафик стэка:
 
 - `https://<domain>/` -> `frontend`
+- `https://<secondary-domain>/` -> `frontend`, если в окружении задан второй домен
 - `https://<domain>/logs` -> `dozzle`
 - `https://<domain>/agents/...` -> `minio:9000`
 - `https://minio.<domain>/` -> `minio:9001`
@@ -64,6 +65,8 @@ cp .env.prod.example .env
 - `AGENT_ADAPTER_CATALOG_KEY=catalog/index.json`
 - `AGENT_ADAPTER_CATALOG_SYNC_INTERVAL_MIN`
 - `AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL=stable`
+
+Если один production-стэк должен отвечать на два пользовательских домена, второй host нужно добавить в labels пользовательских routers Traefik и в `ALLOWED_ORIGINS`. Для текущей схемы с относительным `/api` CORS не нужен основному frontend-пути, но backend использует `ALLOWED_ORIGINS` для прямых browser-запросов к API и preflight-проверок.
 
 Для MinIO-контейнеров в production не используйте `latest`.
 В шаблоне по умолчанию зафиксированы CPU-совместимые теги `*-cpuv1`, потому что на старых `amd64`-хостах `minio/mc:latest` может завершаться с ошибкой `Fatal glibc error: CPU does not support x86-64-v2`.
