@@ -886,6 +886,12 @@ export interface UserInterfaceConfigDTO {
   search?: {
     cards_columns?: number;
   };
+  company_ticket_table?: {
+    columns?: Array<{
+      key: string;
+      width?: number;
+    }>;
+  };
 }
 
 export interface GlobalTranslationLocaleDTO {

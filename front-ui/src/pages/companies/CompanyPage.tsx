@@ -811,7 +811,11 @@ const CompanyPage: React.FC = () => {
               Создать тикет
             </Button>
           </div>
-          <TicketTable companyIds={ticketCompanyIDs} limit={10} />
+          <TicketTable
+            companyIds={ticketCompanyIDs}
+            limit={10}
+            showCompanyColumn={ticketScope === 'with_children'}
+          />
         </div>
       ),
     },

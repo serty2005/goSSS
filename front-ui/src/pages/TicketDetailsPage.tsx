@@ -1682,6 +1682,7 @@ const TicketDetailsPage: React.FC = () => {
       limit={10}
       showCompanyColumn={false}
       excludedTicketId={metadata.id}
+      rowOpenMode="new_tab"
     />
   ) : (
     <Empty description="Компания тикета не выбрана" />

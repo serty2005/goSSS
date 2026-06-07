@@ -95,6 +95,47 @@ body .ant-message .ant-message-notice-content {
   overflow: hidden;
 }
 
+.company-ticket-table .ant-table-tbody>tr>td {
+  vertical-align: middle;
+}
+
+.company-ticket-table .ant-table-thead>tr>th {
+  user-select: none;
+}
+
+.company-ticket-table .ant-table-thead>tr>th.company-ticket-table__header-cell--sortable {
+  cursor: grab;
+}
+
+.company-ticket-table .ant-table-thead>tr>th.company-ticket-table__header-cell--sortable:active {
+  cursor: grabbing;
+}
+
+.company-ticket-table .ant-table-thead>tr>th.company-ticket-table__header-cell--sorted {
+  background: var(--app-color-primary-soft);
+}
+
+.company-ticket-table__header {
+  min-width: 0;
+  height: 100%;
+}
+
+.company-ticket-table__header-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-ticket-table__description,
+.company-ticket-table__cell-ellipsis,
+.company-ticket-table__cell-nowrap {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tickets-table .ant-table-cell-ellipsis .ant-typography {
   display: block;
   overflow: hidden;
