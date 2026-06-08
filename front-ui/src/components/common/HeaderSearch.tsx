@@ -1,6 +1,6 @@
 ﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Popconfirm, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
+import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Modal, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { DeleteOutlined, LogoutOutlined, PlusOutlined, SaveOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +20,22 @@ const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const LONGEST_STATUS_LABEL_WIDTH = 260;
+const TABLE_COLUMN_OPTIONS = [
+  { value: 'selection', labelKey: 'layout:headerSearch.ticket.tableColumns.selection' },
+  { value: 'number', labelKey: 'layout:headerSearch.ticket.tableColumns.number' },
+  { value: 'status', labelKey: 'layout:headerSearch.ticket.tableColumns.status' },
+  { value: 'company_display', labelKey: 'layout:headerSearch.ticket.tableColumns.company_display' },
+  { value: 'assignee_display', labelKey: 'layout:headerSearch.ticket.tableColumns.assignee_display' },
+  { value: 'reporter_display', labelKey: 'layout:headerSearch.ticket.tableColumns.reporter_display' },
+  { value: 'subject', labelKey: 'layout:headerSearch.ticket.tableColumns.subject' },
+  { value: 'bitrix_deal_title', labelKey: 'layout:headerSearch.ticket.tableColumns.bitrix_deal_title' },
+  { value: 'last_comment', labelKey: 'layout:headerSearch.ticket.tableColumns.last_comment' },
+  { value: 'created_at', labelKey: 'layout:headerSearch.ticket.tableColumns.created_at' },
+  { value: 'last_activity', labelKey: 'layout:headerSearch.ticket.tableColumns.last_activity' },
+  { value: 'sync_with_bitrix', labelKey: 'layout:headerSearch.ticket.tableColumns.sync_with_bitrix' },
+] as const;
+const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
+const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'selection');
 const TICKET_STATE_PARAM_KEYS = [
   'preset_id',
   'q',
@@ -71,6 +87,7 @@ const HeaderSearch: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
+  const isBitrixEnabled = user?.bitrix_enabled === true;
   const localeDefinition = useMemo(() => getSupportedLocale(i18n.resolvedLanguage), [i18n.resolvedLanguage]);
   const ticketModeOptions = useMemo(
     () => [
@@ -116,6 +133,8 @@ const HeaderSearch: React.FC = () => {
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
   const debouncedTicketTerm = useDebouncedValue(ticketTerm, TEXT_SEARCH_DEBOUNCE_MS);
   const [presetName, setPresetName] = useState('');
+  const [presetSettingsPresetID, setPresetSettingsPresetID] = useState<string | null>(null);
+  const [presetSettingsValues, setPresetSettingsValues] = useState<Partial<Record<TicketPresetParamKey, string>>>({});
   const appliedSearch = ticketParams.get('q') || '';
   const ticketStatus = ticketParams.get('status') || '';
   const selectedPresetID = ticketParams.get('preset_id') || undefined;
@@ -239,6 +258,22 @@ const HeaderSearch: React.FC = () => {
     })),
     [assigneesRes, t],
   );
+  const tableColumnOptions = useMemo(
+    () => {
+      const localizedOptions = TABLE_COLUMN_OPTIONS.map((item) => ({
+        value: item.value,
+        label: t(item.labelKey),
+      }));
+      return isBitrixEnabled
+        ? localizedOptions
+        : localizedOptions.filter((item) => item.value !== 'bitrix_deal_title' && item.value !== 'sync_with_bitrix');
+    },
+    [isBitrixEnabled, t],
+  );
+  const tableColumnOrder = useMemo(
+    () => tableColumnOptions.map((item) => item.value),
+    [tableColumnOptions],
+  );
 
   const bulkAssignMutation = useMutation({
     mutationFn: async (payload: { ids: string[]; assigneeID: number }) => {
@@ -263,15 +298,15 @@ const HeaderSearch: React.FC = () => {
     () => presets.find((item) => item.id === selectedPresetID),
     [presets, selectedPresetID],
   );
+  const presetSettingsPreset = useMemo(
+    () => presets.find((item) => item.id === presetSettingsPresetID),
+    [presetSettingsPresetID, presets],
+  );
   useEffect(() => {
     if (selectedPreset) {
       setPresetName(selectedPreset.name);
     }
   }, [selectedPreset]);
-  const presetNameOptions = useMemo(
-    () => presets.map((item) => ({ value: item.name })),
-    [presets],
-  );
   const normalizedPresetName = useMemo(
     () => presetName.trim().toLocaleLowerCase(localeDefinition.intlLocale),
     [localeDefinition.intlLocale, presetName],
@@ -310,6 +345,40 @@ const HeaderSearch: React.FC = () => {
   }, [currentPresetValues, selectedPreset]);
   const shouldShowPresetSaveAction = Boolean(presetName.trim())
     && (!existingPresetByName || isSelectedPresetDirty || selectedPresetID !== existingPresetByName.id);
+  const normalizePresetTableColumns = useCallback((rawValue?: string) => {
+    const allowedColumnKeys = isBitrixEnabled
+      ? TABLE_COLUMN_KEYS
+      : TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
+    const defaultColumnKeys = isBitrixEnabled
+      ? DEFAULT_TABLE_COLUMN_KEYS
+      : TABLE_COLUMN_KEYS.filter((key) => key !== 'selection' && key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
+    if (!rawValue) {
+      return defaultColumnKeys;
+    }
+    const values = rawValue.split(',').filter((value) => allowedColumnKeys.includes(value as (typeof TABLE_COLUMN_KEYS)[number]));
+    return values.length ? values : defaultColumnKeys;
+  }, [isBitrixEnabled]);
+  const presetSettingsArchiveMode = presetSettingsValues.archive_mode === 'archive' ? 'archive' : 'active';
+  const presetSettingsCompanyParamKey = presetSettingsArchiveMode === 'archive' ? 'archive_company' : 'company';
+  const presetSettingsPeriodFromParamKey = presetSettingsArchiveMode === 'archive' ? 'archive_period_from' : 'period_from';
+  const presetSettingsPeriodToParamKey = presetSettingsArchiveMode === 'archive' ? 'archive_period_to' : 'period_to';
+  const presetSettingsStatusValues = useMemo(
+    () => (presetSettingsValues.status ? presetSettingsValues.status.split(',').filter(Boolean) : []),
+    [presetSettingsValues.status],
+  );
+  const presetSettingsAssigneeValues = useMemo(
+    () => (presetSettingsValues.assignee_ids ? presetSettingsValues.assignee_ids.split(',').filter(Boolean) : []),
+    [presetSettingsValues.assignee_ids],
+  );
+  const presetSettingsTableColumns = useMemo(
+    () => normalizePresetTableColumns(presetSettingsValues.table_columns),
+    [normalizePresetTableColumns, presetSettingsValues.table_columns],
+  );
+  const presetSettingsPeriodValue: [Dayjs, Dayjs] | null = useMemo(() => {
+    const periodFromValue = presetSettingsValues[presetSettingsPeriodFromParamKey];
+    const periodToValue = presetSettingsValues[presetSettingsPeriodToParamKey];
+    return periodFromValue && periodToValue ? [dayjs(periodFromValue), dayjs(periodToValue)] : null;
+  }, [presetSettingsPeriodFromParamKey, presetSettingsPeriodToParamKey, presetSettingsValues]);
   const ticketStateStorageKey = useMemo(() => {
     const userKey = user?.id ? String(user.id) : 'guest';
     return `tickets-last-state-${userKey}`;
@@ -570,14 +639,18 @@ const HeaderSearch: React.FC = () => {
     }
   };
 
-  const deleteCurrentPreset = async () => {
-    if (!user || !existingPresetByName) {
+  const deletePreset = useCallback(async (presetID: string) => {
+    if (!user) {
+      return;
+    }
+    const preset = presets.find((item) => item.id === presetID);
+    if (!preset) {
       return;
     }
     const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
     const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
     const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
-    const nextPresets = presets.filter((item) => item.id !== existingPresetByName.id);
+    const nextPresets = presets.filter((item) => item.id !== preset.id);
     const nextConfig: Record<string, unknown> = {
       ...currentConfig,
       tickets: {
@@ -592,15 +665,199 @@ const HeaderSearch: React.FC = () => {
     try {
       await updateProfileMutation.mutateAsync(nextConfig);
       setUser({ ...user, profile_config: nextConfig as any });
-      if (selectedPresetID === existingPresetByName.id) {
+      if (selectedPresetID === preset.id) {
         updateTicketParams({ preset_id: undefined });
+        setPresetName('');
       }
-      setPresetName('');
+      if (presetSettingsPresetID === preset.id) {
+        setPresetSettingsPresetID(null);
+        setPresetSettingsValues({});
+      }
       message.success(t('layout:headerSearch.ticket.presetDeleted'));
     } catch {
       message.error(t('layout:headerSearch.ticket.presetDeleteError'));
     }
-  };
+  }, [
+    presets,
+    presetSettingsPresetID,
+    selectedPresetID,
+    setUser,
+    t,
+    updateProfileMutation,
+    updateTicketParams,
+    user,
+  ]);
+
+  const confirmDeletePreset = useCallback((preset: TicketPreset) => {
+    Modal.confirm({
+      title: t('layout:headerSearch.ticket.presetDeleteTitle', { name: preset.name }),
+      okText: t('common:actions.delete'),
+      cancelText: t('common:actions.cancel'),
+      okButtonProps: { danger: true },
+      onOk: () => deletePreset(preset.id),
+    });
+  }, [deletePreset, t]);
+
+  const openPresetSettings = useCallback((preset: TicketPreset) => {
+    setPresetSettingsPresetID(preset.id);
+    setPresetSettingsValues({ ...preset.values });
+  }, []);
+
+  const closePresetSettings = useCallback(() => {
+    setPresetSettingsPresetID(null);
+    setPresetSettingsValues({});
+  }, []);
+
+  const updatePresetSettingsValue = useCallback((key: TicketPresetParamKey, value?: string) => {
+    setPresetSettingsValues((current) => {
+      const next = { ...current };
+      if (!value) {
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+      return next;
+    });
+  }, []);
+
+  const savePresetSettings = useCallback(async () => {
+    if (!user || !presetSettingsPreset) {
+      return;
+    }
+    const normalizedValues: Partial<Record<TicketPresetParamKey, string>> = {};
+    TICKET_PRESET_PARAM_KEYS.forEach((key) => {
+      const value = presetSettingsValues[key];
+      if (value) {
+        normalizedValues[key] = value;
+      }
+    });
+    const nextPreset: TicketPreset = {
+      ...presetSettingsPreset,
+      values: normalizedValues,
+    };
+    const nextPresets = presets.map((item) => (item.id === nextPreset.id ? nextPreset : item));
+    const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
+    const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
+    const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
+    const nextConfig: Record<string, unknown> = {
+      ...currentConfig,
+      tickets: {
+        ...ticketsConfig,
+        filters: {
+          ...filtersConfig,
+          presets: nextPresets,
+        },
+      },
+    };
+
+    try {
+      await updateProfileMutation.mutateAsync(nextConfig);
+      setUser({ ...user, profile_config: nextConfig as any });
+      if (selectedPresetID === nextPreset.id) {
+        const nextParams: Record<string, string | undefined> = {};
+        TICKET_PRESET_PARAM_KEYS.forEach((key) => {
+          nextParams[key] = nextPreset.values[key] || undefined;
+        });
+        nextParams.preset_id = nextPreset.id;
+        updateTicketParams(nextParams);
+        setPresetName(nextPreset.name);
+      }
+      closePresetSettings();
+      message.success(t('layout:headerSearch.ticket.presetUpdated'));
+    } catch {
+      message.error(t('layout:headerSearch.ticket.presetSaveError'));
+    }
+  }, [
+    closePresetSettings,
+    presetSettingsPreset,
+    presetSettingsValues,
+    presets,
+    selectedPresetID,
+    setUser,
+    t,
+    updateProfileMutation,
+    updateTicketParams,
+    user,
+  ]);
+
+  const presetNameOptions = useMemo(
+    () => presets.map((item) => ({
+      value: item.name,
+      label: (
+        <div className="ticket-preset-option">
+          <span className="ticket-preset-option-name">{item.name}</span>
+          <span className="ticket-preset-option-actions">
+            <Button
+              size="small"
+              type="text"
+              icon={<SettingOutlined />}
+              aria-label={t('layout:headerSearch.ticket.presetSettings')}
+              title={t('layout:headerSearch.ticket.presetSettings')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.stopPropagation();
+                openPresetSettings(item);
+              }}
+            />
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={t('common:actions.delete')}
+              title={t('common:actions.delete')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.stopPropagation();
+                confirmDeletePreset(item);
+              }}
+            />
+          </span>
+        </div>
+      ),
+    })),
+    [confirmDeletePreset, openPresetSettings, presets, t],
+  );
+
+  const presetSelectOptions = useMemo(
+    () => presets.map((item) => ({
+      value: item.id,
+      selectedLabel: item.name,
+      label: (
+        <div className="ticket-preset-option">
+          <span className="ticket-preset-option-name">{item.name}</span>
+          <span className="ticket-preset-option-actions">
+            <Button
+              size="small"
+              type="text"
+              icon={<SettingOutlined />}
+              aria-label={t('layout:headerSearch.ticket.presetSettings')}
+              title={t('layout:headerSearch.ticket.presetSettings')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.stopPropagation();
+                openPresetSettings(item);
+              }}
+            />
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={t('common:actions.delete')}
+              title={t('common:actions.delete')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.stopPropagation();
+                confirmDeletePreset(item);
+              }}
+            />
+          </span>
+        </div>
+      ),
+    })),
+    [confirmDeletePreset, openPresetSettings, presets, t],
+  );
 
   const [sectionParams] = useSearchParams();
   const sectionTerm = sectionParams.get('q') || '';
@@ -787,6 +1044,137 @@ const HeaderSearch: React.FC = () => {
       && archiveMode !== 'archive'
       && selectedTicketIDs.length > 0;
     const periodValue: [Dayjs, Dayjs] | null = periodFrom && periodTo ? [dayjs(periodFrom), dayjs(periodTo)] : null;
+    const presetSettingsModal = (
+      <Modal
+        open={Boolean(presetSettingsPreset)}
+        title={t('layout:headerSearch.ticket.presetSettingsTitle', { name: presetSettingsPreset?.name || '' })}
+        okText={t('common:actions.save')}
+        cancelText={t('common:actions.cancel')}
+        onOk={() => void savePresetSettings()}
+        onCancel={closePresetSettings}
+        confirmLoading={updateProfileMutation.isPending}
+        width={420}
+        className="ticket-preset-settings-modal"
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.listMode')}</Text>
+            <Segmented
+              block
+              value={presetSettingsArchiveMode}
+              options={ticketModeOptions}
+              style={{ marginTop: 6 }}
+              onChange={(value) => {
+                const nextMode = value as 'active' | 'archive';
+                setPresetSettingsValues((current) => {
+                  const next = { ...current, archive_mode: nextMode };
+                  if (nextMode === 'archive') {
+                    delete next.status;
+                    delete next.only_active_statuses;
+                    delete next.assignee_ids;
+                    delete next.company;
+                    delete next.period_from;
+                    delete next.period_to;
+                  } else {
+                    delete next.archive_company;
+                    delete next.archive_period_from;
+                    delete next.archive_period_to;
+                  }
+                  return next;
+                });
+              }}
+            />
+          </div>
+
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.tableColumnsLabel')}</Text>
+            <Select
+              mode="multiple"
+              value={presetSettingsTableColumns}
+              onChange={(values) => {
+                const normalized = tableColumnOrder.filter((key) => values.includes(key));
+                updatePresetSettingsValue('table_columns', normalized.length ? normalized.join(',') : undefined);
+              }}
+              options={tableColumnOptions}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {presetSettingsArchiveMode !== 'archive' && (
+            <>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.statuses')}</Text>
+                <Space.Compact style={{ width: '100%', marginTop: 6 }}>
+                  <Select
+                    mode="multiple"
+                    placeholder={t('layout:headerSearch.ticket.statuses')}
+                    value={presetSettingsStatusValues}
+                    onChange={(values) => updatePresetSettingsValue('status', values.length ? values.join(',') : undefined)}
+                    options={ticketStatusOptions}
+                    style={{ width: '100%' }}
+                  />
+                  <Button
+                    type={presetSettingsValues.only_active_statuses === '1' ? 'primary' : 'default'}
+                    onClick={() => updatePresetSettingsValue(
+                      'only_active_statuses',
+                      presetSettingsValues.only_active_statuses === '1' ? undefined : '1',
+                    )}
+                  >
+                    {t('layout:headerSearch.ticket.activeOnly')}
+                  </Button>
+                </Space.Compact>
+              </div>
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.assignees')}</Text>
+                <Select
+                  mode="multiple"
+                  placeholder={t('layout:headerSearch.ticket.assignees')}
+                  value={presetSettingsAssigneeValues}
+                  onChange={(values) => updatePresetSettingsValue('assignee_ids', values.length ? values.join(',') : undefined)}
+                  options={assigneeOptions}
+                  loading={!assigneesRes}
+                  style={{ width: '100%', marginTop: 6 }}
+                />
+              </div>
+            </>
+          )}
+
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.period')}</Text>
+            <DatePicker.RangePicker
+              value={presetSettingsPeriodValue}
+              onChange={(dates) => {
+                const from = dates?.[0] ? dates[0].startOf('day').format('YYYY-MM-DD') : undefined;
+                const to = dates?.[1] ? dates[1].endOf('day').format('YYYY-MM-DD') : undefined;
+                updatePresetSettingsValue(presetSettingsPeriodFromParamKey, from);
+                updatePresetSettingsValue(presetSettingsPeriodToParamKey, to);
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+              allowClear
+            />
+          </div>
+
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('layout:headerSearch.ticket.company')}</Text>
+            <Select
+              showSearch
+              allowClear
+              placeholder={t('layout:headerSearch.ticket.company')}
+              value={presetSettingsValues[presetSettingsCompanyParamKey]}
+              onChange={(value) => updatePresetSettingsValue(presetSettingsCompanyParamKey, value || undefined)}
+              filterOption={(input, option) =>
+                String((option as { searchText?: string } | undefined)?.searchText || '').includes(input.toLowerCase())
+              }
+              options={companyOptions}
+              loading={isFiltersLoading}
+              optionLabelProp="selectedLabel"
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+        </Space>
+      </Modal>
+    );
     const filterContent = (
       <Space direction="vertical" size="small" className="ticket-filter-popover-content">
         {isHeaderNarrow && (
@@ -813,7 +1201,8 @@ const HeaderSearch: React.FC = () => {
               allowClear
               placeholder={t('layout:headerSearch.ticket.savedFilter')}
               value={selectedPresetID}
-              options={presets.map((item) => ({ value: item.id, label: item.name }))}
+              options={presetSelectOptions}
+              optionLabelProp="selectedLabel"
               onChange={(value) => {
                 if (!value) {
                   setPresetName('');
@@ -897,18 +1286,17 @@ const HeaderSearch: React.FC = () => {
               placeholder={t('layout:headerSearch.ticket.presetName')}
               value={presetName}
               onChange={setPresetName}
-              filterOption={(inputValue, option) =>
-                String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())
-              }
+              onSelect={(value) => {
+                const preset = presets.find((item) => item.name === value);
+                if (preset) {
+                  applyPreset(preset.id);
+                }
+              }}
+              filterOption={false}
             />
             <Button onClick={() => void saveCurrentPreset()} loading={updateProfileMutation.isPending}>
               {t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
             </Button>
-            {existingPresetByName && (
-              <Button danger onClick={() => void deleteCurrentPreset()} loading={updateProfileMutation.isPending}>
-                {t('common:actions.delete')}
-              </Button>
-            )}
           </Space.Compact>
         )}
 
@@ -963,9 +1351,40 @@ const HeaderSearch: React.FC = () => {
 
     if (isHeaderMobile) {
       return (
-        <div className="header-mobile-search-row">
+        <>
+          <div className="header-mobile-search-row">
+            <Input.Search
+              className="ticket-header-mobile-search"
+              placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
+              allowClear
+              loading={isTicketSearchLoading}
+              value={ticketTerm}
+              onChange={handleTicketSearchChange}
+              onSearch={applyTicketSearch}
+            />
+            {renderMobileSettingsButton(filterContent)}
+          </div>
+          {presetSettingsModal}
+        </>
+      );
+    }
+
+    return (
+      <>
+        <Space size="small" wrap={false} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
+          {!isHeaderNarrow && (
+            <Segmented
+              className="ticket-header-inline-archive"
+              value={archiveMode}
+              options={ticketModeOptions}
+              onChange={(value) => {
+                const nextMode = value as 'active' | 'archive';
+                updateTicketParams({ archive_mode: nextMode });
+              }}
+            />
+          )}
           <Input.Search
-            className="ticket-header-mobile-search"
+            className="ticket-header-search-input"
             placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
             allowClear
             loading={isTicketSearchLoading}
@@ -973,103 +1392,59 @@ const HeaderSearch: React.FC = () => {
             onChange={handleTicketSearchChange}
             onSearch={applyTicketSearch}
           />
-          {renderMobileSettingsButton(filterContent)}
-        </div>
-      );
-    }
-
-    return (
-      <Space size="small" wrap={false} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
-        {!isHeaderNarrow && (
-          <Segmented
-            className="ticket-header-inline-archive"
-            value={archiveMode}
-            options={ticketModeOptions}
-            onChange={(value) => {
-              const nextMode = value as 'active' | 'archive';
-              updateTicketParams({ archive_mode: nextMode });
-            }}
-          />
-        )}
-        <Input.Search
-          className="ticket-header-search-input"
-          placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
-          allowClear
-          loading={isTicketSearchLoading}
-          value={ticketTerm}
-          onChange={handleTicketSearchChange}
-          onSearch={applyTicketSearch}
-        />
-        {!isHeaderMobile && archiveMode !== 'archive' && (
-          <Space.Compact className="ticket-header-profile-control">
-            <AutoComplete
-              className="ticket-header-profile-name"
-              options={presetNameOptions}
-              placeholder={t('layout:headerSearch.ticket.savedFilter')}
-              value={presetName}
-              onChange={setPresetName}
-              onSelect={(value) => {
-                const preset = presets.find((item) => item.name === value);
-                if (preset) {
-                  applyPreset(preset.id);
-                }
-              }}
-              filterOption={(inputValue, option) =>
-                String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())
-              }
-            />
-            {shouldShowPresetSaveAction && (
-              <Button
-                icon={<SaveOutlined />}
-                aria-label={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
-                title={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
-                onClick={() => void saveCurrentPreset()}
-                loading={updateProfileMutation.isPending}
+          {!isHeaderMobile && archiveMode !== 'archive' && (
+            <Space.Compact className="ticket-header-profile-control">
+              <AutoComplete
+                className="ticket-header-profile-name"
+                options={presetNameOptions}
+                placeholder={t('layout:headerSearch.ticket.savedFilter')}
+                value={presetName}
+                onChange={setPresetName}
+                onSelect={(value) => {
+                  const preset = presets.find((item) => item.name === value);
+                  if (preset) {
+                    applyPreset(preset.id);
+                  }
+                }}
+                filterOption={false}
               />
-            )}
-            {existingPresetByName && (
-              <Popconfirm
-                title={t('common:actions.delete')}
-                okText={t('common:actions.delete')}
-                cancelText={t('common:actions.cancel')}
-                okButtonProps={{ danger: true }}
-                onConfirm={() => void deleteCurrentPreset()}
-              >
+              {shouldShowPresetSaveAction && (
                 <Button
-                  danger
-                  icon={<DeleteOutlined />}
-                  aria-label={t('common:actions.delete')}
-                  title={t('common:actions.delete')}
+                  icon={<SaveOutlined />}
+                  aria-label={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
+                  title={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
+                  onClick={() => void saveCurrentPreset()}
                   loading={updateProfileMutation.isPending}
                 />
-              </Popconfirm>
-            )}
-          </Space.Compact>
-        )}
-        <Button
-          className="ticket-header-new-ticket"
-          type="primary"
-          icon={<PlusOutlined />}
-          aria-label={t('layout:headerSearch.ticket.newTicket')}
-          style={isHeaderNarrow ? { width: 40, minWidth: 40, paddingInline: 0 } : undefined}
-          onClick={() => {
-            if (isTicketsListPage) {
+              )}
+            </Space.Compact>
+          )}
+          <Button
+            className="ticket-header-new-ticket"
+            type="primary"
+            icon={<PlusOutlined />}
+            aria-label={t('layout:headerSearch.ticket.newTicket')}
+            style={isHeaderNarrow ? { width: 40, minWidth: 40, paddingInline: 0 } : undefined}
+            onClick={() => {
+              if (isTicketsListPage) {
+                requestCreateTicket();
+                return;
+              }
+              if (isTicketsPage) {
+                const params = new URLSearchParams(location.search);
+                params.set('create', '1');
+                navigate(`${location.pathname}?${params.toString()}`);
+                return;
+              }
               requestCreateTicket();
-              return;
-            }
-            if (isTicketsPage) {
-              const params = new URLSearchParams(location.search);
-              params.set('create', '1');
-              navigate(`${location.pathname}?${params.toString()}`);
-              return;
-            }
-            requestCreateTicket();
-            navigate('/tickets');
-          }}
-        >
-          {!isHeaderNarrow && <span className="ticket-header-new-ticket-label">{t('layout:headerSearch.ticket.newTicket')}</span>}
-        </Button>
-      </Space>
+              navigate('/tickets');
+            }}
+          >
+            {!isHeaderNarrow && <span className="ticket-header-new-ticket-label">{t('layout:headerSearch.ticket.newTicket')}</span>}
+          </Button>
+        </Space>
+        {presetSettingsModal}
+      </>
     );
   }
 
