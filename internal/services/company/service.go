@@ -119,8 +119,8 @@ func (s *serviceImpl) GetCompany(ctx context.Context, id string) (*company.Compa
 	return s.companyRepo.GetByID(ctx, id)
 }
 
-func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int) ([]company.Company, int64, error) {
-	return s.companyRepo.SearchWithTotal(ctx, term, true, limit, offset)
+func (s *serviceImpl) SearchCompanies(ctx context.Context, term string, limit, offset int, parentIDs []string) ([]company.Company, int64, error) {
+	return s.companyRepo.SearchWithTotal(ctx, term, true, limit, offset, parentIDs)
 }
 
 // GetChildren возвращает список дочерних компаний для указанной hub-компании.
@@ -317,8 +317,12 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 	return results, nil
 }
 
-func (s *serviceImpl) ListBitrixMappings(ctx context.Context, term string, limit, offset int) ([]company.BitrixMappingRow, error) {
-	companies, err := s.companyRepo.Search(ctx, term, true, limit, offset)
+func (s *serviceImpl) ListParents(ctx context.Context, term string, limit int) ([]company.ParentCompanyOption, error) {
+	return s.companyRepo.ListParents(ctx, term, limit)
+}
+
+func (s *serviceImpl) ListBitrixMappings(ctx context.Context, term string, limit, offset int, parentIDs []string) ([]company.BitrixMappingRow, error) {
+	companies, err := s.companyRepo.Search(ctx, term, true, limit, offset, parentIDs)
 	if err != nil {
 		return nil, err
 	}

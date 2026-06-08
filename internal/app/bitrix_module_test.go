@@ -79,6 +79,29 @@ func TestBitrixModuleRegisterCompanyRoutes_AllowsInternToReadMappings(t *testing
 	}
 }
 
+func TestBitrixModuleRegisterCompanyRoutes_AllowsInternToReadCompaniesWithMappings(t *testing.T) {
+	t.Parallel()
+
+	module := &bitrixModule{
+		cfg: &config.Config{
+			EnableBitrixGateway: true,
+		},
+	}
+
+	router := chi.NewRouter()
+	module.registerCompanyRoutes(router, handlers.NewCompanyHandler(bitrixModuleCompanyServiceStub{}))
+
+	req := httptest.NewRequest(http.MethodGet, "/with-bitrix-service-point-mappings?company_id=company-1", nil)
+	req = req.WithContext(context.WithValue(req.Context(), contextkeys.UserRolesContextKey, []string{user.RoleIntern}))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ожидался статус %d, получен %d", http.StatusOK, rec.Code)
+	}
+}
+
 func TestBitrixModuleRegisterCompanyRoutes_StillForbidsSupportSpecialistToUpdateMappings(t *testing.T) {
 	t.Parallel()
 
@@ -120,8 +143,12 @@ func (bitrixModuleCompanyServiceStub) GetCompany(context.Context, string) (*comp
 	return nil, nil
 }
 
-func (bitrixModuleCompanyServiceStub) SearchCompanies(context.Context, string, int, int) ([]company.Company, int64, error) {
+func (bitrixModuleCompanyServiceStub) SearchCompanies(context.Context, string, int, int, []string) ([]company.Company, int64, error) {
 	return nil, 0, nil
+}
+
+func (bitrixModuleCompanyServiceStub) ListParents(context.Context, string, int) ([]company.ParentCompanyOption, error) {
+	return nil, nil
 }
 
 func (bitrixModuleCompanyServiceStub) GetInfrastructure(context.Context, string) ([]api.FoundEntityDTO, error) {
@@ -132,7 +159,7 @@ func (bitrixModuleCompanyServiceStub) GetChildren(context.Context, string) ([]co
 	return nil, nil
 }
 
-func (bitrixModuleCompanyServiceStub) ListBitrixMappings(context.Context, string, int, int) ([]company.BitrixMappingRow, error) {
+func (bitrixModuleCompanyServiceStub) ListBitrixMappings(context.Context, string, int, int, []string) ([]company.BitrixMappingRow, error) {
 	return []company.BitrixMappingRow{}, nil
 }
 

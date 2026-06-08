@@ -42,3 +42,9 @@ type BitrixMappingRow struct {
 	BitrixServicePointCode   *string
 	BitrixServicePointStatus *bool
 }
+
+type ParentCompanyOption struct {
+	ID            string
+	Title         string
+	ChildrenCount int64
+}

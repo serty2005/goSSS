@@ -81,8 +81,8 @@ test.describe('Мобильный интерфейс ServiceDesk', () => {
 
     await openMobileMenuItem(page, 'Компании', 'Компании', /\/companies$/);
     await expect(page.getByRole('heading', { name: /^Компании/ })).toBeVisible();
-    await expect(page.getByText('Ресторан Север')).toBeVisible();
-    await expectVisibleBoxInsideViewport(page.locator('.ant-list').first(), 'список компаний');
+    await expect(page.getByRole('link', { name: 'Ресторан Север' })).toBeVisible();
+    await expectVisibleBoxInsideViewport(page.locator('.ant-table-wrapper').first(), 'таблица компаний');
     await expectDocumentHasNoHorizontalOverflow(page);
 
     await openMobileMenuItem(page, 'Оборудование', 'Серверы', /\/servers$/);

@@ -15,6 +15,7 @@ type Repository interface {
 	GetByIDUnscoped(ctx context.Context, internalID string) (*Company, error)
 	GetAllParentIDs(ctx context.Context, childID string) ([]string, error)
 	GetAllIDsAndDates(ctx context.Context) (map[string]*Company, error)
-	Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]Company, error)
-	SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int) ([]Company, int64, error)
+	ListParents(ctx context.Context, term string, limit int) ([]ParentCompanyOption, error)
+	Search(ctx context.Context, term string, showInactive bool, limit, offset int, parentIDs []string) ([]Company, error)
+	SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int, parentIDs []string) ([]Company, int64, error)
 }

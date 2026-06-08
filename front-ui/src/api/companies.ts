@@ -1,11 +1,18 @@
 import apiClient from './axios';
-import { ApiResponse, CompanyBitrixMappingRowDTO, CompanyModel, InfrastructureItem } from '@/types/api';
+import { ApiResponse, CompanyBitrixMappingRowDTO, CompanyModel, CompanyParentOptionDTO, InfrastructureItem } from '@/types/api';
 
 export const companiesApi = {
   // Поиск/листинг компаний
-  searchCompanies: async (term: string, limit = 20, offset = 0) => {
+  searchCompanies: async (term: string, limit = 20, offset = 0, parentIds: string[] = []) => {
     const response = await apiClient.get<ApiResponse<CompanyModel[]>>('/companies', {
-      params: { term, limit, offset },
+      params: { term, limit, offset, parent_ids: parentIds.length ? parentIds.join(',') : undefined },
+    });
+    return response.data;
+  },
+
+  getParentCompanies: async (term = '', limit = 300) => {
+    const response = await apiClient.get<ApiResponse<CompanyParentOptionDTO[]>>('/companies/parents', {
+      params: { term, limit },
     });
     return response.data;
   },
@@ -33,15 +40,15 @@ export const companiesApi = {
     return response.data;
   },
 
-  getBitrixMappings: async (term: string, limit = 50, offset = 0) => {
-    const response = await apiClient.get<ApiResponse<CompanyBitrixMappingRowDTO[]>>('/companies/bitrix-service-point-mappings', {
-      params: { term, limit, offset },
+  getCompaniesWithBitrixMappings: async (term: string, limit = 50, offset = 0, parentIds: string[] = []) => {
+    const response = await apiClient.get<ApiResponse<CompanyBitrixMappingRowDTO[]>>('/companies/with-bitrix-service-point-mappings', {
+      params: { term, limit, offset, parent_ids: parentIds.length ? parentIds.join(',') : undefined },
     });
     return response.data;
   },
 
   getBitrixMappingByCompanyID: async (companyId: string) => {
-    const response = await apiClient.get<CompanyBitrixMappingRowDTO[] | ApiResponse<CompanyBitrixMappingRowDTO[]>>('/companies/bitrix-service-point-mappings', {
+    const response = await apiClient.get<CompanyBitrixMappingRowDTO[] | ApiResponse<CompanyBitrixMappingRowDTO[]>>('/companies/with-bitrix-service-point-mappings', {
       params: { company_id: companyId },
     });
     const data = response.data as unknown;

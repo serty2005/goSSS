@@ -828,8 +828,15 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
     }
 
     if (method === 'GET' && path === '/companies') {
-      await route.fulfill(json(ok(companyList, {
-        total: companyList.length,
+      const parentIDs = (url.searchParams.get('parent_ids') || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const items = parentIDs.length
+        ? [...companyList, ...networkChildren].filter((item) => parentIDs.includes(String(item.parent_id || '')))
+        : companyList;
+      await route.fulfill(json(ok(items, {
+        total: items.length,
         limit: Number(url.searchParams.get('limit') || 20),
         offset: Number(url.searchParams.get('offset') || 0),
         has_next: false,
@@ -837,7 +844,18 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
       return;
     }
 
-    if (method === 'GET' && path === '/companies/bitrix-service-point-mappings') {
+    if (method === 'GET' && path === '/companies/parents') {
+      await route.fulfill(json(ok([
+        { id: 'company-1', title: 'Ресторан Север', children_count: networkChildren.length },
+      ])));
+      return;
+    }
+
+    if (
+      method === 'GET' &&
+      (path === '/companies/with-bitrix-service-point-mappings' ||
+        path === '/companies/bitrix-service-point-mappings')
+    ) {
       await route.fulfill(json(ok(companyMappings, {
         total: companyMappings.length,
         limit: Number(url.searchParams.get('limit') || 50),

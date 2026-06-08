@@ -714,6 +714,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/companies", func(r chi.Router) {
 			r.Get("/", a.CompanyHandler.Search)
+			r.Get("/parents", a.CompanyHandler.ListParents)
 			if a.BitrixModule != nil {
 				a.BitrixModule.registerCompanyRoutes(r, a.CompanyHandler)
 			}

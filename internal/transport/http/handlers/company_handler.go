@@ -29,6 +29,7 @@ func NewCompanyHandler(service company.Service) *CompanyHandler {
 func (h *CompanyHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/companies", func(r chi.Router) {
 		r.Get("/", h.Search) // Добавим возможность поиска/листинга
+		r.Get("/parents", h.ListParents)
 		r.Get("/{id}", h.Get)
 		r.Post("/", h.Create)
 		r.Put("/{id}", h.Update)
@@ -58,6 +59,7 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	term := r.URL.Query().Get("term")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	parentIDs := parseCompanyCSVQuery(r.URL.Query().Get("parent_ids"))
 
 	if limit <= 0 {
 		limit = 50
@@ -66,7 +68,7 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	comps, total, err := h.service.SearchCompanies(r.Context(), term, limit, offset)
+	comps, total, err := h.service.SearchCompanies(r.Context(), term, limit, offset, parentIDs)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("failed to search companies", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
@@ -86,6 +88,32 @@ func (h *CompanyHandler) Search(w http.ResponseWriter, r *http.Request) {
 		HasNext: hasNext,
 		HasPrev: hasPrev,
 	})
+}
+
+func (h *CompanyHandler) ListParents(w http.ResponseWriter, r *http.Request) {
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 200
+	}
+
+	parents, err := h.service.ListParents(r.Context(), term, limit)
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("failed to list parent companies", "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	items := make([]companyParentDTO, 0, len(parents))
+	for _, parent := range parents {
+		items = append(items, companyParentDTO{
+			ID:            parent.ID,
+			Title:         strings.TrimSpace(parent.Title),
+			ChildrenCount: parent.ChildrenCount,
+		})
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
 func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +139,7 @@ func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Reque
 	term := strings.TrimSpace(r.URL.Query().Get("term"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	parentIDs := parseCompanyCSVQuery(r.URL.Query().Get("parent_ids"))
 
 	if limit <= 0 {
 		limit = 50
@@ -119,7 +148,7 @@ func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Reque
 		offset = 0
 	}
 
-	rows, err := h.service.ListBitrixMappings(r.Context(), term, limit, offset)
+	rows, err := h.service.ListBitrixMappings(r.Context(), term, limit, offset, parentIDs)
 	if err != nil {
 		middleware.GetLogger(r.Context()).Error("failed to list bitrix mappings", "error", err)
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
@@ -132,6 +161,18 @@ func (h *CompanyHandler) ListBitrixMappings(w http.ResponseWriter, r *http.Reque
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, items)
+}
+
+func parseCompanyCSVQuery(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		clean := strings.TrimSpace(part)
+		if clean != "" {
+			result = append(result, clean)
+		}
+	}
+	return result
 }
 
 func (h *CompanyHandler) UpdateBitrixMapping(w http.ResponseWriter, r *http.Request) {
@@ -370,6 +411,12 @@ type companyResponseDTO struct {
 	LastModifiedDate *string `json:"last_modified_date,omitempty"`
 }
 
+type companyParentDTO struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	ChildrenCount int64  `json:"children_count"`
+}
+
 type updateCompanyBitrixMappingRequest struct {
 	CompanyID            *string `json:"company_id"`
 	BitrixServicePointID *int64  `json:"bitrix_service_point_id"`
@@ -382,6 +429,7 @@ type syncCompanyBitrixContractRequest struct {
 type companyBitrixMappingDTO struct {
 	CompanyID                 string  `json:"company_id"`
 	CompanyTitle              string  `json:"company_title"`
+	CompanyParentID           *string `json:"company_parent_id,omitempty"`
 	CompanyParentTitle        *string `json:"company_parent_title,omitempty"`
 	CompanyAdditionalName     *string `json:"company_additional_name,omitempty"`
 	CompanyAddress            *string `json:"company_address,omitempty"`
@@ -442,6 +490,7 @@ func toCompanyBitrixMappingDTO(row company.BitrixMappingRow) companyBitrixMappin
 	return companyBitrixMappingDTO{
 		CompanyID:                 row.Company.ID,
 		CompanyTitle:              title,
+		CompanyParentID:           row.Company.ParentID,
 		CompanyParentTitle:        row.Company.ParentTitle,
 		CompanyAdditionalName:     row.Company.AdditionalName,
 		CompanyAddress:            row.Company.Address,

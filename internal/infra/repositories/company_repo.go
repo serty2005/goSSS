@@ -149,7 +149,31 @@ func (r *companyRepo) GetAllIDsAndDates(ctx context.Context) (map[string]*compan
 	return res, nil
 }
 
-func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, error) {
+func (r *companyRepo) ListParents(ctx context.Context, term string, limit int) ([]company.ParentCompanyOption, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	limit = min(limit, 500)
+
+	var parents []company.ParentCompanyOption
+	query := r.getDB(ctx).WithContext(ctx).
+		Model(&company.Company{}).
+		Select("companies.id, COALESCE(companies.title, '') AS title, COUNT(children.id) AS children_count").
+		Joins("JOIN companies children ON children.parent_id = companies.id AND children.deleted_at IS NULL").
+		Group("companies.id, companies.title")
+
+	if cleanTerm := strings.TrimSpace(term); cleanTerm != "" {
+		query = query.Where("companies.title ILIKE ?", "%"+cleanTerm+"%")
+	}
+
+	err := query.
+		Order("LOWER(COALESCE(companies.title, '')) ASC").
+		Limit(limit).
+		Find(&parents).Error
+	return parents, err
+}
+
+func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool, limit, offset int, parentIDs []string) ([]company.Company, error) {
 	var entities []company.Company
 	query := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
@@ -177,6 +201,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
 	}
+	query = applyCompanyParentFilter(query, parentIDs)
 	err := query.
 		Order("CASE WHEN companies.parent_id IS NULL OR companies.parent_id = '' THEN 0 ELSE 1 END ASC").
 		Order("LOWER(COALESCE(companies.title, '')) ASC").
@@ -186,7 +211,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 	return entities, err
 }
 
-func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int) ([]company.Company, int64, error) {
+func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInactive bool, limit, offset int, parentIDs []string) ([]company.Company, int64, error) {
 	base := r.getDB(ctx).WithContext(ctx).
 		Model(&company.Company{}).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id")
@@ -194,6 +219,7 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 	if !showInactive {
 		base = base.Where("companies.active_contract = ?", true)
 	}
+	base = applyCompanyParentFilter(base, parentIDs)
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
@@ -227,6 +253,7 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
 	}
+	query = applyCompanyParentFilter(query, parentIDs)
 	if err := query.
 		Order("CASE WHEN companies.parent_id IS NULL OR companies.parent_id = '' THEN 0 ELSE 1 END ASC").
 		Order("LOWER(COALESCE(companies.title, '')) ASC").
@@ -236,6 +263,26 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 		return nil, 0, err
 	}
 	return entities, total, nil
+}
+
+func applyCompanyParentFilter(query *gorm.DB, parentIDs []string) *gorm.DB {
+	cleanIDs := make([]string, 0, len(parentIDs))
+	seen := make(map[string]struct{}, len(parentIDs))
+	for _, item := range parentIDs {
+		id := strings.TrimSpace(item)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		cleanIDs = append(cleanIDs, id)
+	}
+	if len(cleanIDs) == 0 {
+		return query
+	}
+	return query.Where("companies.parent_id IN ?", cleanIDs)
 }
 
 func applyCompanySearchTerm(query *gorm.DB, term string) *gorm.DB {

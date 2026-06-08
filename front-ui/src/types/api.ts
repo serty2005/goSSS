@@ -48,9 +48,16 @@ export interface CompanyModel {
   last_modified_date?: string;
 }
 
+export interface CompanyParentOptionDTO {
+  id: string;
+  title: string;
+  children_count: number;
+}
+
 export interface CompanyBitrixMappingRowDTO {
   company_id: string;
   company_title: string;
+  company_parent_id?: string;
   company_parent_title?: string;
   company_additional_name?: string;
   company_address?: string;
