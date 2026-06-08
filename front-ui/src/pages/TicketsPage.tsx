@@ -367,6 +367,12 @@ const TicketsPage: React.FC = () => {
     archiveMode === "archive" ? "archive_period_from" : "period_from";
   const periodToParamKey =
     archiveMode === "archive" ? "archive_period_to" : "period_to";
+  const companyParamKey =
+    archiveMode === "archive" ? "archive_company" : "company";
+  const companyValues = useMemo(
+    () => company.split(",").map((value) => value.trim()).filter(Boolean),
+    [company],
+  );
   const viewMode = (isMobile ? "cards" : "table") as ViewMode;
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -516,7 +522,7 @@ const TicketsPage: React.FC = () => {
             archiveMode === "archive"
               ? undefined
               : effectiveStatus || undefined,
-          company_id: company || undefined,
+          company_ids: companyValues.length ? companyValues : undefined,
           assignee_ids: assigneeIDs || undefined,
           period_from: periodFrom || undefined,
           period_to: periodTo || undefined,
@@ -548,6 +554,27 @@ const TicketsPage: React.FC = () => {
     });
     return counts;
   }, [visibleTickets]);
+  const { data: tableFiltersResponse, isFetching: isTableFiltersLoading } = useQuery({
+    queryKey: ['ticket-table-filters', archiveMode, q, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
+    queryFn: () =>
+      ticketsApi.getTicketFilters({
+        archive_mode: archiveMode,
+        search: q || undefined,
+        status: archiveMode === "archive" ? undefined : (effectiveStatusValues.length ? effectiveStatusValues : undefined),
+        period_from: periodFrom || undefined,
+        period_to: periodTo || undefined,
+      }),
+    staleTime: 30_000,
+  });
+  const tableCompanyOptions = useMemo(
+    () =>
+      (tableFiltersResponse?.data?.companies || []).map((item) => ({
+        value: item.id,
+        label: item.parent_name ? `${item.parent_name} / ${item.name || item.id}` : item.name || item.id,
+        count: item.count,
+      })),
+    [tableFiltersResponse?.data?.companies],
+  );
 
   const { data: detailsResponse, isLoading: isDetailsLoading } = useQuery({
     queryKey: ["ticket", selectedTicketId],
@@ -1352,6 +1379,12 @@ const TicketsPage: React.FC = () => {
                     ownValue: user?.id ? String(user.id) : undefined,
                     onChange: (values) => updateTicketParams({ assignee_ids: values.length ? values.join(",") : undefined }),
                   },
+              company: {
+                values: companyValues,
+                options: tableCompanyOptions,
+                loading: isTableFiltersLoading,
+                onChange: (values) => updateTicketParams({ [companyParamKey]: values.length ? values.join(",") : undefined }),
+              },
               created: {
                 value: tableDateRangeValue,
                 onChange: (value) => {

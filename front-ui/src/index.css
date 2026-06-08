@@ -148,6 +148,15 @@ body .ant-message .ant-message-notice-content {
   overflow: auto;
 }
 
+.company-ticket-table__scroll-frame {
+  width: 100%;
+  min-width: 0;
+}
+
+.company-ticket-table--no-horizontal-scroll .ant-table-content {
+  overflow-x: hidden !important;
+}
+
 .company-ticket-table__columns-menu {
   position: fixed;
   z-index: 1200;
@@ -155,10 +164,17 @@ body .ant-message .ant-message-notice-content {
   max-height: min(420px, calc(100dvh - 32px));
   overflow: auto;
   padding: 10px;
-  border: 1px solid var(--app-color-border-strong);
+  border: 1px solid var(--ant-color-border, var(--app-color-border-strong));
   border-radius: 8px;
-  background: var(--app-color-bg-container);
-  box-shadow: 0 12px 32px rgb(15 23 42 / 16%);
+  isolation: isolate;
+  color: var(--app-color-text, rgba(0, 0, 0, 0.88));
+  background-color: var(--app-bg-container);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 26%);
+}
+
+.company-ticket-table__columns-menu .ant-checkbox-wrapper,
+.company-ticket-table__columns-menu .ant-typography {
+  color: inherit;
 }
 
 .company-ticket-table__description,
@@ -1696,7 +1712,6 @@ body .ant-message .ant-message-notice-content {
 @media (max-width: 1460px) {
 
   .ticket-header-inline-archive,
-  .ticket-header-inline-preset,
   .app-header-user-text,
   .ticket-header-new-ticket-label {
     display: none !important;
@@ -1706,6 +1721,60 @@ body .ant-message .ant-message-notice-content {
     width: 40px;
     min-width: 40px;
     padding-inline: 0;
+  }
+}
+
+.ticket-header-search-controls {
+  display: flex;
+  flex-wrap: nowrap !important;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.ticket-header-search-input {
+  flex: 0 1 300px;
+  min-width: 180px;
+}
+
+.ticket-header-profile-control {
+  flex: 0 1 320px;
+  min-width: 190px;
+}
+
+.ticket-header-profile-name {
+  width: 100%;
+  min-width: 0;
+}
+
+.ticket-header-new-ticket {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1460px) {
+  .ticket-header-search-input {
+    flex-basis: 240px;
+    min-width: 160px;
+  }
+
+  .ticket-header-profile-control {
+    flex-basis: 240px;
+    min-width: 170px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .ticket-header-search-input {
+    flex-basis: 200px;
+    min-width: 140px;
+  }
+
+  .ticket-header-profile-control {
+    flex-basis: 200px;
+    min-width: 150px;
   }
 }
 

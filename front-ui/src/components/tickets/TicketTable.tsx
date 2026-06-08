@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button, Checkbox, DatePicker, Popover, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
@@ -106,6 +107,12 @@ type TicketTableColumnFilters = {
   status?: {
     values: string[];
     options: TicketTableFilterOption[];
+    onChange: (values: string[]) => void;
+  };
+  company?: {
+    values: string[];
+    options: TicketTableFilterOption[];
+    loading?: boolean;
     onChange: (values: string[]) => void;
   };
   assignee?: {
@@ -494,6 +501,7 @@ const TicketTable: React.FC<Props> = ({
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const tableContainerRef = useRef<HTMLDivElement | null>(null);
   const columnsStateRef = useRef<TicketTableColumn[]>([]);
   const isResizeActiveRef = useRef(false);
   const suppressHeaderClickRef = useRef(false);
@@ -501,6 +509,7 @@ const TicketTable: React.FC<Props> = ({
   const [createdRange, setCreatedRange] = useState<DateRangeValue>(null);
   const [closedRange, setClosedRange] = useState<DateRangeValue>(null);
   const [isResizingColumn, setIsResizingColumn] = useState(false);
+  const [tableContainerWidth, setTableContainerWidth] = useState(0);
   const [tableSort, setTableSort] = useState<TableSortState>(null);
   const [columnsMenu, setColumnsMenu] = useState<{ open: boolean; x: number; y: number }>({
     open: false,
@@ -515,6 +524,22 @@ const TicketTable: React.FC<Props> = ({
       activationConstraint: { distance: 6 },
     }),
   );
+
+  useLayoutEffect(() => {
+    const node = tableContainerRef.current;
+    if (!node) {
+      return;
+    }
+
+    const updateWidth = () => {
+      setTableContainerWidth(Math.floor(node.getBoundingClientRect().width));
+    };
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const normalizedCompanyIds = useMemo(() => {
     const source = companyIds?.length ? companyIds : (companyId ? [companyId] : []);
@@ -1100,6 +1125,37 @@ const TicketTable: React.FC<Props> = ({
       );
     }
 
+    if (columnKey === 'company_display' && columnFilters?.company) {
+      const filter = columnFilters.company;
+      return (
+        <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+          <Text strong>Компании</Text>
+          <Checkbox
+            checked={filter.values.length === 0}
+            onChange={() => filter.onChange([])}
+          >
+            Все компании
+          </Checkbox>
+          <Checkbox.Group
+            value={filter.values}
+            onChange={(values) => filter.onChange(values.map((value) => String(value)))}
+          >
+            <Space direction="vertical" size={4} style={{ marginTop: 2 }}>
+              {filter.options.map((option) => (
+                <Checkbox key={option.value} value={option.value}>
+                  <Space size={6}>
+                    <span>{option.label}</span>
+                    {typeof option.count === 'number' && <Tag>{option.count}</Tag>}
+                  </Space>
+                </Checkbox>
+              ))}
+            </Space>
+          </Checkbox.Group>
+          {filter.loading && <Text type="secondary">Загрузка...</Text>}
+        </Space>
+      );
+    }
+
     if (columnKey === 'assignee_display' && columnFilters?.assignee) {
       const filter = columnFilters.assignee;
       const isMine = Boolean(filter.ownValue) && filter.values.length === 1 && filter.values[0] === filter.ownValue;
@@ -1157,6 +1213,9 @@ const TicketTable: React.FC<Props> = ({
     }
     if (columnKey === 'assignee_display') {
       return Boolean(columnFilters?.assignee?.values.length);
+    }
+    if (columnKey === 'company_display') {
+      return Boolean(columnFilters?.company?.values.length);
     }
     if (columnKey === 'created_at') {
       return Boolean(columnFilters?.created?.value?.[0] || columnFilters?.created?.value?.[1]);
@@ -1231,7 +1290,12 @@ const TicketTable: React.FC<Props> = ({
   );
   const columnMenuRows = useMemo(
     () => {
-      const rows = columnsState.filter((column) => availableColumnSet.has(column.key));
+      const rows = columnsState.filter((column) => {
+        if (!showCompanyColumn && column.key === 'company_name') {
+          return false;
+        }
+        return availableColumnSet.has(column.key);
+      });
       if (availableColumnSet.has('selection') && !rows.some((column) => column.key === 'selection')) {
         return [
           {
@@ -1245,7 +1309,7 @@ const TicketTable: React.FC<Props> = ({
       }
       return rows;
     },
-    [availableColumnSet, columnsState],
+    [availableColumnSet, columnsState, showCompanyColumn],
   );
   const currentVisibleColumnKeys = useMemo(
     () => visibleColumnKeys || columnMenuRows.map((column) => column.key),
@@ -1343,6 +1407,7 @@ const TicketTable: React.FC<Props> = ({
       return sum + (Number.isFinite(width) ? width : DEFAULT_MIN_COLUMN_WIDTH);
     }, 0);
   }, [tableColumns]);
+  const shouldShowHorizontalScroll = !tableContainerWidth || tableScrollX > tableContainerWidth + 1;
 
   const openTicket = useCallback((ticketID: string) => {
     const url = `/tickets/${ticketID}`;
@@ -1389,49 +1454,51 @@ const TicketTable: React.FC<Props> = ({
           items={tableColumns.map((column) => column.key as string)}
           strategy={horizontalListSortingStrategy}
         >
-          <Table
-            dataSource={sortedRows}
-            columns={tableColumns}
-            rowKey="id"
-            loading={tableLoading}
-            pagination={false}
-            size="small"
-            bordered
-            className="tickets-table company-ticket-table"
-            tableLayout="fixed"
-            scroll={{ x: tableScrollX }}
-            components={{
-              header: {
-                cell: DraggableHeaderCell,
-              },
-            }}
-            rowClassName={rowClassName}
-            onHeaderRow={() => ({
-              onContextMenu: (event) => {
-                if (!onVisibleColumnKeysChange) {
-                  return;
-                }
-                event.preventDefault();
-                event.stopPropagation();
-                setColumnsMenu({
-                  open: true,
-                  x: event.clientX,
-                  y: event.clientY,
-                });
-              },
-            })}
-            onRow={(record) => ({
-              onClick: (event) => {
-                if (onRowClick) {
-                  onRowClick(record, event);
-                  return;
-                }
-                openTicket(String(record.id));
-              },
-              style: { cursor: 'pointer' },
-            })}
-          />
-          {columnsMenu.open && (
+          <div ref={tableContainerRef} className="company-ticket-table__scroll-frame">
+            <Table
+              dataSource={sortedRows}
+              columns={tableColumns}
+              rowKey="id"
+              loading={tableLoading}
+              pagination={false}
+              size="small"
+              bordered
+              className={`tickets-table company-ticket-table${shouldShowHorizontalScroll ? '' : ' company-ticket-table--no-horizontal-scroll'}`}
+              tableLayout="fixed"
+              scroll={{ x: tableScrollX }}
+              components={{
+                header: {
+                  cell: DraggableHeaderCell,
+                },
+              }}
+              rowClassName={rowClassName}
+              onHeaderRow={() => ({
+                onContextMenu: (event) => {
+                  if (!onVisibleColumnKeysChange) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setColumnsMenu({
+                    open: true,
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                },
+              })}
+              onRow={(record) => ({
+                onClick: (event) => {
+                  if (onRowClick) {
+                    onRowClick(record, event);
+                    return;
+                  }
+                  openTicket(String(record.id));
+                },
+                style: { cursor: 'pointer' },
+              })}
+            />
+          </div>
+          {columnsMenu.open && createPortal(
             <div
               className="company-ticket-table__columns-menu"
               style={{ left: columnsMenu.x, top: columnsMenu.y }}
@@ -1450,7 +1517,8 @@ const TicketTable: React.FC<Props> = ({
                   </Checkbox>
                 ))}
               </Space>
-            </div>
+            </div>,
+            document.body,
           )}
         </SortableContext>
       </DndContext>

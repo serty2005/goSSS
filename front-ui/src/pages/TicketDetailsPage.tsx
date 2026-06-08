@@ -114,6 +114,36 @@ const hasPyrusLink = (metadata?: TicketDetailsDTO['metadata']) => {
   return String(metadata.service_desk_uuid || '').trim().startsWith('pyrus:task:');
 };
 
+const LATEST_TICKETS_TABLE_COLUMN_KEYS = [
+  'number',
+  'subject',
+  'status',
+  'created_at',
+  'closed_at',
+  'assignee',
+  'reporter_name',
+] as const;
+type LatestTicketsTableColumnKey = (typeof LATEST_TICKETS_TABLE_COLUMN_KEYS)[number];
+const DEFAULT_LATEST_TICKETS_TABLE_COLUMN_KEYS: LatestTicketsTableColumnKey[] = [
+  ...LATEST_TICKETS_TABLE_COLUMN_KEYS,
+];
+const LATEST_TICKETS_AVAILABLE_COLUMN_KEYS = [...LATEST_TICKETS_TABLE_COLUMN_KEYS];
+
+const normalizeLatestTicketsTableColumnKeys = (value: unknown): LatestTicketsTableColumnKey[] => {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+  const values = rawItems
+    .map((item) => String(item || '').trim())
+    .filter((item): item is LatestTicketsTableColumnKey =>
+      (LATEST_TICKETS_TABLE_COLUMN_KEYS as readonly string[]).includes(item),
+    );
+  const normalized = LATEST_TICKETS_TABLE_COLUMN_KEYS.filter((key) => values.includes(key));
+  return normalized.length ? normalized : DEFAULT_LATEST_TICKETS_TABLE_COLUMN_KEYS;
+};
+
 const resolveEntityTitle = (item: InfrastructureItem) => {
   const dataRow = item.data as Record<string, string | undefined>;
   return (
@@ -1091,6 +1121,31 @@ const TicketDetailsPage: React.FC = () => {
       }
     },
   });
+  const latestTicketsVisibleColumnKeys = useMemo(
+    () => normalizeLatestTicketsTableColumnKeys((user?.profile_config as any)?.tickets?.latest_table_columns),
+    [user?.profile_config],
+  );
+  const updateLatestTicketsVisibleColumns = useCallback((keys: string[]) => {
+    if (!user) {
+      return;
+    }
+    const nextColumns = normalizeLatestTicketsTableColumnKeys(keys);
+    const previousUser = user;
+    const nextConfig = {
+      ...(user.profile_config || {}),
+      tickets: {
+        ...((user.profile_config || {}).tickets || {}),
+        latest_table_columns: nextColumns,
+      },
+    };
+    setUser({ ...user, profile_config: nextConfig as any });
+    updateProfileConfigMutation.mutate(nextConfig as any, {
+      onError: () => {
+        setUser(previousUser);
+        message.error('Не удалось сохранить набор столбцов таблицы тикетов');
+      },
+    });
+  }, [setUser, updateProfileConfigMutation, user]);
 
   const toggleTicketSubscription = async () => {
     if (!user || !id) {
@@ -1683,6 +1738,9 @@ const TicketDetailsPage: React.FC = () => {
       showCompanyColumn={false}
       excludedTicketId={metadata.id}
       rowOpenMode="new_tab"
+      availableColumnKeys={LATEST_TICKETS_AVAILABLE_COLUMN_KEYS}
+      visibleColumnKeys={latestTicketsVisibleColumnKeys}
+      onVisibleColumnKeysChange={updateLatestTicketsVisibleColumns}
     />
   ) : (
     <Empty description="Компания тикета не выбрана" />

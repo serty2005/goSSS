@@ -104,6 +104,7 @@ export const getThemeCssVariables = (
     '--app-bg-layout': colors.bgLayout,
     '--app-bg-container': colors.bgContainer,
     '--app-color-primary': colors.primary,
+    '--app-color-text': isDark ? 'rgba(255, 255, 255, 0.88)' : 'rgba(0, 0, 0, 0.88)',
     '--app-color-border': colors.borderColor,
     '--app-color-border-strong': withAlpha(colors.borderColor, isDark ? 0.8 : 0.55),
     '--app-color-divider': withAlpha(colors.borderColor, isDark ? 0.6 : 0.35),

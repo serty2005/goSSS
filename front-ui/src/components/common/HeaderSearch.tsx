@@ -1,7 +1,7 @@
 ﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
-import { LogoutOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
+import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Popconfirm, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
+import { DeleteOutlined, LogoutOutlined, PlusOutlined, SaveOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -263,6 +263,11 @@ const HeaderSearch: React.FC = () => {
     () => presets.find((item) => item.id === selectedPresetID),
     [presets, selectedPresetID],
   );
+  useEffect(() => {
+    if (selectedPreset) {
+      setPresetName(selectedPreset.name);
+    }
+  }, [selectedPreset]);
   const presetNameOptions = useMemo(
     () => presets.map((item) => ({ value: item.name })),
     [presets],
@@ -303,6 +308,8 @@ const HeaderSearch: React.FC = () => {
       (selectedPreset.values[key] || '') !== (currentPresetValues[key] || '')
     ));
   }, [currentPresetValues, selectedPreset]);
+  const shouldShowPresetSaveAction = Boolean(presetName.trim())
+    && (!existingPresetByName || isSelectedPresetDirty || selectedPresetID !== existingPresetByName.id);
   const ticketStateStorageKey = useMemo(() => {
     const userKey = user?.id ? String(user.id) : 'guest';
     return `tickets-last-state-${userKey}`;
@@ -555,43 +562,9 @@ const HeaderSearch: React.FC = () => {
     try {
       await updateProfileMutation.mutateAsync(nextConfig);
       setUser({ ...user, profile_config: nextConfig as any });
-      setPresetName('');
+      setPresetName(nextPreset.name);
       updateTicketParams({ preset_id: nextPreset.id });
       message.success(t(existingPresetByName ? 'layout:headerSearch.ticket.presetUpdated' : 'layout:headerSearch.ticket.presetSaved'));
-    } catch {
-      message.error(t('layout:headerSearch.ticket.presetSaveError'));
-    }
-  };
-
-  const saveSelectedPreset = async () => {
-    if (!user || !selectedPreset) {
-      return;
-    }
-
-    const nextPreset: TicketPreset = {
-      ...selectedPreset,
-      values: currentPresetValues,
-    };
-    const nextPresets = presets.map((item) => (item.id === selectedPreset.id ? nextPreset : item));
-
-    const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
-    const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
-    const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
-    const nextConfig: Record<string, unknown> = {
-      ...currentConfig,
-      tickets: {
-        ...ticketsConfig,
-        filters: {
-          ...filtersConfig,
-          presets: nextPresets,
-        },
-      },
-    };
-
-    try {
-      await updateProfileMutation.mutateAsync(nextConfig);
-      setUser({ ...user, profile_config: nextConfig as any });
-      message.success(t('layout:headerSearch.ticket.presetUpdated'));
     } catch {
       message.error(t('layout:headerSearch.ticket.presetSaveError'));
     }
@@ -804,6 +777,7 @@ const HeaderSearch: React.FC = () => {
               options={presets.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(value) => {
                 if (!value) {
+                  setPresetName('');
                   updateTicketParams({ preset_id: undefined });
                   return;
                 }
@@ -966,7 +940,7 @@ const HeaderSearch: React.FC = () => {
     }
 
     return (
-      <Space size="small" wrap={!isHeaderNarrow} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
+      <Space size="small" wrap={false} style={{ justifyContent: 'center' }} className="ticket-header-search-controls">
         {!isHeaderNarrow && (
           <Segmented
             className="ticket-header-inline-archive"
@@ -979,35 +953,57 @@ const HeaderSearch: React.FC = () => {
           />
         )}
         <Input.Search
+          className="ticket-header-search-input"
           placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
           allowClear
           loading={isTicketSearchLoading}
           value={ticketTerm}
           onChange={handleTicketSearchChange}
           onSearch={applyTicketSearch}
-          style={{ width: isHeaderMobile ? 88 : (isCompact ? 240 : 320) }}
         />
-        {!isHeaderNarrow && archiveMode !== 'archive' && (
-          <Space.Compact>
-            <Select
-              className="ticket-header-inline-preset"
-              allowClear
+        {!isHeaderMobile && archiveMode !== 'archive' && (
+          <Space.Compact className="ticket-header-profile-control">
+            <AutoComplete
+              className="ticket-header-profile-name"
+              options={presetNameOptions}
               placeholder={t('layout:headerSearch.ticket.savedFilter')}
-              value={selectedPresetID}
-              options={presets.map((item) => ({ value: item.id, label: item.name }))}
-              onChange={(value) => {
-                if (!value) {
-                  updateTicketParams({ preset_id: undefined });
-                  return;
+              value={presetName}
+              onChange={setPresetName}
+              onSelect={(value) => {
+                const preset = presets.find((item) => item.name === value);
+                if (preset) {
+                  applyPreset(preset.id);
                 }
-                applyPreset(value);
               }}
-              style={{ width: isCompact ? 180 : 220 }}
+              filterOption={(inputValue, option) =>
+                String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())
+              }
             />
-            {isSelectedPresetDirty && (
-              <Button onClick={() => void saveSelectedPreset()} loading={updateProfileMutation.isPending}>
-                {t('common:actions.save')}
-              </Button>
+            {shouldShowPresetSaveAction && (
+              <Button
+                icon={<SaveOutlined />}
+                aria-label={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
+                title={t(existingPresetByName ? 'common:actions.update' : 'common:actions.save')}
+                onClick={() => void saveCurrentPreset()}
+                loading={updateProfileMutation.isPending}
+              />
+            )}
+            {existingPresetByName && (
+              <Popconfirm
+                title={t('common:actions.delete')}
+                okText={t('common:actions.delete')}
+                cancelText={t('common:actions.cancel')}
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void deleteCurrentPreset()}
+              >
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={t('common:actions.delete')}
+                  title={t('common:actions.delete')}
+                  loading={updateProfileMutation.isPending}
+                />
+              </Popconfirm>
             )}
           </Space.Compact>
         )}
