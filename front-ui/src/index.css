@@ -266,8 +266,17 @@ body .ant-message .ant-message-notice-content {
   outline: none;
 }
 
+.companies-mapping-editor {
+  width: 100%;
+}
+
 .companies-mapping-editor .ant-select {
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+.companies-mapping-editor .ant-select-dropdown {
+  min-width: 100% !important;
 }
 
 .companies-load-more {

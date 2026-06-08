@@ -534,7 +534,7 @@ func (s *serviceImpl) SyncBitrixContract(ctx context.Context, companyID string) 
 
 	snapshot := contractsvc.BuildDailySnapshotFromBitrixServicePoint(normalizedCompanyID, *point)
 	snapshot.SourceHash = buildBitrixPointContractSourceHash(*point)
-	return s.contractSvc.SyncDailySnapshots(ctx, []contractdom.DailyCompanyContractSnapshot{snapshot})
+	return s.contractSvc.SyncDailySnapshot(ctx, snapshot)
 }
 
 func buildBitrixPointContractSourceHash(point bitrix.ServicePoint) string {

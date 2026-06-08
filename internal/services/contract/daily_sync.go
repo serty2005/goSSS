@@ -18,8 +18,16 @@ import (
 
 const contractMailSyncUpdatedBy = "contract_mail_sync"
 
-// SyncDailySnapshots применяет итоговый снимок контрактов по уже существующим mapping компаний к точкам.
+func (s *serviceImpl) SyncDailySnapshot(ctx context.Context, snapshot contract.DailyCompanyContractSnapshot) error {
+	return s.syncDailySnapshots(ctx, []contract.DailyCompanyContractSnapshot{snapshot}, false)
+}
+
+// SyncDailySnapshots применяет полный итоговый снимок контрактов по уже существующим mapping компаний к точкам.
 func (s *serviceImpl) SyncDailySnapshots(ctx context.Context, snapshots []contract.DailyCompanyContractSnapshot) error {
+	return s.syncDailySnapshots(ctx, snapshots, true)
+}
+
+func (s *serviceImpl) syncDailySnapshots(ctx context.Context, snapshots []contract.DailyCompanyContractSnapshot, deactivateMissing bool) error {
 	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		tx := db.ExtractDB(txCtx, nil)
 		affectedCompanyIDs := make(map[string]struct{}, len(snapshots))
@@ -50,26 +58,28 @@ func (s *serviceImpl) SyncDailySnapshots(ctx context.Context, snapshots []contra
 			upsertedContracts++
 		}
 
-		existingManaged, err := s.contractRepo.ListByLastUpdatedBy(txCtx, contractMailSyncUpdatedBy)
-		if err != nil {
-			return err
-		}
-		for _, item := range existingManaged {
-			if _, exists := snapshotByContractID[item.ID]; exists {
-				continue
+		if deactivateMissing {
+			existingManaged, err := s.contractRepo.ListByLastUpdatedBy(txCtx, contractMailSyncUpdatedBy)
+			if err != nil {
+				return err
 			}
+			for _, item := range existingManaged {
+				if _, exists := snapshotByContractID[item.ID]; exists {
+					continue
+				}
 
-			updates := map[string]interface{}{
-				"state":           "inactive",
-				"last_updated_by": contractMailSyncUpdatedBy,
-			}
-			if _, err := s.contractRepo.Update(txCtx, item.ID, updates); err != nil {
-				return fmt.Errorf("не удалось деактивировать устаревший контракт %s: %w", item.ID, err)
-			}
-			deactivatedContracts++
-			for _, companyItem := range item.Companies {
-				if companyItem.ID != "" {
-					affectedCompanyIDs[companyItem.ID] = struct{}{}
+				updates := map[string]interface{}{
+					"state":           "inactive",
+					"last_updated_by": contractMailSyncUpdatedBy,
+				}
+				if _, err := s.contractRepo.Update(txCtx, item.ID, updates); err != nil {
+					return fmt.Errorf("не удалось деактивировать устаревший контракт %s: %w", item.ID, err)
+				}
+				deactivatedContracts++
+				for _, companyItem := range item.Companies {
+					if companyItem.ID != "" {
+						affectedCompanyIDs[companyItem.ID] = struct{}{}
+					}
 				}
 			}
 		}

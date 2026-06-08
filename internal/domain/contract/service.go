@@ -10,6 +10,7 @@ type Service interface {
 	// SyncContracts выполняет полную синхронизацию контрактов из внешней системы.
 	// Принимает карту: ExternalID -> Contract Model.
 	SyncContracts(ctx context.Context, contracts map[string]*Contract) error
+	SyncDailySnapshot(ctx context.Context, snapshot DailyCompanyContractSnapshot) error
 	SyncDailySnapshots(ctx context.Context, snapshots []DailyCompanyContractSnapshot) error
 
 	CreateContract(ctx context.Context, dto *api.ContractCreateDTO) (*Contract, error)

@@ -164,6 +164,10 @@ const buildPointOptionLabel = (point: BitrixServicePointDTO) => {
   return parts.join(' · ');
 };
 
+const getMappingPopupContainer = (triggerNode: HTMLElement) => (
+  triggerNode.closest('.companies-mapping-editor') as HTMLElement | null
+) || document.body;
+
 const CompaniesListPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const term = (searchParams.get('q') || '').trim();
@@ -441,6 +445,30 @@ const CompaniesListPage: React.FC = () => {
       .filter(Boolean) as PointOption[];
   }, [pointsLookup, servicePoints]);
 
+  const resetCompanyLookup = useCallback(() => {
+    setCompanyLookupTerm('');
+    setCompanyLookupAppliedTerm('');
+  }, []);
+
+  const resetServicePointLookup = useCallback(() => {
+    setServicePointLookupTerm('');
+    setServicePointLookupAppliedTerm('');
+  }, []);
+
+  const startCompanyMappingEdit = useCallback((companyID: string) => {
+    resetCompanyLookup();
+    resetServicePointLookup();
+    setEditingPointID(null);
+    setEditingCompanyID(companyID);
+  }, [resetCompanyLookup, resetServicePointLookup]);
+
+  const startPointMappingEdit = useCallback((pointID: number) => {
+    resetCompanyLookup();
+    resetServicePointLookup();
+    setEditingCompanyID(null);
+    setEditingPointID(pointID);
+  }, [resetCompanyLookup, resetServicePointLookup]);
+
   const updateMutation = useMutation({
     mutationFn: (payload: { company_id?: string; bitrix_service_point_id?: number }) => companiesApi.updateBitrixMapping(payload),
     onSuccess: () => {
@@ -461,8 +489,9 @@ const CompaniesListPage: React.FC = () => {
       company_id: row.company_id,
       bitrix_service_point_id: pointID,
     });
+    resetServicePointLookup();
     setEditingCompanyID(null);
-  }, [companyDrafts, updateMutation]);
+  }, [companyDrafts, resetServicePointLookup, updateMutation]);
 
   const applyPointMapping = useCallback(async (point: BitrixServicePointDTO) => {
     const companyID = pointDrafts[point.b24_element_id];
@@ -470,8 +499,9 @@ const CompaniesListPage: React.FC = () => {
       company_id: companyID,
       bitrix_service_point_id: point.b24_element_id,
     });
+    resetCompanyLookup();
     setEditingPointID(null);
-  }, [pointDrafts, updateMutation]);
+  }, [pointDrafts, resetCompanyLookup, updateMutation]);
 
   const renderPointMappingCell = useCallback((row: CompanyBitrixMappingRowDTO) => {
     const isEditing = editingCompanyID === row.company_id;
@@ -494,7 +524,7 @@ const CompaniesListPage: React.FC = () => {
         <button
           type="button"
           className="companies-mapping-cell"
-          onClick={() => setEditingCompanyID(row.company_id)}
+          onClick={() => startCompanyMappingEdit(row.company_id)}
           title={mappedLabel}
         >
           {mappedLabel}
@@ -509,9 +539,18 @@ const CompaniesListPage: React.FC = () => {
           showSearch
           value={draftPointID}
           options={servicePointOptions}
+          style={{ width: '100%' }}
+          popupMatchSelectWidth
+          getPopupContainer={getMappingPopupContainer}
           onSearch={setServicePointLookupTerm}
           onChange={(value) => {
             setCompanyDrafts((prev) => ({ ...prev, [row.company_id]: value }));
+          }}
+          onClear={resetServicePointLookup}
+          onOpenChange={(open) => {
+            if (open) {
+              resetServicePointLookup();
+            }
           }}
           placeholder="Выберите точку B24"
           filterOption={false}
@@ -530,6 +569,7 @@ const CompaniesListPage: React.FC = () => {
             icon={<CloseOutlined />}
             onClick={() => {
               setCompanyDrafts((prev) => ({ ...prev, [row.company_id]: originalPointID }));
+              resetServicePointLookup();
               setEditingCompanyID(null);
             }}
           />
@@ -541,7 +581,9 @@ const CompaniesListPage: React.FC = () => {
     canMapBitrix,
     companyDrafts,
     editingCompanyID,
+    resetServicePointLookup,
     servicePointOptions,
+    startCompanyMappingEdit,
     updateMutation.isPending,
   ]);
 
@@ -565,7 +607,7 @@ const CompaniesListPage: React.FC = () => {
         <button
           type="button"
           className="companies-mapping-cell"
-          onClick={() => setEditingPointID(pointID)}
+          onClick={() => startPointMappingEdit(pointID)}
           title={currentLabel}
         >
           {currentLabel}
@@ -580,9 +622,18 @@ const CompaniesListPage: React.FC = () => {
           showSearch
           value={draftCompanyID}
           options={companyLookupOptions}
+          style={{ width: '100%' }}
+          popupMatchSelectWidth
+          getPopupContainer={getMappingPopupContainer}
           onSearch={setCompanyLookupTerm}
           onChange={(value) => {
             setPointDrafts((prev) => ({ ...prev, [pointID]: value }));
+          }}
+          onClear={resetCompanyLookup}
+          onOpenChange={(open) => {
+            if (open) {
+              resetCompanyLookup();
+            }
           }}
           placeholder="Выберите компанию"
           filterOption={false}
@@ -601,6 +652,7 @@ const CompaniesListPage: React.FC = () => {
             icon={<CloseOutlined />}
             onClick={() => {
               setPointDrafts((prev) => ({ ...prev, [pointID]: originalCompanyID }));
+              resetCompanyLookup();
               setEditingPointID(null);
             }}
           />
@@ -614,6 +666,8 @@ const CompaniesListPage: React.FC = () => {
     editingPointID,
     mappingByPointID,
     pointDrafts,
+    resetCompanyLookup,
+    startPointMappingEdit,
     updateMutation.isPending,
   ]);
 

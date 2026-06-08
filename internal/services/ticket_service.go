@@ -2452,7 +2452,7 @@ func (s *ticketServiceImpl) syncCompanyContractFromBitrixPoint(ctx context.Conte
 
 	snapshot := contractsvc.BuildDailySnapshotFromBitrixServicePoint(companyID, *point)
 	snapshot.SourceHash = buildBitrixPointContractSourceHash(*point)
-	if err := s.contractService.SyncDailySnapshots(ctx, []contract.DailyCompanyContractSnapshot{snapshot}); err != nil {
+	if err := s.contractService.SyncDailySnapshot(ctx, snapshot); err != nil {
 		return nil, err
 	}
 
