@@ -606,6 +606,7 @@ const HeaderSearch: React.FC = () => {
   const sectionTerm = sectionParams.get('q') || '';
   const [sectionSearchTerm, setSectionSearchTerm] = useState(sectionTerm);
   const debouncedSectionSearchTerm = useDebouncedValue(sectionSearchTerm, TEXT_SEARCH_DEBOUNCE_MS);
+  const ignoredSectionSearchAfterClearRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isSectionSearchPage) return;
@@ -634,11 +635,49 @@ const HeaderSearch: React.FC = () => {
     navigate(query ? `${location.pathname}?${query}` : location.pathname);
   }, [location.pathname, navigate, sectionParams]);
 
+  const handleSectionSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.target.value;
+    setSectionSearchTerm(nextValue);
+    if (nextValue !== '') {
+      ignoredSectionSearchAfterClearRef.current = null;
+      return;
+    }
+    const currentAppliedTerm = sectionTerm.trim();
+    if (!currentAppliedTerm) {
+      return;
+    }
+    ignoredSectionSearchAfterClearRef.current = currentAppliedTerm;
+    onSectionSearch('');
+  }, [onSectionSearch, sectionTerm]);
+
+  const handleSectionSearchSubmit = useCallback((value: string) => {
+    const normalizedValue = value.trim();
+    if (
+      ignoredSectionSearchAfterClearRef.current
+      && normalizedValue === ignoredSectionSearchAfterClearRef.current
+    ) {
+      return;
+    }
+    ignoredSectionSearchAfterClearRef.current = null;
+    onSectionSearch(value);
+  }, [onSectionSearch]);
+
   useEffect(() => {
     if (!isSectionSearchPage) {
       return;
     }
-    if (debouncedSectionSearchTerm.trim() === sectionTerm.trim()) {
+    const normalizedDebouncedTerm = debouncedSectionSearchTerm.trim();
+    const normalizedSectionTerm = sectionTerm.trim();
+    if (
+      ignoredSectionSearchAfterClearRef.current
+      && normalizedDebouncedTerm === ignoredSectionSearchAfterClearRef.current
+    ) {
+      return;
+    }
+    if (!normalizedDebouncedTerm && !normalizedSectionTerm) {
+      ignoredSectionSearchAfterClearRef.current = null;
+    }
+    if (normalizedDebouncedTerm === normalizedSectionTerm) {
       return;
     }
     onSectionSearch(debouncedSectionSearchTerm);
@@ -1044,8 +1083,8 @@ const HeaderSearch: React.FC = () => {
             allowClear
             loading={isSectionSearchLoading}
             value={sectionSearchTerm}
-            onChange={(event) => setSectionSearchTerm(event.target.value)}
-            onSearch={onSectionSearch}
+            onChange={handleSectionSearchChange}
+            onSearch={handleSectionSearchSubmit}
           />
           {renderMobileSettingsButton()}
         </div>
@@ -1058,8 +1097,8 @@ const HeaderSearch: React.FC = () => {
         allowClear
         loading={isSectionSearchLoading}
         value={sectionSearchTerm}
-        onChange={(event) => setSectionSearchTerm(event.target.value)}
-        onSearch={onSectionSearch}
+        onChange={handleSectionSearchChange}
+        onSearch={handleSectionSearchSubmit}
         style={{ width: 440, maxWidth: '100%' }}
       />
     );
