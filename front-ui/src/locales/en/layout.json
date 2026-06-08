@@ -106,6 +106,11 @@
       "presetSaveError": "Failed to save filter",
       "presetDeleted": "Filter deleted",
       "presetDeleteError": "Failed to delete filter",
+      "presetDeleteTitle": "Delete filter “{{name}}”?",
+      "presetSettings": "Filter settings",
+      "presetSettingsTitle": "Filter settings “{{name}}”",
+      "tableColumnsLabel": "Columns",
+      "period": "Period",
       "assigneeFallback": "ID {{id}}",
       "modes": {
         "active": "Active",
