@@ -275,10 +275,6 @@ body .ant-message .ant-message-notice-content {
   min-width: 0;
 }
 
-.companies-mapping-editor .ant-select-dropdown {
-  min-width: 100% !important;
-}
-
 .companies-load-more {
   display: flex;
   min-height: 40px;

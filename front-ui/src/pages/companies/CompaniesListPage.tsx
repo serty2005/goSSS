@@ -164,9 +164,14 @@ const buildPointOptionLabel = (point: BitrixServicePointDTO) => {
   return parts.join(' · ');
 };
 
-const getMappingPopupContainer = (triggerNode: HTMLElement) => (
-  triggerNode.closest('.companies-mapping-editor') as HTMLElement | null
-) || document.body;
+const DEFAULT_MAPPING_DROPDOWN_WIDTH = 520;
+
+const resolveMappingDropdownWidth = (triggerNode: HTMLElement) => {
+  const cell = triggerNode.closest('td');
+  const editor = triggerNode.closest('.companies-mapping-editor');
+  const width = cell?.getBoundingClientRect().width || editor?.getBoundingClientRect().width || 0;
+  return Math.ceil(Math.max(width, DEFAULT_MAPPING_DROPDOWN_WIDTH));
+};
 
 const CompaniesListPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -191,6 +196,7 @@ const CompaniesListPage: React.FC = () => {
   const [servicePointContractFilter, setServicePointContractFilter] = useState<string[]>([]);
   const [servicePointCreatedRange, setServicePointCreatedRange] = useState<DateRangeValue>(null);
   const [servicePointUpdatedRange, setServicePointUpdatedRange] = useState<DateRangeValue>(null);
+  const [mappingDropdownWidth, setMappingDropdownWidth] = useState(DEFAULT_MAPPING_DROPDOWN_WIDTH);
   const [activeTabKey, setActiveTabKey] = useState('companies');
   const companiesLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const mappingsLoadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -469,6 +475,10 @@ const CompaniesListPage: React.FC = () => {
     setEditingPointID(pointID);
   }, [resetCompanyLookup, resetServicePointLookup]);
 
+  const updateMappingDropdownWidth = useCallback((triggerNode: HTMLElement) => {
+    setMappingDropdownWidth(resolveMappingDropdownWidth(triggerNode));
+  }, []);
+
   const updateMutation = useMutation({
     mutationFn: (payload: { company_id?: string; bitrix_service_point_id?: number }) => companiesApi.updateBitrixMapping(payload),
     onSuccess: () => {
@@ -540,8 +550,9 @@ const CompaniesListPage: React.FC = () => {
           value={draftPointID}
           options={servicePointOptions}
           style={{ width: '100%' }}
-          popupMatchSelectWidth
-          getPopupContainer={getMappingPopupContainer}
+          popupMatchSelectWidth={mappingDropdownWidth}
+          onMouseDown={(event) => updateMappingDropdownWidth(event.currentTarget)}
+          onFocus={(event) => updateMappingDropdownWidth(event.currentTarget)}
           onSearch={setServicePointLookupTerm}
           onChange={(value) => {
             setCompanyDrafts((prev) => ({ ...prev, [row.company_id]: value }));
@@ -581,9 +592,11 @@ const CompaniesListPage: React.FC = () => {
     canMapBitrix,
     companyDrafts,
     editingCompanyID,
+    mappingDropdownWidth,
     resetServicePointLookup,
     servicePointOptions,
     startCompanyMappingEdit,
+    updateMappingDropdownWidth,
     updateMutation.isPending,
   ]);
 
@@ -623,8 +636,9 @@ const CompaniesListPage: React.FC = () => {
           value={draftCompanyID}
           options={companyLookupOptions}
           style={{ width: '100%' }}
-          popupMatchSelectWidth
-          getPopupContainer={getMappingPopupContainer}
+          popupMatchSelectWidth={mappingDropdownWidth}
+          onMouseDown={(event) => updateMappingDropdownWidth(event.currentTarget)}
+          onFocus={(event) => updateMappingDropdownWidth(event.currentTarget)}
           onSearch={setCompanyLookupTerm}
           onChange={(value) => {
             setPointDrafts((prev) => ({ ...prev, [pointID]: value }));
@@ -664,10 +678,12 @@ const CompaniesListPage: React.FC = () => {
     canMapBitrix,
     companyLookupOptions,
     editingPointID,
+    mappingDropdownWidth,
     mappingByPointID,
     pointDrafts,
     resetCompanyLookup,
     startPointMappingEdit,
+    updateMappingDropdownWidth,
     updateMutation.isPending,
   ]);
 
