@@ -24,6 +24,8 @@ type PointMappingDraft = Record<number, string | undefined>;
 const COMPANIES_LIMIT = 50;
 const MAPPINGS_PAGE_LIMIT = 200;
 const POINTS_PAGE_LIMIT = 200;
+const EMPTY_MAPPINGS: CompanyBitrixMappingRowDTO[] = [];
+const EMPTY_SERVICE_POINTS: BitrixServicePointDTO[] = [];
 
 const isKnownDate = (value?: string) => {
   if (!value) return false;
@@ -153,14 +155,14 @@ const CompaniesListPage: React.FC = () => {
     staleTime: 15_000,
   });
 
-  const { data: servicePoints = [], isLoading: isServicePointsLoading } = useQuery({
+  const { data: servicePointsData, isLoading: isServicePointsLoading } = useQuery({
     queryKey: ['bitrix-service-points', 'companies-page', term],
     queryFn: () => fetchAllServicePoints(term),
     enabled: canMapBitrix,
     staleTime: 15_000,
   });
 
-  const { data: pointsLookup = [] } = useQuery({
+  const { data: pointsLookupData } = useQuery({
     queryKey: ['bitrix-service-points', 'company-mapping-lookup', servicePointLookupAppliedTerm],
     queryFn: () => ticketsApi.getBitrixServicePoints({
       term: servicePointLookupAppliedTerm,
@@ -187,7 +189,9 @@ const CompaniesListPage: React.FC = () => {
     setServicePointLookupAppliedTerm(debouncedServicePointLookupTerm);
   }, [debouncedServicePointLookupTerm]);
 
-  const mappings = useMemo(() => mappingsData || [], [mappingsData]);
+  const mappings = useMemo(() => mappingsData || EMPTY_MAPPINGS, [mappingsData]);
+  const servicePoints = useMemo(() => servicePointsData || EMPTY_SERVICE_POINTS, [servicePointsData]);
+  const pointsLookup = useMemo(() => pointsLookupData || EMPTY_SERVICE_POINTS, [pointsLookupData]);
   const companies = useMemo(() => (companiesData?.pages || []).flatMap((pageData) => pageData.data || []), [companiesData?.pages]);
   const companiesTotal = companiesData?.pages?.[0]?.meta?.total || 0;
 
