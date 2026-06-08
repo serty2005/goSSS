@@ -54,6 +54,8 @@ export interface CompanyBitrixMappingRowDTO {
   company_parent_title?: string;
   company_additional_name?: string;
   company_address?: string;
+  company_active_contract?: boolean;
+  company_contract_type?: string;
   bitrix_service_point_id?: number;
   bitrix_service_point_name?: string;
   bitrix_service_point_code?: string;
@@ -451,6 +453,9 @@ export interface BitrixServicePointDTO {
   address?: string;
   one_c_code?: string;
   contract_on?: boolean | null;
+  contract_type?: string;
+  created_at?: string;
+  updated_at?: string;
   raw_json?: string;
 }
 

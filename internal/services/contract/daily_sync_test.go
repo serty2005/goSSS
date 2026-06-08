@@ -78,6 +78,75 @@ func TestService_SyncDailySnapshots_NormalizesContractTypeFromBitrixPoint(t *tes
 	}
 }
 
+func TestService_SyncDailySnapshots_PrefersMailContractOverNativeContract(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:TestServiceSyncDailySnapshotsPrefersMailContractOverNativeContract?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(&company.Company{}, &contractdom.Contract{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := t.Context()
+	companyRepo := repositories.NewCompanyRepo(db)
+	contractRepo := repositories.NewContractRepo(db)
+
+	activeContract := false
+	title := "Компания с родным и почтовым контрактом"
+	comp := &company.Company{
+		Title:          &title,
+		ActiveContract: &activeContract,
+	}
+	if err := companyRepo.Create(ctx, comp); err != nil {
+		t.Fatalf("не удалось создать компанию: %v", err)
+	}
+
+	nativeState := "active"
+	native := &contractdom.Contract{
+		Base:  common.Base{ID: "native-active-contract"},
+		State: &nativeState,
+	}
+	if err := contractRepo.Create(ctx, native); err != nil {
+		t.Fatalf("не удалось создать родной контракт: %v", err)
+	}
+	if err := contractRepo.ReplaceCompanyLinks(ctx, native, []string{comp.ID}); err != nil {
+		t.Fatalf("не удалось привязать родной контракт: %v", err)
+	}
+
+	svc := NewService(
+		logger.New("", "test", "error", true),
+		dbinfra.NewGormTransactor(db),
+		contractRepo,
+		companyRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	if err := svc.SyncDailySnapshots(ctx, []contractdom.DailyCompanyContractSnapshot{
+		{
+			CompanyID:    comp.ID,
+			ContractType: "Не активен",
+			Active:       false,
+		},
+	}); err != nil {
+		t.Fatalf("SyncDailySnapshots завершился ошибкой: %v", err)
+	}
+
+	refreshed, err := companyRepo.GetByID(ctx, comp.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать компанию: %v", err)
+	}
+	if refreshed.ActiveContract == nil || *refreshed.ActiveContract {
+		t.Fatalf("ожидали, что статус компании берется из неактивного почтового контракта, получили %v", refreshed.ActiveContract)
+	}
+	if refreshed.ContractID == nil || *refreshed.ContractID != mailManagedContractID(comp.ID) {
+		t.Fatalf("ожидали приоритет почтового контракта, получили %v", refreshed.ContractID)
+	}
+}
+
 func TestService_SyncDailySnapshots_RestoresSoftDeletedMailContract(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:TestServiceSyncDailySnapshotsRestoresSoftDeletedMailContract?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {

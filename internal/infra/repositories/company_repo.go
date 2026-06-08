@@ -62,7 +62,7 @@ func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_id,
 			(
@@ -70,7 +70,7 @@ func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_type
 		`).
@@ -161,7 +161,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_id,
 			(
@@ -169,7 +169,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_type
 		`)
@@ -211,7 +211,7 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_id,
 			(
@@ -219,7 +219,7 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 				FROM contracts c
 				JOIN company_contracts cc ON cc.contract_id = c.id
 				WHERE cc.company_id = companies.id
-				ORDER BY (c.state = 'active') DESC, c.updated_at DESC
+				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
 				LIMIT 1
 			) AS contract_type
 		`)

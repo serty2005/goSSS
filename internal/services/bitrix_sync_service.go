@@ -38,6 +38,7 @@ var bitrixServicePointSelectFields = []string{
 	"ID",
 	"NAME",
 	"CODE",
+	"DATE_CREATE",
 	"PROPERTY_361",
 	"PROPERTY_681",
 }
@@ -412,6 +413,10 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 		currentCode := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointOneCCodeProperty]))
 		rawContractType := normalizeCell(extractPropertyFirstValue(item.Properties[bitrixServicePointContractProperty]))
 		normalizedContractType := normalizeContractType(rawContractType)
+		createdAt := time.Now()
+		if item.CreatedAt != nil {
+			createdAt = *item.CreatedAt
+		}
 		all = append(all, bitrix.ServicePoint{
 			B24ElementID: item.ID,
 			Name:         item.Name,
@@ -419,6 +424,7 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 			ContractOn:   contractTypeToBool(normalizedContractType),
 			ContractType: nullableStringValue(normalizedContractType),
 			RawJSON:      item.RawJSON,
+			CreatedAt:    createdAt,
 			UpdatedAt:    time.Now(),
 		})
 	}

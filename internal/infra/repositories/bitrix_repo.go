@@ -142,6 +142,9 @@ func (r *bitrixRepo) ReplaceServicePoints(ctx context.Context, points []bitrix.S
 				"one_c_code",
 				"one_c_contract_on",
 				"contract_type",
+				"contract_start",
+				"contract_end",
+				"client_order",
 				"raw_json",
 				"updated_at",
 			}),
@@ -233,6 +236,9 @@ func (r *bitrixRepo) UpdateServicePointSyncData(ctx context.Context, point *bitr
 	item := *point
 	item.Name = strings.TrimSpace(item.Name)
 	item.Address = strings.TrimSpace(item.Address)
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now()
+	}
 	item.UpdatedAt = time.Now()
 
 	return r.getDB(ctx).WithContext(ctx).Clauses(clause.OnConflict{

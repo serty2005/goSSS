@@ -61,6 +61,7 @@ type ListElement struct {
 	ID         int64
 	Name       string
 	Code       string
+	CreatedAt  *time.Time
 	Properties map[string]interface{}
 	RawJSON    string
 }
@@ -1242,11 +1243,33 @@ func parseListElements(raw interface{}) []ListElement {
 			ID:         toInt64(m["ID"]),
 			Name:       strings.TrimSpace(toString(m["NAME"])),
 			Code:       strings.TrimSpace(toString(m["CODE"])),
+			CreatedAt:  parseBitrixListElementTime(m["DATE_CREATE"]),
 			Properties: clonePropertyMap(m),
 			RawJSON:    string(rawJSON),
 		})
 	}
 	return result
+}
+
+func parseBitrixListElementTime(value interface{}) *time.Time {
+	raw := strings.TrimSpace(toString(value))
+	if raw == "" {
+		return nil
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02 15:04:05",
+		"02.01.2006 15:04:05",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func parseUsers(raw interface{}) []User {

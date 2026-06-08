@@ -52,6 +52,7 @@ type ServicePoint struct {
 	ContractEnd   *time.Time `json:"contract_end,omitempty"`
 	ClientOrder   *string    `json:"client_order,omitempty" gorm:"type:text"`
 	RawJSON       string     `json:"raw_json" gorm:"type:text"`
+	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 

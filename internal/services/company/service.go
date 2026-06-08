@@ -448,7 +448,8 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 		}
 	}
 
-	return s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
+	syncCompanyID := ""
+	err := s.tm.WithinTransaction(ctx, func(txCtx context.Context) error {
 		switch {
 		case normalizedCompanyID != "" && normalizedPointID != nil:
 			if s.isBitrixTestServicePoint(ctx, *normalizedPointID) {
@@ -457,16 +458,27 @@ func (s *serviceImpl) UpdateBitrixMapping(ctx context.Context, companyID *string
 				}
 				return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
 			}
-			return s.bitrixRepo.UpsertCompanyServicePointMapping(txCtx, &bitrix.CompanyServicePointMapping{
+			if err := s.bitrixRepo.UpsertCompanyServicePointMapping(txCtx, &bitrix.CompanyServicePointMapping{
 				CompanyID:            normalizedCompanyID,
 				BitrixServicePointID: *normalizedPointID,
-			})
+			}); err != nil {
+				return err
+			}
+			syncCompanyID = normalizedCompanyID
+			return nil
 		case normalizedCompanyID != "":
 			return s.bitrixRepo.DeleteCompanyServicePointMappingByCompanyID(txCtx, normalizedCompanyID)
 		default:
 			return s.bitrixRepo.DeleteCompanyServicePointMappingByPointID(txCtx, *normalizedPointID)
 		}
 	})
+	if err != nil {
+		return err
+	}
+	if syncCompanyID != "" && s.contractSvc != nil {
+		return s.SyncBitrixContract(ctx, syncCompanyID)
+	}
+	return nil
 }
 
 func (s *serviceImpl) isBitrixTestServicePoint(ctx context.Context, pointID int64) bool {

@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/contract"
@@ -377,6 +378,16 @@ func (s *serviceImpl) recalculateCompanyStatus(ctx context.Context, tx *gorm.DB,
 	activeContractIDs, err := s.contractRepo.GetActiveContractIDsForCompany(ctx, companyID)
 	if err != nil {
 		return err
+	}
+	mailContract, mailContractErr := s.contractRepo.GetByID(ctx, mailManagedContractID(companyID))
+	if mailContractErr != nil && !errors.Is(mailContractErr, domain.ErrNotFound) {
+		return mailContractErr
+	}
+	if mailContractErr == nil && mailContract != nil {
+		activeContractIDs = activeContractIDs[:0]
+		if mailContract.State != nil && strings.TrimSpace(*mailContract.State) == "active" {
+			activeContractIDs = append(activeContractIDs, mailContract.ID)
+		}
 	}
 
 	hasActiveContract := len(activeContractIDs) > 0

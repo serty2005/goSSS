@@ -683,8 +683,42 @@ const AcceptancePage: React.FC = () => {
   const selectedExistingCompanyID = String(formValues?.company_id || '').trim();
   const selectedParentCompanyID = String(formValues?.new_company_parent_id || '').trim();
   const selectedContractMode = (formValues?.contract_mode || 'inherit_parent') as ContractMode;
+  const { data: selectedParentCompanyData, isFetching: isSelectedParentCompanyLoading } = useQuery({
+    queryKey: ['acceptance', 'selected-parent-company', selectedParentCompanyID],
+    queryFn: () => companiesApi.getCompany(selectedParentCompanyID),
+    enabled: drawerOpen && selectedContractMode === 'inherit_parent' && selectedParentCompanyID !== '' && !companiesByID[selectedParentCompanyID],
+    staleTime: 30_000,
+  });
+  const selectedParentCompanyFromQuery = useMemo(() => (
+    selectedParentCompanyData?.data
+      ? {
+        title: selectedParentCompanyData.data.title || selectedParentCompanyID,
+        additionalName: selectedParentCompanyData.data.additional_name || '',
+        address: selectedParentCompanyData.data.address || '',
+        active_contract: Boolean(selectedParentCompanyData.data.active_contract),
+        contract_type: selectedParentCompanyData.data.contract_type || '',
+      }
+      : undefined
+  ), [selectedParentCompanyData?.data, selectedParentCompanyID]);
   const selectedExistingCompany = selectedExistingCompanyID ? companiesByID[selectedExistingCompanyID] : undefined;
-  const selectedParentCompany = selectedParentCompanyID ? companiesByID[selectedParentCompanyID] : undefined;
+  const selectedParentCompany = selectedParentCompanyID
+    ? (companiesByID[selectedParentCompanyID] || selectedParentCompanyFromQuery)
+    : undefined;
+  const effectiveCompanyOptions = useMemo(() => {
+    const options = [...companyOptions];
+    if (selectedParentCompanyID && selectedParentCompanyFromQuery && !options.some((item) => item.value === selectedParentCompanyID)) {
+      options.unshift({
+        value: selectedParentCompanyID,
+        title: selectedParentCompanyFromQuery.title,
+        parentTitle: undefined,
+        additionalName: selectedParentCompanyFromQuery.additionalName,
+        address: selectedParentCompanyFromQuery.address,
+        active_contract: selectedParentCompanyFromQuery.active_contract,
+        contract_type: selectedParentCompanyFromQuery.contract_type,
+      });
+    }
+    return options;
+  }, [companyOptions, selectedParentCompanyFromQuery, selectedParentCompanyID]);
   const bitrixServicePointOptions = useMemo(() => {
     if (!Array.isArray(bitrixServicePoints)) return [];
     return (bitrixServicePoints as BitrixServicePointDTO[]).map((point) => ({
@@ -825,6 +859,8 @@ const AcceptancePage: React.FC = () => {
       if (selectedContractMode === 'inherit_parent') {
         if (!selectedParentCompanyID) {
           reasons.push('Не выбрана родительская компания для наследования контракта');
+        } else if (isSelectedParentCompanyLoading) {
+          reasons.push('Проверяем родительскую компанию');
         } else if (!selectedParentCompany) {
           reasons.push('Родительская компания не найдена в списке');
         } else if (!selectedParentCompany.active_contract) {
@@ -873,6 +909,7 @@ const AcceptancePage: React.FC = () => {
     selectedContractMode,
     selectedParentCompany,
     selectedParentCompanyID,
+    isSelectedParentCompanyLoading,
     isManualMode,
     isManualServerEnabled,
     duplicateServerByUniqueID?.id,
@@ -983,7 +1020,7 @@ const AcceptancePage: React.FC = () => {
                   selectedContractMode={selectedContractMode}
                   selectedParentCompany={selectedParentCompany}
                   selectedExistingCompany={selectedExistingCompany}
-                  companyOptions={companyOptions}
+                  companyOptions={effectiveCompanyOptions}
                   isCompaniesLoading={isCompaniesLoading}
                   isBitrixEnabled={isBitrixEnabled}
                   bitrixServicePointOptions={bitrixServicePointOptions}
@@ -1181,7 +1218,7 @@ const AcceptancePage: React.FC = () => {
                   selectedContractMode={selectedContractMode}
                   selectedParentCompany={selectedParentCompany}
                   selectedExistingCompany={selectedExistingCompany}
-                  companyOptions={companyOptions}
+                  companyOptions={effectiveCompanyOptions}
                   isCompaniesLoading={isCompaniesLoading}
                   isBitrixEnabled={isBitrixEnabled}
                   bitrixServicePointOptions={bitrixServicePointOptions}

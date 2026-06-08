@@ -217,6 +217,67 @@ body .ant-message .ant-message-notice-content {
   color: var(--app-color-primary);
 }
 
+.companies-page {
+  width: 100%;
+}
+
+.companies-table-surface {
+  width: 100%;
+  min-width: 0;
+}
+
+.companies-table-loader {
+  display: flex;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+}
+
+.companies-work-table .ant-table-tbody>tr>td {
+  height: 46px;
+}
+
+.companies-name-cell {
+  width: 100%;
+  min-width: 0;
+}
+
+.companies-mapping-cell {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 8px;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.companies-mapping-cell:hover,
+.companies-mapping-cell:focus-visible {
+  color: var(--app-color-primary);
+  background: var(--app-color-primary-soft);
+  border-color: var(--app-color-border-strong);
+  outline: none;
+}
+
+.companies-mapping-editor .ant-select {
+  min-width: 0;
+}
+
+.companies-load-more {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16px;
+}
+
 .tickets-table .ant-table-cell-ellipsis .ant-typography {
   display: block;
   overflow: hidden;

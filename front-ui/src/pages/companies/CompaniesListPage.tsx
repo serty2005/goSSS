@@ -1,20 +1,109 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Empty, List, message, Select, Space, Spin, Table, Tag, Tabs, Tooltip, Typography } from 'antd';
-import { BankOutlined, CheckOutlined, CloseOutlined, SwapOutlined, SyncOutlined } from '@ant-design/icons';
+import { Button, Empty, Select, Space, Spin, Table, Tag, Tabs, Tooltip, Typography, message } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { BankOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
-import { CompanyBitrixMappingRowDTO, CompanyModel } from '@/types/api';
+import { BitrixServicePointDTO, CompanyBitrixMappingRowDTO, CompanyModel } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { cancelDraft, createInitialDraft, formatMappedServicePointLabel, isDraftDirty, MappingDraft, toggleDirection } from './companyBitrixMappingState';
+import { formatMappedServicePointLabel } from './companyBitrixMappingState';
 
 const { Title, Text } = Typography;
 
 type CompanyOption = { value: string; label: string };
+type PointOption = { value: number; label: string };
+type CompanyMappingDraft = Record<string, number | undefined>;
+type PointMappingDraft = Record<number, string | undefined>;
+
+const COMPANIES_LIMIT = 50;
+const MAPPINGS_PAGE_LIMIT = 200;
+const POINTS_PAGE_LIMIT = 200;
+
+const isKnownDate = (value?: string) => {
+  if (!value) return false;
+  const parsed = dayjs(value);
+  return parsed.isValid() && parsed.year() > 1900;
+};
+
+const formatDateTime = (value?: string) => {
+  if (!isKnownDate(value)) {
+    return '-';
+  }
+  return dayjs(value).format('DD.MM.YYYY HH:mm');
+};
+
+const contractStatusTag = (active?: boolean, contractType?: string) => (
+  <Space size={6} wrap>
+    <Tag color={active ? 'success' : 'default'}>{active ? 'Активен' : 'Нет активного'}</Tag>
+    {contractType && <Text type="secondary">{contractType}</Text>}
+  </Space>
+);
+
+const ellipsisText = (value?: string | null) => (
+  <div className="company-ticket-table__cell-ellipsis" title={value || '-'}>
+    {value || '-'}
+  </div>
+);
+
+const buildCompanyOptionLabel = (item: CompanyModel | CompanyBitrixMappingRowDTO) => {
+  const isMappingRow = 'company_id' in item;
+  const id = isMappingRow ? item.company_id : resolveCompanyID(item);
+  const title = (isMappingRow ? item.company_title : resolveCompanyTitle(item)) || id || 'Компания';
+  const parentTitle = isMappingRow ? item.company_parent_title : resolveCompanyParentTitle(item);
+  return parentTitle ? `${title} (${parentTitle})` : title;
+};
+
+const buildPointOptionLabel = (point: BitrixServicePointDTO) => {
+  const parts = [point.name || `ID ${point.b24_element_id}`];
+  if (point.one_c_code) {
+    parts.push(`1C: ${point.one_c_code}`);
+  }
+  if (point.contract_type) {
+    parts.push(point.contract_type);
+  } else if (typeof point.contract_on === 'boolean') {
+    parts.push(point.contract_on ? 'контракт активен' : 'контракт не активен');
+  }
+  return parts.join(' · ');
+};
+
+const fetchAllBitrixMappings = async (term: string) => {
+  const result: CompanyBitrixMappingRowDTO[] = [];
+  let offset = 0;
+  for (let page = 0; page < 50; page += 1) {
+    const response = await companiesApi.getBitrixMappings(term, MAPPINGS_PAGE_LIMIT, offset);
+    const rows = response.data || [];
+    result.push(...rows);
+    if (rows.length < MAPPINGS_PAGE_LIMIT) {
+      break;
+    }
+    offset += MAPPINGS_PAGE_LIMIT;
+  }
+  return result;
+};
+
+const fetchAllServicePoints = async (term: string) => {
+  const result: BitrixServicePointDTO[] = [];
+  let offset = 0;
+  for (let page = 0; page < 50; page += 1) {
+    const rows = await ticketsApi.getBitrixServicePoints({
+      term,
+      limit: POINTS_PAGE_LIMIT,
+      offset,
+    });
+    result.push(...rows);
+    if (rows.length < POINTS_PAGE_LIMIT) {
+      break;
+    }
+    offset += POINTS_PAGE_LIMIT;
+  }
+  return result;
+};
 
 const CompaniesListPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -23,55 +112,70 @@ const CompaniesListPage: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const isBitrixEnabled = user?.bitrix_enabled === true;
   const isAdminUser = isAdmin(user?.roles);
+  const canMapBitrix = isAdminUser && isBitrixEnabled;
 
   const [companyLookupTerm, setCompanyLookupTerm] = useState('');
   const [servicePointLookupTerm, setServicePointLookupTerm] = useState('');
   const [companyLookupAppliedTerm, setCompanyLookupAppliedTerm] = useState('');
   const [servicePointLookupAppliedTerm, setServicePointLookupAppliedTerm] = useState('');
+  const [editingCompanyID, setEditingCompanyID] = useState<string | null>(null);
+  const [editingPointID, setEditingPointID] = useState<number | null>(null);
+  const [companyDrafts, setCompanyDrafts] = useState<CompanyMappingDraft>({});
+  const [pointDrafts, setPointDrafts] = useState<PointMappingDraft>({});
+  const companiesLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const debouncedCompanyLookupTerm = useDebouncedValue(companyLookupTerm, SELECT_SEARCH_DEBOUNCE_MS);
   const debouncedServicePointLookupTerm = useDebouncedValue(servicePointLookupTerm, SELECT_SEARCH_DEBOUNCE_MS);
-  const [drafts, setDrafts] = useState<Record<string, MappingDraft>>({});
-  const [syncingCompanyID, setSyncingCompanyID] = useState<string | null>(null);
-  const companiesLimit = 20;
-  const companiesLoadMoreRef = useRef<HTMLDivElement | null>(null);
 
-  const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
+  const {
+    data: companiesData,
+    isLoading: isCompaniesLoading,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery({
     queryKey: ['companies', 'list', term],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => companiesApi.searchCompanies(term, companiesLimit, Number(pageParam) || 0),
+    queryFn: ({ pageParam }) => companiesApi.searchCompanies(term, COMPANIES_LIMIT, Number(pageParam) || 0),
     getNextPageParam: (lastPage) => {
       const meta = lastPage.meta;
       if (!meta?.has_next) {
         return undefined;
       }
-      return (meta.offset || 0) + (meta.limit || companiesLimit);
+      return (meta.offset || 0) + (meta.limit || COMPANIES_LIMIT);
     },
     staleTime: 30_000,
   });
 
   const { data: mappingsData, isLoading: isMappingsLoading } = useQuery({
     queryKey: ['companies', 'bitrix-mappings', term],
-    queryFn: () => companiesApi.getBitrixMappings(term, 200, 0),
-    enabled: isAdminUser && isBitrixEnabled,
+    queryFn: () => fetchAllBitrixMappings(term),
+    enabled: canMapBitrix,
     staleTime: 15_000,
   });
 
-  const { data: pointsData = [] } = useQuery({
-    queryKey: ['bitrix-service-points', 'for-company-mappings', servicePointLookupAppliedTerm],
+  const { data: servicePoints = [], isLoading: isServicePointsLoading } = useQuery({
+    queryKey: ['bitrix-service-points', 'companies-page', term],
+    queryFn: () => fetchAllServicePoints(term),
+    enabled: canMapBitrix,
+    staleTime: 15_000,
+  });
+
+  const { data: pointsLookup = [] } = useQuery({
+    queryKey: ['bitrix-service-points', 'company-mapping-lookup', servicePointLookupAppliedTerm],
     queryFn: () => ticketsApi.getBitrixServicePoints({
       term: servicePointLookupAppliedTerm,
-      limit: 20,
+      limit: 40,
       offset: 0,
       random_if_empty: true,
     }),
-    enabled: isAdminUser && isBitrixEnabled,
+    enabled: canMapBitrix,
     staleTime: 15_000,
   });
 
   const { data: companiesLookupData } = useQuery({
-    queryKey: ['companies', 'lookup', companyLookupAppliedTerm],
-    queryFn: () => companiesApi.searchCompanies(companyLookupAppliedTerm, 30, 0),
-    enabled: isAdminUser,
+    queryKey: ['companies', 'mapping-lookup', companyLookupAppliedTerm],
+    queryFn: () => companiesApi.searchCompanies(companyLookupAppliedTerm, 40, 0),
+    enabled: canMapBitrix,
     staleTime: 30_000,
   });
 
@@ -83,98 +187,37 @@ const CompaniesListPage: React.FC = () => {
     setServicePointLookupAppliedTerm(debouncedServicePointLookupTerm);
   }, [debouncedServicePointLookupTerm]);
 
+  const mappings = useMemo(() => mappingsData || [], [mappingsData]);
+  const companies = useMemo(() => (companiesData?.pages || []).flatMap((pageData) => pageData.data || []), [companiesData?.pages]);
+  const companiesTotal = companiesData?.pages?.[0]?.meta?.total || 0;
+
+  const mappingByPointID = useMemo(() => {
+    const result = new Map<number, CompanyBitrixMappingRowDTO>();
+    mappings.forEach((row) => {
+      if (row.bitrix_service_point_id) {
+        result.set(row.bitrix_service_point_id, row);
+      }
+    });
+    return result;
+  }, [mappings]);
+
   useEffect(() => {
-    if (!mappingsData?.data) {
-      return;
-    }
-    const next: Record<string, MappingDraft> = {};
-    for (const row of mappingsData.data) {
-      next[row.company_id] = createInitialDraft(row);
-    }
-    setDrafts(next);
-  }, [mappingsData?.data]);
-
-  const companyLookupOptions = useMemo<CompanyOption[]>(() => {
-    const items = companiesLookupData?.data || [];
-    return items
-      .map((item) => {
-        const id = resolveCompanyID(item as CompanyModel);
-        if (!id) return null;
-        const title = resolveCompanyTitle(item as CompanyModel) || id;
-        const parentTitle = resolveCompanyParentTitle(item as CompanyModel);
-        const label = parentTitle ? `${title} (${parentTitle})` : title;
-        return { value: id, label };
-      })
-      .filter(Boolean) as CompanyOption[];
-  }, [companiesLookupData?.data]);
-
-  const servicePointOptions = useMemo(() => {
-    return (pointsData || []).map((point) => {
-      const code = point.one_c_code ? ` · код 1С: ${point.one_c_code}` : '';
-      const suffix = point.address ? ` · ${point.address}` : '';
-      const status = point.contract_on == null ? '' : point.contract_on ? ' · контракт: активен' : ' · контракт: нет';
-      return {
-        value: point.b24_element_id,
-        label: `${point.name}${code}${suffix}${status}`,
-      };
+    const nextCompanyDrafts: CompanyMappingDraft = {};
+    const nextPointDrafts: PointMappingDraft = {};
+    mappings.forEach((row) => {
+      nextCompanyDrafts[row.company_id] = row.bitrix_service_point_id;
+      if (row.bitrix_service_point_id) {
+        nextPointDrafts[row.bitrix_service_point_id] = row.company_id;
+      }
     });
-  }, [pointsData]);
-
-  const updateMutation = useMutation({
-    mutationFn: (payload: { company_id?: string; bitrix_service_point_id?: number }) => companiesApi.updateBitrixMapping(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
-      message.success('Сопоставление обновлено');
-    },
-    onError: (error: any) => {
-      const apiMessage = error?.response?.data?.error?.error;
-      message.error(apiMessage || 'Не удалось обновить сопоставление');
-    },
-  });
-
-  const syncContractMutation = useMutation({
-    mutationFn: (companyId: string) => companiesApi.syncBitrixContract(companyId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
-      queryClient.invalidateQueries({ queryKey: ['companies', 'list'] });
-      message.success('Контракт компании синхронизирован из точки Bitrix24');
-    },
-    onError: (error: any) => {
-      const apiMessage = error?.response?.data?.error?.error;
-      message.error(apiMessage || 'Не удалось синхронизировать контракт компании');
-    },
-  });
-
-  const applyDraft = async (row: CompanyBitrixMappingRowDTO) => {
-    const draft = drafts[row.company_id];
-    if (!draft) return;
-
-    if (draft.direction === 'company_to_point') {
-      await updateMutation.mutateAsync({
-        company_id: row.company_id,
-        bitrix_service_point_id: draft.pointId,
-      });
-      return;
-    }
-
-    await updateMutation.mutateAsync({
-      company_id: draft.companyId,
-      bitrix_service_point_id: draft.pointId,
+    servicePoints.forEach((point) => {
+      if (nextPointDrafts[point.b24_element_id] === undefined) {
+        nextPointDrafts[point.b24_element_id] = undefined;
+      }
     });
-  };
-
-  const syncContractForRow = async (row: CompanyBitrixMappingRowDTO) => {
-    setSyncingCompanyID(row.company_id);
-    try {
-      await syncContractMutation.mutateAsync(row.company_id);
-    } finally {
-      setSyncingCompanyID(null);
-    }
-  };
-
-  const mappings = mappingsData?.data || [];
-  const companies = useMemo(() => (data?.pages || []).flatMap((pageData) => pageData.data || []), [data?.pages]);
-  const companiesTotal = data?.pages?.[0]?.meta?.total || 0;
+    setCompanyDrafts(nextCompanyDrafts);
+    setPointDrafts(nextPointDrafts);
+  }, [mappings, servicePoints]);
 
   useEffect(() => {
     const node = companiesLoadMoreRef.current;
@@ -196,268 +239,364 @@ const CompaniesListPage: React.FC = () => {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, companies.length]);
 
-  const columns = [
+  const companyLookupOptions = useMemo<CompanyOption[]>(() => {
+    const source = [...mappings, ...(companiesLookupData?.data || [])];
+    const seen = new Set<string>();
+    return source
+      .map((item) => {
+        const id = 'company_id' in item ? item.company_id : resolveCompanyID(item);
+        if (!id || seen.has(id)) return null;
+        seen.add(id);
+        return { value: id, label: buildCompanyOptionLabel(item) };
+      })
+      .filter(Boolean) as CompanyOption[];
+  }, [companiesLookupData?.data, mappings]);
+
+  const servicePointOptions = useMemo<PointOption[]>(() => {
+    const source = [...servicePoints, ...pointsLookup];
+    const seen = new Set<number>();
+    return source
+      .map((point) => {
+        if (!point.b24_element_id || seen.has(point.b24_element_id)) return null;
+        seen.add(point.b24_element_id);
+        return { value: point.b24_element_id, label: buildPointOptionLabel(point) };
+      })
+      .filter(Boolean) as PointOption[];
+  }, [pointsLookup, servicePoints]);
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: { company_id?: string; bitrix_service_point_id?: number }) => companiesApi.updateBitrixMapping(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
+      queryClient.invalidateQueries({ queryKey: ['companies', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['bitrix-service-points'] });
+      message.success('Сопоставление сохранено, контракт синхронизирован');
+    },
+    onError: (error: any) => {
+      const apiMessage = error?.response?.data?.error?.error;
+      message.error(apiMessage || 'Не удалось сохранить сопоставление');
+    },
+  });
+
+  const applyCompanyMapping = async (row: CompanyBitrixMappingRowDTO) => {
+    const pointID = companyDrafts[row.company_id];
+    await updateMutation.mutateAsync({
+      company_id: row.company_id,
+      bitrix_service_point_id: pointID,
+    });
+    setEditingCompanyID(null);
+  };
+
+  const applyPointMapping = async (point: BitrixServicePointDTO) => {
+    const companyID = pointDrafts[point.b24_element_id];
+    await updateMutation.mutateAsync({
+      company_id: companyID,
+      bitrix_service_point_id: point.b24_element_id,
+    });
+    setEditingPointID(null);
+  };
+
+  const renderPointMappingCell = (row: CompanyBitrixMappingRowDTO) => {
+    const isEditing = editingCompanyID === row.company_id;
+    const originalPointID = row.bitrix_service_point_id;
+    const draftPointID = companyDrafts[row.company_id];
+    const dirty = (draftPointID ?? undefined) !== (originalPointID ?? undefined);
+    const mappedLabel = formatMappedServicePointLabel({
+      bitrix_service_point_id: draftPointID,
+      bitrix_service_point_name: row.bitrix_service_point_name,
+      bitrix_service_point_code: row.bitrix_service_point_code,
+      bitrix_service_point_enabled: row.bitrix_service_point_enabled,
+    });
+
+    if (!canMapBitrix) {
+      return ellipsisText(mappedLabel);
+    }
+
+    if (!isEditing) {
+      return (
+        <button
+          type="button"
+          className="companies-mapping-cell"
+          onClick={() => setEditingCompanyID(row.company_id)}
+          title={mappedLabel}
+        >
+          {mappedLabel}
+        </button>
+      );
+    }
+
+    return (
+      <Space.Compact block className="companies-mapping-editor">
+        <Select
+          allowClear
+          showSearch
+          value={draftPointID}
+          options={servicePointOptions}
+          onSearch={setServicePointLookupTerm}
+          onChange={(value) => {
+            setCompanyDrafts((prev) => ({ ...prev, [row.company_id]: value }));
+          }}
+          placeholder="Выберите точку B24"
+          filterOption={false}
+        />
+        <Tooltip title={dirty ? 'Подтвердить сопоставление' : 'Нет изменений'}>
+          <Button
+            type="primary"
+            icon={<CheckOutlined />}
+            disabled={!dirty}
+            loading={updateMutation.isPending}
+            onClick={() => void applyCompanyMapping(row)}
+          />
+        </Tooltip>
+        <Tooltip title="Отмена">
+          <Button
+            icon={<CloseOutlined />}
+            onClick={() => {
+              setCompanyDrafts((prev) => ({ ...prev, [row.company_id]: originalPointID }));
+              setEditingCompanyID(null);
+            }}
+          />
+        </Tooltip>
+      </Space.Compact>
+    );
+  };
+
+  const renderCompanyMappingCell = (point: BitrixServicePointDTO) => {
+    const pointID = point.b24_element_id;
+    const mapping = mappingByPointID.get(pointID);
+    const isEditing = editingPointID === pointID;
+    const originalCompanyID = mapping?.company_id;
+    const draftCompanyID = pointDrafts[pointID];
+    const dirty = (draftCompanyID ?? undefined) !== (originalCompanyID ?? undefined);
+    const currentLabel = draftCompanyID
+      ? companyLookupOptions.find((option) => option.value === draftCompanyID)?.label || mapping?.company_title || draftCompanyID
+      : 'Компания не выбрана';
+
+    if (!canMapBitrix) {
+      return ellipsisText(currentLabel);
+    }
+
+    if (!isEditing) {
+      return (
+        <button
+          type="button"
+          className="companies-mapping-cell"
+          onClick={() => setEditingPointID(pointID)}
+          title={currentLabel}
+        >
+          {currentLabel}
+        </button>
+      );
+    }
+
+    return (
+      <Space.Compact block className="companies-mapping-editor">
+        <Select
+          allowClear
+          showSearch
+          value={draftCompanyID}
+          options={companyLookupOptions}
+          onSearch={setCompanyLookupTerm}
+          onChange={(value) => {
+            setPointDrafts((prev) => ({ ...prev, [pointID]: value }));
+          }}
+          placeholder="Выберите компанию"
+          filterOption={false}
+        />
+        <Tooltip title={dirty ? 'Подтвердить сопоставление' : 'Нет изменений'}>
+          <Button
+            type="primary"
+            icon={<CheckOutlined />}
+            disabled={!dirty}
+            loading={updateMutation.isPending}
+            onClick={() => void applyPointMapping(point)}
+          />
+        </Tooltip>
+        <Tooltip title="Отмена">
+          <Button
+            icon={<CloseOutlined />}
+            onClick={() => {
+              setPointDrafts((prev) => ({ ...prev, [pointID]: originalCompanyID }));
+              setEditingPointID(null);
+            }}
+          />
+        </Tooltip>
+      </Space.Compact>
+    );
+  };
+
+  const companyRows = useMemo<CompanyBitrixMappingRowDTO[]>(() => {
+    if (canMapBitrix) {
+      return mappings;
+    }
+    return companies.map((item) => ({
+      company_id: resolveCompanyID(item) || '',
+      company_title: resolveCompanyTitle(item) || '',
+      company_parent_title: resolveCompanyParentTitle(item) || undefined,
+      company_additional_name: item.additional_name,
+      company_address: item.address,
+      company_active_contract: item.active_contract,
+      company_contract_type: item.contract_type,
+    })).filter((row) => row.company_id);
+  }, [canMapBitrix, companies, mappings]);
+
+  const companyColumns: ColumnsType<CompanyBitrixMappingRowDTO> = [
     {
-      title: 'Наша компания',
+      title: 'Имя',
       dataIndex: 'company_title',
-      key: 'company',
-      width: '42%',
-      render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
-        const draft = drafts[row.company_id];
-        const isPointToCompany = draft?.direction === 'point_to_company';
-        if (isPointToCompany) {
-          const currentValue = draft.companyId;
-          const fallbackLabel = row.company_parent_title ? `${row.company_title} (${row.company_parent_title})` : row.company_title;
-          const options = currentValue && !companyLookupOptions.some((item) => item.value === currentValue)
-            ? [{ value: currentValue, label: fallbackLabel }, ...companyLookupOptions]
-            : companyLookupOptions;
-          return (
-            <Select
-              allowClear
-              showSearch
-              value={currentValue}
-              options={options}
-              onSearch={setCompanyLookupTerm}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setCompanyLookupAppliedTerm(companyLookupTerm);
-                }
-              }}
-              onChange={(value) => {
-                setDrafts((prev) => ({
-                  ...prev,
-                  [row.company_id]: {
-                    ...prev[row.company_id],
-                    companyId: value || undefined,
-                  },
-                }));
-              }}
-              style={{ width: '100%' }}
-              placeholder="Выберите компанию"
-              filterOption={(input, option) => String(option?.label || '').toLowerCase().includes(input.toLowerCase())}
-            />
-          );
-        }
-
-        return (
-          <Space direction="vertical" size={0}>
-            <Text strong>{row.company_title}</Text>
-            {row.company_parent_title && <Text type="secondary">Сеть: {row.company_parent_title}</Text>}
-          </Space>
-        );
-      },
+      key: 'company_title',
+      width: 260,
+      render: (_value, row) => (
+        <Space size={8} className="companies-name-cell">
+          <BankOutlined />
+          <Link to={`/companies/${row.company_id}`} className="company-ticket-table__company-link">
+            {row.company_title || row.company_id}
+          </Link>
+        </Space>
+      ),
     },
     {
-      title: '',
-      key: 'direction',
-      width: 90,
-      render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
-        const draft = drafts[row.company_id];
-        const disabled = !draft?.pointId;
-        return (
-          <Tooltip title={disabled ? 'Переключение доступно только для сопоставленной точки B24' : 'Сменить направление сопоставления'}>
-            <Button
-              type={draft?.direction === 'point_to_company' ? 'primary' : 'default'}
-              icon={<SwapOutlined />}
-              disabled={disabled}
-              onClick={() => {
-                setDrafts((prev) => ({
-                  ...prev,
-                  [row.company_id]: toggleDirection(prev[row.company_id]),
-                }));
-              }}
-            />
-          </Tooltip>
-        );
-      },
+      title: 'Статус контракта',
+      key: 'contract_status',
+      width: 190,
+      render: (_value, row) => contractStatusTag(row.company_active_contract, row.company_contract_type),
     },
     {
-      title: 'Точка обслуживания Bitrix24',
-      dataIndex: 'bitrix_service_point_name',
-      key: 'point',
-      width: '46%',
-      render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
-        const draft = drafts[row.company_id];
-        const isCompanyToPoint = draft?.direction !== 'point_to_company';
-        const mappedPointLabel = formatMappedServicePointLabel({
-          bitrix_service_point_id: draft?.pointId,
-          bitrix_service_point_name: row.bitrix_service_point_name,
-          bitrix_service_point_code: row.bitrix_service_point_code,
-          bitrix_service_point_enabled: row.bitrix_service_point_enabled,
-        });
-        if (isCompanyToPoint) {
-          const fallbackOptions = draft?.pointId && !servicePointOptions.some((option) => option.value === draft.pointId)
-            ? [{ value: draft.pointId, label: mappedPointLabel }, ...servicePointOptions]
-            : servicePointOptions;
-          return (
-            <Select
-              allowClear
-              showSearch
-              value={draft?.pointId}
-              options={fallbackOptions}
-              onSearch={setServicePointLookupTerm}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setServicePointLookupAppliedTerm(servicePointLookupTerm);
-                }
-              }}
-              onChange={(value) => {
-                setDrafts((prev) => ({
-                  ...prev,
-                  [row.company_id]: {
-                    ...prev[row.company_id],
-                    pointId: value,
-                  },
-                }));
-              }}
-              style={{ width: '50%' }}
-              placeholder="Выберите точку B24"
-              filterOption={false}
-            />
-          );
-        }
-
-        if (!draft?.pointId) {
-          return <Text type="secondary">Точка B24 не выбрана</Text>;
-        }
-
-        const item = servicePointOptions.find((option) => option.value === draft.pointId);
-        return <Text>{item?.label || mappedPointLabel}</Text>;
-      },
+      title: 'Родитель',
+      dataIndex: 'company_parent_title',
+      key: 'company_parent_title',
+      width: 220,
+      render: ellipsisText,
     },
     {
-      title: 'Действия',
-      key: 'actions',
-      width: 180,
-      render: (_: unknown, row: CompanyBitrixMappingRowDTO) => {
-        const draft = drafts[row.company_id];
-        if (!draft) {
-          return null;
-        }
-        const dirty = isDraftDirty(draft);
-        const hasSavedMapping = Boolean(draft.originalPointId && draft.originalCompanyId === row.company_id);
-        return (
-          <Space>
-            {hasSavedMapping && (
-              <Tooltip title={dirty ? 'Сначала сохраните или отмените изменения сопоставления' : 'Синхронизировать контракт компании из точки Bitrix24'}>
-                <Button
-                  icon={<SyncOutlined />}
-                  disabled={dirty}
-                  loading={syncContractMutation.isPending && syncingCompanyID === row.company_id}
-                  onClick={() => void syncContractForRow(row)}
-                />
-              </Tooltip>
-            )}
-            {dirty && (
-              <Tooltip title="Применить">
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  loading={updateMutation.isPending}
-                  onClick={() => void applyDraft(row)}
-                />
-              </Tooltip>
-            )}
-            {dirty && (
-              <Tooltip title="Отмена">
-                <Button
-                  icon={<CloseOutlined />}
-                  onClick={() => {
-                    setDrafts((prev) => ({
-                      ...prev,
-                      [row.company_id]: cancelDraft(prev[row.company_id]),
-                    }));
-                  }}
-                />
-              </Tooltip>
-            )}
-          </Space>
-        );
-      },
+      title: 'Адрес',
+      dataIndex: 'company_address',
+      key: 'company_address',
+      width: 280,
+      render: ellipsisText,
+    },
+    {
+      title: 'Юр. название',
+      dataIndex: 'company_additional_name',
+      key: 'company_additional_name',
+      width: 260,
+      render: ellipsisText,
+    },
+    {
+      title: 'Сопоставленная точка Bitrix24',
+      key: 'bitrix_mapping',
+      width: 380,
+      render: (_value, row) => renderPointMappingCell(row),
     },
   ];
 
-  if (isLoading) {
-    return <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large" /></div>;
-  }
+  const servicePointColumns: ColumnsType<BitrixServicePointDTO> = [
+    {
+      title: 'ID в 1C',
+      dataIndex: 'one_c_code',
+      key: 'one_c_code',
+      width: 150,
+      render: ellipsisText,
+    },
+    {
+      title: 'Название',
+      dataIndex: 'name',
+      key: 'name',
+      width: 280,
+      render: ellipsisText,
+    },
+    {
+      title: 'Дата создания',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
+      render: formatDateTime,
+    },
+    {
+      title: 'Дата обновления',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 160,
+      render: formatDateTime,
+    },
+    {
+      title: 'Тип контракта',
+      dataIndex: 'contract_type',
+      key: 'contract_type',
+      width: 200,
+      render: (_value, row) => contractStatusTag(row.contract_on ?? undefined, row.contract_type),
+    },
+    {
+      title: 'Сопоставленная компания',
+      key: 'company_mapping',
+      width: 380,
+      render: (_value, row) => renderCompanyMappingCell(row),
+    },
+  ];
 
-  const listContent = (
-    <Card className="glass-panel">
-      {companies.length === 0 ? (
+  const companiesContent = (
+    <div className="companies-table-surface">
+      {isCompaniesLoading || (canMapBitrix && isMappingsLoading) ? (
+        <div className="companies-table-loader"><Spin size="large" /></div>
+      ) : companyRows.length === 0 ? (
         <Empty description="Компании не найдены" />
       ) : (
         <>
-          <List
-            dataSource={companies}
-            renderItem={(item) => {
-              const company = item as CompanyModel;
-              const id = resolveCompanyID(company);
-              const title = resolveCompanyTitle(company) || id;
-              const parentTitle = resolveCompanyParentTitle(company);
-              const address = company.address;
-              const additional = company.additional_name;
-              const is_active = company.active_contract === true;
-
-              return (
-                <List.Item key={id || title}>
-                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                    <Space size={8}>
-                      <BankOutlined />
-                      {id ? <Link to={`/companies/${id}`}>{title}</Link> : <Text strong>{title}</Text>}
-                      <Tag color={is_active ? 'success' : 'default'}>{is_active ? 'Активен' : 'Завершён'}</Tag>
-                    </Space>
-                    {parentTitle && <Text type="secondary">Группа: {parentTitle}</Text>}
-                    {additional && <Text type="secondary">Юр. название: {additional}</Text>}
-                    {address && <Text type="secondary">{address}</Text>}
-                  </Space>
-                </List.Item>
-              );
-            }}
+          <Table<CompanyBitrixMappingRowDTO>
+            rowKey="company_id"
+            columns={companyColumns}
+            dataSource={companyRows}
+            pagination={false}
+            size="small"
+            className="tickets-table company-ticket-table companies-work-table"
+            scroll={{ x: 1550 }}
           />
-          <div ref={companiesLoadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
-            {(isFetchingNextPage || (hasNextPage && companies.length > 0)) && <Spin size="small" />}
-            {!hasNextPage && companies.length > 0 && (
-              <Text type="secondary">Показано: {companies.length} из {companiesTotal}</Text>
-            )}
-          </div>
+          {!canMapBitrix && (
+            <div ref={companiesLoadMoreRef} className="companies-load-more">
+              {(isFetchingNextPage || (hasNextPage && companies.length > 0)) && <Spin size="small" />}
+              {!hasNextPage && companies.length > 0 && (
+                <Text type="secondary">Показано: {companies.length} из {companiesTotal}</Text>
+              )}
+            </div>
+          )}
         </>
       )}
-    </Card>
+    </div>
   );
 
-  const mappingContent = (
-    <Card className="glass-panel">
-      {isMappingsLoading ? (
-        <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
-      ) : mappings.length === 0 ? (
-        <Empty description="Сопоставления не найдены" />
+  const servicePointsContent = (
+    <div className="companies-table-surface">
+      {isServicePointsLoading || isMappingsLoading ? (
+        <div className="companies-table-loader"><Spin size="large" /></div>
+      ) : servicePoints.length === 0 ? (
+        <Empty description="Точки обслуживания Bitrix24 не найдены" />
       ) : (
-        <Table
-          rowKey="company_id"
-          columns={columns}
-          dataSource={mappings}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        <Table<BitrixServicePointDTO>
+          rowKey="b24_element_id"
+          columns={servicePointColumns}
+          dataSource={servicePoints}
+          pagination={{ pageSize: 50, hideOnSinglePage: true }}
           size="small"
-          scroll={{ x: 'max-content' }}
+          className="tickets-table company-ticket-table companies-work-table"
+          scroll={{ x: 1350 }}
         />
       )}
-    </Card>
+    </div>
   );
 
   const tabItems = [
-    { key: 'companies', label: 'Компании', children: listContent },
+    { key: 'companies', label: 'Компании', children: companiesContent },
   ];
 
-  if (isAdminUser && isBitrixEnabled) {
-    tabItems.push({ key: 'mappings', label: 'Сопоставление с B24', children: mappingContent });
+  if (canMapBitrix) {
+    tabItems.push({ key: 'service-points', label: 'Точки обслуживания Bitrix24', children: servicePointsContent });
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space direction="vertical" size="middle" className="companies-page">
       <Title level={4} style={{ margin: 0 }}>
         Компании {term ? `по запросу "${term}"` : ''}
       </Title>
-
       <Tabs defaultActiveKey="companies" items={tabItems} />
     </Space>
   );

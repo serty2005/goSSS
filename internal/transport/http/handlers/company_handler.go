@@ -385,6 +385,8 @@ type companyBitrixMappingDTO struct {
 	CompanyParentTitle        *string `json:"company_parent_title,omitempty"`
 	CompanyAdditionalName     *string `json:"company_additional_name,omitempty"`
 	CompanyAddress            *string `json:"company_address,omitempty"`
+	CompanyActiveContract     *bool   `json:"company_active_contract,omitempty"`
+	CompanyContractType       *string `json:"company_contract_type,omitempty"`
 	BitrixServicePointID      *int64  `json:"bitrix_service_point_id,omitempty"`
 	BitrixServicePointName    *string `json:"bitrix_service_point_name,omitempty"`
 	BitrixServicePointCode    *string `json:"bitrix_service_point_code,omitempty"`
@@ -443,6 +445,8 @@ func toCompanyBitrixMappingDTO(row company.BitrixMappingRow) companyBitrixMappin
 		CompanyParentTitle:        row.Company.ParentTitle,
 		CompanyAdditionalName:     row.Company.AdditionalName,
 		CompanyAddress:            row.Company.Address,
+		CompanyActiveContract:     row.Company.ActiveContract,
+		CompanyContractType:       row.Company.ContractType,
 		BitrixServicePointID:      row.BitrixServicePointID,
 		BitrixServicePointName:    row.BitrixServicePointName,
 		BitrixServicePointCode:    row.BitrixServicePointCode,
