@@ -121,9 +121,44 @@ body .ant-message .ant-message-notice-content {
 }
 
 .company-ticket-table__header-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.company-ticket-table__sort-marker {
+  flex: 0 0 auto;
+  color: var(--app-color-primary);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.company-ticket-table__filter-button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
+.company-ticket-table__filter-popover {
+  width: 260px;
+  max-height: 340px;
+  overflow: auto;
+}
+
+.company-ticket-table__columns-menu {
+  position: fixed;
+  z-index: 1200;
+  width: 240px;
+  max-height: min(420px, calc(100dvh - 32px));
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--app-color-border-strong);
+  border-radius: 8px;
+  background: var(--app-color-bg-container);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 16%);
 }
 
 .company-ticket-table__description,
@@ -134,6 +169,36 @@ body .ant-message .ant-message-notice-content {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.company-ticket-table__date-part,
+.company-ticket-table__time-part {
+  display: block;
+  min-width: 10ch;
+  white-space: nowrap;
+}
+
+.company-ticket-table__time-part {
+  min-width: 5ch;
+}
+
+.company-ticket-table__external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.company-ticket-table__company-link {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-ticket-table__company-link:hover {
+  color: var(--app-color-primary);
 }
 
 .tickets-table .ant-table-cell-ellipsis .ant-typography {

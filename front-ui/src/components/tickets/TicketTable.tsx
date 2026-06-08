@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DatePicker, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { Button, Checkbox, DatePicker, Popover, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
-import type { ColumnsType } from 'antd/es/table';
+import { FilterOutlined, LinkOutlined } from '@ant-design/icons';
+import type { ColumnsType, TableProps } from 'antd/es/table';
 import {
   DndContext,
   type DragEndEvent,
@@ -35,6 +36,29 @@ interface Props {
   showCompanyColumn?: boolean;
   excludedTicketId?: string | number;
   rowOpenMode?: 'current' | 'new_tab';
+  variant?: 'related' | 'workspace';
+  dataSource?: TicketListItemDTO[];
+  total?: number;
+  loading?: TableProps<TicketListItemDTO>['loading'];
+  visibleColumnKeys?: string[];
+  showPeriodFilters?: boolean;
+  showFooter?: boolean;
+  layoutKey?: string;
+  layoutStorage?: 'profile' | 'local' | 'none';
+  sortState?: TableSortState;
+  sortableColumnKeys?: string[];
+  onSortChange?: (columnKey: string) => void;
+  onRowClick?: (record: TicketListItemDTO, event: React.MouseEvent<HTMLElement>) => void;
+  rowClassName?: TableProps<TicketListItemDTO>['rowClassName'];
+  showSelectionColumn?: boolean;
+  selectedTicketIds?: string[];
+  onSelectedTicketIdsChange?: (ids: string[]) => void;
+  emptyText?: string;
+  availableColumnKeys?: string[];
+  onVisibleColumnKeysChange?: (keys: string[]) => void;
+  onLayoutChange?: (columns: TicketTableLayoutColumn[]) => void;
+  layoutColumns?: TicketTableLayoutColumn[];
+  columnFilters?: TicketTableColumnFilters;
 }
 
 type DateRangeValue = [Dayjs | null, Dayjs | null] | null;
@@ -68,12 +92,43 @@ type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & {
   onResizeStart?: () => void;
   onResizeStop?: () => void;
   isResizing?: boolean;
+  filterContent?: React.ReactNode;
+  isFilterActive?: boolean;
+};
+
+type TicketTableFilterOption = {
+  value: string;
+  label: React.ReactNode;
+  count?: number;
+};
+
+type TicketTableColumnFilters = {
+  status?: {
+    values: string[];
+    options: TicketTableFilterOption[];
+    onChange: (values: string[]) => void;
+  };
+  assignee?: {
+    values: string[];
+    options: TicketTableFilterOption[];
+    ownValue?: string;
+    onChange: (values: string[]) => void;
+  };
+  created?: {
+    value: DateRangeValue;
+    onChange: (value: DateRangeValue) => void;
+  };
+  activity?: {
+    value: DateRangeValue;
+    onChange: (value: DateRangeValue) => void;
+  };
 };
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
 const TABLE_LAYOUT_KEY = 'company_ticket_table';
 const DEFAULT_MIN_COLUMN_WIDTH = 90;
+const WORKSPACE_SORTABLE_COLUMN_KEYS = ['number', 'assignee_display', 'created_at', 'last_activity'];
 
 const formatDateTime = (value?: string) => {
   if (!value) return '-';
@@ -158,6 +213,7 @@ const compareText = (left?: string, right?: string) =>
 const resolveSortValue = (row: TicketListItemDTO, key: string) => {
   switch (key) {
     case 'company_name':
+    case 'company_display':
       return row.company_name || row.company_id || '';
     case 'number':
       return row.number || 0;
@@ -169,10 +225,20 @@ const resolveSortValue = (row: TicketListItemDTO, key: string) => {
       return resolveDateValue(row.created_at);
     case 'closed_at':
       return resolveDateValue(resolveClosedAt(row));
+    case 'last_activity':
+      return resolveDateValue(row.last_activity);
     case 'assignee':
+    case 'assignee_display':
       return row.assignee?.full_name || '';
     case 'reporter_name':
+    case 'reporter_display':
       return row.reporter_name || 'Сотрудник';
+    case 'bitrix_deal_title':
+      return row.bitrix_deal_title || '';
+    case 'last_comment':
+      return normalizeTicketPreview(row.last_comment || '');
+    case 'sync_with_bitrix':
+      return row.bitrix_deal_url || row.pyrus_task_url || '';
     default:
       return '';
   }
@@ -184,6 +250,73 @@ const getStatusTag = (status: TicketStatus, isCommonContract?: boolean) => {
     <Space size={4}>
       <Tag color={meta.color}>{meta.label}</Tag>
       {isCommonContract && <Tag color="gold">Платный</Tag>}
+    </Space>
+  );
+};
+
+const formatDateParts = (value?: string) => {
+  if (!value) return { date: '-', time: '--:--' };
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) return { date: '-', time: '--:--' };
+  return {
+    date: parsed.format('DD.MM.YYYY'),
+    time: parsed.format('HH:mm'),
+  };
+};
+
+const formatDeferredDateTime = (value?: string) => {
+  if (!value) return '';
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) return '';
+  return parsed.format('DD.MM.YYYY HH:mm');
+};
+
+const TicketTableDateStamp: React.FC<{ value?: string }> = ({ value }) => {
+  const stamp = formatDateParts(value);
+  return (
+    <Space direction="vertical" size={0}>
+      <Text className="company-ticket-table__date-part">{stamp.date}</Text>
+      <Text type="secondary" className="company-ticket-table__time-part">{stamp.time}</Text>
+    </Space>
+  );
+};
+
+const TicketExternalLinks: React.FC<{ ticket: TicketListItemDTO }> = ({ ticket }) => {
+  const links = [
+    {
+      label: 'B24',
+      href: ticket.bitrix_deal_url,
+      title: 'Открыть сделку Bitrix24',
+      color: 'success',
+    },
+    {
+      label: 'Pyrus',
+      href: ticket.pyrus_task_url,
+      title: 'Открыть задачу Pyrus',
+      color: 'geekblue',
+    },
+  ].filter((item) => String(item.href || '').trim());
+
+  if (links.length === 0) {
+    return <Text type="secondary">-</Text>;
+  }
+
+  return (
+    <Space size={4} wrap>
+      {links.map((item) => (
+        <Tooltip key={item.label} title={item.title}>
+          <a
+            href={item.href}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="company-ticket-table__external-link"
+          >
+            <Tag color={item.color} style={{ marginInlineEnd: 0 }}>{item.label}</Tag>
+            <LinkOutlined />
+          </a>
+        </Tooltip>
+      ))}
     </Space>
   );
 };
@@ -243,6 +376,8 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({
   isSortable,
   sortOrder,
   onSort,
+  filterContent,
+  isFilterActive,
   children,
   className,
   ...rest
@@ -296,6 +431,29 @@ const DraggableHeaderCell: React.FC<HeaderCellProps> = ({
         <span className="tickets-table-header-title company-ticket-table__header-title">
           {children}
         </span>
+        {sortOrder && (
+          <span className="company-ticket-table__sort-marker" aria-hidden="true">
+            {sortOrder === 'asc' ? '↑' : '↓'}
+          </span>
+        )}
+        {filterContent && (
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            content={filterContent}
+          >
+            <Button
+              type={isFilterActive ? 'primary' : 'text'}
+              size="small"
+              icon={<FilterOutlined />}
+              className="company-ticket-table__filter-button"
+              aria-label="Фильтр столбца"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onTouchStart={(event) => event.stopPropagation()}
+            />
+          </Popover>
+        )}
       </div>
     </ResizableHeaderCell>
   );
@@ -308,6 +466,29 @@ const TicketTable: React.FC<Props> = ({
   showCompanyColumn = true,
   excludedTicketId,
   rowOpenMode = 'current',
+  variant = 'related',
+  dataSource,
+  total,
+  loading,
+  visibleColumnKeys,
+  showPeriodFilters,
+  showFooter = true,
+  layoutKey,
+  layoutStorage = 'profile',
+  sortState,
+  sortableColumnKeys,
+  onSortChange,
+  onRowClick,
+  rowClassName,
+  showSelectionColumn,
+  selectedTicketIds = [],
+  onSelectedTicketIdsChange,
+  emptyText = 'Тикеты не найдены',
+  availableColumnKeys,
+  onVisibleColumnKeysChange,
+  onLayoutChange,
+  layoutColumns,
+  columnFilters,
 }) => {
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
@@ -321,6 +502,14 @@ const TicketTable: React.FC<Props> = ({
   const [closedRange, setClosedRange] = useState<DateRangeValue>(null);
   const [isResizingColumn, setIsResizingColumn] = useState(false);
   const [tableSort, setTableSort] = useState<TableSortState>(null);
+  const [columnsMenu, setColumnsMenu] = useState<{ open: boolean; x: number; y: number }>({
+    open: false,
+    x: 0,
+    y: 0,
+  });
+  const isControlledData = dataSource !== undefined;
+  const resolvedLayoutKey = layoutKey || (variant === 'workspace' ? `tickets_workspace_table_${user?.id || 'guest'}` : TABLE_LAYOUT_KEY);
+  const shouldShowPeriodFilters = showPeriodFilters ?? !isControlledData;
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -370,6 +559,7 @@ const TicketTable: React.FC<Props> = ({
       closedBounds.from,
       closedBounds.to,
     ],
+    enabled: !isControlledData,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       ticketsApi.getTickets({
@@ -398,30 +588,35 @@ const TicketTable: React.FC<Props> = ({
   );
 
   const rows = useMemo(() => {
+    const sourceRows = isControlledData ? (dataSource || []) : rawRows;
     const excludedID = excludedTicketId === undefined || excludedTicketId === null ? '' : String(excludedTicketId);
     if (!excludedID) {
-      return rawRows;
+      return sourceRows;
     }
-    return rawRows.filter((item) => String(item.id) !== excludedID);
-  }, [excludedTicketId, rawRows]);
+    return sourceRows.filter((item) => String(item.id) !== excludedID);
+  }, [dataSource, excludedTicketId, isControlledData, rawRows]);
+  const effectiveSort = sortState !== undefined ? sortState : tableSort;
   const sortedRows = useMemo(() => {
-    if (!tableSort) {
+    if (!effectiveSort) {
       return rows;
     }
 
     return [...rows].sort((left, right) => {
-      const leftValue = resolveSortValue(left, tableSort.key);
-      const rightValue = resolveSortValue(right, tableSort.key);
+      const leftValue = resolveSortValue(left, effectiveSort.key);
+      const rightValue = resolveSortValue(right, effectiveSort.key);
       const result = typeof leftValue === 'number' && typeof rightValue === 'number'
         ? leftValue - rightValue
         : compareText(String(leftValue), String(rightValue));
-      return tableSort.order === 'asc' ? result : -result;
+      return effectiveSort.order === 'asc' ? result : -result;
     });
-  }, [rows, tableSort]);
-  const total = data?.pages?.[0]?.meta?.total || 0;
-  const visibleTotal = Math.max(0, total - (rawRows.length - rows.length));
+  }, [effectiveSort, rows]);
+  const fetchedTotal = data?.pages?.[0]?.meta?.total || 0;
+  const visibleTotal = total ?? Math.max(0, fetchedTotal - (rawRows.length - rows.length));
 
   useEffect(() => {
+    if (isControlledData) {
+      return;
+    }
     const node = loadMoreRef.current;
     if (!node || !hasNextPage) {
       return;
@@ -439,28 +634,13 @@ const TicketTable: React.FC<Props> = ({
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage, rows.length]);
+  }, [fetchNextPage, hasNextPage, isControlledData, isFetchingNextPage, rows.length]);
 
   const ticketLinkTarget = rowOpenMode === 'new_tab' ? '_blank' : undefined;
   const ticketLinkRel = rowOpenMode === 'new_tab' ? 'noreferrer' : undefined;
 
-  const columnsBase = useMemo<TicketTableColumn[]>(() => [
-    {
-      title: 'Компания',
-      dataIndex: 'company_name',
-      key: 'company_name',
-      width: 220,
-      minWidth: createColumnMinWidth('Компания'),
-      maxWidth: 360,
-      render: (_value: string | undefined, record: TicketListItemDTO) => (
-        <div className="company-ticket-table__cell-ellipsis" title={record.company_name || record.company_id || '-'}>
-          <Link to={`/companies/${record.company_id}`} onClick={(event) => event.stopPropagation()}>
-            {record.company_name || record.company_id || '-'}
-          </Link>
-        </div>
-      ),
-    },
-    {
+  const columnsBase = useMemo<TicketTableColumn[]>(() => {
+    const numberColumn: TicketTableColumn = {
       title: 'Номер',
       dataIndex: 'number',
       key: 'number',
@@ -478,92 +658,290 @@ const TicketTable: React.FC<Props> = ({
           <Text strong>#{val}</Text>
         </Link>
       ),
-    },
-    {
-      title: 'Описание',
-      dataIndex: 'description',
-      key: 'subject',
-      width: 360,
-      minWidth: createColumnMinWidth('Описание'),
-      maxWidth: 640,
-      render: (textValue?: string) => {
-        const preview = normalizeTicketPreview(textValue) || 'Без описания';
-        return (
-          <Typography.Text
-            className="company-ticket-table__description"
-            ellipsis={{ tooltip: preview }}
+    };
+
+    if (variant === 'workspace') {
+      return [
+        numberColumn,
+        {
+          title: 'Статус',
+          dataIndex: 'status',
+          key: 'status',
+          width: 140,
+          minWidth: createColumnMinWidth('Статус'),
+          maxWidth: 190,
+          render: (status: TicketStatus, record: TicketListItemDTO) => {
+            const tag = getStatusTag(status, record.is_common_contract);
+            const deferredTitle = status === 'deferred'
+              ? formatDeferredDateTime(record.deferred_until)
+              : '';
+            return deferredTitle ? <Tooltip title={`Отложено до ${deferredTitle}`}>{tag}</Tooltip> : tag;
+          },
+        },
+        {
+          title: 'Компания',
+          dataIndex: 'company_name',
+          key: 'company_display',
+          width: 220,
+          minWidth: createColumnMinWidth('Компания'),
+          maxWidth: 360,
+          render: (_value: string | undefined, record: TicketListItemDTO) => (
+            <Link
+              to={`/companies/${record.company_id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="company-ticket-table__company-link"
+              title={record.company_name || record.company_id || 'Компания не указана'}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {record.company_name || record.company_id || 'Компания не указана'}
+            </Link>
+          ),
+        },
+        {
+          title: 'Исполнитель',
+          dataIndex: 'assignee',
+          key: 'assignee_display',
+          width: 170,
+          minWidth: createColumnMinWidth('Исполнитель'),
+          maxWidth: 320,
+          render: (assignee?: { full_name: string }) => (
+            <div className="company-ticket-table__cell-ellipsis" title={assignee?.full_name || 'Не назначен'}>
+              {assignee?.full_name || 'Не назначен'}
+            </div>
+          ),
+        },
+        {
+          title: 'Автор',
+          dataIndex: 'reporter_name',
+          key: 'reporter_display',
+          width: 180,
+          minWidth: createColumnMinWidth('Автор'),
+          maxWidth: 280,
+          render: (value?: string) => (
+            <div className="company-ticket-table__cell-ellipsis" title={value || 'Сотрудник'}>
+              {value || 'Сотрудник'}
+            </div>
+          ),
+        },
+        {
+          title: 'Описание',
+          dataIndex: 'description',
+          key: 'subject',
+          width: 260,
+          minWidth: createColumnMinWidth('Описание'),
+          maxWidth: 500,
+          render: (textValue?: string) => {
+            const preview = normalizeTicketPreview(textValue) || 'Без описания';
+            return (
+              <div className="tickets-table-multiline-cell" title={preview}>
+                {preview}
+              </div>
+            );
+          },
+        },
+        {
+          title: 'Сделка Bitrix24',
+          dataIndex: 'bitrix_deal_title',
+          key: 'bitrix_deal_title',
+          width: 240,
+          minWidth: createColumnMinWidth('Сделка Bitrix24'),
+          maxWidth: 420,
+          render: (value?: string) => (
+            <div className="company-ticket-table__cell-ellipsis" title={value || '-'}>
+              {value || '-'}
+            </div>
+          ),
+        },
+        {
+          title: 'Последний комментарий',
+          dataIndex: 'last_comment',
+          key: 'last_comment',
+          width: 260,
+          minWidth: createColumnMinWidth('Последний комментарий'),
+          maxWidth: 500,
+          render: (value?: string) => {
+            const preview = normalizeTicketPreview(value) || '-';
+            return (
+              <div className="tickets-table-multiline-cell tickets-table-multiline-cell-secondary" title={preview}>
+                {preview}
+              </div>
+            );
+          },
+        },
+        {
+          title: 'Создано',
+          dataIndex: 'created_at',
+          key: 'created_at',
+          width: 120,
+          minWidth: estimateHeaderMinWidth('Создано'),
+          maxWidth: 180,
+          render: (date?: string) => <TicketTableDateStamp value={date} />,
+        },
+        {
+          title: 'Обновлено',
+          dataIndex: 'last_activity',
+          key: 'last_activity',
+          width: 120,
+          minWidth: estimateHeaderMinWidth('Обновлено'),
+          maxWidth: 180,
+          render: (date?: string) => <TicketTableDateStamp value={date} />,
+        },
+        {
+          title: 'Внешние',
+          dataIndex: 'sync_with_bitrix',
+          key: 'sync_with_bitrix',
+          width: 160,
+          minWidth: createColumnMinWidth('Внешние'),
+          maxWidth: 220,
+          render: (_value: boolean | undefined, record: TicketListItemDTO) => <TicketExternalLinks ticket={record} />,
+        },
+      ];
+    }
+
+    return [
+      {
+        title: 'Компания',
+        dataIndex: 'company_name',
+        key: 'company_name',
+        width: 220,
+        minWidth: createColumnMinWidth('Компания'),
+        maxWidth: 360,
+        render: (_value: string | undefined, record: TicketListItemDTO) => (
+          <Link
+            to={`/companies/${record.company_id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="company-ticket-table__company-link"
+            title={record.company_name || record.company_id || '-'}
+            onClick={(event) => event.stopPropagation()}
           >
-            {preview}
-          </Typography.Text>
-        );
+            {record.company_name || record.company_id || '-'}
+          </Link>
+        ),
       },
-    },
-    {
-      title: 'Статус',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      minWidth: createColumnMinWidth('Статус'),
-      maxWidth: 180,
-      render: (status: TicketStatus, record: TicketListItemDTO) => getStatusTag(status, record.is_common_contract),
-    },
-    {
-      title: 'Дата создания',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 145,
-      minWidth: estimateHeaderMinWidth('Дата создания'),
-      maxWidth: 220,
-      render: (date?: string) => <Text className="company-ticket-table__cell-nowrap">{formatDateTime(date)}</Text>,
-    },
-    {
-      title: 'Дата закрытия',
-      dataIndex: 'last_activity',
-      key: 'closed_at',
-      width: 145,
-      minWidth: estimateHeaderMinWidth('Дата закрытия'),
-      maxWidth: 220,
-      render: (_date: string, record: TicketListItemDTO) => <Text className="company-ticket-table__cell-nowrap">{formatDateTime(resolveClosedAt(record))}</Text>,
-    },
-    {
-      title: 'Исполнитель',
-      dataIndex: 'assignee',
-      key: 'assignee',
-      width: 160,
-      minWidth: createColumnMinWidth('Исполнитель'),
-      maxWidth: 320,
-      render: (assignee?: { full_name: string }) => (
-        <div className="company-ticket-table__cell-ellipsis" title={assignee?.full_name || '-'}>
-          {assignee?.full_name || '-'}
-        </div>
-      ),
-    },
-    {
-      title: 'Автор',
-      dataIndex: 'reporter_name',
-      key: 'reporter_name',
-      width: 130,
-      minWidth: createColumnMinWidth('Автор'),
-      maxWidth: 240,
-      render: (value?: string) => (
-        <div className="company-ticket-table__cell-ellipsis" title={value || 'Сотрудник'}>
-          {value || 'Сотрудник'}
-        </div>
-      ),
-    },
-  ], [ticketLinkRel, ticketLinkTarget]);
+      numberColumn,
+      {
+        title: 'Описание',
+        dataIndex: 'description',
+        key: 'subject',
+        width: 360,
+        minWidth: createColumnMinWidth('Описание'),
+        maxWidth: 640,
+        render: (textValue?: string) => {
+          const preview = normalizeTicketPreview(textValue) || 'Без описания';
+          return (
+            <Typography.Text
+              className="company-ticket-table__description"
+              ellipsis={{ tooltip: preview }}
+            >
+              {preview}
+            </Typography.Text>
+          );
+        },
+      },
+      {
+        title: 'Статус',
+        dataIndex: 'status',
+        key: 'status',
+        width: 120,
+        minWidth: createColumnMinWidth('Статус'),
+        maxWidth: 180,
+        render: (status: TicketStatus, record: TicketListItemDTO) => getStatusTag(status, record.is_common_contract),
+      },
+      {
+        title: 'Дата создания',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        width: 145,
+        minWidth: estimateHeaderMinWidth('Дата создания'),
+        maxWidth: 220,
+        render: (date?: string) => <Text className="company-ticket-table__cell-nowrap">{formatDateTime(date)}</Text>,
+      },
+      {
+        title: 'Дата закрытия',
+        dataIndex: 'last_activity',
+        key: 'closed_at',
+        width: 145,
+        minWidth: estimateHeaderMinWidth('Дата закрытия'),
+        maxWidth: 220,
+        render: (_date: string, record: TicketListItemDTO) => <Text className="company-ticket-table__cell-nowrap">{formatDateTime(resolveClosedAt(record))}</Text>,
+      },
+      {
+        title: 'Исполнитель',
+        dataIndex: 'assignee',
+        key: 'assignee',
+        width: 160,
+        minWidth: createColumnMinWidth('Исполнитель'),
+        maxWidth: 320,
+        render: (assignee?: { full_name: string }) => (
+          <div className="company-ticket-table__cell-ellipsis" title={assignee?.full_name || '-'}>
+            {assignee?.full_name || '-'}
+          </div>
+        ),
+      },
+      {
+        title: 'Автор',
+        dataIndex: 'reporter_name',
+        key: 'reporter_name',
+        width: 130,
+        minWidth: createColumnMinWidth('Автор'),
+        maxWidth: 240,
+        render: (value?: string) => (
+          <div className="company-ticket-table__cell-ellipsis" title={value || 'Сотрудник'}>
+            {value || 'Сотрудник'}
+          </div>
+        ),
+      },
+    ];
+  }, [ticketLinkRel, ticketLinkTarget, variant]);
 
   const [columnsState, setColumnsState] = useState<TicketTableColumn[]>(columnsBase);
 
   useEffect(() => {
-    const storedColumns = (user?.profile_config?.interface as any)?.[TABLE_LAYOUT_KEY]?.columns;
+    if (layoutStorage === 'none') {
+      columnsStateRef.current = columnsBase;
+      setColumnsState(columnsBase);
+      return;
+    }
+
+    let storedColumns: TicketTableLayoutColumn[] | undefined = layoutColumns;
+    if (layoutStorage === 'local') {
+      if (!storedColumns) {
+        try {
+          const raw = window.localStorage.getItem(resolvedLayoutKey);
+          storedColumns = raw ? JSON.parse(raw) : undefined;
+        } catch {
+          storedColumns = undefined;
+        }
+      }
+    } else if (!storedColumns) {
+      storedColumns = (user?.profile_config?.interface as any)?.[resolvedLayoutKey]?.columns;
+    }
     const nextColumns = applyStoredColumnLayout(columnsBase, storedColumns);
     columnsStateRef.current = nextColumns;
     setColumnsState(nextColumns);
-  }, [columnsBase, user?.id, user?.profile_config]);
+  }, [columnsBase, layoutColumns, layoutStorage, resolvedLayoutKey, user?.id, user?.profile_config]);
 
   const saveColumnsLayout = useCallback((nextColumns: TicketTableColumn[]) => {
-    if (!user || nextColumns.length === 0) {
+    if (layoutStorage === 'none' || nextColumns.length === 0) {
+      return;
+    }
+
+    if (layoutStorage === 'local') {
+      const nextLayoutColumns = nextColumns.map((column) => ({
+        key: column.key,
+        width: column.width,
+      }));
+      window.localStorage.setItem(
+        resolvedLayoutKey,
+        serializeColumnsLayout(nextLayoutColumns),
+      );
+      onLayoutChange?.(nextLayoutColumns);
+      return;
+    }
+
+    if (!user) {
       return;
     }
 
@@ -571,7 +949,8 @@ const TicketTable: React.FC<Props> = ({
       key: column.key,
       width: column.width,
     }));
-    const currentLayoutColumns = (user.profile_config?.interface as any)?.[TABLE_LAYOUT_KEY]?.columns;
+    onLayoutChange?.(nextLayoutColumns);
+    const currentLayoutColumns = (user.profile_config?.interface as any)?.[resolvedLayoutKey]?.columns;
     const nextLayoutSignature = serializeColumnsLayout(nextLayoutColumns);
     if (
       serializeColumnsLayout(currentLayoutColumns) === nextLayoutSignature ||
@@ -586,7 +965,7 @@ const TicketTable: React.FC<Props> = ({
       ...(user.profile_config || {}),
       interface: {
         ...((user.profile_config || {}).interface || {}),
-        [TABLE_LAYOUT_KEY]: {
+        [resolvedLayoutKey]: {
           columns: nextLayoutColumns,
         },
       },
@@ -600,7 +979,7 @@ const TicketTable: React.FC<Props> = ({
         message.error('Не удалось сохранить вид таблицы тикетов');
       },
     });
-  }, [setUser, updateProfileConfigMutation, user]);
+  }, [layoutStorage, onLayoutChange, resolvedLayoutKey, setUser, updateProfileConfigMutation, user]);
 
   const handleResize = useCallback(
     (stateIndex: number) =>
@@ -673,6 +1052,11 @@ const TicketTable: React.FC<Props> = ({
       return;
     }
 
+    if (onSortChange) {
+      onSortChange(columnKey);
+      return;
+    }
+
     setTableSort((currentSort) => {
       if (currentSort?.key !== columnKey) {
         return { key: columnKey, order: 'asc' };
@@ -682,22 +1066,135 @@ const TicketTable: React.FC<Props> = ({
       }
       return null;
     });
-  }, [isResizingColumn]);
+  }, [isResizingColumn, onSortChange]);
+
+  const effectiveSortableColumnKeys = useMemo(() => {
+    if (sortableColumnKeys) {
+      return sortableColumnKeys;
+    }
+    return variant === 'workspace' ? WORKSPACE_SORTABLE_COLUMN_KEYS : undefined;
+  }, [sortableColumnKeys, variant]);
+
+  const renderColumnFilter = useCallback((columnKey: string) => {
+    if (columnKey === 'status' && columnFilters?.status) {
+      const filter = columnFilters.status;
+      return (
+        <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+          <Text strong>Статусы</Text>
+          <Checkbox.Group
+            value={filter.values}
+            onChange={(values) => filter.onChange(values.map((value) => String(value)))}
+          >
+            <Space direction="vertical" size={4}>
+              {filter.options.map((option) => (
+                <Checkbox key={option.value} value={option.value}>
+                  <Space size={6}>
+                    <span>{option.label}</span>
+                    {typeof option.count === 'number' && <Tag>{option.count}</Tag>}
+                  </Space>
+                </Checkbox>
+              ))}
+            </Space>
+          </Checkbox.Group>
+        </Space>
+      );
+    }
+
+    if (columnKey === 'assignee_display' && columnFilters?.assignee) {
+      const filter = columnFilters.assignee;
+      const isMine = Boolean(filter.ownValue) && filter.values.length === 1 && filter.values[0] === filter.ownValue;
+      return (
+        <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+          <Text strong>Сотрудники</Text>
+          <Checkbox
+            checked={isMine}
+            disabled={!filter.ownValue}
+            onChange={(event) => filter.onChange(event.target.checked && filter.ownValue ? [filter.ownValue] : [])}
+          >
+            Мои
+          </Checkbox>
+          <Checkbox.Group
+            value={filter.values}
+            onChange={(values) => filter.onChange(values.map((value) => String(value)))}
+          >
+            <Space direction="vertical" size={4}>
+              {filter.options.map((option) => (
+                <Checkbox key={option.value} value={option.value}>
+                  {option.label}
+                </Checkbox>
+              ))}
+            </Space>
+          </Checkbox.Group>
+        </Space>
+      );
+    }
+
+    const dateFilter = columnKey === 'created_at'
+      ? columnFilters?.created
+      : columnKey === 'last_activity'
+        ? columnFilters?.activity
+        : undefined;
+    if (dateFilter) {
+      return (
+        <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+          <Text strong>Период</Text>
+          <RangePicker
+            value={dateFilter.value}
+            format="DD.MM.YYYY"
+            allowClear
+            onChange={(value) => dateFilter.onChange((value as DateRangeValue) || null)}
+          />
+        </Space>
+      );
+    }
+
+    return null;
+  }, [columnFilters]);
+
+  const isColumnFilterActive = useCallback((columnKey: string) => {
+    if (columnKey === 'status') {
+      return Boolean(columnFilters?.status?.values.length);
+    }
+    if (columnKey === 'assignee_display') {
+      return Boolean(columnFilters?.assignee?.values.length);
+    }
+    if (columnKey === 'created_at') {
+      return Boolean(columnFilters?.created?.value?.[0] || columnFilters?.created?.value?.[1]);
+    }
+    if (columnKey === 'last_activity') {
+      return Boolean(columnFilters?.activity?.value?.[0] || columnFilters?.activity?.value?.[1]);
+    }
+    return false;
+  }, [columnFilters]);
 
   const columns = useMemo<ColumnsType<TicketListItemDTO>>(() => (
     columnsState
-      .filter((column) => showCompanyColumn || column.key !== 'company_name')
+      .filter((column) => {
+        if (!showCompanyColumn && column.key === 'company_name') {
+          return false;
+        }
+        if (!visibleColumnKeys) {
+          return true;
+        }
+        return visibleColumnKeys.includes(column.key);
+      })
       .map((column) => {
         const stateIndex = columnsState.findIndex((item) => item.key === column.key);
+        const isSortable = effectiveSortableColumnKeys
+          ? effectiveSortableColumnKeys.includes(column.key)
+          : true;
+        const filterContent = renderColumnFilter(column.key);
         return {
           ...column,
           onHeaderCell: () => ({
             id: column.key,
             width: column.width,
             minWidth: column.minWidth,
-            isSortable: true,
-            sortOrder: tableSort?.key === column.key ? tableSort.order : null,
-            onSort: () => toggleSort(column.key),
+            isSortable,
+            sortOrder: isSortable && effectiveSort?.key === column.key ? effectiveSort.order : null,
+            onSort: isSortable ? () => toggleSort(column.key) : undefined,
+            filterContent,
+            isFilterActive: isColumnFilterActive(column.key),
             onResize: handleResize(stateIndex),
             onResizeStart: () => {
               isResizeActiveRef.current = true;
@@ -710,20 +1207,142 @@ const TicketTable: React.FC<Props> = ({
       })
   ), [
     columnsState,
+    effectiveSort,
+    effectiveSortableColumnKeys,
     handleResize,
     handleResizeStop,
+    isColumnFilterActive,
     isResizingColumn,
+    renderColumnFilter,
     showCompanyColumn,
-    tableSort,
     toggleSort,
+    visibleColumnKeys,
+  ]);
+
+  const sortedRowIds = useMemo(() => sortedRows.map((item) => String(item.id)), [sortedRows]);
+  const selectedVisibleCount = useMemo(
+    () => sortedRowIds.filter((id) => selectedTicketIds.includes(id)).length,
+    [selectedTicketIds, sortedRowIds],
+  );
+  const shouldShowSelectionColumn = Boolean(showSelectionColumn || visibleColumnKeys?.includes('selection'));
+  const availableColumnSet = useMemo(
+    () => new Set(availableColumnKeys || columnsState.map((column) => column.key)),
+    [availableColumnKeys, columnsState],
+  );
+  const columnMenuRows = useMemo(
+    () => {
+      const rows = columnsState.filter((column) => availableColumnSet.has(column.key));
+      if (availableColumnSet.has('selection') && !rows.some((column) => column.key === 'selection')) {
+        return [
+          {
+            key: 'selection',
+            title: 'Выбор',
+            width: 44,
+            minWidth: 44,
+          } as TicketTableColumn,
+          ...rows,
+        ];
+      }
+      return rows;
+    },
+    [availableColumnSet, columnsState],
+  );
+  const currentVisibleColumnKeys = useMemo(
+    () => visibleColumnKeys || columnMenuRows.map((column) => column.key),
+    [columnMenuRows, visibleColumnKeys],
+  );
+  const closeColumnsMenu = useCallback(() => {
+    setColumnsMenu((current) => ({ ...current, open: false }));
+  }, []);
+  useEffect(() => {
+    if (!columnsMenu.open) {
+      return;
+    }
+    const close = () => closeColumnsMenu();
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [closeColumnsMenu, columnsMenu.open]);
+
+  const toggleColumnVisibility = useCallback((columnKey: string, checked: boolean) => {
+    if (!onVisibleColumnKeysChange) {
+      return;
+    }
+    const next = checked
+      ? [...currentVisibleColumnKeys, columnKey]
+      : currentVisibleColumnKeys.filter((key) => key !== columnKey);
+    const orderSource = columnMenuRows.map((column) => column.key);
+    const ordered = orderSource
+      .filter((key) => availableColumnSet.has(key) && next.includes(key));
+    onVisibleColumnKeysChange(ordered);
+  }, [
+    availableColumnSet,
+    columnMenuRows,
+    currentVisibleColumnKeys,
+    onVisibleColumnKeysChange,
+  ]);
+
+  const tableColumns = useMemo<ColumnsType<TicketListItemDTO>>(() => {
+    if (!shouldShowSelectionColumn) {
+      return columns;
+    }
+
+    return [
+      {
+        key: 'selection',
+        title: (
+          <Checkbox
+            checked={sortedRowIds.length > 0 && selectedVisibleCount === sortedRowIds.length}
+            indeterminate={selectedVisibleCount > 0 && selectedVisibleCount < sortedRowIds.length}
+            onChange={(event) => {
+              onSelectedTicketIdsChange?.(event.target.checked ? sortedRowIds : []);
+            }}
+            onClick={(event) => event.stopPropagation()}
+          />
+        ),
+        width: 44,
+        minWidth: 44,
+        onHeaderCell: () => ({
+          id: 'selection',
+          width: 44,
+          minWidth: 44,
+          isDragDisabled: true,
+          isSortable: false,
+        }),
+        render: (_value: unknown, record: TicketListItemDTO) => (
+          <Checkbox
+            checked={selectedTicketIds.includes(String(record.id))}
+            onChange={() => {
+              const id = String(record.id);
+              const next = selectedTicketIds.includes(id)
+                ? selectedTicketIds.filter((item) => item !== id)
+                : [...selectedTicketIds, id];
+              onSelectedTicketIdsChange?.(next);
+            }}
+            onClick={(event) => event.stopPropagation()}
+          />
+        ),
+      } as TicketTableColumn,
+      ...columns,
+    ];
+  }, [
+    columns,
+    onSelectedTicketIdsChange,
+    selectedTicketIds,
+    selectedVisibleCount,
+    shouldShowSelectionColumn,
+    sortedRowIds,
   ]);
 
   const tableScrollX = useMemo(() => {
-    return columns.reduce((sum, column) => {
+    return tableColumns.reduce((sum, column) => {
       const width = Number(column.width ?? (column as { minWidth?: number }).minWidth ?? DEFAULT_MIN_COLUMN_WIDTH);
       return sum + (Number.isFinite(width) ? width : DEFAULT_MIN_COLUMN_WIDTH);
     }, 0);
-  }, [columns]);
+  }, [tableColumns]);
 
   const openTicket = useCallback((ticketID: string) => {
     const url = `/tickets/${ticketID}`;
@@ -734,8 +1353,11 @@ const TicketTable: React.FC<Props> = ({
     navigate(url);
   }, [navigate, rowOpenMode]);
 
+  const tableLoading = loading ?? isLoading;
+
   return (
     <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      {shouldShowPeriodFilters && (
       <Space wrap size={8}>
         <Space direction="vertical" size={2}>
           <Text type="secondary">Период создания</Text>
@@ -754,6 +1376,7 @@ const TicketTable: React.FC<Props> = ({
           />
         </Space>
       </Space>
+      )}
 
       <DndContext
         sensors={sensors}
@@ -763,14 +1386,14 @@ const TicketTable: React.FC<Props> = ({
         onDragCancel={handleDragCancel}
       >
         <SortableContext
-          items={columns.map((column) => column.key as string)}
+          items={tableColumns.map((column) => column.key as string)}
           strategy={horizontalListSortingStrategy}
         >
           <Table
             dataSource={sortedRows}
-            columns={columns}
+            columns={tableColumns}
             rowKey="id"
-            loading={isLoading}
+            loading={tableLoading}
             pagination={false}
             size="small"
             bordered
@@ -782,25 +1405,67 @@ const TicketTable: React.FC<Props> = ({
                 cell: DraggableHeaderCell,
               },
             }}
+            rowClassName={rowClassName}
+            onHeaderRow={() => ({
+              onContextMenu: (event) => {
+                if (!onVisibleColumnKeysChange) {
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                setColumnsMenu({
+                  open: true,
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              },
+            })}
             onRow={(record) => ({
-              onClick: () => {
+              onClick: (event) => {
+                if (onRowClick) {
+                  onRowClick(record, event);
+                  return;
+                }
                 openTicket(String(record.id));
               },
               style: { cursor: 'pointer' },
             })}
           />
+          {columnsMenu.open && (
+            <div
+              className="company-ticket-table__columns-menu"
+              style={{ left: columnsMenu.x, top: columnsMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <Text strong>Столбцы</Text>
+              <Space direction="vertical" size={4} style={{ width: '100%', marginTop: 8 }}>
+                {columnMenuRows.map((column) => (
+                  <Checkbox
+                    key={column.key}
+                    checked={currentVisibleColumnKeys.includes(column.key)}
+                    onChange={(event) => toggleColumnVisibility(column.key, event.target.checked)}
+                  >
+                    {column.title as React.ReactNode}
+                  </Checkbox>
+                ))}
+              </Space>
+            </div>
+          )}
         </SortableContext>
       </DndContext>
 
+      {showFooter && (
       <div ref={loadMoreRef} style={{ marginTop: 4, display: 'flex', justifyContent: 'center', minHeight: 28 }}>
         {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
         {!hasNextPage && rows.length > 0 && (
           <Text type="secondary">Показано: {rows.length} из {visibleTotal}</Text>
         )}
         {!isLoading && rows.length === 0 && (
-          <Text type="secondary">Тикеты не найдены</Text>
+          <Text type="secondary">{emptyText}</Text>
         )}
       </div>
+      )}
     </Space>
   );
 };

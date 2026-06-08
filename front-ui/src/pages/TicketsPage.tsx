@@ -26,32 +26,13 @@ import {
   Select,
   Space,
   Spin,
-  Table,
-  Checkbox,
   Tag,
   Tooltip,
   Typography,
   message,
   theme as antTheme,
 } from "antd";
-import { LinkOutlined, MenuOutlined } from "@ant-design/icons";
-import type { ColumnsType } from "antd/es/table";
-import {
-  DndContext,
-  DragEndEvent,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  horizontalListSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { Resizable } from "react-resizable";
+import { LinkOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
@@ -61,6 +42,7 @@ import { usersApi } from "@/api/users";
 import { profileApi } from "@/api/profile";
 import { useLayoutHeader } from "@/components/layout/LayoutHeaderContext";
 import TelephonyLineIndicator from "@/components/telephony/TelephonyLineIndicator";
+import TicketTable from "@/components/tickets/TicketTable";
 import ManagerTransferModal, {
   ManagerTransferPayload,
 } from "@/components/tickets/ManagerTransferModal";
@@ -89,20 +71,6 @@ const LazyNewTicketModal = React.lazy(
 );
 
 type ViewMode = "list" | "cards" | "table";
-
-type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & {
-  id?: string;
-  width?: number;
-  minWidth?: number;
-  isDragDisabled?: boolean;
-  onResize?: (
-    event: React.SyntheticEvent,
-    data: { size: { width: number; height: number } },
-  ) => void;
-  onResizeStart?: () => void;
-  onResizeStop?: () => void;
-  isResizing?: boolean;
-};
 
 const normalizeDescription = (value?: string) => {
   const normalized = normalizeDescriptionMultiline(value);
@@ -142,8 +110,6 @@ const resolveTicketCreatedSourceLabel = (source?: string) => {
   return i18n.t("tickets:fallback.unknown");
 };
 
-const DATE_STAMP_MIN_WIDTH = "10ch";
-const TIME_STAMP_MIN_WIDTH = "5ch";
 const TABLE_COLUMN_KEYS = [
   "selection",
   "number",
@@ -168,9 +134,33 @@ type TableSortKey =
   | "created_at"
   | "last_activity";
 type TableSortOrder = "asc" | "desc";
-const COLUMN_MAX_WIDTH: Partial<Record<TableColumnKey, number>> = {
-  subject: 500,
-  last_comment: 500,
+
+const encodeTableLayout = (columns: Array<{ key: string; width?: number }>) => {
+  if (!columns.length) {
+    return undefined;
+  }
+  return encodeURIComponent(JSON.stringify(columns));
+};
+
+const decodeTableLayout = (value: string) => {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value)) as Array<{ key?: unknown; width?: unknown }>;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    const columns = parsed
+      .map((item) => ({
+        key: String(item.key || '').trim(),
+        width: typeof item.width === 'number' ? item.width : undefined,
+      }))
+      .filter((item) => item.key);
+    return columns.length ? columns : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const formatDateStamp = (value?: string) => ({
@@ -284,120 +274,6 @@ const ExternalLinksBadges: React.FC<{
   );
 };
 
-const estimateHeaderMinWidth = (title: string) => {
-  // Минимальная ширина: текст заголовка + внутренние отступы + область drag-handle.
-  return Math.max(70, title.length * 8 + 44);
-};
-
-const clampColumnWidth = (key: string, width: number, minWidth: number) => {
-  const min = minWidth || 90;
-  const max = COLUMN_MAX_WIDTH[key as TableColumnKey];
-  const bounded = Math.max(width, min);
-  if (typeof max === "number") {
-    return Math.min(bounded, max);
-  }
-  return bounded;
-};
-
-const ResizableHeaderCell = React.forwardRef<
-  HTMLTableCellElement,
-  HeaderCellProps
->((props, ref) => {
-  const {
-    onResize,
-    onResizeStart,
-    onResizeStop,
-    width,
-    minWidth,
-    children,
-    ...rest
-  } = props;
-  if (!width || !onResize) {
-    return (
-      <th ref={ref} {...rest}>
-        {children}
-      </th>
-    );
-  }
-  return (
-    <Resizable
-      width={width}
-      height={0}
-      handle={
-        <span
-          className="resize-handle"
-          onMouseDown={(event) => event.stopPropagation()}
-          onTouchStart={(event) => event.stopPropagation()}
-        />
-      }
-      onResize={onResize}
-      onResizeStart={onResizeStart}
-      onResizeStop={onResizeStop}
-      minConstraints={[minWidth || 90, 0]}
-      draggableOpts={{ enableUserSelectHack: false }}
-    >
-      <th ref={ref} {...rest}>
-        {children}
-      </th>
-    </Resizable>
-  );
-});
-
-ResizableHeaderCell.displayName = "ResizableHeaderCell";
-
-const DraggableHeaderCell: React.FC<HeaderCellProps> = ({
-  id,
-  style,
-  isResizing,
-  isDragDisabled,
-  children,
-  ...rest
-}) => {
-  const sortableDisabled = Boolean(isResizing || isDragDisabled || !id);
-  const {
-    attributes,
-    listeners,
-    setActivatorNodeRef,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: id || "", disabled: sortableDisabled });
-
-  const mergedStyle: React.CSSProperties = {
-    ...style,
-    transform: CSS.Transform.toString(transform),
-    transition,
-    cursor: sortableDisabled ? "default" : "move",
-    ...(isDragging ? { position: "relative", zIndex: 2 } : {}),
-  };
-
-  return (
-    <ResizableHeaderCell
-      ref={setNodeRef}
-      style={mergedStyle}
-      {...attributes}
-      {...rest}
-    >
-      <div className="tickets-table-header">
-        <span className="tickets-table-header-title">{children}</span>
-        {!sortableDisabled && (
-          <span
-            ref={setActivatorNodeRef}
-            className={`tickets-table-drag-handle${isResizing ? " is-disabled" : ""}`}
-            {...listeners}
-            onClick={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onTouchStart={(event) => event.stopPropagation()}
-          >
-            <MenuOutlined />
-          </span>
-        )}
-      </div>
-    </ResizableHeaderCell>
-  );
-};
-
 const TicketsPage: React.FC = () => {
   const { t } = useTranslation(["common", "layout", "tickets"]);
   const { token } = antTheme.useToken();
@@ -461,7 +337,6 @@ const TicketsPage: React.FC = () => {
   const [statusComment, setStatusComment] = useState("");
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [pendingDeferredAt, setPendingDeferredAt] = useState<string>("");
-  const [isResizingColumn, setIsResizingColumn] = useState(false);
 
   const resetPendingStatusState = useCallback(() => {
     setPendingStatus(null);
@@ -469,15 +344,11 @@ const TicketsPage: React.FC = () => {
     setPendingDeferredAt("");
   }, []);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-  );
-
   const q = searchParams.get("q") || "";
   const status = searchParams.get("status") || "";
   const tableColumnsParam = searchParams.get("table_columns") || "";
   const tableSortParam = searchParams.get("table_sort") || "";
-  const selectedPresetID = searchParams.get("preset_id") || "";
+  const tableLayoutParam = searchParams.get("table_layout") || "";
   const onlyActiveStatuses = searchParams.get("only_active_statuses") === "1";
   const assigneeIDs = searchParams.get("assignee_ids") || "";
   const archiveMode =
@@ -492,6 +363,10 @@ const TicketsPage: React.FC = () => {
   const periodFrom =
     archiveMode === "archive" ? archivePeriodFrom : activePeriodFrom;
   const periodTo = archiveMode === "archive" ? archivePeriodTo : activePeriodTo;
+  const periodFromParamKey =
+    archiveMode === "archive" ? "archive_period_from" : "period_from";
+  const periodToParamKey =
+    archiveMode === "archive" ? "archive_period_to" : "period_to";
   const viewMode = (isMobile ? "cards" : "table") as ViewMode;
   const limit = 20;
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -562,6 +437,15 @@ const TicketsPage: React.FC = () => {
       );
     return values.length ? values : [...defaultColumnKeys];
   }, [isBitrixEnabled, tableColumnsParam]);
+  const availableTableColumnKeys = useMemo<TableColumnKey[]>(
+    () => (
+      isBitrixEnabled
+        ? [...TABLE_COLUMN_KEYS]
+        : TABLE_COLUMN_KEYS.filter((key) => key !== "bitrix_deal_title" && key !== "sync_with_bitrix")
+    ),
+    [isBitrixEnabled],
+  );
+  const tableLayoutColumns = useMemo(() => decodeTableLayout(tableLayoutParam), [tableLayoutParam]);
   const tableSort = useMemo<{
     key: TableSortKey;
     order: TableSortOrder;
@@ -657,6 +541,13 @@ const TicketsPage: React.FC = () => {
   const visibleTickets = tickets;
   const total = data?.pages?.[0]?.meta?.total || 0;
   const isRefreshingTickets = isFetching && !isFetchingNextPage && !isLoading;
+  const statusCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    visibleTickets.forEach((ticket) => {
+      counts.set(ticket.status, (counts.get(ticket.status) || 0) + 1);
+    });
+    return counts;
+  }, [visibleTickets]);
 
   const { data: detailsResponse, isLoading: isDetailsLoading } = useQuery({
     queryKey: ["ticket", selectedTicketId],
@@ -680,6 +571,16 @@ const TicketsPage: React.FC = () => {
         .filter((item) => item.is_active)
         .map((item) => ({
           id: item.id,
+          label: item.full_name || item.username,
+        })),
+    [usersResponse?.data],
+  );
+  const activeAssigneeOptions = useMemo(
+    () =>
+      (usersResponse?.data || [])
+        .filter((item) => item.is_active)
+        .map((item) => ({
+          value: String(item.id),
           label: item.full_name || item.username,
         })),
     [usersResponse?.data],
@@ -989,342 +890,21 @@ const TicketsPage: React.FC = () => {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, tickets.length]);
 
-  const tableDataBase = useMemo(
-    () =>
-      visibleTickets.map((ticket) => ({
-        ...ticket,
-        subject: resolveTicketSubjectFromDescription(ticket.description),
-        subject_multiline:
-          normalizeDescriptionMultiline(ticket.description) ||
-          t("tickets:fallback.noDescription"),
-        company_display:
-          ticket.company_name ||
-          ticket.company_id ||
-          t("tickets:fallback.companyNotSpecified"),
-        last_comment_display: normalizeDescription(ticket.last_comment),
-        last_comment_multiline: normalizeDescriptionMultiline(
-          ticket.last_comment,
-        ),
-        assignee_display:
-          ticket.assignee?.full_name || t("tickets:fallback.unassigned"),
-        reporter_display:
-          ticket.reporter_name || t("tickets:fallback.employee"),
-      })),
-    [t, visibleTickets],
-  );
-  const tableData = useMemo(() => {
-    if (!tableSort) {
-      return tableDataBase;
-    }
-    const factor = tableSort.order === "asc" ? 1 : -1;
-    return [...tableDataBase].sort((a, b) => {
-      switch (tableSort.key) {
-        case "number":
-          return ((a.number || 0) - (b.number || 0)) * factor;
-        case "assignee_display":
-          return (
-            String(a.assignee_display || "").localeCompare(
-              String(b.assignee_display || ""),
-              "ru",
-            ) * factor
-          );
-        case "created_at":
-          return (
-            (dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()) *
-            factor
-          );
-        case "last_activity":
-          return (
-            (dayjs(a.last_activity).valueOf() -
-              dayjs(b.last_activity).valueOf()) *
-            factor
-          );
-        default:
-          return 0;
-      }
-    });
-  }, [tableDataBase, tableSort]);
-
-  type TableRow = (typeof tableData)[number];
-
-  const tableColumnsBase: ColumnsType<TableRow> = useMemo(
-    () => [
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.number"),
-        dataIndex: "number",
-        key: "number",
-        width: 90,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.number"),
-        ),
-        render: (val: number, row) => (
-          <Link
-            className="ticket-number-cell-link"
-            to={`/tickets/${row.id}`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Text strong>#{val}</Text>
-          </Link>
-        ),
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.status"),
-        dataIndex: "status",
-        key: "status",
-        width: 140,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.status"),
-        ),
-        render: (value: TicketStatus, row) => {
-          const meta = getTicketStatusMeta(value);
-          const deferredTitle =
-            value === "deferred"
-              ? formatDeferredTooltip(row.deferred_until)
-              : "";
-          const statusTag = <Tag color={meta.color}>{meta.label}</Tag>;
-          return (
-            <Space size={4}>
-              {deferredTitle ? (
-                <Tooltip title={deferredTitle}>{statusTag}</Tooltip>
-              ) : (
-                statusTag
-              )}
-              {row.is_common_contract && (
-                <Tag color="gold">{t("tickets:labels.paid")}</Tag>
-              )}
-            </Space>
-          );
-        },
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.company_display"),
-        dataIndex: "company_display",
-        key: "company_display",
-        width: 220,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.company_display"),
-        ),
-        ellipsis: true,
-        render: (value: string) => (
-          <Text ellipsis style={{ width: "100%", display: "block" }}>
-            {value}
-          </Text>
-        ),
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.assignee_display"),
-        dataIndex: "assignee_display",
-        key: "assignee_display",
-        width: 170,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.assignee_display"),
-        ),
-        ellipsis: true,
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.reporter_display"),
-        dataIndex: "reporter_display",
-        key: "reporter_display",
-        width: 180,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.reporter_display"),
-        ),
-        ellipsis: true,
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.subject"),
-        dataIndex: "subject_multiline",
-        key: "subject",
-        width: 260,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.subject"),
-        ),
-        render: (value: string) => (
-          <div className="tickets-table-multiline-cell" title={value}>
-            {value}
-          </div>
-        ),
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.bitrix_deal_title"),
-        dataIndex: "bitrix_deal_title",
-        key: "bitrix_deal_title",
-        width: 240,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.bitrix_deal_title"),
-        ),
-        ellipsis: true,
-        render: (value?: string) => value || "-",
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.last_comment"),
-        dataIndex: "last_comment_multiline",
-        key: "last_comment",
-        width: 260,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.last_comment"),
-        ),
-        render: (value: string) => (
-          <div
-            className="tickets-table-multiline-cell tickets-table-multiline-cell-secondary"
-            title={value || "-"}
-          >
-            {value || "-"}
-          </div>
-        ),
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.created_at"),
-        dataIndex: "created_at",
-        key: "created_at",
-        width: 110,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.created_at"),
-        ),
-        render: (value?: string) => {
-          const stamp = formatDateStamp(value);
-          return (
-            <Space direction="vertical" size={0}>
-              <Text style={{ minWidth: DATE_STAMP_MIN_WIDTH }}>
-                {stamp.date}
-              </Text>
-              <Text type="secondary" style={{ minWidth: TIME_STAMP_MIN_WIDTH }}>
-                {stamp.time}
-              </Text>
-            </Space>
-          );
-        },
-      },
-      {
-        title: t("layout:headerSearch.ticket.tableColumns.last_activity"),
-        dataIndex: "last_activity",
-        key: "last_activity",
-        width: 110,
-        minWidth: estimateHeaderMinWidth(
-          t("layout:headerSearch.ticket.tableColumns.last_activity"),
-        ),
-        render: (value: string) => {
-          const stamp = formatDateStamp(value);
-          return (
-            <Space direction="vertical" size={0}>
-              <Text style={{ minWidth: DATE_STAMP_MIN_WIDTH }}>
-                {stamp.date}
-              </Text>
-              <Text type="secondary" style={{ minWidth: TIME_STAMP_MIN_WIDTH }}>
-                {stamp.time}
-              </Text>
-            </Space>
-          );
-        },
-      },
-      {
-        title: "External",
-        dataIndex: "sync_with_bitrix",
-        key: "sync_with_bitrix",
-        width: 160,
-        minWidth: estimateHeaderMinWidth("External"),
-        render: (_value: boolean, row) => (
-          <ExternalLinksBadges
-            bitrixURL={row.bitrix_deal_url}
-            pyrusURL={row.pyrus_task_url}
-            compact
-            onClick={(event) => event.stopPropagation()}
-          />
-        ),
-      },
-    ],
-    [t],
-  );
-
-  const [tableColumnsState, setTableColumnsState] =
-    useState<ColumnsType<TableRow>>(tableColumnsBase);
-  const [isTableLayoutHydrated, setIsTableLayoutHydrated] = useState(false);
-
   const tableLayoutStorageKey = useMemo(() => {
     const userKey = user?.id ? String(user.id) : "guest";
     return `tickets-table-layout-${userKey}`;
   }, [user?.id]);
-
-  useEffect(() => {
-    setIsTableLayoutHydrated(false);
-    const raw = localStorage.getItem(tableLayoutStorageKey);
-    if (!raw) {
-      setTableColumnsState(tableColumnsBase);
-      setIsTableLayoutHydrated(true);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as Array<{ key: string; width?: number }>;
-      const baseByKey = new Map(tableColumnsBase.map((col) => [col.key, col]));
-      const next: ColumnsType<TableRow> = [];
-      const seen = new Set<string>();
-
-      for (const entry of parsed) {
-        const base = baseByKey.get(entry.key);
-        if (!base) continue;
-        const minWidth = (base as { minWidth?: number }).minWidth || 90;
-        const nextWidth = clampColumnWidth(
-          String(base.key),
-          entry.width ?? (base.width as number),
-          minWidth,
-        );
-        next.push({
-          ...base,
-          width: nextWidth,
-        });
-        seen.add(entry.key);
-      }
-      for (const col of tableColumnsBase) {
-        const key = col.key as string;
-        if (seen.has(key)) continue;
-        next.push(col);
-      }
-      setTableColumnsState(next.length ? next : tableColumnsBase);
-      setIsTableLayoutHydrated(true);
-    } catch {
-      setTableColumnsState(tableColumnsBase);
-      setIsTableLayoutHydrated(true);
-    }
-  }, [tableColumnsBase, tableLayoutStorageKey]);
-
-  useEffect(() => {
-    if (!isTableLayoutHydrated) return;
-    if (!tableColumnsState.length) return;
-    const payload = tableColumnsState.map((col) => ({
-      key: col.key as string,
-      width: col.width as number | undefined,
-    }));
-    localStorage.setItem(tableLayoutStorageKey, JSON.stringify(payload));
-  }, [isTableLayoutHydrated, tableColumnsState, tableLayoutStorageKey]);
-
-  const handleResize =
-    (index: number) =>
-    (_event: React.SyntheticEvent, data: { size: { width: number } }) => {
-      setTableColumnsState((columns) => {
-        const nextColumns = [...columns];
-        const minWidth =
-          (nextColumns[index] as { minWidth?: number }).minWidth || 90;
-        const columnKey = String(nextColumns[index]?.key || "");
-        nextColumns[index] = {
-          ...nextColumns[index],
-          width: clampColumnWidth(columnKey, data.size.width, minWidth),
-        };
-        return nextColumns;
-      });
-    };
-
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    if (!over || active.id === over.id) return;
-    const activeID = String(active.id);
-    const overID = String(over.id);
-    if (activeID === "selection" || overID === "selection") return;
-    setTableColumnsState((columns) => {
-      const oldIndex = columns.findIndex((col) => col.key === activeID);
-      const newIndex = columns.findIndex((col) => col.key === overID);
-      if (oldIndex === -1 || newIndex === -1) return columns;
-      return arrayMove(columns, oldIndex, newIndex);
-    });
-  };
+  const tableDateRangeValue = useMemo(
+    () => (
+      periodFrom || periodTo
+        ? [
+            periodFrom ? dayjs(periodFrom) : null,
+            periodTo ? dayjs(periodTo) : null,
+          ] as any
+        : null
+    ),
+    [periodFrom, periodTo],
+  );
 
   function updateTicketParams(next: Record<string, string | undefined>) {
     const params = new URLSearchParams(searchParams);
@@ -1346,65 +926,6 @@ const TicketsPage: React.FC = () => {
         : tableSort.order === "asc"
           ? "desc"
           : null;
-    const nextTableSortValue = nextOrder ? `${key}:${nextOrder}` : "";
-    if (user && selectedPresetID) {
-      const profileConfig = (user.profile_config || {}) as Record<string, any>;
-      const ticketsConfig = (profileConfig.tickets || {}) as Record<
-        string,
-        any
-      >;
-      const filtersConfig = (ticketsConfig.filters || {}) as Record<
-        string,
-        any
-      >;
-      const presets = Array.isArray(filtersConfig.presets)
-        ? filtersConfig.presets
-        : [];
-      const presetIndex = presets.findIndex(
-        (item: any) => item?.id === selectedPresetID,
-      );
-      if (presetIndex >= 0) {
-        const currentPreset = presets[presetIndex] as {
-          values?: Record<string, string>;
-        };
-        const currentSortValue =
-          typeof currentPreset?.values?.table_sort === "string"
-            ? currentPreset.values.table_sort
-            : "";
-        if (currentSortValue !== nextTableSortValue) {
-          const nextPreset = {
-            ...presets[presetIndex],
-            values: {
-              ...((presets[presetIndex] as any)?.values || {}),
-            } as Record<string, string>,
-          };
-          if (nextTableSortValue) {
-            nextPreset.values.table_sort = nextTableSortValue;
-          } else {
-            delete nextPreset.values.table_sort;
-          }
-          const nextPresets = [...presets];
-          nextPresets[presetIndex] = nextPreset;
-          const nextConfig = {
-            ...profileConfig,
-            tickets: {
-              ...ticketsConfig,
-              filters: {
-                ...filtersConfig,
-                presets: nextPresets,
-              },
-            },
-          };
-          const prevUser = user;
-          setUser({ ...user, profile_config: nextConfig as any });
-          updateProfileConfigMutation.mutate(nextConfig as any, {
-            onError: () => {
-              setUser(prevUser);
-            },
-          });
-        }
-      }
-    }
     const params = new URLSearchParams(searchParams);
     if (!nextOrder) {
       params.delete("table_sort");
@@ -1414,113 +935,6 @@ const TicketsPage: React.FC = () => {
     params.set("page", "1");
     setSearchParamsRaw(params.toString());
   }
-
-  function renderSortableTitle(label: string, key: TableSortKey) {
-    const order = tableSort?.key === key ? tableSort.order : null;
-    return (
-      <Space
-        size={4}
-        onClick={(event) => {
-          event.stopPropagation();
-          applyTableSort(key);
-        }}
-        style={{ cursor: "pointer", userSelect: "none" }}
-      >
-        <span>{label}</span>
-        {order ? (
-          <span aria-hidden="true">{order === "asc" ? "↑" : "↓"}</span>
-        ) : null}
-      </Space>
-    );
-  }
-
-  const tableColumnsVisibleState = tableColumnsState.filter((col) =>
-    selectedTableColumnKeys.includes(String(col.key) as TableColumnKey),
-  );
-  const tableColumns = tableColumnsVisibleState.map((col) => {
-    const columnKey = String(col.key);
-    const stateIndex = tableColumnsState.findIndex(
-      (item) => item.key === col.key,
-    );
-    const sortableLabel =
-      columnKey === "number"
-        ? t("layout:headerSearch.ticket.tableColumns.number")
-        : columnKey === "assignee_display"
-          ? t("layout:headerSearch.ticket.tableColumns.assignee_display")
-          : columnKey === "created_at"
-            ? t("layout:headerSearch.ticket.tableColumns.created_at")
-            : columnKey === "last_activity"
-              ? t("layout:headerSearch.ticket.tableColumns.last_activity")
-              : null;
-    return {
-      ...col,
-      title: sortableLabel
-        ? renderSortableTitle(sortableLabel, columnKey as TableSortKey)
-        : col.title,
-      onHeaderCell: () => ({
-        id: col.key as string,
-        width: col.width,
-        minWidth: (col as { minWidth?: number }).minWidth || 90,
-        isDragDisabled: columnKey === "selection",
-        onResize: handleResize(stateIndex),
-        onResizeStart: () => setIsResizingColumn(true),
-        onResizeStop: () => setIsResizingColumn(false),
-        isResizing: isResizingColumn,
-      }),
-    };
-  });
-  if (selectedTableColumnKeys.includes("selection")) {
-    tableColumns.unshift({
-      key: "selection",
-      title: (
-        <Checkbox
-          checked={
-            tableData.length > 0 &&
-            selectedTicketIDs.length === tableData.length
-          }
-          indeterminate={
-            selectedTicketIDs.length > 0 &&
-            selectedTicketIDs.length < tableData.length
-          }
-          onChange={(event) => {
-            if (event.target.checked) {
-              setSelectedTicketIDs(tableData.map((item) => item.id));
-            } else {
-              setSelectedTicketIDs([]);
-            }
-          }}
-        />
-      ),
-      width: 44,
-      onHeaderCell: () => ({
-        id: "selection",
-        width: 44,
-        minWidth: 44,
-        isDragDisabled: true,
-      }),
-      render: (_value: unknown, row: TableRow) => (
-        <Checkbox
-          checked={selectedTicketIDs.includes(row.id)}
-          onChange={() => {
-            const next = selectedTicketIDs.includes(row.id)
-              ? selectedTicketIDs.filter((item) => item !== row.id)
-              : [...selectedTicketIDs, row.id];
-            setSelectedTicketIDs(next);
-          }}
-          onClick={(event) => event.stopPropagation()}
-        />
-      ),
-    } as any);
-  }
-
-  const tableScrollX = useMemo(() => {
-    return tableColumns.reduce((sum, col) => {
-      const width = Number(
-        col.width ?? (col as { minWidth?: number }).minWidth ?? 90,
-      );
-      return sum + (Number.isFinite(width) ? width : 90);
-    }, 0);
-  }, [tableColumns]);
 
   const applyAssigneeFilter = (assigneeID?: number) => {
     if (!assigneeID) return;
@@ -1892,47 +1306,78 @@ const TicketsPage: React.FC = () => {
           </Row>
         )}
         {viewMode === "table" && (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={tableColumns.map((col) => col.key as string)}
-              strategy={horizontalListSortingStrategy}
-            >
-              <Table<TableRow>
-                dataSource={tableData}
-                columns={tableColumns}
-                rowKey="id"
-                size="small"
-                bordered
-                className="tickets-table"
-                style={{ width: "100%" }}
-                tableLayout="fixed"
-                scroll={{ x: tableScrollX }}
-                pagination={false}
-                loading={{
-                  spinning: isLoading || isRefreshingTickets,
-                  tip: t("tickets:labels.searching"),
-                }}
-                components={{
-                  header: {
-                    cell: DraggableHeaderCell,
+          <TicketTable
+            variant="workspace"
+            dataSource={visibleTickets}
+            total={total}
+            loading={{
+              spinning: isLoading || isRefreshingTickets,
+              tip: t("tickets:labels.searching"),
+            }}
+            visibleColumnKeys={selectedTableColumnKeys}
+            availableColumnKeys={availableTableColumnKeys}
+            onVisibleColumnKeysChange={(keys) => {
+              const normalized = availableTableColumnKeys.filter((key) => keys.includes(key));
+              updateTicketParams({
+                table_columns: normalized.length ? normalized.join(",") : undefined,
+              });
+            }}
+            showPeriodFilters={false}
+            showFooter={false}
+            layoutStorage="local"
+            layoutKey={tableLayoutStorageKey}
+            layoutColumns={tableLayoutColumns}
+            onLayoutChange={(columns) => {
+              updateTicketParams({ table_layout: encodeTableLayout(columns) });
+            }}
+            sortState={tableSort}
+            onSortChange={(columnKey) => applyTableSort(columnKey as TableSortKey)}
+            columnFilters={{
+              status: archiveMode === "archive"
+                ? undefined
+                : {
+                    values: statusValues,
+                    options: TICKET_STATUS_OPTIONS.map((item) => ({
+                      value: item.value,
+                      label: t(`layout:headerSearch.ticket.statusOptions.${item.value}`),
+                      count: statusCounts.get(item.value) || 0,
+                    })),
+                    onChange: (values) => updateTicketParams({ status: values.length ? values.join(",") : undefined }),
                   },
-                }}
-                rowClassName={(record) =>
-                  selectedTicketIDs.includes(record.id)
-                    ? "ant-table-row-selected"
-                    : ""
-                }
-                onRow={(record) => ({
-                  onClick: (event) => onTicketRowClick(record.id, event),
-                  style: { cursor: "pointer" },
-                })}
-              />
-            </SortableContext>
-          </DndContext>
+              assignee: archiveMode === "archive"
+                ? undefined
+                : {
+                    values: assigneeIDs ? assigneeIDs.split(",").filter(Boolean) : [],
+                    options: activeAssigneeOptions,
+                    ownValue: user?.id ? String(user.id) : undefined,
+                    onChange: (values) => updateTicketParams({ assignee_ids: values.length ? values.join(",") : undefined }),
+                  },
+              created: {
+                value: tableDateRangeValue,
+                onChange: (value) => {
+                  const from = value?.[0] ? value[0].startOf("day").format("YYYY-MM-DD") : undefined;
+                  const to = value?.[1] ? value[1].endOf("day").format("YYYY-MM-DD") : from;
+                  updateTicketParams({ [periodFromParamKey]: from, [periodToParamKey]: to });
+                },
+              },
+              activity: {
+                value: tableDateRangeValue,
+                onChange: (value) => {
+                  const from = value?.[0] ? value[0].startOf("day").format("YYYY-MM-DD") : undefined;
+                  const to = value?.[1] ? value[1].endOf("day").format("YYYY-MM-DD") : from;
+                  updateTicketParams({ [periodFromParamKey]: from, [periodToParamKey]: to });
+                },
+              },
+            }}
+            selectedTicketIds={selectedTicketIDs}
+            onSelectedTicketIdsChange={setSelectedTicketIDs}
+            rowClassName={(record) =>
+              selectedTicketIDs.includes(record.id)
+                ? "ant-table-row-selected"
+                : ""
+            }
+            onRowClick={(record, event) => onTicketRowClick(record.id, event)}
+          />
         )}
 
         <div

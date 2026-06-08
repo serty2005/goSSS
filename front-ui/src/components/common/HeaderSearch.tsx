@@ -20,22 +20,6 @@ const { useBreakpoint } = Grid;
 const { Text } = Typography;
 
 const LONGEST_STATUS_LABEL_WIDTH = 260;
-const TABLE_COLUMN_OPTIONS = [
-  { value: 'selection', labelKey: 'layout:headerSearch.ticket.tableColumns.selection' },
-  { value: 'number', labelKey: 'layout:headerSearch.ticket.tableColumns.number' },
-  { value: 'status', labelKey: 'layout:headerSearch.ticket.tableColumns.status' },
-  { value: 'company_display', labelKey: 'layout:headerSearch.ticket.tableColumns.company_display' },
-  { value: 'assignee_display', labelKey: 'layout:headerSearch.ticket.tableColumns.assignee_display' },
-  { value: 'reporter_display', labelKey: 'layout:headerSearch.ticket.tableColumns.reporter_display' },
-  { value: 'subject', labelKey: 'layout:headerSearch.ticket.tableColumns.subject' },
-  { value: 'bitrix_deal_title', labelKey: 'layout:headerSearch.ticket.tableColumns.bitrix_deal_title' },
-  { value: 'last_comment', labelKey: 'layout:headerSearch.ticket.tableColumns.last_comment' },
-  { value: 'created_at', labelKey: 'layout:headerSearch.ticket.tableColumns.created_at' },
-  { value: 'last_activity', labelKey: 'layout:headerSearch.ticket.tableColumns.last_activity' },
-  { value: 'sync_with_bitrix', labelKey: 'layout:headerSearch.ticket.tableColumns.sync_with_bitrix' },
-];
-const TABLE_COLUMN_KEYS = TABLE_COLUMN_OPTIONS.map((item) => item.value);
-const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'selection');
 const TICKET_STATE_PARAM_KEYS = [
   'preset_id',
   'q',
@@ -44,6 +28,7 @@ const TICKET_STATE_PARAM_KEYS = [
   'only_active_statuses',
   'table_columns',
   'table_sort',
+  'table_layout',
   'assignee_ids',
   'archive_mode',
   'company',
@@ -61,6 +46,7 @@ const TICKET_PRESET_PARAM_KEYS = [
   'only_active_statuses',
   'table_columns',
   'table_sort',
+  'table_layout',
   'assignee_ids',
   'company',
   'archive_company',
@@ -85,7 +71,6 @@ const HeaderSearch: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
-  const isBitrixEnabled = user?.bitrix_enabled === true;
   const localeDefinition = useMemo(() => getSupportedLocale(i18n.resolvedLanguage), [i18n.resolvedLanguage]);
   const ticketModeOptions = useMemo(
     () => [
@@ -135,8 +120,6 @@ const HeaderSearch: React.FC = () => {
   const ticketStatus = ticketParams.get('status') || '';
   const selectedPresetID = ticketParams.get('preset_id') || undefined;
   const onlyActiveStatuses = ticketParams.get('only_active_statuses') === '1';
-  const ticketView = isHeaderMobile ? 'cards' : 'table';
-  const ticketTableColumns = ticketParams.get('table_columns') || '';
   const ticketAssigneeIDs = ticketParams.get('assignee_ids') || '';
   const archiveMode = ticketParams.get('archive_mode') === 'archive' ? 'archive' : 'active';
   const activeCompany = ticketParams.get('company') || undefined;
@@ -194,37 +177,6 @@ const HeaderSearch: React.FC = () => {
   const assigneeValues = useMemo(() => (ticketAssigneeIDs ? ticketAssigneeIDs.split(',').filter(Boolean) : []), [ticketAssigneeIDs]);
   const ownAssigneeID = user?.id ? String(user.id) : '';
   const isMineOnly = Boolean(ownAssigneeID) && assigneeValues.length === 1 && assigneeValues[0] === ownAssigneeID;
-  const selectedTableColumns = useMemo(() => {
-    const availableTableColumnKeys = isBitrixEnabled
-      ? TABLE_COLUMN_KEYS
-      : TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
-    const defaultTableColumns = isBitrixEnabled
-      ? DEFAULT_TABLE_COLUMN_KEYS
-      : DEFAULT_TABLE_COLUMN_KEYS.filter((key) => key !== 'bitrix_deal_title' && key !== 'sync_with_bitrix');
-    if (!ticketTableColumns) {
-      return defaultTableColumns;
-    }
-    const values = ticketTableColumns.split(',').filter((value) => availableTableColumnKeys.includes(value));
-    return values.length ? values : defaultTableColumns;
-  }, [isBitrixEnabled, ticketTableColumns]);
-
-  const tableColumnOptions = useMemo(
-    () => {
-      const localizedOptions = TABLE_COLUMN_OPTIONS.map((item) => ({
-        value: item.value,
-        label: t(item.labelKey),
-      }));
-      return isBitrixEnabled
-        ? localizedOptions
-        : localizedOptions.filter((item) => item.value !== 'bitrix_deal_title' && item.value !== 'sync_with_bitrix');
-    },
-    [isBitrixEnabled, t],
-  );
-  const tableColumnOrder = useMemo(
-    () => tableColumnOptions.map((item) => item.value),
-    [tableColumnOptions],
-  );
-
   const { data: filterRes, isFetching: isFiltersLoading } = useQuery({
     queryKey: ['ticket-filters', archiveMode, appliedSearch, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
     queryFn: () =>
@@ -307,6 +259,10 @@ const HeaderSearch: React.FC = () => {
     }
     return raw.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string');
   }, [user?.profile_config]);
+  const selectedPreset = useMemo(
+    () => presets.find((item) => item.id === selectedPresetID),
+    [presets, selectedPresetID],
+  );
   const presetNameOptions = useMemo(
     () => presets.map((item) => ({ value: item.name })),
     [presets],
@@ -329,6 +285,24 @@ const HeaderSearch: React.FC = () => {
     }, 0);
     return `preset_${maxIndex + 1}`;
   }, [presets]);
+  const currentPresetValues = useMemo(() => {
+    const values: Partial<Record<TicketPresetParamKey, string>> = {};
+    TICKET_PRESET_PARAM_KEYS.forEach((key) => {
+      const value = ticketParams.get(key);
+      if (value) {
+        values[key] = value;
+      }
+    });
+    return values;
+  }, [ticketParams]);
+  const isSelectedPresetDirty = useMemo(() => {
+    if (!selectedPreset) {
+      return false;
+    }
+    return TICKET_PRESET_PARAM_KEYS.some((key) => (
+      (selectedPreset.values[key] || '') !== (currentPresetValues[key] || '')
+    ));
+  }, [currentPresetValues, selectedPreset]);
   const ticketStateStorageKey = useMemo(() => {
     const userKey = user?.id ? String(user.id) : 'guest';
     return `tickets-last-state-${userKey}`;
@@ -589,6 +563,40 @@ const HeaderSearch: React.FC = () => {
     }
   };
 
+  const saveSelectedPreset = async () => {
+    if (!user || !selectedPreset) {
+      return;
+    }
+
+    const nextPreset: TicketPreset = {
+      ...selectedPreset,
+      values: currentPresetValues,
+    };
+    const nextPresets = presets.map((item) => (item.id === selectedPreset.id ? nextPreset : item));
+
+    const currentConfig = (user.profile_config || {}) as Record<string, unknown>;
+    const ticketsConfig = (currentConfig.tickets || {}) as Record<string, unknown>;
+    const filtersConfig = (ticketsConfig.filters || {}) as Record<string, unknown>;
+    const nextConfig: Record<string, unknown> = {
+      ...currentConfig,
+      tickets: {
+        ...ticketsConfig,
+        filters: {
+          ...filtersConfig,
+          presets: nextPresets,
+        },
+      },
+    };
+
+    try {
+      await updateProfileMutation.mutateAsync(nextConfig);
+      setUser({ ...user, profile_config: nextConfig as any });
+      message.success(t('layout:headerSearch.ticket.presetUpdated'));
+    } catch {
+      message.error(t('layout:headerSearch.ticket.presetSaveError'));
+    }
+  };
+
   const deleteCurrentPreset = async () => {
     if (!user || !existingPresetByName) {
       return;
@@ -806,24 +814,6 @@ const HeaderSearch: React.FC = () => {
           </div>
         )}
 
-        <Space style={{ width: '100%' }} align="start">
-          {ticketView === 'table' && (
-            <Select
-              mode="multiple"
-              value={selectedTableColumns}
-              onChange={(values) => {
-                const normalized = tableColumnOrder.filter((key) => values.includes(key));
-                updateTicketParams({
-                  table_columns: normalized.length ? normalized.join(',') : undefined,
-                });
-              }}
-              options={tableColumnOptions}
-              style={{ flex: 1, minWidth: 0 }}
-            />
-          )}
-        </Space>
-
-
         {archiveMode !== 'archive' && (
           <>
             <Space style={{ width: LONGEST_STATUS_LABEL_WIDTH, justifyContent: 'space-between' }} align="start">
@@ -916,12 +906,14 @@ const HeaderSearch: React.FC = () => {
                   archive_company: undefined,
                   archive_period_from: undefined,
                   archive_period_to: undefined,
+                  table_layout: undefined,
                 }
               : {
                   status: undefined,
                   only_active_statuses: undefined,
                   table_columns: undefined,
                   assignee_ids: undefined,
+                  table_layout: undefined,
                   company: undefined,
                   period_from: undefined,
                   period_to: undefined,
@@ -996,25 +988,29 @@ const HeaderSearch: React.FC = () => {
           style={{ width: isHeaderMobile ? 88 : (isCompact ? 240 : 320) }}
         />
         {!isHeaderNarrow && archiveMode !== 'archive' && (
-          <Select
-            className="ticket-header-inline-preset"
-            allowClear
-            placeholder={t('layout:headerSearch.ticket.savedFilter')}
-            value={selectedPresetID}
-            options={presets.map((item) => ({ value: item.id, label: item.name }))}
-            onChange={(value) => {
-              if (!value) {
-                updateTicketParams({ preset_id: undefined });
-                return;
-              }
-              applyPreset(value);
-            }}
-            style={{ width: isCompact ? 180 : 220 }}
-          />
+          <Space.Compact>
+            <Select
+              className="ticket-header-inline-preset"
+              allowClear
+              placeholder={t('layout:headerSearch.ticket.savedFilter')}
+              value={selectedPresetID}
+              options={presets.map((item) => ({ value: item.id, label: item.name }))}
+              onChange={(value) => {
+                if (!value) {
+                  updateTicketParams({ preset_id: undefined });
+                  return;
+                }
+                applyPreset(value);
+              }}
+              style={{ width: isCompact ? 180 : 220 }}
+            />
+            {isSelectedPresetDirty && (
+              <Button onClick={() => void saveSelectedPreset()} loading={updateProfileMutation.isPending}>
+                {t('common:actions.save')}
+              </Button>
+            )}
+          </Space.Compact>
         )}
-        <Popover trigger="click" placement="bottomRight" content={filterContent}>
-          <Button shape="circle" icon={<SettingOutlined />} aria-label={t('layout:headerSearch.ticket.openFilters')} />
-        </Popover>
         <Button
           className="ticket-header-new-ticket"
           type="primary"
