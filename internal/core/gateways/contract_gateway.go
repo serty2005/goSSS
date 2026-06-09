@@ -99,6 +99,10 @@ func (g *contractGatewayImpl) RefreshLatestReport(ctx context.Context) error {
 	}
 
 	selectedReports := selectLatestReportsBySource(reports)
+	if len(selectedReports) == 0 {
+		g.logger.Info("Принудительный пересчёт контрактов завершён: в актуальных отчётах нет строк точек обслуживания")
+		return nil
+	}
 	report := buildCombinedContractMailReport(selectedReports)
 	g.logger.Info(
 		"Запущена принудительная обработка актуальных почтовых отчётов по контрактам",
@@ -109,6 +113,7 @@ func (g *contractGatewayImpl) RefreshLatestReport(ctx context.Context) error {
 		"extracted_service_points", len(report.Rows),
 		"reports_merged", len(selectedReports),
 	)
+	g.maybeRunAutomaticBitrixSync(ctx, report, selectedReports)
 	if err := g.applyReport(ctx, report); err != nil {
 		g.logger.Error("Не удалось выполнить принудительный пересчёт по актуальным почтовым отчётам", "attachment_name", report.AttachmentName, "error", err)
 		for _, selectedReport := range selectedReports {
@@ -149,6 +154,10 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 	g.logger.Info("Получены отчёты по контрактам из почты", "reports_count", len(reports))
 
 	selectedReports := selectLatestReportsBySource(reports)
+	if len(selectedReports) == 0 {
+		g.logger.Info("Актуальные отчёты по контрактам не содержат строк точек обслуживания")
+		return
+	}
 	reportsToMark := make([]contractsvc.ContractMailReport, 0, len(selectedReports))
 	for _, report := range selectedReports {
 		if strings.TrimSpace(report.AttachmentHash) == "" {
@@ -180,7 +189,16 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 		reportsToMark = append(reportsToMark, report)
 	}
 	if len(reportsToMark) == 0 {
-		g.logger.Info("Актуальные отчёты по контрактам уже обработаны ранее", "sources_count", len(selectedReports))
+		combinedReport := buildCombinedContractMailReport(selectedReports)
+		g.logger.Info(
+			"Актуальные отчёты по контрактам уже обработаны ранее, запущена проверка соответствия компаний",
+			"sources_count", len(selectedReports),
+			"attachment_hash", combinedReport.AttachmentHash,
+		)
+		g.maybeRunAutomaticBitrixSync(ctx, combinedReport, selectedReports)
+		if err := g.applyReport(ctx, combinedReport); err != nil {
+			g.logger.Error("Не удалось проверить соответствие компаний по актуальным почтовым отчётам", "attachment_name", combinedReport.AttachmentName, "error", err)
+		}
 		return
 	}
 
@@ -193,6 +211,7 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 		"extracted_service_points", len(combinedReport.Rows),
 		"reports_merged", len(selectedReports),
 	)
+	g.maybeRunAutomaticBitrixSync(ctx, combinedReport, selectedReports)
 	if err := g.applyReport(ctx, combinedReport); err != nil {
 		g.logger.Error("Не удалось применить актуальный набор почтовых отчётов по контрактам", "attachment_name", combinedReport.AttachmentName, "error", err)
 		for _, report := range reportsToMark {
@@ -204,7 +223,6 @@ func (g *contractGatewayImpl) sync(ctx context.Context) {
 	for _, report := range reportsToMark {
 		g.storeMailImportStatus(ctx, report, contractdom.MailImportStatusProcessed, nil)
 	}
-	g.maybeRunAutomaticBitrixSync(ctx, combinedReport, selectedReports)
 	g.logger.Info("Цикл актуализации контрактов из почты завершён", "reports_count", len(reports))
 }
 
@@ -353,17 +371,13 @@ func (g *contractGatewayImpl) buildDailySnapshots(
 		if point, ok := pointsByID[mapping.BitrixServicePointID]; ok {
 			snapshot = contractsvc.BuildDailySnapshotFromBitrixServicePoint(mapping.CompanyID, point)
 			snapshot.SourceHash = sourceHash
-			pointContractType := contractsvc.NormalizeServicePointContractType(dereferenceString(point.ContractType))
-			pointContractKnown := point.ContractOn != nil || pointContractType != ""
 
 			if row, matched := matchReportRowToPoint(point, rowsByCode, rowsByName); matched {
 				snapshot.ServicePointName = row.ServicePointName
 				snapshot.ServicePointCode = row.ServicePointCode
 				snapshot.ContractorID = row.ContractorID
-				if !pointContractKnown {
-					snapshot.ContractType = contractsvc.NormalizeServicePointContractType(row.ContractType)
-					snapshot.Active = row.ContractOn
-				}
+				snapshot.ContractType = contractsvc.NormalizeServicePointContractType(row.ContractType)
+				snapshot.Active = row.ContractOn
 				snapshot.StartDate = row.StartDate
 				snapshot.EndDate = row.EndDate
 				snapshot.ClientOrder = row.ClientOrder

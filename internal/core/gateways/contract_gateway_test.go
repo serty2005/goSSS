@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestContractGateway_BuildDailySnapshots_UsesBitrixPointContractStatusAndType(t *testing.T) {
+func TestContractGateway_BuildDailySnapshots_UsesReportContractStatusAndType(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(gatewayTestSQLiteDSN(t)), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("не удалось открыть in-memory БД: %v", err)
@@ -28,8 +28,8 @@ func TestContractGateway_BuildDailySnapshots_UsesBitrixPointContractStatusAndTyp
 	ctx := context.Background()
 	bitrixRepo := repositories.NewBitrixRepo(db)
 
-	contractOn := true
-	contractType := "Да"
+	contractOn := false
+	contractType := "Не активен"
 	oneCCode := "SP-001"
 	if err := db.Create(&bitrix.ServicePoint{
 		B24ElementID: 501,
@@ -53,8 +53,8 @@ func TestContractGateway_BuildDailySnapshots_UsesBitrixPointContractStatusAndTyp
 			ContractorID:     "SP-001",
 			ServicePointCode: "SP-001",
 			ServicePointName: "Точка обслуживания 1",
-			ContractOn:       false,
-			ContractType:     "Не активен",
+			ContractOn:       true,
+			ContractType:     "Да",
 		},
 	}
 
@@ -71,7 +71,7 @@ func TestContractGateway_BuildDailySnapshots_UsesBitrixPointContractStatusAndTyp
 
 	snapshot := snapshots[0]
 	if !snapshot.Active {
-		t.Fatalf("ожидали активный локальный контракт по данным точки Bitrix24, получили inactive")
+		t.Fatalf("ожидали активный локальный контракт по свежему почтовому отчёту, получили inactive")
 	}
 	if snapshot.ContractType != "TS Standart" {
 		t.Fatalf("ожидали нормализованный тип TS Standart, получили %q", snapshot.ContractType)
