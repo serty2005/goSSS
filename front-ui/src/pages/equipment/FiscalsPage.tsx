@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { Card, DatePicker, Empty, Select, Space, Spin, Table, Typography } from 'antd';
-import type { TableProps } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import type { FilterValue, SorterResult, SortOrder } from 'antd/es/table/interface';
+import { Card, Checkbox, DatePicker, Select, Space, Spin, Typography } from 'antd';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { companiesApi } from '@/api/companies';
 import { equipmentApi } from '@/api/equipment';
+import DataTable, {
+  DataTableColumn,
+  DataTableSortState,
+  DataTableTextCell,
+} from '@/components/common/DataTable';
+import { createDataTableColumnMinWidth, formatDataTableText } from '@/components/common/dataTableUtils';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -25,6 +28,11 @@ type Row = {
   ownerName: string;
   parentCompanyId: string;
   parentCompanyName: string;
+  ofdName: string;
+  licenses: unknown;
+  licensesLabel: string;
+  frFirmware: string;
+  driverVersion: string;
 };
 
 type ListViewState = {
@@ -35,13 +43,30 @@ type ListViewState = {
 };
 
 const STORAGE_KEY = 'fiscals_list_view_state_v1';
+const FISCALS_TABLE_COLUMN_KEYS = [
+  'model',
+  'rnm',
+  'serial',
+  'fnExpireDate',
+  'ofdName',
+  'licensesLabel',
+  'frFirmware',
+  'driverVersion',
+  'legalName',
+  'address',
+  'owner',
+] as const;
 
 const normalizeText = (value: unknown, fallback = '-') => {
-  const clean = String(value ?? '').trim();
+  const clean = formatDataTableText(value);
   return clean || fallback;
 };
 
-const compareText = (a: string, b: string) => a.localeCompare(b, 'ru', { sensitivity: 'base' });
+const compareText = (a: string, b: string) => a.localeCompare(b, 'ru', {
+  numeric: true,
+  sensitivity: 'base',
+});
+
 const containsText = (value: string, search: string) =>
   value.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru'));
 
@@ -82,6 +107,47 @@ const formatDate = (value: string) => {
   return parsed.isValid() ? parsed.format('DD.MM.YYYY') : '-';
 };
 
+const getDateSortValue = (value: string, sortState: DataTableSortState) => {
+  const parsed = dayjs(value);
+  if (parsed.isValid()) {
+    return parsed.valueOf();
+  }
+  return sortState?.order === 'desc' ? Number.MIN_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+};
+
+const formatLicenseDate = (value: unknown) => {
+  const text = normalizeText(value, '');
+  if (!text) return '';
+  const parsed = dayjs(text);
+  return parsed.isValid() ? parsed.format('DD.MM.YYYY') : text;
+};
+
+const formatLicenses = (value: unknown) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    return normalizeText(value, '');
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return normalizeText(value, '');
+  }
+
+  return Object.entries(value as Record<string, unknown>)
+    .map(([licenseID, rawLicense]) => {
+      if (!rawLicense || typeof rawLicense !== 'object' || Array.isArray(rawLicense)) {
+        return `${licenseID}: ${normalizeText(rawLicense, '')}`.trim();
+      }
+
+      const license = rawLicense as Record<string, unknown>;
+      const name = normalizeText(license.name, '');
+      const dateUntil = formatLicenseDate(license.date_until);
+      const suffix = dateUntil ? `до ${dateUntil}` : '';
+      return [licenseID, name, suffix].filter(Boolean).join(' ');
+    })
+    .filter(Boolean)
+    .sort(compareText)
+    .join('\n');
+};
+
 const FiscalsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -95,8 +161,7 @@ const FiscalsPage: React.FC = () => {
   ]);
   const [companyFilterSearch, setCompanyFilterSearch] = useState('');
   const [companyOptionCache, setCompanyOptionCache] = useState<Record<string, string>>({});
-  const [sortBy, setSortBy] = useState('');
-  const [sortOrder, setSortOrder] = useState<SortOrder>(null);
+  const [tableSort, setTableSort] = useState<DataTableSortState>(null);
 
   const term = (searchParams.get('q') || '').trim();
   const limit = 20;
@@ -104,9 +169,24 @@ const FiscalsPage: React.FC = () => {
 
   const companyFilterKey = useMemo(() => selectedCompanyIDs.slice().sort(), [selectedCompanyIDs]);
   const modelFilterKey = useMemo(() => selectedModels.slice().sort(), [selectedModels]);
+  const sortBy = tableSort?.key === 'fnExpireDate' ? 'fn_expire_date' : '';
+  const sortOrder = tableSort?.order === 'asc'
+    ? 'ascend'
+    : tableSort?.order === 'desc'
+      ? 'descend'
+      : undefined;
 
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteQuery({
-    queryKey: ['equipment', 'fiscals', term, companyFilterKey, modelFilterKey, fnExpireRange, sortBy, sortOrder],
+    queryKey: [
+      'equipment',
+      'fiscals',
+      term,
+      companyFilterKey,
+      modelFilterKey,
+      fnExpireRange,
+      sortBy,
+      sortOrder,
+    ],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       equipmentApi.listFiscals({
@@ -118,7 +198,7 @@ const FiscalsPage: React.FC = () => {
         fnExpireFrom: fnExpireRange[0],
         fnExpireTo: fnExpireRange[1],
         sortBy,
-        sortOrder: sortOrder || undefined,
+        sortOrder,
       }),
     getNextPageParam: (lastPage) => {
       const meta = lastPage.meta;
@@ -137,7 +217,7 @@ const FiscalsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const { data: filterOptionsData } = useQuery({
+  const { data: filterOptionsData, isFetching: isFilterOptionsLoading } = useQuery({
     queryKey: ['equipment', 'fiscals', 'filter-options'],
     queryFn: () => equipmentApi.getFiscalFilterOptions(),
     staleTime: 5 * 60_000,
@@ -150,6 +230,7 @@ const FiscalsPage: React.FC = () => {
         .map((item) => {
           const row = item as Record<string, unknown>;
           const id = normalizeText(row.id, '');
+          const licenses = row.licenses;
           return {
             id,
             model: normalizeText(row.model_kkt, 'ККТ'),
@@ -162,6 +243,11 @@ const FiscalsPage: React.FC = () => {
             ownerName: normalizeText(row.owner_title || row.owner_id, normalizeText(row.owner_id, '-')),
             parentCompanyId: normalizeText(row.owner_parent_id, ''),
             parentCompanyName: normalizeText(row.owner_parent_title, ''),
+            ofdName: normalizeText(row.ofd_name),
+            licenses,
+            licensesLabel: formatLicenses(licenses),
+            frFirmware: normalizeText(row.fr_firmware),
+            driverVersion: normalizeText(row.driver_version),
           };
         }),
     [data?.pages],
@@ -255,8 +341,8 @@ const FiscalsPage: React.FC = () => {
     });
     optionMap.delete('-');
     return Array.from(optionMap.entries())
-      .map(([value, label]) => ({ text: label, value }))
-      .sort((a, b) => compareText(String(a.text), String(b.text)));
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => compareText(a.label, b.label));
   }, [filterOptionsData?.data?.models, selectedModels]);
 
   const total = data?.pages?.[0]?.meta?.total || 0;
@@ -290,20 +376,6 @@ const FiscalsPage: React.FC = () => {
     );
   }, []);
 
-  const handleTableChange: TableProps<Row>['onChange'] = (_pagination, filters, sorter) => {
-    const modelValues = Array.isArray(filters.model) ? filters.model.map(String) : [];
-    setSelectedModels(modelValues);
-
-    const activeSorter = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<Row>;
-    if (activeSorter?.field === 'fnExpireDate' && activeSorter.order) {
-      setSortBy('fn_expire_date');
-      setSortOrder(activeSorter.order);
-      return;
-    }
-    setSortBy('');
-    setSortOrder(null);
-  };
-
   const handleRangeChange = useCallback((dates: [Dayjs | null, Dayjs | null] | null) => {
     setFnExpireRange([
       dates?.[0]?.format('YYYY-MM-DD') || '',
@@ -311,71 +383,215 @@ const FiscalsPage: React.FC = () => {
     ]);
   }, []);
 
+  const handleSortChange = useCallback((columnKey: string) => {
+    setTableSort((currentSort) => {
+      if (currentSort?.key !== columnKey) {
+        return { key: columnKey, order: 'asc' };
+      }
+      if (currentSort.order === 'asc') {
+        return { key: columnKey, order: 'desc' };
+      }
+      return null;
+    });
+  }, []);
+
+  const modelFilterContent = useMemo(() => (
+    <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+      <Text strong>Модель ФР</Text>
+      <Checkbox checked={selectedModels.length === 0} onChange={() => setSelectedModels([])}>
+        Все
+      </Checkbox>
+      <Checkbox.Group
+        value={selectedModels}
+        onChange={(nextValues) => setSelectedModels(nextValues.map((value) => String(value)))}
+      >
+        <Space direction="vertical" size={4} style={{ maxHeight: 260, overflowY: 'auto' }}>
+          {modelFilterOptions.map((option) => (
+            <Checkbox key={option.value} value={option.value}>
+              {option.label}
+            </Checkbox>
+          ))}
+          {isFilterOptionsLoading && <Spin size="small" />}
+        </Space>
+      </Checkbox.Group>
+    </Space>
+  ), [isFilterOptionsLoading, modelFilterOptions, selectedModels]);
+
+  const ownerFilterContent = useMemo(() => (
+    <Space direction="vertical" size={8} className="company-ticket-table__filter-popover" style={{ width: 340 }}>
+      <Text strong>Владелец</Text>
+      <Select
+        mode="multiple"
+        showSearch
+        allowClear
+        filterOption={false}
+        maxTagCount="responsive"
+        placeholder="Начните вводить название"
+        value={selectedCompanyIDs}
+        options={companyFilterOptions}
+        loading={isCompanySearchLoading}
+        style={{ width: '100%' }}
+        onSearch={setCompanyFilterSearch}
+        onChange={(nextValue) => setSelectedCompanyIDs(nextValue.map(String))}
+      />
+      <Text type="secondary">Поиск владельцев выполняется отдельным запросом по компаниям.</Text>
+    </Space>
+  ), [companyFilterOptions, isCompanySearchLoading, selectedCompanyIDs]);
+
+  const fnExpireFilterContent = useMemo(() => (
+    <Space direction="vertical" size={8} className="company-ticket-table__filter-popover">
+      <Text strong>Срок ФН</Text>
+      <RangePicker
+        allowClear
+        format="DD.MM.YYYY"
+        placeholder={['ФН от', 'ФН до']}
+        value={[
+          fnExpireRange[0] ? dayjs(fnExpireRange[0], 'YYYY-MM-DD') : null,
+          fnExpireRange[1] ? dayjs(fnExpireRange[1], 'YYYY-MM-DD') : null,
+        ]}
+        onChange={(dates) => handleRangeChange(dates as [Dayjs | null, Dayjs | null] | null)}
+      />
+    </Space>
+  ), [fnExpireRange, handleRangeChange]);
+
   const ownerColumnTitle = selectedCompanyIDs.length > 0 ? `Владелец (${selectedCompanyIDs.length})` : 'Владелец';
 
-  const columns: ColumnsType<Row> = [
+  const columns = useMemo<DataTableColumn<Row>[]>(() => [
     {
       title: 'Имя ФР',
       dataIndex: 'model',
       key: 'model',
       width: 240,
-      filters: modelFilterOptions,
-      filteredValue: selectedModels.length > 0 ? (selectedModels as FilterValue) : null,
+      minWidth: createDataTableColumnMinWidth('Имя ФР'),
+      maxWidth: 420,
+      isSortable: false,
+      filterContent: modelFilterContent,
+      isFilterActive: selectedModels.length > 0,
     },
-    { title: 'РНМ', dataIndex: 'rnm', key: 'rnm', width: 180 },
-    { title: 'Серийный номер', dataIndex: 'serial', key: 'serial', width: 200 },
+    {
+      title: 'РНМ',
+      dataIndex: 'rnm',
+      key: 'rnm',
+      width: 170,
+      minWidth: createDataTableColumnMinWidth('РНМ'),
+      maxWidth: 260,
+      isSortable: false,
+    },
+    {
+      title: 'Серийный номер',
+      dataIndex: 'serial',
+      key: 'serial',
+      width: 190,
+      minWidth: createDataTableColumnMinWidth('Серийный номер'),
+      maxWidth: 320,
+      isSortable: false,
+    },
     {
       title: 'Срок ФН',
       dataIndex: 'fnExpireDate',
       key: 'fnExpireDate',
       width: 150,
-      sorter: true,
-      sortOrder: sortBy === 'fn_expire_date' ? sortOrder : null,
-      render: (value: string) => formatDate(value),
+      minWidth: createDataTableColumnMinWidth('Срок ФН'),
+      maxWidth: 220,
+      filterContent: fnExpireFilterContent,
+      isFilterActive: Boolean(fnExpireRange[0] || fnExpireRange[1]),
+      sortValue: (row) => getDateSortValue(row.fnExpireDate, tableSort),
+      render: (value?: string) => <DataTableTextCell value={formatDate(value || '')} />,
     },
-    { title: 'Юрлицо', dataIndex: 'legalName', key: 'legalName', width: 260 },
-    { title: 'Адрес установки', dataIndex: 'address', key: 'address', width: 320 },
+    {
+      title: 'Название ОФД',
+      dataIndex: 'ofdName',
+      key: 'ofdName',
+      width: 220,
+      minWidth: createDataTableColumnMinWidth('Название ОФД'),
+      maxWidth: 420,
+      isSortable: false,
+    },
+    {
+      title: 'Лицензии ФР',
+      dataIndex: 'licensesLabel',
+      key: 'licensesLabel',
+      width: 260,
+      minWidth: createDataTableColumnMinWidth('Лицензии ФР'),
+      maxWidth: 520,
+      isSortable: false,
+      render: (value?: string) => <DataTableTextCell value={value} multiline />,
+    },
+    {
+      title: 'Версия прошивки',
+      dataIndex: 'frFirmware',
+      key: 'frFirmware',
+      width: 180,
+      minWidth: createDataTableColumnMinWidth('Версия прошивки'),
+      maxWidth: 280,
+      isSortable: false,
+    },
+    {
+      title: 'Версия драйвера',
+      dataIndex: 'driverVersion',
+      key: 'driverVersion',
+      width: 180,
+      minWidth: createDataTableColumnMinWidth('Версия драйвера'),
+      maxWidth: 280,
+      isSortable: false,
+    },
+    {
+      title: 'Юрлицо',
+      dataIndex: 'legalName',
+      key: 'legalName',
+      width: 260,
+      minWidth: createDataTableColumnMinWidth('Юрлицо'),
+      maxWidth: 520,
+      isSortable: false,
+    },
+    {
+      title: 'Адрес установки',
+      dataIndex: 'address',
+      key: 'address',
+      width: 320,
+      minWidth: createDataTableColumnMinWidth('Адрес установки'),
+      maxWidth: 640,
+      isSortable: false,
+    },
     {
       title: ownerColumnTitle,
       dataIndex: 'ownerName',
       key: 'owner',
       width: 280,
+      minWidth: createDataTableColumnMinWidth('Владелец'),
+      maxWidth: 460,
+      isSortable: false,
+      filterContent: ownerFilterContent,
+      isFilterActive: selectedCompanyIDs.length > 0,
       render: (_ownerName: string, record) => renderCompanyLink(record.ownerId, record.ownerName),
     },
-  ];
+  ], [
+    fnExpireFilterContent,
+    fnExpireRange,
+    modelFilterContent,
+    ownerColumnTitle,
+    ownerFilterContent,
+    renderCompanyLink,
+    selectedCompanyIDs.length,
+    selectedModels.length,
+    tableSort,
+  ]);
 
-  const filtersPanel = useMemo(
-    () => (
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space wrap size={12} style={{ width: '100%', alignItems: 'flex-start' }}>
-          <Select
-            mode="multiple"
-            showSearch
-            allowClear
-            filterOption={false}
-            maxTagCount="responsive"
-            placeholder="Владельцы"
-            value={selectedCompanyIDs}
-            options={companyFilterOptions}
-            loading={isCompanySearchLoading}
-            style={{ width: 'min(100%, 420px)', minWidth: 260 }}
-            onSearch={setCompanyFilterSearch}
-            onChange={(nextValue) => setSelectedCompanyIDs(nextValue.map(String))}
-          />
-          <RangePicker
-            allowClear
-            placeholder={['ФН от', 'ФН до']}
-            value={[
-              fnExpireRange[0] ? dayjs(fnExpireRange[0], 'YYYY-MM-DD') : null,
-              fnExpireRange[1] ? dayjs(fnExpireRange[1], 'YYYY-MM-DD') : null,
-            ]}
-            style={{ width: 'min(100%, 280px)' }}
-            onChange={(dates) => handleRangeChange(dates as [Dayjs | null, Dayjs | null] | null)}
-          />
+  const tableFooter = (
+    <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 12 }}>
+      {!isLoading && rows.length > 0 ? (
+        <Space wrap size={12}>
+          <Text type="secondary">Найдено по запросу: {total}</Text>
+          <Text type="secondary">Загружено: {rows.length}</Text>
         </Space>
-      </Space>
-    ),
-    [companyFilterOptions, fnExpireRange, handleRangeChange, isCompanySearchLoading, selectedCompanyIDs],
+      ) : null}
+      <div ref={loadMoreRef} style={{ display: 'flex', justifyContent: 'center', minHeight: 40 }}>
+        {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
+        {!hasNextPage && rows.length > 0 ? (
+          <Text type="secondary">Показано: {rows.length} из {total}</Text>
+        ) : null}
+      </div>
+    </Space>
   );
 
   return (
@@ -383,41 +599,29 @@ const FiscalsPage: React.FC = () => {
       <Title level={4} style={{ margin: 0 }}>
         Фискальные регистраторы{term ? ` по запросу "${term}"` : ''}
       </Title>
-      {filtersPanel}
       <Card className="glass-panel">
-        {isLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
-        ) : rows.length === 0 ? (
-          <Empty description="Фискальные регистраторы не найдены" />
-        ) : (
-          <Table<Row>
-            rowKey="id"
-            dataSource={rows}
-            columns={columns}
-            pagination={false}
-            scroll={{ x: 'max-content' }}
-            showSorterTooltip={false}
-            onChange={handleTableChange}
-            onRow={(record) => ({
-              onClick: () => record.id && navigate(`/fiscals/${record.id}`),
-              style: { cursor: 'pointer' },
-            })}
-          />
-        )}
-
-        {!isLoading && rows.length > 0 ? (
-          <Space direction="vertical" size={0} style={{ marginTop: 12 }}>
-            <Text type="secondary">Найдено по запросу: {total}</Text>
-            <Text type="secondary">Загружено: {rows.length}</Text>
-          </Space>
-        ) : null}
-
-        <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
-          {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
-          {!hasNextPage && rows.length > 0 ? (
-            <Text type="secondary">Показано: {rows.length} из {total}</Text>
-          ) : null}
-        </div>
+        <DataTable<Row>
+          rowKey="id"
+          dataSource={rows}
+          columns={columns}
+          loading={isLoading}
+          pagination={false}
+          size="small"
+          layoutKey="fiscals_table_layout"
+          layoutStorage="local"
+          visibilityStorageKey="fiscals_table_visible_columns"
+          availableColumnKeys={[...FISCALS_TABLE_COLUMN_KEYS]}
+          defaultVisibleColumnKeys={[...FISCALS_TABLE_COLUMN_KEYS]}
+          sortState={tableSort}
+          onSortChange={handleSortChange}
+          sortableColumnKeys={['fnExpireDate']}
+          emptyText="Фискальные регистраторы не найдены"
+          footer={tableFooter}
+          onRow={(record) => ({
+            onClick: () => record.id && navigate(`/fiscals/${record.id}`),
+            style: { cursor: 'pointer' },
+          })}
+        />
       </Card>
     </Space>
   );
