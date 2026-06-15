@@ -318,12 +318,19 @@ type AgentCommand struct {
 	// CompletedAt — время получения результата выполнения от агента.
 	CompletedAt *time.Time `gorm:"index"`
 
-	// ResultPayload — последний структурированный результат выполнения команды.
-	// Хранит stdout/stderr, exit_code, duration_ms и доменный JSON-ответ адаптера.
-	ResultPayload datatypes.JSON `gorm:"type:jsonb"`
+		// ResultPayload — последний структурированный результат выполнения команды.
+		// Хранит stdout/stderr, exit_code, duration_ms и доменный JSON-ответ адаптера.
+		ResultPayload datatypes.JSON `gorm:"type:jsonb"`
 
-	// UpdatedAt — время последнего обновления статуса команды.
-	UpdatedAt time.Time
+		// SagaID — идентификатор саги для идемпотентности scheduled-запусков адаптеров.
+		// Заполняется только для команд типа "run_adapter", созданных по расписанию.
+		// Для других команд (inventory, exec, update_config) — nil.
+		// Partial unique index (agent_uuid, type, saga_id) WHERE saga_id IS NOT NULL
+		// предотвращает дублирование при конкурентных подах agent-gateway.
+		SagaID *string `gorm:"type:text;index"`
+
+		// UpdatedAt — время последнего обновления статуса команды.
+		UpdatedAt time.Time
 }
 
 // ReconciliationTask представляет задачу согласования данных для ручной обработки оператором.

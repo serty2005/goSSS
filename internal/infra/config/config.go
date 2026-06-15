@@ -41,6 +41,30 @@ type MegafonVATSRecordingsConfig struct {
 	RetentionDays int
 }
 
+// AgentAuthConfig хранит параметры авторизации активных агентов (sssruner).
+//
+// Access-токен агента подписывается как JWT EdDSA: приватный ключ живёт на
+// agent-gateway, публичный позволяет любому поду проверять токен без обращения
+// к master-БД. Если приватный ключ не задан (ENV пустой), он генерируется при
+// старте в памяти процесса — такой режим годится для локальной разработки и
+// single-instance, но при multi-instance необходимо задать общий ключ через ENV.
+type AgentAuthConfig struct {
+	// JWTPrivateKeyPEM — приватный ключ Ed25519 в формате PEM.
+	// Если пустой, ключ генерируется в памяти при старте.
+	JWTPrivateKeyPEM string
+
+	// JWTPublicKeyPEM — публичный ключ Ed25519 в формате PEM.
+	// Если пустой, выводится из приватного.
+	JWTPublicKeyPEM string
+
+	// AccessTTL — срок жизни access-токена.
+	AccessTTL time.Duration
+
+	// JWTEnabled означает, что приватный ключ доступен и access-токены
+	// выпускаются как JWT. При false используется opaque-режим.
+	JWTEnabled bool
+}
+
 // EventBusBackend определяет доступные реализации шины событий.
 const (
 	EventBusBackendMemory = "memory"
@@ -199,6 +223,12 @@ type Config struct {
 
 	// NATS хранит параметры подключения к NATS JetStream.
 	NATS NATSConfig
+
+	// AgentAuth хранит параметры JWT-авторизации активных агентов.
+	AgentAuth AgentAuthConfig
+
+	// AgentGatewayPort — порт HTTP-сервера agent-gateway.
+	AgentGatewayPort string
 }
 
 func New() *Config {
@@ -362,6 +392,13 @@ func New() *Config {
 
 		EventBusBackend: strings.ToLower(strings.TrimSpace(getEnv("EVENT_BUS_BACKEND", EventBusBackendMemory))),
 		NATS:            newNATSConfig(),
+		AgentAuth: AgentAuthConfig{
+			JWTPrivateKeyPEM: strings.TrimSpace(getEnv("AGENT_JWT_PRIVATE_KEY", "")),
+			JWTPublicKeyPEM:  strings.TrimSpace(getEnv("AGENT_JWT_PUBLIC_KEY", "")),
+			AccessTTL:        time.Duration(max(1, getEnvAsInt("AGENT_JWT_ACCESS_TTL_MIN", 1440))) * time.Minute,
+			JWTEnabled:       strings.TrimSpace(getEnv("AGENT_JWT_PRIVATE_KEY", "")) != "",
+		},
+		AgentGatewayPort: getEnv("AGENT_GATEWAY_PORT", "8090"),
 	}
 }
 

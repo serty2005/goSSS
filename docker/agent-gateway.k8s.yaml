@@ -1,0 +1,151 @@
+# agent-gateway — выделенный сервис для работы с агентами.
+# Deployment + HPA + Service + PodAntiAffinity + ConfigMap + Secret.
+#
+# Переменные окружения (ConfigMap):
+#   EVENT_BUS_BACKEND, NATS_URLS, NATS_STREAM_PREFIX,
+#   AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL, LOG_LEVEL
+#
+# Секреты (Secret):
+#   AGENT_JWT_PRIVATE_KEY, AGENT_JWT_PUBLIC_KEY (опционально, PEM),
+#   AGENT_API_KEY
+#
+# Остальные переменные (DATABASE_URL, NATS_CREDS_FILE) — через
+# внешний Secret/ConfigMap кластера.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-gateway
+  labels:
+    app: agent-gateway
+    component: agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-gateway
+  template:
+    metadata:
+      labels:
+        app: agent-gateway
+        component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/healthz"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: agent-gateway
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: agent-gateway
+          image: xeniondesk/agent-gateway:latest
+          ports:
+            - containerPort: 8090
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: agent-gateway-config
+            - secretRef:
+                name: agent-gateway-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: url
+            - name: NATS_CREDS_FILE
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-gateway
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-gateway
+  labels:
+    app: agent-gateway
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8090
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: agent-gateway
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-gateway-config
+data:
+  EVENT_BUS_BACKEND: "nats"
+  NATS_URLS: "nats://nats:4222"
+  NATS_STREAM_PREFIX: "sss"
+  AGENT_ADAPTER_CATALOG_DEFAULT_CHANNEL: "stable"
+  LOG_LEVEL: "info"
+  AGENT_GATEWAY_PORT: "8090"
+  AGENT_JWT_ENABLED: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-gateway-secrets
+type: Opaque
+stringData:
+  # PEM-ключи Ed25519. Если пустые — генерируются при старте каждого пода.
+  # Для production нужно задать явно (общий ключ на все поды).
+  AGENT_JWT_PRIVATE_KEY: ""
+  AGENT_JWT_PUBLIC_KEY: ""
+  AGENT_API_KEY: ""

@@ -691,29 +691,26 @@ func (a *Application) setupRouter() *chi.Mux {
 		return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/events")
 	}))
 
-	// Без Auth Middleware, авторизация внутри хендлера
-	r.Post("/api/submit_json", a.AgentHandler.HandleSubmitJSON)
-	r.Post("/api/articles/webhook", a.ArticleHandler.CreateFromWebhook)
+		// Без Auth Middleware, авторизация внутри хендлера
+		r.Post("/api/articles/webhook", a.ArticleHandler.CreateFromWebhook)
 
-	r.Route("/api/auth", func(r chi.Router) {
-		a.AuthHandler.RegisterRoutes(r)
-	})
-	if a.BitrixModule != nil {
-		a.BitrixModule.registerPublicRoutes(r)
-	}
-	if a.PyrusModule != nil {
-		a.PyrusModule.registerPublicRoutes(r)
-	}
-	if a.TelephonyModule != nil {
-		a.TelephonyModule.registerPublicRoutes(r)
-	}
+		r.Route("/api/auth", func(r chi.Router) {
+			a.AuthHandler.RegisterRoutes(r)
+		})
+		if a.BitrixModule != nil {
+			a.BitrixModule.registerPublicRoutes(r)
+		}
+		if a.PyrusModule != nil {
+			a.PyrusModule.registerPublicRoutes(r)
+		}
+		if a.TelephonyModule != nil {
+			a.TelephonyModule.registerPublicRoutes(r)
+		}
 
-	r.Route("/api/agents", func(r chi.Router) {
-		// r.Use(middleware.AgentAuthMiddleware(a.Config.AgentAPIKey))
-		a.AgentHandler.RegisterRoutes(r)
-	})
+		// Агентские маршруты (/api/submit_json, /api/agents/*) перенесены
+		// в отдельный сервис agent-gateway (cmd/agent-gateway/main.go).
 
-	r.Route("/api", func(r chi.Router) {
+		r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.JwtAuthMiddleware(a.Config))
 
 		r.Route("/companies", func(r chi.Router) {

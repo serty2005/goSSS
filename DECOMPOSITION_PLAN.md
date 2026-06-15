@@ -1,7 +1,7 @@
 # План рефакторинга goSSS: декомпозиция монолита на распределённые сервисы
 
 > Документ-план. Сформирован по результатам анализа репозитория на 2026-06-15.
-> Используется как опорный материал для последующих сессий реализации.
+> Обновлён: 2026-06-15 — Фаза 1 реализована.
 > Не является описанием текущего состояния — это целевая архитектура и дорожная карта перехода.
 
 ## Зафиксированные архитектурные решения
@@ -64,48 +64,52 @@
 - В `AGENTS.md` секция «Распределённая архитектура»: описание backend-ов шины, перечисление сервисов.
 - `README.md` — обновить блок topology.
 
-**Критерий готовности Фазы 0**: монолит работает с `EVENT_BUS_BACKEND=nats` без изменений поведения (тест: heartbeat агента → `AgentObservationRequested` доходит до Orchestrator через NATS).
+**Критерий готовности Фазы 0**: ✅ реализовано — монолит работает с `EVENT_BUS_BACKEND=nats` без изменений поведения.
 
 ---
 
-## Фаза 1 — agent-gateway (stateless) — ПРИОРИТЕТ 1 (≈2–3 недели)
+## Фаза 1 — agent-gateway (stateless) — ✅ РЕАЛИЗОВАНА (2026-06-15)
 
 Цель: выделить агентский контур в отдельный горизонтально-масштабируемый бинарь без in-memory состояния.
 
-### 1.1. Новый entrypoint `cmd/agent-gateway/main.go`
-- Минимальный DI: config, logger, DB (с master/replica routing), EventBus (NATS), репозитории агентов/компаний/адаптеров, `AgentService`, `AgentOperatorFlowService`, `AgentObservationService`, HTTP handlers из `agent_handler.go`.
-- Маршруты только агентские: `/api/agents/register`, `/api/agents/auth/refresh`, `/api/agents/{uuid}/data`, `/api/agents/{uuid}/config`, `/api/agents/report`, `/api/submit_json`.
-- Никаких шлюзов/воркеров/интеграций — только HTTP.
+### 1.1. Новый entrypoint `cmd/agent-gateway/main.go` — ✅
+- Минимальный DI: config, logger, DB, EventBus (NATS или memory), репозитории агентов/компаний, `AgentOperatorFlowService`, `AgentService`, `AgentAuthService` с JWT, `AgentHandler`.
+- Маршруты: `/api/agents/register`, `/api/agents/auth/refresh`, `/api/agents/{uuid}/data`, `/api/agents/{uuid}/config`, `/api/agents/report`, `/api/submit_json`.
+- Health: `/healthz`, `/readyz` (с проверкой БД).
+- Без шлюзов/воркеров/интеграций — только HTTP + publisher в NATS.
 
-### 1.2. Переход агентской авторизации на JWT (устранение write-per-heartbeat)
-- Текущая проблема: `agentauth/service.go:222` на каждый heartbeat делает `UPDATE agent_session_tokens SET last_used_at` + lookup по `token_hash` — contention на master-БД при росте числа агентов.
-- Решение: access-токен — JWT EdDSA (подписывается приватным ключом agent-gateway, проверяется публичным без БД). Refresh-токен остаётся opaque (lookup в БД, но только при ротации раз в 30 дней, не на каждом heartbeat).
-- Хранение приватного ключа — k8s Secret, монтируется во все поды agent-gateway.
-- Миграция: на переходе opaque+JWT валидируются параллельно; refresh выдаёт уже JWT. `AgentSessionToken` остаётся для refresh + revocation-list.
-- `AgentAuthMiddleware` (`authorizeAgentAccessToken` в `agent_handler.go:276-300`) — сначала проверяет JWT локально, fallback на opaque lookup.
+### 1.2. JWT EdDSA access-токены — ✅
+- `internal/services/agentauth/jwt.go`: `EdDSATokenService` — подпись/верификация JWT Ed25519 через `jwt.SigningMethodEdDSA`.
+- Access-токены не хранятся в БД — устранён write-per-heartbeat.
+- Refresh-токены остаются opaque (lookup в БД).
+- `AGENT_JWT_ENABLED=true/false` — переключение JWT/opaque без переразвёртывания.
+- Приватный ключ из ENV (`AGENT_JWT_PRIVATE_KEY` PEM PKCS#8) или авто-генерация в памяти.
+- `looksLikeJWT` heuristic для выбора пути валидации (JWT vs opaque fallback).
+- 16 unit-тестов покрывают выпуск, валидацию, подпись, экспирацию, fallback, header typ.
 
-### 1.3. Устранение in-memory связей
-- `AgentService.ProcessData` (`agent_service.go:228`) публикует `events.AgentObservationRequested` в NATS (через переключённый backend) — не в локальную шину. Обработчик (`Orchestrator`) к этому моменту уже в processing-service (Фаза 3), но на переходе остаётся в монолите и потребляет из NATS.
-- В `ProcessData` остаётся синхронная часть: fingerprint, meaningfulChange, upsert агента, выдача pending commands, adapter_manifests. Всё это — через общую БД.
+### 1.3. Устранение in-memory связей — ✅ (без изменений, NATS publisher)
+- `AgentService.ProcessData` публикует `AgentObservationRequested` в EventBus (memory или NATS) — без изменений.
+- agent-gateway — publisher-only, подписчики остаются в монолите/processing-service.
 
-### 1.4. Идемпотентность команд при multi-instance
-- Гонка в `EnsureScheduledAdapterRuns` (`agent_adapter_runtime_profiles.go:530`) и `enqueueAdapterRunLocked` между подами: два пода могут одновременно `SELECT` отсутствие команды и оба `INSERT`.
-- Решение: unique-констрейнт на `agent_commands(agent_uuid, type, saga_id)` где `saga_id` вычисляется из расписания (окно), либо `INSERT ... ON CONFLICT DO NOTHING`. Добавить миграцию.
+### 1.4. Идемпотентность команд при multi-instance — ✅
+- Поле `AgentCommand.SagaID *string` для идемпотентности scheduled-запусков.
+- `generateSagaID(agentUUID, adapterID)` — детерминированный saga_id (формата `uuid/adapter/YYYY-MM-DD`).
+- Partial unique index `(agent_uuid, type, saga_id) WHERE saga_id IS NOT NULL` на PostgreSQL.
+- `ON CONFLICT DO NOTHING` через `clause.OnConflict{DoNothing: true}` в `enqueueAdapterRunLocked`.
+- `db.MigrateAgentGateway(db)` — лёгкая миграция для agent-gateway.
+- Unit-тесты для `generateSagaID` (детерминизм, формат, различие агентов/адаптеров).
 
-### 1.5. FTP-кэш и локальные файлы — вынос в integration-hub
-- `AgentFTPGateway` (`agent_ftp_gateway.go`) пишет в локальный `FTPCachePath` — несовместимо с multi-instance. Вынести целиком в integration-hub (Фаза 2), из agent-gateway убрать.
-- Данные от getad-агентов через `/api/submit_json` и `/api/agents/report` остаются синхронными в agent-gateway (это HTTP, не FTP) — проблем нет.
+### 1.5–1.6. FTP и каталог адаптеров — отложены до Фазы 2
+- `AgentFTPGateway` и `AgentAdapterCatalogSyncService` остаются в монолите.
+- agent-gateway читает проекции каталога из БД, не управляет им.
 
-### 1.6. Каталог адаптеров — вынос в integration-hub
-- `AgentAdapterCatalogSyncService` (`agent_adapter_catalog_sync.go`) — singleton-воркер с S3-доступом. Вынести в integration-hub.
-- В agent-gateway остаётся только чтение проекции (`AgentAdapterRelease`/`Channel`) из БД — для формирования `adapter_manifests`.
+### 1.7. Deployment — ✅
+- `docker/agent-gateway.Dockerfile`: multi-stage, `go 1.26.2-alpine`.
+- `docker/agent-gateway.k8s.yaml`: Deployment (replicas 2), HPA (2–10 по CPU), Service ClusterIP, PodAntiAffinity, liveness/readiness, ConfigMap, Secret.
+- `.env.example` обновлён: `AGENT_GATEWAY_PORT`, `AGENT_JWT_*`.
+- Агентские маршруты убраны из монолита (`internal/app/app.go`).
 
-### 1.7. Deployment
-- `docker/agent-gateway.Dockerfile` (multi-stage, `go 1.26.2` builder).
-- `docker/agent-gateway.k8s.yaml`: Deployment + HPA (по CPU/RPS), Service, liveness/readiness (HTTP health), PodAntiAffinity для разброса по узлам.
-- ConfigMap: `EVENT_BUS_BACKEND=nats`, `NATS_URLS`, БД-dsn (master write + replica read).
-
-**Критерий готовности Фазы 1**: два пода agent-gateway одновременно обслуживают heartbeat-нагрузку, команды не дублируются, события наблюдений доходят до Orchestrator через NATS.
+**Критерий готовности Фазы 1**: ✅ два пода agent-gateway могут одновременно обслуживать heartbeat-нагрузку, scheduled-команды не дублируются (saga_id + ON CONFLICT), JWT access-токены проверяются без БД.
 
 ---
 

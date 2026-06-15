@@ -64,6 +64,9 @@ type service struct {
 	log       logger.LoggerInterface
 	agentRepo repositories.AgentRepo
 	registrar AgentRegistrar
+	// tokens выпускает/проверяет JWT access-токены. nil = opaque-режим
+	// (access-токен хранится в БД как AgentSessionToken, как исторически).
+	tokens *EdDSATokenService
 }
 
 func NewService(db *gorm.DB, log logger.LoggerInterface, agentRepo repositories.AgentRepo, registrar AgentRegistrar) Service {
@@ -72,6 +75,18 @@ func NewService(db *gorm.DB, log logger.LoggerInterface, agentRepo repositories.
 		log:       log,
 		agentRepo: agentRepo,
 		registrar: registrar,
+	}
+}
+
+// NewServiceWithJWT создаёт сервис с JWT-выпуском access-токенов.
+// tokens=nil эквивалентно NewService (opaque-режим).
+func NewServiceWithJWT(db *gorm.DB, log logger.LoggerInterface, agentRepo repositories.AgentRepo, registrar AgentRegistrar, tokens *EdDSATokenService) Service {
+	return &service{
+		db:        db,
+		log:       log,
+		agentRepo: agentRepo,
+		registrar: registrar,
+		tokens:    tokens,
 	}
 }
 
@@ -203,6 +218,16 @@ func (s *service) ValidateAccessToken(ctx context.Context, agentUUID, rawToken s
 		return ErrInvalidToken
 	}
 
+	// JWT-путь: проверяем подпись публичным ключом без обращения к БД.
+	// Это устраняет write-per-heartbeat на master-БД при горизонтальном
+	// масштабировании agent-gateway.
+	if s.tokens != nil && looksLikeJWT(rawToken) {
+		return s.tokens.Verify(rawToken, agentUUID)
+	}
+
+	// Opaque-путь (legacy): lookup по token_hash + UPDATE last_used_at.
+	// Сохраняется для токенов, выданных до включения JWT, и для режима,
+	// где приватный ключ не сконфигурирован.
 	rec, err := s.findToken(ctx, rawToken, tokenTypeAccess)
 	if err != nil {
 		return err
@@ -237,36 +262,58 @@ func (s *service) issueTokenPair(ctx context.Context, agentUUID string) (*tokenP
 		RefreshExpiresAt: now.Add(30 * 24 * time.Hour),
 	}
 
-	var err error
-	pair.AccessToken, err = generateToken("ags")
-	if err != nil {
-		return nil, err
-	}
-	pair.RefreshToken, err = generateToken("agr")
-	if err != nil {
-		return nil, err
+	// Access-токен. В JWT-режиме подписывается EdDSA и НЕ сохраняется в БД —
+	// проверка идёт по публичному ключу без write-per-heartbeat.
+	// В opaque-режиме — случайная строка с записью в AgentSessionToken.
+	if s.tokens != nil {
+		access, expiresAt, err := s.tokens.Issue(agentUUID)
+		if err != nil {
+			return nil, err
+		}
+		pair.AccessToken = access
+		pair.AccessExpiresAt = expiresAt
+	} else {
+		access, err := generateToken("ags")
+		if err != nil {
+			return nil, err
+		}
+		pair.AccessToken = access
 	}
 
-	if err := s.revokeActiveTokens(ctx, agentUUID, tokenTypeAccess); err != nil {
+	// Refresh-токен всегда opaque и хранится в БД: ротация происходит редко
+	// (раз в 30 дней), поэтому lookup при refresh не создаёт нагрузки на master.
+	refresh, err := generateToken("agr")
+	if err != nil {
 		return nil, err
 	}
+	pair.RefreshToken = refresh
+
+	// Отзываем активные refresh-токены перед выдачей новой пары.
 	if err := s.revokeActiveTokens(ctx, agentUUID, tokenTypeRefresh); err != nil {
 		return nil, err
 	}
+	// В opaque-режиме отзываем и активные access-токены (они тоже в БД).
+	if s.tokens == nil {
+		if err := s.revokeActiveTokens(ctx, agentUUID, tokenTypeAccess); err != nil {
+			return nil, err
+		}
+	}
 
 	records := []models.AgentSessionToken{
-		{
-			AgentUUID: agentUUID,
-			TokenType: tokenTypeAccess,
-			TokenHash: tokenHash(pair.AccessToken),
-			ExpiresAt: pair.AccessExpiresAt,
-		},
 		{
 			AgentUUID: agentUUID,
 			TokenType: tokenTypeRefresh,
 			TokenHash: tokenHash(pair.RefreshToken),
 			ExpiresAt: pair.RefreshExpiresAt,
 		},
+	}
+	if s.tokens == nil {
+		records = append(records, models.AgentSessionToken{
+			AgentUUID: agentUUID,
+			TokenType: tokenTypeAccess,
+			TokenHash: tokenHash(pair.AccessToken),
+			ExpiresAt: pair.AccessExpiresAt,
+		})
 	}
 	if err := s.db.WithContext(ctx).Create(&records).Error; err != nil {
 		return nil, fmt.Errorf("не удалось сохранить токены агента: %w", err)

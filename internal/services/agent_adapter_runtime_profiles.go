@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -22,7 +23,21 @@ const (
 	defaultAdapterRunOperation        = "collect"
 	defaultAdapterRunTimeoutSeconds   = 45
 	defaultAdapterScheduleIntervalSec = 300
+
+	// sagaIDDateFormat — компонент даты в saga_id для daily-детерминизма.
+	// Один и тот же агент + адаптер в течение суток получают одинаковый saga_id,
+	// что позволяет partial unique index отсеивать дубли на уровне БД.
+	sagaIDDateFormat = "2006-01-02"
 )
+
+// generateSagaID создаёт детерминированный идентификатор саги для scheduled-запуска.
+// Формат: {agent_uuid}/{adapter_id}/{date} — это позволяет partial unique index
+// гарантировать, что в одни сутки для одного агента и адаптера создаётся
+// не более одной scheduled-команды.
+func generateSagaID(agentUUID, adapterID string) *string {
+	id := agentUUID + "/" + adapterID + "/" + time.Now().UTC().Format(sagaIDDateFormat)
+	return &id
+}
 
 type adapterCommandPayload struct {
 	AdapterID string `json:"adapter_id"`
@@ -524,7 +539,8 @@ func (s *agentOperatorFlowService) EnqueueAdapterRun(ctx context.Context, agentU
 		return err
 	}
 
-	return s.enqueueAdapterRunLocked(ctx, &agent, normalizeLower(req.AdapterID), false)
+	// Ручной запуск — без saga_id, дублирование запрещено через hasPendingAdapterRunCommand.
+	return s.enqueueAdapterRunLocked(ctx, &agent, normalizeLower(req.AdapterID), false, nil)
 }
 
 func (s *agentOperatorFlowService) EnsureScheduledAdapterRuns(ctx context.Context, agent *models.Agent) error {
@@ -566,7 +582,7 @@ func (s *agentOperatorFlowService) EnsureScheduledAdapterRuns(ctx context.Contex
 			}
 		}
 
-		if err := s.enqueueAdapterRunLocked(ctx, agent, adapterID, true); err != nil {
+		if err := s.enqueueAdapterRunLocked(ctx, agent, adapterID, true, generateSagaID(agent.UUID, adapterID)); err != nil {
 			return err
 		}
 	}
@@ -574,7 +590,7 @@ func (s *agentOperatorFlowService) EnsureScheduledAdapterRuns(ctx context.Contex
 	return nil
 }
 
-func (s *agentOperatorFlowService) enqueueAdapterRunLocked(ctx context.Context, agent *models.Agent, adapterID string, skipIfPending bool) error {
+func (s *agentOperatorFlowService) enqueueAdapterRunLocked(ctx context.Context, agent *models.Agent, adapterID string, skipIfPending bool, sagaID *string) error {
 	if agent == nil {
 		return errors.New("агент не найден")
 	}
@@ -600,6 +616,9 @@ func (s *agentOperatorFlowService) enqueueAdapterRunLocked(ctx context.Context, 
 		return fmt.Errorf("не удалось подготовить запуск %s: %w", adapterID, err)
 	}
 
+	// Проверяем наличие pending-команды для адаптера. При scheduled-запуске
+	// это оптимизация, а ON CONFLICT DO NOTHING на partial unique index —
+	// финальная страховка от гонки двух подов agent-gateway.
 	pending, err := s.hasPendingAdapterRunCommand(ctx, agent.UUID, adapterID)
 	if err != nil {
 		return err
@@ -616,12 +635,23 @@ func (s *agentOperatorFlowService) enqueueAdapterRunLocked(ctx context.Context, 
 		return fmt.Errorf("не удалось сериализовать payload команды запуска: %w", err)
 	}
 
-	return s.db.WithContext(ctx).Create(&models.AgentCommand{
+	cmd := models.AgentCommand{
 		AgentUUID: agent.UUID,
 		Type:      "run_adapter",
 		Payload:   datatypes.JSON(raw),
 		Status:    "new",
-	}).Error
+		SagaID:    sagaID,
+	}
+
+	if sagaID != nil {
+		// Scheduled-запуск: ON CONFLICT DO NOTHING — если два пода agent-gateway
+		// одновременно создают команду с одинаковым saga_id, только одна succeeded.
+		return s.db.WithContext(ctx).
+			Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&cmd).Error
+	}
+
+	return s.db.WithContext(ctx).Create(&cmd).Error
 }
 
 func (s *agentOperatorFlowService) hasPendingAdapterRunCommand(ctx context.Context, agentUUID, adapterID string) (bool, error) {

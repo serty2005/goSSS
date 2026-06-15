@@ -126,6 +126,9 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 	if err := ensureLegacyTicketContacts(db); err != nil {
 		return err
 	}
+	if err := ensureAgentCommandSagaUniqueIndex(db); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -341,4 +344,45 @@ func splitFullName(fullName string) (string, string) {
 	}
 
 	return parts[0], strings.Join(parts[1:], " ")
+}
+
+// ensureAgentCommandSagaUniqueIndex создаёт partial unique index для идемпотентности
+// scheduled-запусков адаптеров при горизонтальном масштабировании agent-gateway.
+// Индекс уникален только для строк, где saga_id IS NOT NULL.
+func ensureAgentCommandSagaUniqueIndex(db *gorm.DB) error {
+	if db.Dialector.Name() != "postgres" {
+		return nil
+	}
+
+	const indexName = "idx_agent_commands_saga_id_unique"
+	var exists bool
+	if err := db.Raw(
+		"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = ?)", indexName,
+	).Scan(&exists).Error; err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	// Partial unique index: уникальность только для scheduled-команд с saga_id.
+	return db.Exec(`
+		CREATE UNIQUE INDEX idx_agent_commands_saga_id_unique
+		ON agent_commands (agent_uuid, type, saga_id)
+		WHERE saga_id IS NOT NULL
+	`).Error
+}
+
+// MigrateAgentGateway выполняет миграцию только таблиц, необходимых для agent-gateway.
+// Используется отдельным бинарником agent-gateway вместо полной Migrate монолита.
+func MigrateAgentGateway(db *gorm.DB) error {
+	if err := db.AutoMigrate(
+		&models.Agent{},
+		&models.AgentRegistrationAttempt{},
+		&models.AgentSessionToken{},
+		&models.AgentCommand{},
+	); err != nil {
+		return err
+	}
+	return ensureAgentCommandSagaUniqueIndex(db)
 }

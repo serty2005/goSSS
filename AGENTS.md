@@ -47,6 +47,7 @@
 
 ```text
 cmd/                         # CLI и backend entrypoints
+cmd/agent-gateway/           # выделенный сервис для работы с агентами (Фаза 1 декомпозиции)
 internal/app/                # сборка приложения, DI, router, фоновые процессы
 internal/domain/             # доменные модели, интерфейсы и типы
 internal/infra/              # БД, внешние клиенты, плагины, S3, logger, config
@@ -101,7 +102,39 @@ DECOMPOSITION_PLAN.md        # целевая архитектура и план
 
 Конфигурация NATS (см. `internal/infra/config/config.go`, секция `NATSConfig`): `EVENT_BUS_BACKEND`, `NATS_URLS`, `NATS_CREDS_FILE`, `NATS_STREAM_PREFIX` (default `sss`), `NATS_MAX_AGE_HOURS` (default 168 = 7 дней).
 
-Текущий статус декомпозиции монолита на отдельные сервисы (agent-gateway, integration-hub, processing-service, operator-api) описан в `DECOMPOSITION_PLAN.md`. Реализована Фаза 0 — переключаемая шина событий с NATS JetStream; остальной монолит пока работает как единый процесс.
+Текущий статус декомпозиции монолита на отдельные сервисы (agent-gateway, integration-hub, processing-service, operator-api) описан в `DECOMPOSITION_PLAN.md`. Реализована Фаза 0 — переключаемая шина событий с NATS JetStream; реализована Фаза 1 — выделенный agent-gateway с JWT EdDSA и идемпотентностью scheduled-команд.
+
+### 5.2 agent-gateway
+
+`cmd/agent-gateway/main.go` — отдельный бинарник, выделенный из монолита. Отвечает за:
+
+- приём heartbeat и данных от агентов (sssruner / getad);
+- регистрацию агентов и выпуск JWT access-токенов;
+- публикацию событий в NATS JetStream (publisher-only, без подписок).
+
+Агентские маршруты (`/api/submit_json`, `/api/agents/*`) убраны из монолита и перенесены в agent-gateway.
+
+**JWT EdDSA access-токены** (`internal/services/agentauth/jwt.go`):
+
+- Access-токены подписаны Ed25519 через `jwt.SigningMethodEdDSA`, проверяются публичным ключом без обращения к БД.
+- Refresh-токены остаются opaque (хранятся в БД как хеш).
+- `AGENT_JWT_ENABLED=true` включает JWT; при `false` или пустом — opaque fallback для обратной совместимости.
+- Приватный ключ可以从 ENV (`AGENT_JWT_PRIVATE_KEY`, PEM PKCS#8) или генерируется в памяти.
+- `AGENT_JWT_PUBLIC_KEY` опционален (выводится из приватного).
+- `AGENT_JWT_ACCESS_TTL_MIN` — TTL access-токена (по умолчанию 1440 мин = 24 ч).
+
+**Идемпотентность scheduled-запусков адаптеров**:
+
+- Поле `AgentCommand.SagaID *string` — детерминированный идентификатор саги (формат: `agent_uuid/adapter_id/YYYY-MM-DD`).
+- Partial unique index `(agent_uuid, type, saga_id) WHERE saga_id IS NOT NULL` на PostgreSQL предотвращает дублирование при конкурентных подах.
+- `INSERT ... ON CONFLICT DO NOTHING` через `clause.OnConflict{DoNothing: true}` в `enqueueAdapterRunLocked`.
+- Для ручных запусков saga_id не заполняется; для scheduled — генерируется `generateSagaID`.
+
+**Миграция**: `db.MigrateAgentGateway(db)` — лёгкая миграция только таблиц агента (Agent, AgentRegistrationAttempt, AgentSessionToken, AgentCommand) + partial unique index. Не зависит от полного `db.Migrate`.
+
+**Конфигурация**: `AGENT_GATEWAY_PORT` (default 8090), переменные читаются из `.env` через `config.New()`.
+
+**Развертывание**: `docker/agent-gateway.Dockerfile` (multi-stage, go 1.26.2-alpine), `docker/agent-gateway.k8s.yaml` (Deployment + HPA + Service + PodAntiAffinity + ConfigMap + Secret).
 
 ## 6. Основные backend-модули
 
@@ -147,9 +180,9 @@ Router собирается в `Application.setupRouter()`.
 - DTO и ошибки на русском языке;
 - согласованность с frontend API-клиентом.
 
-Legacy getad-контур:
+Legacy getad-контур (перенесён в agent-gateway):
 
-- `POST /api/submit_json` зарегистрирован отдельно в `Application.setupRouter()` до JWT-группы;
+- `POST /api/submit_json` обрабатывается в agent-gateway (`cmd/agent-gateway/main.go`), а не в монолите;
 - handler: `AgentHandler.HandleSubmitJSON`;
 - авторизация не JWT и не agent access token, а заголовок `X-API-Key`;
 - `X-API-Key` сравнивается с `Config.AgentAPIKey` / `AGENT_API_KEY`;
