@@ -34,7 +34,8 @@
 - Agent: Go module `etalon-agent`, `go 1.26.2`.
 - Backend HTTP: `chi/v5`.
 - Backend DB: PostgreSQL + GORM.
-- Очереди интеграций: Redis Streams.
+- Шина событий: `pkg/eventbus` с двумя бэкендами — in-memory (`EVENT_BUS_BACKEND=memory`, по умолчанию) и распределённая NATS JetStream (`EVENT_BUS_BACKEND=nats`).
+- Очереди интеграций: Redis Streams (входящие вебхуки Bitrix/Pyrus/МегаФон).
 - Object storage: S3/MinIO.
 - Frontend: React 19, TypeScript, Vite, Ant Design 6, TanStack Query, Zustand, i18next.
 - E2E: Playwright.
@@ -52,11 +53,12 @@ internal/infra/              # БД, внешние клиенты, плагин
 internal/services/           # бизнес-сервисы backend
 internal/core/               # event bus gateways, workers, processing
 internal/transport/http/     # handlers и middleware
-pkg/eventbus/                # внутренняя in-memory шина событий
+pkg/eventbus/                # шина событий: in-memory + NATS JetStream backend
 front-ui/                    # frontend
 agent/                       # Windows agent и адаптеры
 docker/                      # compose, Dockerfile, deploy
 tools/                       # сидер и служебные инструменты
+DECOMPOSITION_PLAN.md        # целевая архитектура и план декомпозиции монолита
 ```
 
 ## 5. Backend-архитектура
@@ -80,6 +82,26 @@ tools/                       # сидер и служебные инструме
 Обычный HTTP-путь: `handler -> service -> repository -> DB`.
 
 Событийный путь: `gateway/handler -> eventbus -> orchestrator/worker -> service/repository`.
+
+### 5.1 Шина событий и распределённая архитектура
+
+`pkg/eventbus` предоставляет интерфейс `EventBus` (`Publish`, `Subscribe`, `SubscribeChannel`, `Start`) с двумя реализациями:
+
+- `InMemoryEventBus` — in-process шина на буферизированном канале (ёмкость 10000). Бэкенд по умолчанию, подходит для локальной разработки и текущего монолита.
+- `NATSEventBus` (`pkg/eventbus/nats_bus.go`) — распределённая шина поверх NATS JetStream. Заменяет in-memory при горизонтальном масштабировании и распиле сервиса на поды.
+
+Бэкенд выбирается фабрикой `eventbus.New(cfg)` по `EVENT_BUS_BACKEND` (`memory` или `nats`) и подключается в `internal/app/app.go`. Подписчики (`Subscribe`, `SubscribeChannel`) и издатели (`Publish`) не различают бэкенды — один и тот же код работает в обоих режимах.
+
+Ключевые детали NATS-бэкенда:
+
+- Стримы разделены по доменам (`sss.agent`, `sss.integration`, `sss.processing`, `sss.domain`), см. `domainStreams` в `nats_bus.go`. Одно событие копируется во все стримы с подходящим subject-фильтром, что позволяет независимо доставлять его воркерам и SSE-broadcast.
+- `Subscribe` создаёт durable pull-consumer с детерминированным именем (зависит только от типа события) — все реплики с одинаковым именем делят сообщения конкурентно (одно сообщение получает одна реплика).
+- `SubscribeChannel` (SSE) создаёт ephemeral consumer с уникальным durable на процесс — каждый под operator-api получает свою копию событий (broadcast).
+- Для восстановления конкретного payload-типа при десериализации используется реестр `eventbus.RegisterPayloadType`. Регистрация всех событий системы выполняется в `internal/core/events/payload_types.go` через `init()`. Это обязательно: без регистрации подписчики не смогут сделать `event.Payload.(events.<ConcretePayload>)`.
+
+Конфигурация NATS (см. `internal/infra/config/config.go`, секция `NATSConfig`): `EVENT_BUS_BACKEND`, `NATS_URLS`, `NATS_CREDS_FILE`, `NATS_STREAM_PREFIX` (default `sss`), `NATS_MAX_AGE_HOURS` (default 168 = 7 дней).
+
+Текущий статус декомпозиции монолита на отдельные сервисы (agent-gateway, integration-hub, processing-service, operator-api) описан в `DECOMPOSITION_PLAN.md`. Реализована Фаза 0 — переключаемая шина событий с NATS JetStream; остальной монолит пока работает как единый процесс.
 
 ## 6. Основные backend-модули
 
@@ -248,7 +270,7 @@ S3/MinIO:
 - agent adapter catalog sync;
 - Bitrix/Pyrus/Telephony loops.
 
-Перед изменением фонового процесса нужно проверить флаг `ENABLE_*`, интервал, graceful shutdown через context и влияние на event bus.
+Перед изменением фонового процесса нужно проверить флаг `ENABLE_*`, интервал, graceful shutdown через context и влияние на event bus. Шина событий запускается первой (`EventBus.Start`), её бэкенд in-memory или NATS выбирается через `EVENT_BUS_BACKEND` (см. секцию 5.1).
 
 ## 12. Конфигурация и данные
 

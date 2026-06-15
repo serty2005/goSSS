@@ -41,6 +41,31 @@ type MegafonVATSRecordingsConfig struct {
 	RetentionDays int
 }
 
+// EventBusBackend определяет доступные реализации шины событий.
+const (
+	EventBusBackendMemory = "memory"
+	EventBusBackendNATS   = "nats"
+)
+
+// NATSConfig хранит параметры подключения к NATS JetStream.
+// NATS заменяет in-memory шину при распределённом развёртывании сервисов.
+type NATSConfig struct {
+	// Enabled указывает, что NATS-бэкенд выбран фабрикой шины событий.
+	Enabled bool
+
+	// URLs — список адресов NATS-серверов (nats:// или tls://).
+	URLs []string
+
+	// CredsFile — путь к файлу учётных данных NATS (опционально, для аутентификации по ключам).
+	CredsFile string
+
+	// StreamPrefix — префикс имён JetStream-стримов (напр. "sss" даёт "sss.agent", "sss.integration").
+	StreamPrefix string
+
+	// MaxAge — срок хранения сообщений в стримах.
+	MaxAge time.Duration
+}
+
 // Config хранит всю конфигурацию приложения.
 type Config struct {
 	ServerPort         string
@@ -168,6 +193,12 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+
+	// EventBusBackend выбирает реализацию шины событий: "memory" или "nats".
+	EventBusBackend string
+
+	// NATS хранит параметры подключения к NATS JetStream.
+	NATS NATSConfig
 }
 
 func New() *Config {
@@ -328,6 +359,37 @@ func New() *Config {
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       getEnvAsInt("REDIS_DB", 0),
+
+		EventBusBackend: strings.ToLower(strings.TrimSpace(getEnv("EVENT_BUS_BACKEND", EventBusBackendMemory))),
+		NATS:            newNATSConfig(),
+	}
+}
+
+// newNATSConfig читает параметры NATS JetStream из окружения.
+func newNATSConfig() NATSConfig {
+	rawURLs := strings.TrimSpace(getEnv("NATS_URLS", ""))
+	prefix := strings.ToLower(strings.TrimSpace(getEnv("NATS_STREAM_PREFIX", "sss")))
+	if prefix == "" {
+		prefix = "sss"
+	}
+
+	var urls []string
+	for _, u := range strings.Split(rawURLs, ",") {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			urls = append(urls, u)
+		}
+	}
+
+	backend := strings.ToLower(strings.TrimSpace(getEnv("EVENT_BUS_BACKEND", EventBusBackendMemory)))
+	maxAge := time.Duration(max(1, getEnvAsInt("NATS_MAX_AGE_HOURS", 24*7))) * time.Hour
+
+	return NATSConfig{
+		Enabled:      backend == EventBusBackendNATS && len(urls) > 0,
+		URLs:         urls,
+		CredsFile:    strings.TrimSpace(getEnv("NATS_CREDS_FILE", "")),
+		StreamPrefix: prefix,
+		MaxAge:       maxAge,
 	}
 }
 

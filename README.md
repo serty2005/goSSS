@@ -54,7 +54,7 @@ Backend написан на Go, точка входа - `cmd/etalon-server/main.
 - `internal/services` - бизнес-сервисы заявок, агентов, кандидатов, синхронизаций, телефонии, отчетов;
 - `internal/core` - event-driven контур: gateways, workers, orchestrator, processing engine;
 - `internal/transport/http` - HTTP handlers и middleware;
-- `pkg/eventbus` - внутренняя шина событий.
+- `pkg/eventbus` - шина событий с переключаемым бэкендом: in-memory (по умолчанию, `EVENT_BUS_BACKEND=memory`) или распределённая NATS JetStream (`EVENT_BUS_BACKEND=nats`) для горизонтального масштабирования. См. `AGENTS.md` секция 5.1.
 
 HTTP-запросы идут через `chi`: middleware CORS, request id, real IP, логирование, recoverer, timeout и JWT. Бизнес-поток для обычных API остается слоистым: handler -> service -> repository. Фоновые интеграции и реакции на изменения идут через event bus.
 
@@ -231,7 +231,10 @@ Backend читает первый найденный `.env`, поднимаяс�
 - хранилища: `TICKET_STORAGE_PATH`, `FTP_CACHE_PATH`, `S3_*`, `AGENT_ADAPTER_CATALOG_*`;
 - фоновые контуры: `ENABLE_SDESK_GATEWAY`, `ENABLE_AGENT_FTP_GATEWAY`, `ENABLE_POLLING_GATEWAY`, `ENABLE_CONTRACT_GATEWAY`;
 - внешние интеграции: `ENABLE_BITRIX_GATEWAY`, `ENABLE_PYRUS_GATEWAY`, `ENABLE_MEGAFON_VATS`;
-- очереди: `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_DB`.
+- очереди: `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_DB`;
+- шина событий: `EVENT_BUS_BACKEND` (`memory` по умолчанию или `nats` для распределённой), `NATS_URLS`, `NATS_STREAM_PREFIX`, `NATS_MAX_AGE_HOURS`.
+
+Полный план декомпозиции монолита на распределённые сервисы (agent-gateway, integration-hub, processing-service, operator-api) — в `DECOMPOSITION_PLAN.md`.
 
 Frontend использует `front-ui/.env.example`; основной параметр для dev-прокси - `VITE_API_TARGET`.
 
@@ -244,7 +247,8 @@ Frontend использует `front-ui/.env.example`; основной пара
 - Node.js 22+ и npm для frontend;
 - PostgreSQL 16+;
 - Redis 7+ для интеграционных очередей;
-- MinIO/S3 для каталога агентских адаптеров и записей телефонии, если включены соответствующие контуры.
+- MinIO/S3 для каталога агентских адаптеров и записей телефонии, если включены соответствующие контуры;
+- NATS 2.10+ с JetStream — только при `EVENT_BUS_BACKEND=nats` (для распределённого режима). По умолчанию шина работает in-process, NATS не требуется.
 
 Backend:
 

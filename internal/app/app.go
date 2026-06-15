@@ -140,7 +140,11 @@ func New() (*Application, error) {
 		return nil, err
 	}
 
-	app.EventBus = eventbus.NewInMemoryEventBus(10000)
+	app.EventBus, err = eventbus.New(app.Config)
+	if err != nil {
+		app.Logger.Fatal("Не удалось создать шину событий", "backend", app.Config.EventBusBackend, "error", err)
+	}
+	app.Logger.Info("Шина событий инициализирована", "backend", app.Config.EventBusBackend)
 
 	// Запуск слоев
 	repos := setupRepositories(app.DB)
