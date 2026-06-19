@@ -4,6 +4,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
+import { ticketsApi } from '@/api/tickets';
 import { contractsApi } from '@/api/contracts';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
 import { ServerEntity, WorkstationEntity, FiscalEntity, ContractDetailDTO, CompanyModel } from '@/types/api';
@@ -144,6 +145,25 @@ const CompanyPage: React.FC = () => {
     queryFn: () => companiesApi.getBitrixMappingByCompanyID(companyID),
     enabled: Boolean(companyID),
     staleTime: 30_000,
+  });
+
+  const { data: bitrixServicePoints = [], isLoading: loadingBitrixServicePoints } = useQuery({
+    queryKey: ['bitrix-service-points', 'company-card'],
+    queryFn: () => ticketsApi.getBitrixServicePoints({ limit: 500 }),
+    enabled: canDeleteCompany,
+    staleTime: 5 * 60_000,
+  });
+
+  const updateBitrixMappingMutation = useMutation({
+    mutationFn: (bitrixServicePointID: number) => companiesApi.updateBitrixMapping({
+      company_id: companyID,
+      bitrix_service_point_id: bitrixServicePointID,
+    }),
+    onSuccess: () => {
+      message.success('Точка обслуживания Bitrix24 обновлена');
+      queryClient.invalidateQueries({ queryKey: ['company-bitrix-mapping', companyID] });
+    },
+    onError: () => message.error('Не удалось обновить точку обслуживания Bitrix24'),
   });
 
   const { data: contractRes } = useQuery({
@@ -926,7 +946,18 @@ const CompanyPage: React.FC = () => {
           ) : '-'}
         </Descriptions.Item>
         <Descriptions.Item label="Точка обслуживания B24" span={2}>
-          {bitrixMapping?.bitrix_service_point_id ? (
+          {canDeleteCompany ? (
+            <Select
+              showSearch
+              value={bitrixMapping?.bitrix_service_point_id}
+              placeholder="Выберите точку обслуживания"
+              loading={loadingBitrixServicePoints || updateBitrixMappingMutation.isPending}
+              style={{ width: 420, maxWidth: '100%' }}
+              options={bitrixServicePoints.map((item) => ({ value: item.b24_element_id, label: item.name }))}
+              optionFilterProp="label"
+              onChange={(value) => updateBitrixMappingMutation.mutate(value)}
+            />
+          ) : bitrixMapping?.bitrix_service_point_id ? (
             <Space size={8} wrap>
               <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
               {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}

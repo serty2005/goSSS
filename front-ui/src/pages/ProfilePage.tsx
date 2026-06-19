@@ -8,6 +8,7 @@ import {
   Divider,
   Form,
   Input,
+  InputNumber,
   Row,
   Select,
   Space,
@@ -35,6 +36,8 @@ type CredentialsForm = {
   notifications_common_deferred_due?: boolean;
   comments_new_first?: boolean;
   parse_phone_from_description?: boolean;
+  new_ticket_warning_hours?: number;
+  new_ticket_critical_hours?: number;
   integrations?: Array<{
     integration_type?: string;
     external_id?: string;
@@ -148,6 +151,8 @@ const ProfilePage: React.FC = () => {
       tickets?: {
         comments_new_first?: boolean;
         parse_phone_from_description?: boolean;
+        new_ticket_warning_hours?: number;
+        new_ticket_critical_hours?: number;
       };
       interface?: {
         locale?: string;
@@ -169,6 +174,8 @@ const ProfilePage: React.FC = () => {
       commonDeferredDue: cfg.notifications?.common_deferred_due !== false,
       commentsNewFirst: cfg.tickets?.comments_new_first !== false,
       parsePhoneFromDescription: cfg.tickets?.parse_phone_from_description !== false,
+      newTicketWarningHours: Number(cfg.tickets?.new_ticket_warning_hours ?? 1),
+      newTicketCriticalHours: Number(cfg.tickets?.new_ticket_critical_hours ?? 3),
     };
   }, [locale, user?.profile_config]);
 
@@ -184,6 +191,8 @@ const ProfilePage: React.FC = () => {
       notifications_common_deferred_due: notificationsConfig.commonDeferredDue,
       comments_new_first: notificationsConfig.commentsNewFirst,
       parse_phone_from_description: notificationsConfig.parsePhoneFromDescription,
+      new_ticket_warning_hours: notificationsConfig.newTicketWarningHours,
+      new_ticket_critical_hours: notificationsConfig.newTicketCriticalHours,
     });
   }, [form, initialIntegrations, notificationsConfig, user?.username]);
 
@@ -316,11 +325,15 @@ const ProfilePage: React.FC = () => {
     const currentTicketsConfig = {
       comments_new_first: (user.profile_config as any)?.tickets?.comments_new_first !== false,
       parse_phone_from_description: (user.profile_config as any)?.tickets?.parse_phone_from_description !== false,
+      new_ticket_warning_hours: Number((user.profile_config as any)?.tickets?.new_ticket_warning_hours ?? 1),
+      new_ticket_critical_hours: Number((user.profile_config as any)?.tickets?.new_ticket_critical_hours ?? 3),
     };
 
     const nextTicketsConfig = {
       comments_new_first: values.comments_new_first !== false,
       parse_phone_from_description: values.parse_phone_from_description !== false,
+      new_ticket_warning_hours: Number(values.new_ticket_warning_hours ?? 1),
+      new_ticket_critical_hours: Number(values.new_ticket_critical_hours ?? 3),
     };
 
     const configChanged = (
@@ -605,6 +618,35 @@ const ProfilePage: React.FC = () => {
                 >
                   <Switch />
                 </Form.Item>
+
+                <Space size={12} align="start" style={{ marginTop: 12 }}>
+                  <Form.Item
+                    name="new_ticket_warning_hours"
+                    label="Новая: предупреждение, ч"
+                    rules={[{ required: true, message: 'Укажите порог' }]}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <InputNumber min={0.25} step={0.25} precision={2} />
+                  </Form.Item>
+                  <Form.Item
+                    name="new_ticket_critical_hours"
+                    label="Новая: внимание, ч"
+                    dependencies={['new_ticket_warning_hours']}
+                    rules={[
+                      { required: true, message: 'Укажите порог' },
+                      ({ getFieldValue }) => ({
+                        validator(_, value) {
+                          return Number(value) > Number(getFieldValue('new_ticket_warning_hours'))
+                            ? Promise.resolve()
+                            : Promise.reject(new Error('Должен быть больше предупреждения'));
+                        },
+                      }),
+                    ]}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <InputNumber min={0.5} step={0.25} precision={2} />
+                  </Form.Item>
+                </Space>
               </Card>
             </Col>
 

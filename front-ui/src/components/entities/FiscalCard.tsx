@@ -1,11 +1,12 @@
 ﻿import React from 'react';
-import { Card, Space, Typography, Tag, Tooltip } from 'antd';
+import { Card, Space, Typography, Tag } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { FiscalEntity } from '@/types/api';
 import { getEntityIcon } from '@/utils/mappers';
 import { formatRnm } from '@/utils/formatters';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
+import AgentBadge from '@/components/agents/AgentBadge';
 
 interface Props {
   data: FiscalEntity;
@@ -62,22 +63,10 @@ const FiscalCard: React.FC<Props> = ({ data }) => {
         </Space>
       )}
       extra={agentUpdate ? (
-        <Tooltip
-          title={agentUpdate.updatedAt
-            ? `Агент ${agentUpdate.updater}, ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm:ss')}. Открыть диагностику агента.`
-            : `Агент ${agentUpdate.updater}. Открыть диагностику агента.`}
-        >
-          <Tag
-            color="blue"
-            style={{ fontSize: 12, lineHeight: '22px', paddingInline: 10, marginRight: 0, cursor: 'pointer' }}
-            onClick={(event) => {
-              event.stopPropagation();
-              navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`);
-            }}
-          >
-            Агент
-          </Tag>
-        </Tooltip>
+        <AgentBadge
+          agentID={agentUpdate.updater}
+          onClick={() => navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`)}
+        />
       ) : null}
     >
       <div style={{ marginBottom: 12 }}>

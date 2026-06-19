@@ -208,9 +208,10 @@ type TicketComment struct {
 
 // LastCommentInfo содержит данные о последнем комментарии.
 type LastCommentInfo struct {
-	Text       string `json:"text"`
-	AuthorName string `json:"author_name"`
-	IsPrivate  bool   `json:"is_private"`
+	Text         string    `json:"text"`
+	AuthorName   string    `json:"author_name"`
+	IsPrivate    bool      `json:"is_private"`
+	CreationDate time.Time `json:"creation_date"`
 }
 
 type ConnectionCopyStat struct {

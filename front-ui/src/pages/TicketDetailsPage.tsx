@@ -26,6 +26,7 @@ import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
 import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
+import AgentBadge from '@/components/agents/AgentBadge';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
 import ManagerTransferModal, { ManagerTransferPayload } from '@/components/tickets/ManagerTransferModal';
 import TicketContactsControl from '@/components/tickets/TicketContactsControl';
@@ -448,7 +449,8 @@ const TicketDetailsPage: React.FC = () => {
   const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
   const [draftCompanyID, setDraftCompanyID] = useState<string | undefined>(undefined);
-  const [isBitrixEditMode, setIsBitrixEditMode] = useState(false);
+  const [isBitrixTitleEditMode, setIsBitrixTitleEditMode] = useState(false);
+  const [isBitrixPointEditMode, setIsBitrixPointEditMode] = useState(false);
   const [isBitrixSyncModalOpen, setIsBitrixSyncModalOpen] = useState(false);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
@@ -814,12 +816,12 @@ const TicketDetailsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!metadata || isBitrixEditMode) {
+    if (!metadata || isBitrixTitleEditMode || isBitrixPointEditMode) {
       return;
     }
     setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
     setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
-  }, [isBitrixEditMode, metadata]);
+  }, [isBitrixPointEditMode, isBitrixTitleEditMode, metadata]);
 
   useEffect(() => {
     if (!metadata || isDescriptionEditMode) {
@@ -1183,7 +1185,8 @@ const TicketDetailsPage: React.FC = () => {
     },
     onSuccess: () => {
       message.success('Поля Bitrix24 обновлены');
-      setIsBitrixEditMode(false);
+      setIsBitrixTitleEditMode(false);
+      setIsBitrixPointEditMode(false);
       setIsBitrixSyncModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -1198,7 +1201,8 @@ const TicketDetailsPage: React.FC = () => {
     },
     onSuccess: () => {
       message.success('Связь с Bitrix24 разорвана');
-      setIsBitrixEditMode(false);
+      setIsBitrixTitleEditMode(false);
+      setIsBitrixPointEditMode(false);
       setIsBitrixSyncModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -1448,17 +1452,7 @@ const TicketDetailsPage: React.FC = () => {
       return null;
     }
     const label = getAgentTypeLabel(agentType);
-    return (
-      <Tooltip title="Открыть последнее наблюдение агента">
-        <button
-          type="button"
-          className="ticket-agent-badge"
-          onClick={() => setObservationTarget(target)}
-        >
-          {label}
-        </button>
-      </Tooltip>
-    );
+    return <AgentBadge agentID={agentID} label={label} variant="button" onClick={() => setObservationTarget(target)} />;
   };
 
   const renderServerCard = (item: InfrastructureItem, keyPrefix: string, sourceLabel?: string) => {
@@ -2211,7 +2205,7 @@ const TicketDetailsPage: React.FC = () => {
                       {isBitrixEnabled && metadata.sync_with_bitrix && (
                       <Descriptions.Item label="Заголовок сделки B24">
                         <div style={highlightedFields.bitrix_deal_title ? fieldHighlightStyle : undefined}>
-                          {!isBitrixEditMode ? (
+                          {!isBitrixTitleEditMode ? (
                           <Space>
                             <Text>{metadata.bitrix_deal_title || '-'}</Text>
                             {!isManagerFlowLocked && <Button
@@ -2221,16 +2215,31 @@ const TicketDetailsPage: React.FC = () => {
                               onClick={() => {
                                 setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
                                 setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
-                                setIsBitrixEditMode(true);
+                                setIsBitrixTitleEditMode(true);
                               }}
                             />}
                           </Space>
                           ) : (
-                          <Input
-                            value={draftBitrixDealTitle}
-                            placeholder="Заголовок сделки в Bitrix24"
-                            onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
-                          />
+                          <Space.Compact style={{ width: '100%' }}>
+                            <Input
+                              value={draftBitrixDealTitle}
+                              placeholder="Заголовок сделки в Bitrix24"
+                              onChange={(event) => setDraftBitrixDealTitle(event.target.value)}
+                            />
+                            <Button
+                              icon={<CheckOutlined />}
+                              loading={updateBitrixMutation.isPending}
+                              disabled={!draftBitrixDealTitle.trim()}
+                              onClick={() => updateBitrixMutation.mutate()}
+                            />
+                            <Button
+                              icon={<CloseOutlined />}
+                              onClick={() => {
+                                setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+                                setIsBitrixTitleEditMode(false);
+                              }}
+                            />
+                          </Space.Compact>
                           )}
                         </div>
                       </Descriptions.Item>
@@ -2238,8 +2247,21 @@ const TicketDetailsPage: React.FC = () => {
                       {isBitrixEnabled && metadata.sync_with_bitrix && (
                       <Descriptions.Item label="Точка обслуживания B24">
                         <div style={highlightedFields.bitrix_service_point ? fieldHighlightStyle : undefined}>
-                          {!isBitrixEditMode ? (
-                          bitrixPointName
+                          {!isBitrixPointEditMode ? (
+                          <Space>
+                            <Text>{bitrixPointName}</Text>
+                            {!isManagerFlowLocked && (
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
+                                  setIsBitrixPointEditMode(true);
+                                }}
+                              />
+                            )}
+                          </Space>
                           ) : (
                           <Space>
                             <Select
@@ -2269,8 +2291,7 @@ const TicketDetailsPage: React.FC = () => {
                               icon={<CloseOutlined />}
                               onClick={() => {
                                 setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
-                                setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
-                                setIsBitrixEditMode(false);
+                                setIsBitrixPointEditMode(false);
                               }}
                             />
                           </Space>

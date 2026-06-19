@@ -3,11 +3,11 @@ import { Card, Space, Typography, Tooltip, Tag, Button, Modal, Form, Input, mess
 import { EditOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import dayjs from 'dayjs';
 import { WorkstationEntity } from '@/types/api';
 import { getEntityIcon } from '@/utils/mappers';
 import { equipmentApi } from '@/api/equipment';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
+import AgentBadge from '@/components/agents/AgentBadge';
 
 interface Props {
   data: WorkstationEntity;
@@ -75,22 +75,10 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
         extra={(
           <Space size={8}>
             {agentUpdate && (
-              <Tooltip
-                title={agentUpdate.updatedAt
-                  ? `Агент ${agentUpdate.updater}, ${dayjs(agentUpdate.updatedAt).format('DD.MM.YYYY HH:mm:ss')}. Открыть диагностику агента.`
-                  : `Агент ${agentUpdate.updater}. Открыть диагностику агента.`}
-              >
-                <Tag
-                  color="blue"
-                  style={{ fontSize: 12, lineHeight: '22px', paddingInline: 10, marginRight: 0, cursor: 'pointer' }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`);
-                  }}
-                >
-                  Агент
-                </Tag>
-              </Tooltip>
+              <AgentBadge
+                agentID={agentUpdate.updater}
+                onClick={() => navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`)}
+              />
             )}
             {data.is_new && (
               <Tooltip title="Переименовать станцию">

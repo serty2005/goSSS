@@ -1829,11 +1829,39 @@ func isEmojiRune(r rune) bool {
 	switch {
 	case r >= 0x1F000 && r <= 0x1FAFF:
 		return true
-	case r >= 0x2600 && r <= 0x27BF:
+	case r >= 0x1F1E6 && r <= 0x1F1FF:
+		return true
+	case r == 0x231A || r == 0x231B || r == 0x23F0 || r == 0x23F3:
+		return true
+	case r >= 0x23E9 && r <= 0x23EC:
+		return true
+	case r == 0x25FD || r == 0x25FE || r == 0x2614 || r == 0x2615 || r == 0x267F || r == 0x2693 || r == 0x26A1 || r == 0x26CE || r == 0x26D4 || r == 0x26EA || r == 0x26F5 || r == 0x26FA || r == 0x26FD:
+		return true
+	case r >= 0x2648 && r <= 0x2653:
+		return true
+	case r >= 0x26AA && r <= 0x26AB:
+		return true
+	case r >= 0x26BD && r <= 0x26BE:
+		return true
+	case r >= 0x26C4 && r <= 0x26C5:
+		return true
+	case r >= 0x26F2 && r <= 0x26F3:
+		return true
+	case r == 0x2705 || r == 0x2728 || r == 0x274C || r == 0x274E || r == 0x2757 || r == 0x27B0 || r == 0x27BF:
+		return true
+	case r >= 0x270A && r <= 0x270B:
+		return true
+	case r >= 0x2753 && r <= 0x2755:
+		return true
+	case r >= 0x2795 && r <= 0x2797:
+		return true
+	case r == 0x2B50 || r == 0x2B55 || r == 0x3030 || r == 0x303D || r == 0x3297 || r == 0x3299:
+		return true
+	case r >= 0x2B1B && r <= 0x2B1C:
 		return true
 	case r >= 0xFE00 && r <= 0xFE0F:
 		return true
-	case r == 0x200D:
+	case r == 0x200D || r == 0x20E3:
 		return true
 	default:
 		return false

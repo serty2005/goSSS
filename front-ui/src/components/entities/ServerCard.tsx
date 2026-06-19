@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { Card, Badge, Button, Space, Typography, Tooltip, message, theme as antTheme } from 'antd';
+import { Card, Button, Space, Typography, Tooltip, message, theme as antTheme } from 'antd';
 import { LinkOutlined, SyncOutlined, GlobalOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -15,6 +15,7 @@ import {
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { useAuthStore } from '@/store/authStore';
 import { canManageServerActions } from '@/utils/permissions';
+import AgentBadge from '@/components/agents/AgentBadge';
 
 interface Props {
   data: ServerEntity;
@@ -138,26 +139,10 @@ const ServerCard: React.FC<Props> = ({ data }) => {
       extra={(
         <Space size={8}>
           {agentUpdate ? (
-            <Tooltip
-              title={agentUpdate.updatedAt
-                ? `Агент ${agentUpdate.updater}, ${new Date(agentUpdate.updatedAt).toLocaleString()}. Открыть диагностику агента.`
-                : `Агент ${agentUpdate.updater}. Открыть диагностику агента.`}
-            >
-              <Badge
-                color="#1677ff"
-                text={(
-                  <Text
-                    style={{ cursor: 'pointer' }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`);
-                    }}
-                  >
-                    Агент
-                  </Text>
-                )}
-              />
-            </Tooltip>
+            <AgentBadge
+              agentID={agentUpdate.updater}
+              onClick={() => navigate(`/agent-diagnostics/${encodeURIComponent(agentUpdate.updater)}`)}
+            />
           ) : null}
           <ServerLicenseStatusTag
             serverID={String(data.uuid || '')}

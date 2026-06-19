@@ -932,6 +932,8 @@ export interface UserProfileConfigDTO {
   tickets?: {
     comments_new_first?: boolean;
     parse_phone_from_description?: boolean;
+    new_ticket_warning_hours?: number;
+    new_ticket_critical_hours?: number;
     subscriptions?: string[];
     filters?: {
       presets?: Array<{

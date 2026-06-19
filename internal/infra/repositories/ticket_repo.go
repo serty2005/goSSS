@@ -811,15 +811,16 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 	}
 
 	type row struct {
-		TicketID   string `gorm:"column:ticket_id"`
-		Text       string `gorm:"column:text"`
-		AuthorName string `gorm:"column:author_name"`
-		IsPrivate  bool   `gorm:"column:is_private"`
+		TicketID     string    `gorm:"column:ticket_id"`
+		Text         string    `gorm:"column:text"`
+		AuthorName   string    `gorm:"column:author_name"`
+		IsPrivate    bool      `gorm:"column:is_private"`
+		CreationDate time.Time `gorm:"column:creation_date"`
 	}
 
 	var rows []row
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT tc.ticket_id, tc.text, tc.author_name, tc.is_private
+		`SELECT tc.ticket_id, tc.text, tc.author_name, tc.is_private, tc.creation_date
 		 FROM ticket_comments tc
 		 WHERE tc.ticket_id IN ?
 		   AND tc.deleted_in_bitrix = false
@@ -833,9 +834,10 @@ func (r *ticketRepo) GetLastComments(ctx context.Context, ticketIDs []string) (m
 	for _, r := range rows {
 		if _, exists := result[r.TicketID]; !exists {
 			result[r.TicketID] = tickets.LastCommentInfo{
-				Text:       r.Text,
-				AuthorName: r.AuthorName,
-				IsPrivate:  r.IsPrivate,
+				Text:         r.Text,
+				AuthorName:   r.AuthorName,
+				IsPrivate:    r.IsPrivate,
+				CreationDate: r.CreationDate,
 			}
 		}
 	}

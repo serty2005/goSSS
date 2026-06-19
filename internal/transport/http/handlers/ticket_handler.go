@@ -834,6 +834,11 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Преобразуем в TicketListDTO.
 	dtos := make([]api.TicketListDTO, len(items))
 	for i, item := range items {
+		lastComment := lastComments[item.ID]
+		lastActivity := item.UpdatedAt
+		if lastComment.CreationDate.After(lastActivity) {
+			lastActivity = lastComment.CreationDate
+		}
 		var assignee *struct {
 			ID       uint   `json:"id"`
 			FullName string `json:"full_name"`
@@ -854,9 +859,9 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			Status:               item.Status,
 			Subject:              item.Subject,
 			Description:          item.Description,
-			LastComment:          lastComments[item.ID].Text,
-			LastCommentAuthor:    lastComments[item.ID].AuthorName,
-			LastCommentIsPrivate: lastComments[item.ID].IsPrivate,
+			LastComment:          lastComment.Text,
+			LastCommentAuthor:    lastComment.AuthorName,
+			LastCommentIsPrivate: lastComment.IsPrivate,
 			CompanyID:            item.CompanyID,
 			CompanyName:          item.CompanyName,
 			ReporterName:         resolveTicketReporterName(item),
@@ -875,9 +880,8 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 			DeferredUntil:        item.DeferredUntil,
 			DeferredByID:         item.DeferredByID,
 			Assignee:             assignee,
-			// LastActivityDate is basically UpdatedAt or CreatedAt
-			LastActivityDate: item.UpdatedAt,
-			CreatedAt:        item.CreatedAt,
+			LastActivityDate:     lastActivity,
+			CreatedAt:            item.CreatedAt,
 		}
 	}
 

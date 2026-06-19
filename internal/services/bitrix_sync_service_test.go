@@ -135,6 +135,14 @@ func TestBitrixStageMapping_MapsPaymentReviewToManagerFlow(t *testing.T) {
 	}
 }
 
+func TestStripEmojiForBitrix_УдаляетТолькоEmoji(t *testing.T) {
+	input := "📅 [19.06.2026 15:30] ⟦служебное поле⟧ ✅"
+	want := " [19.06.2026 15:30] ⟦служебное поле⟧ "
+	if got := stripEmojiForBitrix(input); got != want {
+		t.Fatalf("ожидали %q, получили %q", want, got)
+	}
+}
+
 func TestBitrixSyncService_UpsertDealAndLink_UsesExistingDealLinkWithoutCreatingDuplicate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {

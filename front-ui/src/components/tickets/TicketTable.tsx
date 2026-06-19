@@ -129,6 +129,21 @@ const resolveRangeBounds = (range: DateRangeValue) => {
 const createColumnMinWidth = createDataTableColumnMinWidth;
 const estimateHeaderMinWidth = estimateDataTableHeaderMinWidth;
 
+const resolveNewTicketAgeClass = (
+  ticket: TicketListItemDTO,
+  warningHours: number,
+  criticalHours: number,
+  now: number,
+) => {
+  if (ticket.status !== 'new' || !ticket.created_at) return '';
+  const createdAt = dayjs(ticket.created_at);
+  if (!createdAt.isValid()) return '';
+  const ageHours = (now - createdAt.valueOf()) / 3_600_000;
+  if (ageHours > criticalHours) return 'ticket-age-cell ticket-age-cell--critical';
+  if (ageHours > warningHours) return 'ticket-age-cell ticket-age-cell--warning';
+  return '';
+};
+
 const resolveSortValue = (row: TicketListItemDTO, key: string) => {
   switch (key) {
     case 'company_name':
@@ -279,9 +294,21 @@ const TicketTable: React.FC<Props> = ({
   const [createdRange, setCreatedRange] = useState<DateRangeValue>(null);
   const [closedRange, setClosedRange] = useState<DateRangeValue>(null);
   const [tableSort, setTableSort] = useState<TableSortState>(null);
+  const [ageClock, setAgeClock] = useState(() => Date.now());
   const isControlledData = dataSource !== undefined;
   const resolvedLayoutKey = layoutKey || (variant === 'workspace' ? `tickets_workspace_table_${user?.id || 'guest'}` : TABLE_LAYOUT_KEY);
   const shouldShowPeriodFilters = showPeriodFilters ?? !isControlledData;
+  const configuredWarningHours = Number(user?.profile_config?.tickets?.new_ticket_warning_hours ?? 1);
+  const warningHours = Number.isFinite(configuredWarningHours) && configuredWarningHours > 0 ? configuredWarningHours : 1;
+  const configuredCriticalHours = Number(user?.profile_config?.tickets?.new_ticket_critical_hours ?? 3);
+  const criticalHours = Number.isFinite(configuredCriticalHours) && configuredCriticalHours > warningHours
+    ? configuredCriticalHours
+    : Math.max(3, warningHours + 2);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setAgeClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const normalizedCompanyIds = useMemo(() => {
     const source = companyIds?.length ? companyIds : (companyId ? [companyId] : []);
@@ -423,6 +450,7 @@ const TicketTable: React.FC<Props> = ({
           width: 140,
           minWidth: createColumnMinWidth('Статус'),
           maxWidth: 190,
+          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
           render: (status: TicketStatus, record: TicketListItemDTO) => {
             const tag = getStatusTag(status, record.is_common_contract);
             const deferredTitle = status === 'deferred'
@@ -517,6 +545,7 @@ const TicketTable: React.FC<Props> = ({
           width: 120,
           minWidth: estimateHeaderMinWidth('Создано'),
           maxWidth: 180,
+          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
           render: (date?: string) => <TicketTableDateStamp value={date} />,
         },
         {
@@ -526,6 +555,7 @@ const TicketTable: React.FC<Props> = ({
           width: 120,
           minWidth: estimateHeaderMinWidth('Обновлено'),
           maxWidth: 180,
+          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
           render: (date?: string) => <TicketTableDateStamp value={date} />,
         },
         {
@@ -627,7 +657,7 @@ const TicketTable: React.FC<Props> = ({
         render: (value?: string) => <DataTableTextCell value={value} fallback="Сотрудник" />,
       },
     ];
-  }, [ticketLinkRel, ticketLinkTarget, variant]);
+  }, [ageClock, criticalHours, ticketLinkRel, ticketLinkTarget, variant, warningHours]);
 
   const columnsBaseWithSort = useMemo<TicketTableColumn[]>(() => (
     columnsBase.map((column) => ({
