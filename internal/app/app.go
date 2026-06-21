@@ -754,6 +754,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Get("/contracts", a.ContractHandler.ListCompanyContracts)
 		r.Route("/contracts", func(r chi.Router) {
+			r.Get("/", a.ContractHandler.ListCompanyContracts)
 			r.Get("/{id}", a.ContractHandler.GetContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.ContractHandler.CreateContract)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{id}", a.ContractHandler.UpdateContract)

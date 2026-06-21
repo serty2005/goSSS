@@ -37,6 +37,7 @@ type Repository interface {
 	GetCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) (*CompanyServicePointMapping, error)
 	GetCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) (*CompanyServicePointMapping, error)
 	ListCompanyServicePointMappingsByCompanyIDs(ctx context.Context, companyIDs []string) ([]CompanyServicePointMapping, error)
+	ListCompanyServicePointMappingsByPointIDs(ctx context.Context, bitrixServicePointIDs []int64) ([]CompanyServicePointMapping, error)
 	DeleteCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) error
 	DeleteCompanyServicePointMappingByPointID(ctx context.Context, bitrixServicePointID int64) error
 

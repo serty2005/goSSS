@@ -55,6 +55,7 @@ type BitrixSyncService interface {
 	SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
+	ListServicePointMappingCompanies(ctx context.Context, pointIDs []int64) (map[int64][]BitrixServicePointMappedCompany, error)
 	ListCachedUsers(ctx context.Context) ([]bitrix.UserCache, error)
 	SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error)
 	SearchBitrixUsersByName(ctx context.Context, firstName, lastName, fullName string) ([]bitrix.UserCache, error)
@@ -65,6 +66,13 @@ type BitrixSyncService interface {
 	SyncServicePointsFromDailyReport(ctx context.Context, rows []contractsvc.ContractReportRow) (*ServicePointContractSyncResult, error)
 	PreviewContractReportSync(ctx context.Context, rows []contractsvc.ContractReportRow) (*ContractReportSyncPreview, error)
 	ExecuteContractReportSync(ctx context.Context, rows []contractsvc.ContractReportRow, options ContractReportSyncExecuteOptions) (*ContractReportSyncExecuteResult, error)
+}
+
+type BitrixServicePointMappedCompany struct {
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	ParentID    *string `json:"parent_id,omitempty"`
+	ParentTitle *string `json:"parent_title,omitempty"`
 }
 
 type bitrixSyncService struct {
@@ -436,6 +444,68 @@ func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, erro
 
 func (s *bitrixSyncService) ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error) {
 	return s.repo.ListServicePoints(ctx)
+}
+
+func (s *bitrixSyncService) ListServicePointMappingCompanies(ctx context.Context, pointIDs []int64) (map[int64][]BitrixServicePointMappedCompany, error) {
+	result := make(map[int64][]BitrixServicePointMappedCompany)
+	if s == nil || s.repo == nil || s.companyRepo == nil || len(pointIDs) == 0 {
+		return result, nil
+	}
+
+	mappings, err := s.repo.ListCompanyServicePointMappingsByPointIDs(ctx, pointIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(mappings) == 0 {
+		return result, nil
+	}
+
+	companyIDs := make([]string, 0, len(mappings))
+	seenCompanyIDs := make(map[string]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		companyID := strings.TrimSpace(mapping.CompanyID)
+		if companyID == "" {
+			continue
+		}
+		if _, exists := seenCompanyIDs[companyID]; exists {
+			continue
+		}
+		seenCompanyIDs[companyID] = struct{}{}
+		companyIDs = append(companyIDs, companyID)
+	}
+
+	companies, err := s.companyRepo.GetByIDs(ctx, companyIDs)
+	if err != nil {
+		return nil, err
+	}
+	companyByID := make(map[string]company.Company, len(companies))
+	for _, item := range companies {
+		companyByID[item.ID] = item
+	}
+
+	for _, mapping := range mappings {
+		item, ok := companyByID[mapping.CompanyID]
+		if !ok {
+			continue
+		}
+		title := strings.TrimSpace(item.ID)
+		if item.Title != nil && strings.TrimSpace(*item.Title) != "" {
+			title = strings.TrimSpace(*item.Title)
+		}
+		result[mapping.BitrixServicePointID] = append(result[mapping.BitrixServicePointID], BitrixServicePointMappedCompany{
+			ID:          item.ID,
+			Title:       title,
+			ParentID:    item.ParentID,
+			ParentTitle: item.ParentTitle,
+		})
+	}
+
+	for pointID := range result {
+		sort.Slice(result[pointID], func(i, j int) bool {
+			return result[pointID][i].Title < result[pointID][j].Title
+		})
+	}
+	return result, nil
 }
 
 func (s *bitrixSyncService) SearchServicePoints(ctx context.Context, term string, limit, offset int, randomWhenEmpty bool) ([]bitrix.ServicePoint, error) {

@@ -464,6 +464,12 @@ export interface BitrixServicePointDTO {
   created_at?: string;
   updated_at?: string;
   raw_json?: string;
+  mapped_companies?: Array<{
+    id: string;
+    title: string;
+    parent_id?: string;
+    parent_title?: string;
+  }>;
 }
 
 export interface ServicePointImportColumnDTO {

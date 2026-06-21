@@ -332,6 +332,19 @@ func (r *bitrixRepo) ListCompanyServicePointMappingsByCompanyIDs(ctx context.Con
 	return items, err
 }
 
+func (r *bitrixRepo) ListCompanyServicePointMappingsByPointIDs(ctx context.Context, bitrixServicePointIDs []int64) ([]bitrix.CompanyServicePointMapping, error) {
+	if len(bitrixServicePointIDs) == 0 {
+		return []bitrix.CompanyServicePointMapping{}, nil
+	}
+	var items []bitrix.CompanyServicePointMapping
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("bitrix_service_point_id IN ?", bitrixServicePointIDs).
+		Order("bitrix_service_point_id asc").
+		Order("company_id asc").
+		Find(&items).Error
+	return items, err
+}
+
 func (r *bitrixRepo) DeleteCompanyServicePointMappingByCompanyID(ctx context.Context, companyID string) error {
 	return r.getDB(ctx).WithContext(ctx).Where("company_id = ?", companyID).Delete(&bitrix.CompanyServicePointMapping{}).Error
 }

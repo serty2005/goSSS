@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/contextkeys"
 	"etalon-server/internal/core/gateways"
+	"etalon-server/internal/domain/bitrix"
 	contractdom "etalon-server/internal/domain/contract"
 	userdom "etalon-server/internal/domain/user"
 	"etalon-server/internal/infra/config"
@@ -31,6 +32,26 @@ type BitrixHandler struct {
 	contractSync gateways.ContractGateway
 	userRepo     userdom.Repository
 	cfg          *config.Config
+}
+
+type bitrixServicePointCompanyDTO struct {
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	ParentID    *string `json:"parent_id,omitempty"`
+	ParentTitle *string `json:"parent_title,omitempty"`
+}
+
+type bitrixServicePointDTO struct {
+	B24ElementID    int64                          `json:"b24_element_id"`
+	Name            string                         `json:"name"`
+	Address         string                         `json:"address,omitempty"`
+	OneCCode        *string                        `json:"one_c_code,omitempty"`
+	ContractOn      *bool                          `json:"contract_on,omitempty"`
+	ContractType    *string                        `json:"contract_type,omitempty"`
+	CreatedAt       time.Time                      `json:"created_at"`
+	UpdatedAt       time.Time                      `json:"updated_at"`
+	RawJSON         string                         `json:"raw_json,omitempty"`
+	MappedCompanies []bitrixServicePointCompanyDTO `json:"mapped_companies,omitempty"`
 }
 
 func NewBitrixHandler(
@@ -70,21 +91,59 @@ func (h *BitrixHandler) ListServicePoints(w http.ResponseWriter, r *http.Request
 	randomIfEmptyRaw := strings.TrimSpace(r.URL.Query().Get("random_if_empty"))
 	randomIfEmpty := randomIfEmptyRaw == "1" || strings.EqualFold(randomIfEmptyRaw, "true")
 
-	var items interface{}
+	var points []bitrix.ServicePoint
 	if term != "" || limit > 0 || offset > 0 || randomIfEmpty {
 		result, searchErr := h.service.SearchServicePoints(r.Context(), term, limit, offset, randomIfEmpty)
 		if searchErr != nil {
 			response.RespondWithError(w, http.StatusInternalServerError, searchErr.Error())
 			return
 		}
-		items = result
+		points = result
 	} else {
 		result, listErr := h.service.ListServicePoints(r.Context())
 		if listErr != nil {
 			response.RespondWithError(w, http.StatusInternalServerError, listErr.Error())
 			return
 		}
-		items = result
+		points = result
+	}
+
+	pointIDs := make([]int64, 0, len(points))
+	for _, point := range points {
+		pointIDs = append(pointIDs, point.B24ElementID)
+	}
+	mappedCompaniesByPointID, err := h.service.ListServicePointMappingCompanies(r.Context(), pointIDs)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	items := make([]bitrixServicePointDTO, 0, len(points))
+	for _, point := range points {
+		mappedCompanies := mappedCompaniesByPointID[point.B24ElementID]
+		item := bitrixServicePointDTO{
+			B24ElementID: point.B24ElementID,
+			Name:         point.Name,
+			Address:      point.Address,
+			OneCCode:     point.OneCCode,
+			ContractOn:   point.ContractOn,
+			ContractType: point.ContractType,
+			CreatedAt:    point.CreatedAt,
+			UpdatedAt:    point.UpdatedAt,
+			RawJSON:      point.RawJSON,
+		}
+		if len(mappedCompanies) > 0 {
+			item.MappedCompanies = make([]bitrixServicePointCompanyDTO, 0, len(mappedCompanies))
+			for _, mappedCompany := range mappedCompanies {
+				item.MappedCompanies = append(item.MappedCompanies, bitrixServicePointCompanyDTO{
+					ID:          mappedCompany.ID,
+					Title:       mappedCompany.Title,
+					ParentID:    mappedCompany.ParentID,
+					ParentTitle: mappedCompany.ParentTitle,
+				})
+			}
+		}
+		items = append(items, item)
 	}
 	response.RespondWithJSON(w, http.StatusOK, items)
 }

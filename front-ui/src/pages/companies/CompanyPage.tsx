@@ -72,6 +72,7 @@ const CompanyPage: React.FC = () => {
   const [selectedNetworkContractCompanyID, setSelectedNetworkContractCompanyID] = useState('');
   const [isContractHistoryOpen, setIsContractHistoryOpen] = useState(false);
   const [selectedContractInfoID, setSelectedContractInfoID] = useState('');
+  const [contractEditID, setContractEditID] = useState('');
   const [isBitrixMappingEditOpen, setIsBitrixMappingEditOpen] = useState(false);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number>();
   const user = useAuthStore((state) => state.user);
@@ -142,6 +143,7 @@ const CompanyPage: React.FC = () => {
       && String(companyDeletionCandidate.requested_by_user_id || '') !== currentUserID,
   );
   const contractID = company?.contract_id;
+  const editableContractID = contractEditID || contractID || '';
   const contractType = company?.contract_type;
   const companyID = resolveCompanyID(company || {}) || company?.id || '';
   const parentCompanyID = String(company?.parent_id || '').trim();
@@ -211,9 +213,9 @@ const CompanyPage: React.FC = () => {
   });
 
   const { data: contractRes } = useQuery({
-    queryKey: ['contract', contractID, 'company-modal'],
-    queryFn: () => contractsApi.getContract(contractID!),
-    enabled: isContractEditOpen && !!contractID,
+    queryKey: ['contract', editableContractID, 'company-modal'],
+    queryFn: () => contractsApi.getContract(editableContractID),
+    enabled: isContractEditOpen && !!editableContractID,
   });
 
   const { data: companySearchRes } = useQuery({
@@ -434,16 +436,16 @@ const CompanyPage: React.FC = () => {
 
   const updateContractMutation = useMutation({
     mutationFn: async (values: { contract_type: string; contract_state: 'active' | 'inactive' }) => {
-      if (!contractID) {
+      if (!editableContractID) {
         throw new Error('Отсутствует контракт');
       }
 
-      const currentContract = await contractsApi.getContract(contractID);
+      const currentContract = await contractsApi.getContract(editableContractID);
       const services = normalizeServices(currentContract.data.services);
       const nextServices = services.length > 0 ? [...services] : [''];
       nextServices[0] = values.contract_type;
 
-      return contractsApi.updateContract(contractID, {
+      return contractsApi.updateContract(editableContractID, {
         state: values.contract_state,
         services: nextServices,
       });
@@ -452,7 +454,8 @@ const CompanyPage: React.FC = () => {
       message.success('Тип контракта обновлён');
       setIsContractEditOpen(false);
       queryClient.invalidateQueries({ queryKey: ['company', id] });
-      queryClient.invalidateQueries({ queryKey: ['contract', contractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contract', editableContractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
     },
     onError: () => {
       message.error('Не удалось обновить тип контракта');
@@ -488,15 +491,15 @@ const CompanyPage: React.FC = () => {
   const leaveContractMutation = useMutation({
     mutationFn: async () => {
       const currentCompanyID = resolveCompanyID(companyRes?.data || {}) || companyRes?.data?.id || '';
-      if (!contractID || !currentCompanyID) {
+      if (!editableContractID || !currentCompanyID) {
         throw new Error('Недостаточно данных для операции');
       }
-      const current = await contractsApi.getContract(contractID);
+      const current = await contractsApi.getContract(editableContractID);
       const companies = current.data.companies || [];
       const remainingCompanyIDs = companies.map((item) => item.id).filter((item) => item !== currentCompanyID);
       const services = normalizeServices(current.data.services);
 
-      await contractsApi.updateContract(contractID, {
+      await contractsApi.updateContract(editableContractID, {
         company_ids: remainingCompanyIDs,
         recipients: remainingCompanyIDs,
       });
@@ -515,7 +518,8 @@ const CompanyPage: React.FC = () => {
       setSpreadCompanyID(undefined);
       setIsContractEditOpen(false);
       queryClient.invalidateQueries({ queryKey: ['company', id] });
-      queryClient.invalidateQueries({ queryKey: ['contract', contractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contract', editableContractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
     },
     onError: () => {
       message.error('Не удалось вывести компанию в отдельный контракт');
@@ -524,12 +528,12 @@ const CompanyPage: React.FC = () => {
 
   const spreadContractMutation = useMutation({
     mutationFn: async () => {
-      if (!contractID || !spreadCompanyID) {
+      if (!editableContractID || !spreadCompanyID) {
         throw new Error('Выберите компанию для распространения');
       }
-      const current = await contractsApi.getContract(contractID);
+      const current = await contractsApi.getContract(editableContractID);
       const companyIDs = Array.from(new Set([...(current.data.companies || []).map((item) => item.id), spreadCompanyID]));
-      return contractsApi.updateContract(contractID, {
+      return contractsApi.updateContract(editableContractID, {
         company_ids: companyIDs,
         recipients: companyIDs,
       });
@@ -537,7 +541,8 @@ const CompanyPage: React.FC = () => {
     onSuccess: () => {
       message.success('Компания добавлена в контракт');
       setSpreadCompanyID(undefined);
-      queryClient.invalidateQueries({ queryKey: ['contract', contractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contract', editableContractID, 'company-modal'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
       queryClient.invalidateQueries({ queryKey: ['company'] });
     },
     onError: () => {
@@ -572,6 +577,10 @@ const CompanyPage: React.FC = () => {
     : [companyID];
   const parentTitle = company?.parent_title;
   const contractCompanies = useMemo(() => contractRes?.data?.companies || [], [contractRes?.data?.companies]);
+  const contractHistory = useMemo(() => contractHistoryRes?.data || [], [contractHistoryRes?.data]);
+  const latestActiveContractID = useMemo(() => (
+    String(contractHistory.find((item) => item.state === 'active')?.id || '').trim()
+  ), [contractHistory]);
 
   const parentOptions = useMemo(() => {
     const options = (companySearchRes?.data || [])
@@ -621,21 +630,24 @@ const CompanyPage: React.FC = () => {
     setIsCompanyEditOpen(true);
   };
 
-  const openContractEdit = () => {
-    const resolvedType = normalizeServices(contractRes?.data?.services)[0] || contractType || contractTypeOptions[0];
-    const resolvedState = (contractRes?.data?.state) === 'active' ? 'active' : 'inactive';
+  const openContractEdit = (targetContract?: ContractDetailDTO) => {
+    const targetContractID = String(targetContract?.id || contractID || '').trim();
+    setContractEditID(targetContractID);
+    const sourceContract = targetContract || contractRes?.data;
+    const resolvedType = normalizeServices(sourceContract?.services)[0] || contractType || contractTypeOptions[0];
+    const resolvedState = (sourceContract?.state) === 'active' ? 'active' : 'inactive';
     contractForm.setFieldsValue({
       contract_type: resolvedType,
       contract_state: resolvedState,
     });
-    if (contractID && (contractRes?.data?.companies || []).length > 1) {
+    if (targetContractID && (sourceContract?.companies || []).length > 1) {
       message.warning('Контракт общий. Изменения типа и статуса применятся ко всем компаниям-участникам.');
     }
     setIsContractEditOpen(true);
   };
 
   const handleContractFinish = (values: { contract_type: string; contract_state: 'active' | 'inactive' }) => {
-    if (contractID) {
+    if (editableContractID) {
       updateContractMutation.mutate(values);
       return;
     }
@@ -981,12 +993,9 @@ const CompanyPage: React.FC = () => {
                   </Tag>
                 </Space>
               </button>
-              {canEditContract ? (
-                <Button size="small" icon={<EditOutlined />} onClick={openContractEdit}>Настроить</Button>
-              ) : null}
             </div>
           ) : canEditContract ? (
-            <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
+            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openContractEdit()}>
               Создать контракт
             </Button>
           ) : '-'}
@@ -1076,16 +1085,31 @@ const CompanyPage: React.FC = () => {
         <Table
           rowKey="id"
           loading={loadingContractHistory}
-          dataSource={contractHistoryRes?.data || []}
+          dataSource={contractHistory}
           pagination={false}
           size="small"
           locale={{ emptyText: 'Контракты не найдены' }}
           onRow={(record) => ({
             tabIndex: 0,
             style: { cursor: 'pointer' },
-            onClick: () => setSelectedContractInfoID(String(record.id || '')),
+            onClick: () => {
+              const rowContractID = String(record.id || '').trim();
+              if (canEditContract && rowContractID && rowContractID === latestActiveContractID) {
+                setIsContractHistoryOpen(false);
+                openContractEdit(record);
+                return;
+              }
+              setSelectedContractInfoID(rowContractID);
+            },
             onKeyDown: (event) => {
-              if (event.key === 'Enter') setSelectedContractInfoID(String(record.id || ''));
+              if (event.key !== 'Enter') return;
+              const rowContractID = String(record.id || '').trim();
+              if (canEditContract && rowContractID && rowContractID === latestActiveContractID) {
+                setIsContractHistoryOpen(false);
+                openContractEdit(record);
+                return;
+              }
+              setSelectedContractInfoID(rowContractID);
             },
           })}
           columns={[
@@ -1173,7 +1197,7 @@ const CompanyPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={contractID ? 'Параметры контракта' : 'Создание контракта'}
+        title={editableContractID ? 'Параметры контракта' : 'Создание контракта'}
         open={isContractEditOpen}
         onCancel={() => setIsContractEditOpen(false)}
         onOk={() => contractForm.submit()}
@@ -1183,7 +1207,7 @@ const CompanyPage: React.FC = () => {
         width={560}
       >
         <Form form={contractForm} layout="vertical" onFinish={handleContractFinish}>
-          {contractID && contractCompanies.length > 0 && (
+          {editableContractID && contractCompanies.length > 0 && (
             <Form.Item label="Участники контракта">
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 {contractCompanies.map((item) => (
@@ -1224,7 +1248,7 @@ const CompanyPage: React.FC = () => {
               placeholder="Выберите тип контракта"
             />
           </Form.Item>
-          {contractID && (
+          {editableContractID && (
             <Form.Item label="Распространить контракт на компанию">
               <Space style={{ width: '100%' }} align="start">
                 <div style={{ flex: 1 }}>
@@ -1247,7 +1271,7 @@ const CompanyPage: React.FC = () => {
               </Space>
             </Form.Item>
           )}
-          {contractID && (
+          {editableContractID && (
             <Form.Item>
               <Button
                 danger

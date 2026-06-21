@@ -29,7 +29,7 @@ const { RangePicker } = DatePicker;
 type CompanyOption = { value: string; label: string };
 type PointOption = { value: number; label: string };
 type CompanyMappingDraft = Record<string, number | undefined>;
-type PointMappingDraft = Record<number, string | undefined>;
+type PointMappingDraft = Record<number, string[]>;
 type DateRangeValue = [Dayjs | null, Dayjs | null] | null;
 
 const COMPANIES_LIMIT = 50;
@@ -165,6 +165,17 @@ const buildPointOptionLabel = (point: BitrixServicePointDTO) => {
 };
 
 const DEFAULT_MAPPING_DROPDOWN_WIDTH = 520;
+
+const normalizeCompanyIDs = (values: Array<string | undefined>) => (
+  Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean))).sort()
+);
+
+const areCompanyIDsEqual = (left: string[], right: string[]) => {
+  const normalizedLeft = normalizeCompanyIDs(left);
+  const normalizedRight = normalizeCompanyIDs(right);
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+};
 
 const resolveMappingDropdownWidth = (triggerNode: HTMLElement) => {
   const cell = triggerNode.closest('td');
@@ -326,10 +337,12 @@ const CompaniesListPage: React.FC = () => {
   const companiesTotal = companiesData?.pages?.[0]?.meta?.total || 0;
 
   const mappingByPointID = useMemo(() => {
-    const result = new Map<number, CompanyBitrixMappingRowDTO>();
+    const result = new Map<number, CompanyBitrixMappingRowDTO[]>();
     mappings.forEach((row) => {
       if (row.bitrix_service_point_id) {
-        result.set(row.bitrix_service_point_id, row);
+        const rows = result.get(row.bitrix_service_point_id) || [];
+        rows.push(row);
+        result.set(row.bitrix_service_point_id, rows);
       }
     });
     return result;
@@ -341,12 +354,20 @@ const CompaniesListPage: React.FC = () => {
     mappings.forEach((row) => {
       nextCompanyDrafts[row.company_id] = row.bitrix_service_point_id;
       if (row.bitrix_service_point_id) {
-        nextPointDrafts[row.bitrix_service_point_id] = row.company_id;
+        nextPointDrafts[row.bitrix_service_point_id] = [
+          ...(nextPointDrafts[row.bitrix_service_point_id] || []),
+          row.company_id,
+        ];
       }
     });
     servicePoints.forEach((point) => {
-      if (nextPointDrafts[point.b24_element_id] === undefined) {
-        nextPointDrafts[point.b24_element_id] = undefined;
+      const mappedCompanyIDs = normalizeCompanyIDs(
+        (point.mapped_companies || []).map((item: NonNullable<BitrixServicePointDTO['mapped_companies']>[number]) => item.id),
+      );
+      if (mappedCompanyIDs.length > 0) {
+        nextPointDrafts[point.b24_element_id] = mappedCompanyIDs;
+      } else if (nextPointDrafts[point.b24_element_id] === undefined) {
+        nextPointDrafts[point.b24_element_id] = [];
       }
     });
     setCompanyDrafts(nextCompanyDrafts);
@@ -427,7 +448,18 @@ const CompaniesListPage: React.FC = () => {
   ]);
 
   const companyLookupOptions = useMemo<CompanyOption[]>(() => {
-    const source = [...mappings, ...(companiesLookupData?.data || [])];
+    const source = [
+      ...mappings,
+      ...servicePoints.flatMap((point) => (
+        (point.mapped_companies || []).map((item: NonNullable<BitrixServicePointDTO['mapped_companies']>[number]) => ({
+          company_id: item.id,
+          company_title: item.title,
+          company_parent_id: item.parent_id,
+          company_parent_title: item.parent_title,
+        } as CompanyBitrixMappingRowDTO))
+      )),
+      ...(companiesLookupData?.data || []),
+    ];
     const seen = new Set<string>();
     return source
       .map((item) => {
@@ -437,7 +469,7 @@ const CompaniesListPage: React.FC = () => {
         return { value: id, label: buildCompanyOptionLabel(item) };
       })
       .filter(Boolean) as CompanyOption[];
-  }, [companiesLookupData?.data, mappings]);
+  }, [companiesLookupData?.data, mappings, servicePoints]);
 
   const servicePointOptions = useMemo<PointOption[]>(() => {
     const source = [...servicePoints, ...pointsLookup];
@@ -485,7 +517,6 @@ const CompaniesListPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
       queryClient.invalidateQueries({ queryKey: ['companies', 'list'] });
       queryClient.invalidateQueries({ queryKey: ['bitrix-service-points'] });
-      message.success('Сопоставление сохранено, контракт синхронизирован');
     },
     onError: (error: any) => {
       const apiMessage = error?.response?.data?.error?.error;
@@ -499,16 +530,31 @@ const CompaniesListPage: React.FC = () => {
       company_id: row.company_id,
       bitrix_service_point_id: pointID,
     });
+    message.success('Сопоставление сохранено, контракт синхронизирован');
     resetServicePointLookup();
     setEditingCompanyID(null);
   }, [companyDrafts, resetServicePointLookup, updateMutation]);
 
   const applyPointMapping = useCallback(async (point: BitrixServicePointDTO) => {
-    const companyID = pointDrafts[point.b24_element_id];
-    await updateMutation.mutateAsync({
-      company_id: companyID,
-      bitrix_service_point_id: point.b24_element_id,
-    });
+    const pointID = point.b24_element_id;
+    const originalCompanyIDs = normalizeCompanyIDs((point.mapped_companies || []).map((item) => item.id));
+    const draftCompanyIDs = normalizeCompanyIDs(pointDrafts[pointID] || []);
+    const originalSet = new Set(originalCompanyIDs);
+    const draftSet = new Set(draftCompanyIDs);
+
+    const addedCompanyIDs = draftCompanyIDs.filter((companyID) => !originalSet.has(companyID));
+    const removedCompanyIDs = originalCompanyIDs.filter((companyID) => !draftSet.has(companyID));
+
+    await Promise.all([
+      ...addedCompanyIDs.map((companyID) => updateMutation.mutateAsync({
+        company_id: companyID,
+        bitrix_service_point_id: pointID,
+      })),
+      ...removedCompanyIDs.map((companyID) => updateMutation.mutateAsync({
+        company_id: companyID,
+      })),
+    ]);
+    message.success('Сопоставление сохранено, контракт синхронизирован');
     resetCompanyLookup();
     setEditingPointID(null);
   }, [pointDrafts, resetCompanyLookup, updateMutation]);
@@ -602,14 +648,22 @@ const CompaniesListPage: React.FC = () => {
 
   const renderCompanyMappingCell = useCallback((point: BitrixServicePointDTO) => {
     const pointID = point.b24_element_id;
-    const mapping = mappingByPointID.get(pointID);
+    const fallbackMappings = mappingByPointID.get(pointID) || [];
+    const mappedCompanies = point.mapped_companies?.length
+      ? point.mapped_companies
+      : fallbackMappings.map((row) => ({
+        id: row.company_id,
+        title: row.company_title,
+        parent_id: row.company_parent_id,
+        parent_title: row.company_parent_title,
+      }));
     const isEditing = editingPointID === pointID;
-    const originalCompanyID = mapping?.company_id;
-    const draftCompanyID = pointDrafts[pointID];
-    const dirty = (draftCompanyID ?? undefined) !== (originalCompanyID ?? undefined);
-    const currentLabel = draftCompanyID
-      ? companyLookupOptions.find((option) => option.value === draftCompanyID)?.label || mapping?.company_title || draftCompanyID
-      : 'Компания не выбрана';
+    const originalCompanyIDs = normalizeCompanyIDs(mappedCompanies.map((item) => item.id));
+    const draftCompanyIDs = pointDrafts[pointID] || originalCompanyIDs;
+    const dirty = !areCompanyIDsEqual(draftCompanyIDs, originalCompanyIDs);
+    const currentLabel = mappedCompanies.length > 0
+      ? mappedCompanies.map((item) => item.title || item.id).join(', ')
+      : 'Компании не выбраны';
 
     if (!canMapBitrix) {
       return ellipsisText(currentLabel);
@@ -623,7 +677,18 @@ const CompaniesListPage: React.FC = () => {
           onClick={() => startPointMappingEdit(pointID)}
           title={currentLabel}
         >
-          {currentLabel}
+          {mappedCompanies.length > 0 ? (
+            <Space size={[4, 4]} wrap>
+              {mappedCompanies.slice(0, 2).map((item) => (
+                <Tag key={item.id} style={{ marginInlineEnd: 0 }}>
+                  {formatDataTableText(item.title || item.id)}
+                </Tag>
+              ))}
+              {mappedCompanies.length > 2 && <Tag style={{ marginInlineEnd: 0 }}>+{mappedCompanies.length - 2}</Tag>}
+            </Space>
+          ) : (
+            currentLabel
+          )}
         </button>
       );
     }
@@ -632,8 +697,9 @@ const CompaniesListPage: React.FC = () => {
       <Space.Compact block className="companies-mapping-editor">
         <Select
           allowClear
+          mode="multiple"
           showSearch
-          value={draftCompanyID}
+          value={draftCompanyIDs}
           options={companyLookupOptions}
           style={{ width: '100%' }}
           popupMatchSelectWidth={mappingDropdownWidth}
@@ -641,7 +707,7 @@ const CompaniesListPage: React.FC = () => {
           onFocus={(event) => updateMappingDropdownWidth(event.currentTarget)}
           onSearch={setCompanyLookupTerm}
           onChange={(value) => {
-            setPointDrafts((prev) => ({ ...prev, [pointID]: value }));
+            setPointDrafts((prev) => ({ ...prev, [pointID]: normalizeCompanyIDs(value) }));
           }}
           onClear={resetCompanyLookup}
           onOpenChange={(open) => {
@@ -665,7 +731,7 @@ const CompaniesListPage: React.FC = () => {
           <Button
             icon={<CloseOutlined />}
             onClick={() => {
-              setPointDrafts((prev) => ({ ...prev, [pointID]: originalCompanyID }));
+              setPointDrafts((prev) => ({ ...prev, [pointID]: originalCompanyIDs }));
               resetCompanyLookup();
               setEditingPointID(null);
             }}
@@ -968,16 +1034,15 @@ const CompaniesListPage: React.FC = () => {
       render: (_value, row) => contractStatusTag(row.contract_on ?? undefined, row.contract_type),
     },
     {
-      title: 'Сопоставленная компания',
+      title: 'Сопоставленные компании',
       key: 'company_mapping',
       width: 380,
-      minWidth: createDataTableColumnMinWidth('Сопоставленная компания'),
+      minWidth: createDataTableColumnMinWidth('Сопоставленные компании'),
       maxWidth: 620,
-      sortValue: (point) => pointDrafts[point.b24_element_id] || '',
+      sortValue: (point) => (point.mapped_companies || []).map((item) => item.title || item.id).join(', '),
       render: (_value, row) => renderCompanyMappingCell(row),
     },
   ], [
-    pointDrafts,
     renderCompanyMappingCell,
     servicePointContractFilter,
     servicePointCreatedRange,

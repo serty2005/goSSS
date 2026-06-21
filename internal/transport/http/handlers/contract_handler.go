@@ -30,6 +30,7 @@ func NewContractHandler(service contract.Service) *ContractHandler {
 func (h *ContractHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/contracts", h.ListCompanyContracts)
 	r.Route("/contracts", func(r chi.Router) {
+		r.Get("/", h.ListCompanyContracts)
 		r.Get("/{id}", h.GetContract)
 		r.Post("/", h.CreateContract)
 		r.Put("/{id}", h.UpdateContract)
