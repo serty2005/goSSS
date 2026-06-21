@@ -7,6 +7,13 @@ export const contractsApi = {
     return response.data;
   },
 
+  listCompanyContracts: async (companyId: string) => {
+    const response = await apiClient.get<ApiResponse<ContractDetailDTO[]>>('/contracts', {
+      params: { company_id: companyId },
+    });
+    return response.data;
+  },
+
   createContract: async (data: Record<string, unknown>) => {
     const response = await apiClient.post<ApiResponse<ContractDetailDTO>>('/contracts', data);
     return response.data;

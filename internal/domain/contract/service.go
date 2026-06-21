@@ -17,4 +17,5 @@ type Service interface {
 	UpdateContract(ctx context.Context, id string, data map[string]interface{}) error
 	DeleteContract(ctx context.Context, id string) error
 	GetContract(ctx context.Context, id string) (*Contract, error)
+	ListCompanyContracts(ctx context.Context, companyID string) ([]Contract, error)
 }

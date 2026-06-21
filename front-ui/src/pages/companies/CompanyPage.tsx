@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
+import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, Table, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
@@ -19,6 +19,7 @@ import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
 import { resolveCompanyID } from '@/utils/companyHierarchy';
 import { formatMappedServicePointLabel } from './companyBitrixMappingState';
+import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 
 const { Title, Text } = Typography;
 
@@ -69,6 +70,8 @@ const CompanyPage: React.FC = () => {
   const [spreadCompanyID, setSpreadCompanyID] = useState<string | undefined>(undefined);
   const [isNetworkContractModalOpen, setIsNetworkContractModalOpen] = useState(false);
   const [selectedNetworkContractCompanyID, setSelectedNetworkContractCompanyID] = useState('');
+  const [isContractHistoryOpen, setIsContractHistoryOpen] = useState(false);
+  const [selectedContractInfoID, setSelectedContractInfoID] = useState('');
   const [isBitrixMappingEditOpen, setIsBitrixMappingEditOpen] = useState(false);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number>();
   const user = useAuthStore((state) => state.user);
@@ -142,6 +145,12 @@ const CompanyPage: React.FC = () => {
   const contractType = company?.contract_type;
   const companyID = resolveCompanyID(company || {}) || company?.id || '';
   const parentCompanyID = String(company?.parent_id || '').trim();
+
+  const { data: contractHistoryRes, isLoading: loadingContractHistory } = useQuery({
+    queryKey: ['contracts', 'company', companyID],
+    queryFn: () => contractsApi.listCompanyContracts(companyID),
+    enabled: isContractHistoryOpen && Boolean(companyID),
+  });
 
   const { data: bitrixMapping } = useQuery({
     queryKey: ['company-bitrix-mapping', companyID, 'company-card'],
@@ -367,13 +376,6 @@ const CompanyPage: React.FC = () => {
     [networkCompanyByID, selectedNetworkContractCompanyID],
   );
   const selectedNetworkContractID = String(selectedNetworkContractCompany?.contract_id || '').trim();
-  const { data: selectedNetworkContractRes, isLoading: loadingSelectedNetworkContract } = useQuery({
-    queryKey: ['contract', selectedNetworkContractID, 'network-card-view'],
-    queryFn: () => contractsApi.getContract(selectedNetworkContractID),
-    enabled: isNetworkContractModalOpen && Boolean(selectedNetworkContractID),
-    staleTime: 30_000,
-  });
-
   const { data: spreadCompanySearchRes } = useQuery({
     queryKey: ['companies-search-company-page-spread', spreadCompanySearch],
     queryFn: () => companiesApi.searchCompanies(spreadCompanySearch, 20, 0),
@@ -569,7 +571,7 @@ const CompanyPage: React.FC = () => {
     ? [companyID, ...companyChildrenIDs]
     : [companyID];
   const parentTitle = company?.parent_title;
-  const contractCompanies = contractRes?.data?.companies || [];
+  const contractCompanies = useMemo(() => contractRes?.data?.companies || [], [contractRes?.data?.companies]);
 
   const parentOptions = useMemo(() => {
     const options = (companySearchRes?.data || [])
@@ -965,15 +967,24 @@ const CompanyPage: React.FC = () => {
         </Descriptions.Item>
         <Descriptions.Item label="Контракт" span={2}>
           {contractID ? (
-            <Space size={8}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                className="companies-mapping-cell"
+                title="Показать историю контрактов"
+                onClick={() => setIsContractHistoryOpen(true)}
+              >
+                <Space size={8}>
+                  <Text>{contractType || 'Не указан'}</Text>
+                  <Tag color={company.active_contract ? 'success' : 'default'} style={{ marginInlineEnd: 0 }}>
+                    {company.active_contract ? 'Активен' : 'Завершен'}
+                  </Tag>
+                </Space>
+              </button>
               {canEditContract ? (
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
-                  {contractType || 'Не указан'}
-                </Button>
-              ) : (
-                <Text>{contractType || 'Не указан'}</Text>
-              )}
-            </Space>
+                <Button size="small" icon={<EditOutlined />} onClick={openContractEdit}>Настроить</Button>
+              ) : null}
+            </div>
           ) : canEditContract ? (
             <Button type="link" size="small" style={{ padding: 0 }} onClick={openContractEdit}>
               Создать контракт
@@ -1048,57 +1059,50 @@ const CompanyPage: React.FC = () => {
         </>
       )}
 
-      <Modal
-        title="Параметры контракта компании"
+      <ContractInfoModal
         open={isNetworkContractModalOpen}
-        onCancel={() => setIsNetworkContractModalOpen(false)}
-        footer={<Button onClick={() => setIsNetworkContractModalOpen(false)}>Закрыть</Button>}
+        contractId={selectedNetworkContractID}
+        companyTitle={selectedNetworkContractCompany?.title || selectedNetworkContractCompany?.additional_name}
+        onClose={() => setIsNetworkContractModalOpen(false)}
+      />
+
+      <Modal
+        title="История контрактов"
+        open={isContractHistoryOpen}
+        onCancel={() => setIsContractHistoryOpen(false)}
+        footer={<Button onClick={() => setIsContractHistoryOpen(false)}>Закрыть</Button>}
+        width={820}
       >
-        {loadingSelectedNetworkContract ? (
-          <Spin />
-        ) : (
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div>
-              <Text type="secondary">Компания</Text>
-              <Text strong style={{ display: 'block' }}>
-                {selectedNetworkContractCompany?.title || selectedNetworkContractCompany?.additional_name || selectedNetworkContractCompanyID || '-'}
-              </Text>
-            </div>
-            <div>
-              <Text type="secondary">Статус контракта</Text>
-              <Text strong style={{ display: 'block' }}>
-                {selectedNetworkContractRes?.data?.state === 'active'
-                  ? 'Активен'
-                  : selectedNetworkContractRes?.data?.state
-                    ? String(selectedNetworkContractRes.data.state)
-                    : (selectedNetworkContractCompany?.active_contract ? 'Активен' : 'Неактивен')}
-              </Text>
-            </div>
-            <div>
-              <Text type="secondary">Тип контракта</Text>
-              <Text strong style={{ display: 'block' }}>
-                {normalizeServices(selectedNetworkContractRes?.data?.services || [])[0]
-                  || selectedNetworkContractCompany?.contract_type
-                  || '-'}
-              </Text>
-            </div>
-            <div>
-              <Text type="secondary">В этом же контракте</Text>
-              {(selectedNetworkContractRes?.data?.companies || []).length > 0 ? (
-                <Space direction="vertical" size={4} style={{ display: 'flex', marginTop: 4 }}>
-                  {(selectedNetworkContractRes?.data?.companies || []).map((recipient) => (
-                    <Link key={recipient.id} to={`/companies/${recipient.id}`}>
-                      {recipient.title || recipient.id}
-                    </Link>
-                  ))}
-                </Space>
-              ) : (
-                <Text strong style={{ display: 'block' }}>-</Text>
-              )}
-            </div>
-          </Space>
-        )}
+        <Table
+          rowKey="id"
+          loading={loadingContractHistory}
+          dataSource={contractHistoryRes?.data || []}
+          pagination={false}
+          size="small"
+          locale={{ emptyText: 'Контракты не найдены' }}
+          onRow={(record) => ({
+            tabIndex: 0,
+            style: { cursor: 'pointer' },
+            onClick: () => setSelectedContractInfoID(String(record.id || '')),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') setSelectedContractInfoID(String(record.id || ''));
+            },
+          })}
+          columns={[
+            { title: 'Тип', key: 'type', render: (_, record) => String(normalizeServices(record.services)[0] || '-') },
+            { title: 'Статус', dataIndex: 'state', render: (state) => <Tag color={state === 'active' ? 'success' : 'default'}>{state === 'active' ? 'Активен' : 'Неактивен'}</Tag> },
+            { title: 'Создан', dataIndex: 'created_at', render: (value) => value ? new Date(value).toLocaleString('ru-RU') : '-' },
+            { title: 'Обновлен', dataIndex: 'updated_at', render: (value) => value ? new Date(value).toLocaleString('ru-RU') : '-' },
+          ]}
+        />
       </Modal>
+
+      <ContractInfoModal
+        open={Boolean(selectedContractInfoID)}
+        contractId={selectedContractInfoID}
+        companyTitle={company.title || company.additional_name}
+        onClose={() => setSelectedContractInfoID('')}
+      />
 
       <Modal
         title="Редактирование компании"

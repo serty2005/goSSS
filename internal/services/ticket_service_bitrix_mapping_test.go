@@ -293,6 +293,7 @@ func TestChangeCompany_SavesBitrixCompanyServicePointMapping(t *testing.T) {
 		SyncWithBitrix:       true,
 		BitrixDealTitle:      "Сделка",
 		BitrixServicePointID: &pointID,
+		ContractID:           new("contract-on-create"),
 	}
 	if err := ticketRepo.Create(context.Background(), ticket); err != nil {
 		t.Fatalf("не удалось создать тикет: %v", err)
@@ -316,8 +317,12 @@ func TestChangeCompany_SavesBitrixCompanyServicePointMapping(t *testing.T) {
 		nil,
 	)
 
-	if _, err := svc.ChangeCompany(context.Background(), ticket.ID, company2.ID, actor.ID); err != nil {
+	updatedTicket, err := svc.ChangeCompany(context.Background(), ticket.ID, company2.ID, actor.ID)
+	if err != nil {
 		t.Fatalf("ChangeCompany вернул ошибку: %v", err)
+	}
+	if updatedTicket.ContractID == nil || *updatedTicket.ContractID != "contract-on-create" {
+		t.Fatalf("ожидали сохранение исходного контракта тикета, получили %v", updatedTicket.ContractID)
 	}
 
 	newMapping, err := bitrixRepo.GetCompanyServicePointMappingByCompanyID(context.Background(), company2.ID)

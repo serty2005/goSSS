@@ -1250,6 +1250,9 @@ export interface ContractDetailDTO {
   companies?: Array<{ id: string; title: string }>;
   service_level?: number;
   state_start_time?: string;
+  last_modified_date?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface MaterialEntityRefDTO {

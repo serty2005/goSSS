@@ -156,8 +156,33 @@ func (r *contractRepo) GetActiveContractIDsForCompany(ctx context.Context, compa
 	err := r.getDB(ctx).WithContext(ctx).Table("contracts").
 		Joins("JOIN company_contracts ON company_contracts.contract_id = contracts.id").
 		Where("company_contracts.company_id = ? AND contracts.state = ?", companyID, "active").
+		Order("(contracts.id = ('mail-contract:' || company_contracts.company_id)) DESC").
+		Order("contracts.updated_at DESC").
 		Pluck("contracts.id", &contractIDs).Error
 	return contractIDs, err
+}
+
+func (r *contractRepo) DeactivateActiveContractsExcept(ctx context.Context, companyID string, keepContractID string) error {
+	db := r.getDB(ctx).WithContext(ctx)
+	linkedContracts := db.Table("company_contracts").
+		Select("contract_id").
+		Where("company_id = ?", companyID)
+	return db.Model(&contract.Contract{}).
+		Where("id IN (?) AND id <> ? AND state = ?", linkedContracts, keepContractID, "active").
+		Update("state", "inactive").Error
+}
+
+func (r *contractRepo) ListForCompany(ctx context.Context, companyID string) ([]contract.Contract, error) {
+	items := make([]contract.Contract, 0)
+	err := r.getDB(ctx).WithContext(ctx).
+		Joins("JOIN company_contracts ON company_contracts.contract_id = contracts.id").
+		Where("company_contracts.company_id = ?", companyID).
+		Preload("Companies").
+		Order("(contracts.id = ('mail-contract:' || company_contracts.company_id)) DESC").
+		Order("(contracts.state = 'active') DESC").
+		Order("COALESCE(contracts.last_modified_date, contracts.updated_at, contracts.created_at) DESC").
+		Find(&items).Error
+	return items, err
 }
 
 func (r *contractRepo) GetMailImportByAttachmentHash(ctx context.Context, attachmentHash string) (*contract.MailImport, error) {

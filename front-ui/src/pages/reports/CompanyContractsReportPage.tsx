@@ -68,6 +68,8 @@ const CompanyContractsReportPage: React.FC = () => {
       message.error('Не удалось выгрузить отчет');
     },
   });
+  const exportReport = exportMutation.mutate;
+  const isExporting = exportMutation.isPending;
 
   const rows = useMemo(() => reportQuery.data?.data || [], [reportQuery.data?.data]);
   const optionRows = useMemo(() => filterOptionsQuery.data?.data || rows, [filterOptionsQuery.data?.data, rows]);
@@ -220,8 +222,8 @@ const CompanyContractsReportPage: React.FC = () => {
       <Button
         type="primary"
         icon={<DownloadOutlined />}
-        loading={exportMutation.isPending}
-        onClick={() => exportMutation.mutate()}
+        loading={isExporting}
+        onClick={() => exportReport()}
       >
         Скачать XLSX
       </Button>
@@ -235,7 +237,8 @@ const CompanyContractsReportPage: React.FC = () => {
     companyIDs,
     companyOptions,
     companySearch,
-    exportMutation,
+    exportReport,
+    isExporting,
   ]);
 
   useEffect(() => {

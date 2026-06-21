@@ -989,13 +989,16 @@ type AcceptedResponseDTO struct {
 
 // ContractResponseDTO - DTO контракта для API без служебных полей модели.
 type ContractResponseDTO struct {
-	ID             string               `json:"id"`
-	State          *string              `json:"state,omitempty"`
-	StateStartTime *time.Time           `json:"state_start_time,omitempty"`
-	Services       []string             `json:"services,omitempty"`
-	Recipients     []string             `json:"recipients,omitempty"`
-	Companies      []ContractCompanyDTO `json:"companies,omitempty"`
-	ServiceLevel   int                  `json:"service_level"`
+	ID               string               `json:"id"`
+	State            *string              `json:"state,omitempty"`
+	StateStartTime   *time.Time           `json:"state_start_time,omitempty"`
+	LastModifiedDate *time.Time           `json:"last_modified_date,omitempty"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Services         []string             `json:"services,omitempty"`
+	Recipients       []string             `json:"recipients,omitempty"`
+	Companies        []ContractCompanyDTO `json:"companies,omitempty"`
+	ServiceLevel     int                  `json:"service_level"`
 }
 
 type ContractCompanyDTO struct {

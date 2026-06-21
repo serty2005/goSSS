@@ -31,6 +31,7 @@ import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag
 import ManagerTransferModal, { ManagerTransferPayload } from '@/components/tickets/ManagerTransferModal';
 import TicketContactsControl from '@/components/tickets/TicketContactsControl';
 import TicketTable from '@/components/tickets/TicketTable';
+import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { canManageServerActions } from '@/utils/permissions';
 
@@ -2568,56 +2569,13 @@ const TicketDetailsPage: React.FC = () => {
         }}
       />
 
-      <Modal
+      <ContractInfoModal
         open={isContractInfoModalOpen}
-        title="Информация о контракте"
-        onCancel={() => setIsContractInfoModalOpen(false)}
-        footer={<Button onClick={() => setIsContractInfoModalOpen(false)}>Закрыть</Button>}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <div>
-            <Text type="secondary">Компания</Text>
-            <Text strong style={{ display: 'block' }}>{companyTitle || metadata.company_name || '-'}</Text>
-          </div>
-          <div>
-            <Text type="secondary">Контракт</Text>
-            <Space size={8} wrap style={{ display: 'flex', marginTop: 2 }}>
-              <Text strong>{metadata.is_common_contract ? 'Общий контракт' : (contractID || metadata.contract_id || '-')}</Text>
-              {metadata.is_common_contract && <Tag color="gold" style={{ marginInlineEnd: 0 }}>Платный</Tag>}
-            </Space>
-          </div>
-          <div>
-            <Text type="secondary">Тип контракта</Text>
-            <div style={{ marginTop: 4 }}>
-              {renderContractTypeBadge(contractType)}
-            </div>
-          </div>
-          <div>
-            <Text type="secondary">Статус</Text>
-            <Text strong style={{ display: 'block' }}>
-              {contractResponse?.data?.state === 'active'
-                ? 'Активен'
-                : contractResponse?.data?.state
-                  ? String(contractResponse.data.state)
-                  : ((companyResponse?.data as { active_contract?: boolean } | undefined)?.active_contract ? 'Активен' : 'Неактивен')}
-            </Text>
-          </div>
-          <div>
-            <Text type="secondary">Компании в контракте</Text>
-            {(contractResponse?.data?.companies || []).length > 0 ? (
-              <Space direction="vertical" size={4} style={{ display: 'flex', marginTop: 4 }}>
-                {(contractResponse?.data?.companies || []).map((recipient) => (
-                  <Link key={recipient.id} to={`/companies/${recipient.id}`}>
-                    {recipient.title || recipient.id}
-                  </Link>
-                ))}
-              </Space>
-            ) : (
-              <Text strong style={{ display: 'block' }}>-</Text>
-            )}
-          </div>
-        </Space>
-      </Modal>
+        contractId={contractID}
+        companyTitle={companyTitle || metadata.company_name}
+        isCommonContract={metadata.is_common_contract}
+        onClose={() => setIsContractInfoModalOpen(false)}
+      />
 
       {isBitrixEnabled && (
         <Modal

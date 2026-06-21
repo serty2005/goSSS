@@ -145,6 +145,13 @@ func TestService_SyncDailySnapshots_PrefersMailContractOverNativeContract(t *tes
 	if refreshed.ContractID == nil || *refreshed.ContractID != mailManagedContractID(comp.ID) {
 		t.Fatalf("ожидали приоритет почтового контракта, получили %v", refreshed.ContractID)
 	}
+	refreshedNative, err := contractRepo.GetByID(ctx, native.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать устаревший контракт: %v", err)
+	}
+	if refreshedNative.State == nil || *refreshedNative.State != "inactive" {
+		t.Fatalf("ожидали деактивацию устаревшего контракта, получили %v", refreshedNative.State)
+	}
 }
 
 func TestService_SyncDailySnapshot_DoesNotDeactivateOtherMailContracts(t *testing.T) {

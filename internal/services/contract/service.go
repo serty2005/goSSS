@@ -162,6 +162,10 @@ func (s *serviceImpl) GetContract(ctx context.Context, id string) (*contract.Con
 	return s.contractRepo.GetByID(ctx, id)
 }
 
+func (s *serviceImpl) ListCompanyContracts(ctx context.Context, companyID string) ([]contract.Contract, error) {
+	return s.contractRepo.ListForCompany(ctx, strings.TrimSpace(companyID))
+}
+
 func (s *serviceImpl) CreateContract(ctx context.Context, dto *api.ContractCreateDTO) (*contract.Contract, error) {
 	contractModel := &contract.Contract{
 		State:          dto.State,
@@ -375,19 +379,18 @@ func (s *serviceImpl) recalculateCompanyStatus(ctx context.Context, tx *gorm.DB,
 		return fmt.Errorf("компания не найдена")
 	}
 
-	activeContractIDs, err := s.contractRepo.GetActiveContractIDsForCompany(ctx, companyID)
-	if err != nil {
-		return err
-	}
 	mailContract, mailContractErr := s.contractRepo.GetByID(ctx, mailManagedContractID(companyID))
 	if mailContractErr != nil && !errors.Is(mailContractErr, domain.ErrNotFound) {
 		return mailContractErr
 	}
 	if mailContractErr == nil && mailContract != nil {
-		activeContractIDs = activeContractIDs[:0]
-		if mailContract.State != nil && strings.TrimSpace(*mailContract.State) == "active" {
-			activeContractIDs = append(activeContractIDs, mailContract.ID)
+		if err := s.contractRepo.DeactivateActiveContractsExcept(ctx, companyID, mailContract.ID); err != nil {
+			return fmt.Errorf("не удалось деактивировать устаревшие контракты компании %s: %w", companyID, err)
 		}
+	}
+	activeContractIDs, err := s.contractRepo.GetActiveContractIDsForCompany(ctx, companyID)
+	if err != nil {
+		return err
 	}
 
 	hasActiveContract := len(activeContractIDs) > 0

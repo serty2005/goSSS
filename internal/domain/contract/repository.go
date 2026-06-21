@@ -22,6 +22,8 @@ type Repository interface {
 
 	// GetActiveContractIDsForCompany возвращает ID активных контрактов компании.
 	GetActiveContractIDsForCompany(ctx context.Context, companyID string) ([]string, error)
+	DeactivateActiveContractsExcept(ctx context.Context, companyID string, keepContractID string) error
+	ListForCompany(ctx context.Context, companyID string) ([]Contract, error)
 
 	GetMailImportByAttachmentHash(ctx context.Context, attachmentHash string) (*MailImport, error)
 	ListMailImports(ctx context.Context, limit int) ([]MailImport, error)

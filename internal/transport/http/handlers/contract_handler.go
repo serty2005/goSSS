@@ -28,6 +28,7 @@ func NewContractHandler(service contract.Service) *ContractHandler {
 
 // RegisterRoutes регистрирует роуты для контрактов.
 func (h *ContractHandler) RegisterRoutes(r chi.Router) {
+	r.Get("/contracts", h.ListCompanyContracts)
 	r.Route("/contracts", func(r chi.Router) {
 		r.Get("/{id}", h.GetContract)
 		r.Post("/", h.CreateContract)
@@ -52,17 +53,45 @@ func (h *ContractHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := api.ContractResponseDTO{
-		ID:             contractModel.ID,
-		State:          contractModel.State,
-		StateStartTime: contractModel.StateStartTime,
-		Services:       parseContractServices(contractModel.Services),
-		Recipients:     parseContractRecipients(contractModel.Recipients),
-		Companies:      toContractCompaniesDTO(contractModel.Companies),
-		ServiceLevel:   contractModel.ServiceLevel,
-	}
+	dto := toContractResponseDTO(*contractModel)
 
 	response.RespondWithJSON(w, http.StatusOK, dto)
+}
+
+func (h *ContractHandler) ListCompanyContracts(w http.ResponseWriter, r *http.Request) {
+	companyID := strings.TrimSpace(r.URL.Query().Get("company_id"))
+	if companyID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Не указан идентификатор компании")
+		return
+	}
+
+	items, err := h.service.ListCompanyContracts(r.Context(), companyID)
+	if err != nil {
+		middleware.GetLogger(r.Context()).Error("Не удалось получить историю контрактов компании", "company_id", companyID, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить историю контрактов компании")
+		return
+	}
+
+	dtos := make([]api.ContractResponseDTO, 0, len(items))
+	for _, item := range items {
+		dtos = append(dtos, toContractResponseDTO(item))
+	}
+	response.RespondWithJSON(w, http.StatusOK, dtos)
+}
+
+func toContractResponseDTO(contractModel contract.Contract) api.ContractResponseDTO {
+	return api.ContractResponseDTO{
+		ID:               contractModel.ID,
+		State:            contractModel.State,
+		StateStartTime:   contractModel.StateStartTime,
+		LastModifiedDate: contractModel.LastModifiedDate,
+		CreatedAt:        contractModel.CreatedAt,
+		UpdatedAt:        contractModel.UpdatedAt,
+		Services:         parseContractServices(contractModel.Services),
+		Recipients:       parseContractRecipients(contractModel.Recipients),
+		Companies:        toContractCompaniesDTO(contractModel.Companies),
+		ServiceLevel:     contractModel.ServiceLevel,
+	}
 }
 
 func parseContractServices(raw []byte) []string {

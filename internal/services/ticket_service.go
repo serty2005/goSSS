@@ -702,19 +702,6 @@ func (s *ticketServiceImpl) ChangeCompany(ctx context.Context, ticketID string, 
 	}
 
 	ticket.CompanyID = companyID
-	if targetCompany.ActiveContract != nil && *targetCompany.ActiveContract {
-		contractID, err := s.resolveCompanyContractID(ctx, companyID)
-		if err != nil {
-			return nil, err
-		}
-		ticket.ContractID = contractID
-	} else {
-		commonContract, err := s.getOrCreateCommonContract(ctx)
-		if err != nil {
-			return nil, err
-		}
-		ticket.ContractID = &commonContract.ID
-	}
 
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
