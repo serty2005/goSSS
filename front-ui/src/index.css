@@ -1559,14 +1559,6 @@ body .ant-message .ant-message-notice-content {
   border-color: var(--app-color-warning, #faad14);
 }
 
-.ticket-age-cell--warning {
-  background: var(--app-color-warning-bg, #fffbe6) !important;
-}
-
-.ticket-age-cell--critical {
-  background: var(--app-color-error-bg, #fff2f0) !important;
-}
-
 .ticket-equipment-copy-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -321,6 +321,26 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     expectNoBrowserErrors(browserErrors);
   });
 
+  test('не зацикливает поиск агентов из верхней строки', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-поиск в header');
+
+    const browserErrors = collectBrowserErrors(page);
+    let requests = 0;
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/agent-diagnostics') requests += 1;
+    });
+
+    await loginAsAdmin(page);
+    await page.goto('/agents');
+    await page.getByPlaceholder('Поиск агентов: hostname, uuid, владелец').fill('agent-01');
+
+    await expect(page).toHaveURL(/\/agents\?q=agent-01$/);
+    await page.waitForTimeout(1_500);
+    await expect(page).toHaveURL(/\/agents\?q=agent-01$/);
+    expect(requests, 'поиск не должен повторно переключать URL и перезапрашивать список').toBeLessThanOrEqual(2);
+    expectNoBrowserErrors(browserErrors);
+  });
+
   test('объединяет оборудование тикета с подключениями и показывает последние тикеты компании', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-карточку тикета');
 

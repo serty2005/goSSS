@@ -2,7 +2,7 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, theme as antTheme, Popconfirm } from 'antd';
-import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons';
+import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
 import { contractsApi } from '@/api/contracts';
@@ -18,6 +18,7 @@ import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
 import { resolveCompanyID } from '@/utils/companyHierarchy';
+import { formatMappedServicePointLabel } from './companyBitrixMappingState';
 
 const { Title, Text } = Typography;
 
@@ -68,6 +69,8 @@ const CompanyPage: React.FC = () => {
   const [spreadCompanyID, setSpreadCompanyID] = useState<string | undefined>(undefined);
   const [isNetworkContractModalOpen, setIsNetworkContractModalOpen] = useState(false);
   const [selectedNetworkContractCompanyID, setSelectedNetworkContractCompanyID] = useState('');
+  const [isBitrixMappingEditOpen, setIsBitrixMappingEditOpen] = useState(false);
+  const [draftBitrixPointID, setDraftBitrixPointID] = useState<number>();
   const user = useAuthStore((state) => state.user);
   const currentUserID = String(user?.id || '');
   const canEditBase = canEditCompanyBase(user?.roles);
@@ -154,16 +157,48 @@ const CompanyPage: React.FC = () => {
     staleTime: 5 * 60_000,
   });
 
+  const bitrixMappingLabel = formatMappedServicePointLabel(bitrixMapping || {});
+  const bitrixMappingContent = bitrixMapping?.bitrix_service_point_id ? (
+    <Space size={8} wrap>
+      <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
+      {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}
+      {typeof bitrixMapping.bitrix_service_point_enabled === 'boolean' && (
+        <Tag color={bitrixMapping.bitrix_service_point_enabled ? 'success' : 'default'}>
+          {bitrixMapping.bitrix_service_point_enabled ? 'контракт активен' : 'контракт не активен'}
+        </Tag>
+      )}
+    </Space>
+  ) : <Text type="secondary">Не сопоставлена</Text>;
+  const bitrixServicePointOptions = useMemo(() => {
+    const options = bitrixServicePoints.map((item) => ({
+      value: item.b24_element_id,
+      label: formatMappedServicePointLabel({
+        bitrix_service_point_id: item.b24_element_id,
+        bitrix_service_point_name: item.name,
+        bitrix_service_point_code: item.one_c_code,
+        bitrix_service_point_enabled: item.contract_on ?? undefined,
+      }),
+    }));
+    if (bitrixMapping?.bitrix_service_point_id && !options.some((item) => item.value === bitrixMapping.bitrix_service_point_id)) {
+      options.unshift({ value: bitrixMapping.bitrix_service_point_id, label: bitrixMappingLabel });
+    }
+    return options;
+  }, [bitrixMapping, bitrixMappingLabel, bitrixServicePoints]);
+
   const updateBitrixMappingMutation = useMutation({
     mutationFn: (bitrixServicePointID: number) => companiesApi.updateBitrixMapping({
       company_id: companyID,
       bitrix_service_point_id: bitrixServicePointID,
     }),
     onSuccess: () => {
-      message.success('Точка обслуживания Bitrix24 обновлена');
+      message.success('Сопоставление сохранено, контракт синхронизирован');
+      setIsBitrixMappingEditOpen(false);
       queryClient.invalidateQueries({ queryKey: ['company-bitrix-mapping', companyID] });
+      queryClient.invalidateQueries({ queryKey: ['company', id] });
+      queryClient.invalidateQueries({ queryKey: ['contract'] });
+      queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
     },
-    onError: () => message.error('Не удалось обновить точку обслуживания Bitrix24'),
+    onError: () => message.error('Не удалось сохранить сопоставление'),
   });
 
   const { data: contractRes } = useQuery({
@@ -946,27 +981,44 @@ const CompanyPage: React.FC = () => {
           ) : '-'}
         </Descriptions.Item>
         <Descriptions.Item label="Точка обслуживания B24" span={2}>
-          {canDeleteCompany ? (
-            <Select
-              showSearch
-              value={bitrixMapping?.bitrix_service_point_id}
-              placeholder="Выберите точку обслуживания"
-              loading={loadingBitrixServicePoints || updateBitrixMappingMutation.isPending}
-              style={{ width: 420, maxWidth: '100%' }}
-              options={bitrixServicePoints.map((item) => ({ value: item.b24_element_id, label: item.name }))}
-              optionFilterProp="label"
-              onChange={(value) => updateBitrixMappingMutation.mutate(value)}
-            />
+          {canDeleteCompany && isBitrixMappingEditOpen ? (
+            <Space.Compact style={{ width: 620, maxWidth: '100%' }}>
+              <Select
+                showSearch
+                value={draftBitrixPointID}
+                placeholder="Выберите точку обслуживания"
+                loading={loadingBitrixServicePoints}
+                style={{ width: '100%' }}
+                options={bitrixServicePointOptions}
+                optionFilterProp="label"
+                onChange={setDraftBitrixPointID}
+              />
+              <Button
+                type="primary"
+                icon={<CheckOutlined />}
+                loading={updateBitrixMappingMutation.isPending}
+                disabled={!draftBitrixPointID || draftBitrixPointID === bitrixMapping?.bitrix_service_point_id}
+                onClick={() => draftBitrixPointID && updateBitrixMappingMutation.mutate(draftBitrixPointID)}
+              />
+              <Button
+                icon={<CloseOutlined />}
+                onClick={() => setIsBitrixMappingEditOpen(false)}
+              />
+            </Space.Compact>
+          ) : canDeleteCompany ? (
+            <button
+              type="button"
+              className="companies-mapping-cell"
+              title="Изменить точку обслуживания Bitrix24"
+              onClick={() => {
+                setDraftBitrixPointID(bitrixMapping?.bitrix_service_point_id);
+                setIsBitrixMappingEditOpen(true);
+              }}
+            >
+              {bitrixMappingContent}
+            </button>
           ) : bitrixMapping?.bitrix_service_point_id ? (
-            <Space size={8} wrap>
-              <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
-              {bitrixMapping.bitrix_service_point_code && <Tag>{bitrixMapping.bitrix_service_point_code}</Tag>}
-              {typeof bitrixMapping.bitrix_service_point_enabled === 'boolean' && (
-                <Tag color={bitrixMapping.bitrix_service_point_enabled ? 'success' : 'default'}>
-                  {bitrixMapping.bitrix_service_point_enabled ? 'контракт активен' : 'контракт не активен'}
-                </Tag>
-              )}
-            </Space>
+            bitrixMappingContent
           ) : (
             <Text type="secondary">Не сопоставлена</Text>
           )}

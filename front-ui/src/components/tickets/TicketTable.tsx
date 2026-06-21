@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Checkbox, DatePicker, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
+import { Checkbox, DatePicker, Space, Spin, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { LinkOutlined } from '@ant-design/icons';
@@ -129,7 +129,7 @@ const resolveRangeBounds = (range: DateRangeValue) => {
 const createColumnMinWidth = createDataTableColumnMinWidth;
 const estimateHeaderMinWidth = estimateDataTableHeaderMinWidth;
 
-const resolveNewTicketAgeClass = (
+const resolveNewTicketAgeLevel = (
   ticket: TicketListItemDTO,
   warningHours: number,
   criticalHours: number,
@@ -139,8 +139,8 @@ const resolveNewTicketAgeClass = (
   const createdAt = dayjs(ticket.created_at);
   if (!createdAt.isValid()) return '';
   const ageHours = (now - createdAt.valueOf()) / 3_600_000;
-  if (ageHours > criticalHours) return 'ticket-age-cell ticket-age-cell--critical';
-  if (ageHours > warningHours) return 'ticket-age-cell ticket-age-cell--warning';
+  if (ageHours > criticalHours) return 'critical';
+  if (ageHours > warningHours) return 'warning';
   return '';
 };
 
@@ -287,6 +287,7 @@ const TicketTable: React.FC<Props> = ({
   columnFilters,
 }) => {
   const navigate = useNavigate();
+  const { token } = theme.useToken();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -450,7 +451,10 @@ const TicketTable: React.FC<Props> = ({
           width: 140,
           minWidth: createColumnMinWidth('Статус'),
           maxWidth: 190,
-          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
+          onCell: (record) => {
+            const level = resolveNewTicketAgeLevel(record, warningHours, criticalHours, ageClock);
+            return { style: { background: level === 'critical' ? token.colorErrorBg : level === 'warning' ? token.colorWarningBg : undefined } };
+          },
           render: (status: TicketStatus, record: TicketListItemDTO) => {
             const tag = getStatusTag(status, record.is_common_contract);
             const deferredTitle = status === 'deferred'
@@ -545,7 +549,6 @@ const TicketTable: React.FC<Props> = ({
           width: 120,
           minWidth: estimateHeaderMinWidth('Создано'),
           maxWidth: 180,
-          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
           render: (date?: string) => <TicketTableDateStamp value={date} />,
         },
         {
@@ -555,7 +558,6 @@ const TicketTable: React.FC<Props> = ({
           width: 120,
           minWidth: estimateHeaderMinWidth('Обновлено'),
           maxWidth: 180,
-          onCell: (record) => ({ className: resolveNewTicketAgeClass(record, warningHours, criticalHours, ageClock) }),
           render: (date?: string) => <TicketTableDateStamp value={date} />,
         },
         {
@@ -657,7 +659,7 @@ const TicketTable: React.FC<Props> = ({
         render: (value?: string) => <DataTableTextCell value={value} fallback="Сотрудник" />,
       },
     ];
-  }, [ageClock, criticalHours, ticketLinkRel, ticketLinkTarget, variant, warningHours]);
+  }, [ageClock, criticalHours, ticketLinkRel, ticketLinkTarget, token.colorErrorBg, token.colorWarningBg, variant, warningHours]);
 
   const columnsBaseWithSort = useMemo<TicketTableColumn[]>(() => (
     columnsBase.map((column) => ({

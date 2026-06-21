@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Card, Empty, Input, Select, Skeleton, Space, Statistic, Table, Tag, Typography } from 'antd';
@@ -52,9 +52,11 @@ const AgentsPage: React.FC = () => {
   const inventoryFilter = ((searchParams.get('inventory') || 'all').trim() || 'all') as InventoryFilterValue;
   const [searchValue, setSearchValue] = useState(term);
   const debouncedSearchValue = useDebouncedValue(searchValue, TEXT_SEARCH_DEBOUNCE_MS);
+  const hasPendingLocalSearch = useRef(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
+    hasPendingLocalSearch.current = false;
     setSearchValue(term);
   }, [term]);
 
@@ -79,6 +81,10 @@ const AgentsPage: React.FC = () => {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
+    if (!hasPendingLocalSearch.current) {
+      return;
+    }
+    hasPendingLocalSearch.current = false;
     if (debouncedSearchValue.trim() === term) {
       return;
     }
@@ -360,8 +366,14 @@ const AgentsPage: React.FC = () => {
               allowClear
               placeholder="Поиск по hostname, uuid, fingerprint или owner_id"
               value={searchValue}
-              onChange={(event) => setSearchValue(event.target.value)}
-              onSearch={(value) => updateFilters({ q: value })}
+              onChange={(event) => {
+                hasPendingLocalSearch.current = true;
+                setSearchValue(event.target.value);
+              }}
+              onSearch={(value) => {
+                hasPendingLocalSearch.current = false;
+                updateFilters({ q: value });
+              }}
               style={{ width: 420, maxWidth: '100%' }}
             />
             <Select
