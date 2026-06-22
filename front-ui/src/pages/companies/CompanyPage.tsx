@@ -86,14 +86,12 @@ const CompanyPage: React.FC = () => {
     queryKey: ['company', id],
     queryFn: () => companiesApi.getCompany(id!),
     enabled: !!id,
-    placeholderData: (previous) => previous,
   });
 
   const { data: infraRes, isLoading: loadingInfra } = useQuery({
     queryKey: ['company', id, 'infra'],
     queryFn: () => companiesApi.getInfrastructure(id!),
     enabled: !!id,
-    placeholderData: (previous) => previous,
   });
 
   const { data: companyDeletionCandidateRes } = useQuery({
@@ -154,7 +152,7 @@ const CompanyPage: React.FC = () => {
     enabled: isContractHistoryOpen && Boolean(companyID),
   });
 
-  const { data: bitrixMapping } = useQuery({
+  const { data: bitrixMapping, isLoading: loadingBitrixMapping } = useQuery({
     queryKey: ['company-bitrix-mapping', companyID, 'company-card'],
     queryFn: () => companiesApi.getBitrixMappingByCompanyID(companyID),
     enabled: Boolean(companyID),
@@ -169,6 +167,8 @@ const CompanyPage: React.FC = () => {
   });
 
   const bitrixMappingLabel = formatMappedServicePointLabel(bitrixMapping || {});
+  const isBitrixManagedContract = Boolean(bitrixMapping?.bitrix_service_point_id);
+  const canEditManualContract = canEditContract && !loadingBitrixMapping && !isBitrixManagedContract;
   const bitrixMappingContent = bitrixMapping?.bitrix_service_point_id ? (
     <Space size={8} wrap>
       <Text>{bitrixMapping.bitrix_service_point_name || `ID ${bitrixMapping.bitrix_service_point_id}`}</Text>
@@ -395,6 +395,15 @@ const CompanyPage: React.FC = () => {
       contract_state: ((contractRes?.data?.state) === 'active' ? 'active' : 'inactive'),
     });
   }, [contractRes?.data?.services, contractRes?.data?.state, contractForm, contractType, isContractEditOpen]);
+
+  useEffect(() => {
+    if (!isBitrixManagedContract) {
+      return;
+    }
+    setIsContractEditOpen(false);
+    setContractEditID('');
+    setSpreadCompanyID(undefined);
+  }, [isBitrixManagedContract]);
 
   const updateCompanyMutation = useMutation({
     mutationFn: async (values: { title: string; address: string; parent_id?: string }) => {
@@ -631,6 +640,12 @@ const CompanyPage: React.FC = () => {
   };
 
   const openContractEdit = (targetContract?: ContractDetailDTO) => {
+    if (!canEditManualContract) {
+      if (isBitrixManagedContract) {
+        message.info('Контракт управляется сопоставленной точкой Bitrix24 и доступен только для просмотра.');
+      }
+      return;
+    }
     const targetContractID = String(targetContract?.id || contractID || '').trim();
     setContractEditID(targetContractID);
     const sourceContract = targetContract || contractRes?.data;
@@ -994,7 +1009,7 @@ const CompanyPage: React.FC = () => {
                 </Space>
               </button>
             </div>
-          ) : canEditContract ? (
+          ) : canEditManualContract ? (
             <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openContractEdit()}>
               Создать контракт
             </Button>
@@ -1094,7 +1109,7 @@ const CompanyPage: React.FC = () => {
             style: { cursor: 'pointer' },
             onClick: () => {
               const rowContractID = String(record.id || '').trim();
-              if (canEditContract && rowContractID && rowContractID === latestActiveContractID) {
+              if (canEditManualContract && rowContractID && rowContractID === latestActiveContractID) {
                 setIsContractHistoryOpen(false);
                 openContractEdit(record);
                 return;
@@ -1104,7 +1119,7 @@ const CompanyPage: React.FC = () => {
             onKeyDown: (event) => {
               if (event.key !== 'Enter') return;
               const rowContractID = String(record.id || '').trim();
-              if (canEditContract && rowContractID && rowContractID === latestActiveContractID) {
+              if (canEditManualContract && rowContractID && rowContractID === latestActiveContractID) {
                 setIsContractHistoryOpen(false);
                 openContractEdit(record);
                 return;

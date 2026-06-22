@@ -309,7 +309,7 @@ const CompaniesListPage: React.FC = () => {
     staleTime: 15_000,
   });
 
-  const { data: companiesLookupData } = useQuery({
+  const { data: companiesLookupData, isFetching: isCompaniesLookupFetching } = useQuery({
     queryKey: ['companies', 'mapping-lookup', companyLookupAppliedTerm],
     queryFn: () => companiesApi.searchCompanies(companyLookupAppliedTerm, 40, 0),
     enabled: canMapBitrix && editingPointID !== null,
@@ -710,13 +710,9 @@ const CompaniesListPage: React.FC = () => {
             setPointDrafts((prev) => ({ ...prev, [pointID]: normalizeCompanyIDs(value) }));
           }}
           onClear={resetCompanyLookup}
-          onOpenChange={(open) => {
-            if (open) {
-              resetCompanyLookup();
-            }
-          }}
           placeholder="Выберите компанию"
           filterOption={false}
+          notFoundContent={isCompaniesLookupFetching ? <Spin size="small" /> : null}
         />
         <Tooltip title={dirty ? 'Подтвердить сопоставление' : 'Нет изменений'}>
           <Button
@@ -750,6 +746,7 @@ const CompaniesListPage: React.FC = () => {
     resetCompanyLookup,
     startPointMappingEdit,
     updateMappingDropdownWidth,
+    isCompaniesLookupFetching,
     updateMutation.isPending,
   ]);
 

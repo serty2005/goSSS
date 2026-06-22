@@ -168,7 +168,7 @@ func (r *contractRepo) DeactivateActiveContractsExcept(ctx context.Context, comp
 		Select("contract_id").
 		Where("company_id = ?", companyID)
 	return db.Model(&contract.Contract{}).
-		Where("id IN (?) AND id <> ? AND state = ?", linkedContracts, keepContractID, "active").
+		Where("id IN (?) AND id <> ?", linkedContracts, keepContractID).
 		Update("state", "inactive").Error
 }
 

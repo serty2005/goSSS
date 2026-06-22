@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/common"
 	"etalon-server/internal/domain/company"
 	contractdom "etalon-server/internal/domain/contract"
@@ -151,6 +152,94 @@ func TestService_SyncDailySnapshots_PrefersMailContractOverNativeContract(t *tes
 	}
 	if refreshedNative.State == nil || *refreshedNative.State != "inactive" {
 		t.Fatalf("ожидали деактивацию устаревшего контракта, получили %v", refreshedNative.State)
+	}
+}
+
+func TestService_SyncDailySnapshots_UsesBitrixPointStatusInsteadOfContractType(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:TestServiceSyncDailySnapshotsUsesBitrixPointStatusInsteadOfContractType?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть in-memory БД: %v", err)
+	}
+
+	if err := db.AutoMigrate(&company.Company{}, &contractdom.Contract{}); err != nil {
+		t.Fatalf("не удалось подготовить схему: %v", err)
+	}
+
+	ctx := t.Context()
+	companyRepo := repositories.NewCompanyRepo(db)
+	contractRepo := repositories.NewContractRepo(db)
+
+	activeContract := false
+	title := "Компания с выключенным контрактом точки"
+	comp := &company.Company{
+		Title:          &title,
+		ActiveContract: &activeContract,
+	}
+	if err := companyRepo.Create(ctx, comp); err != nil {
+		t.Fatalf("не удалось создать компанию: %v", err)
+	}
+
+	nativeState := "active"
+	native := &contractdom.Contract{
+		Base:  common.Base{ID: "native-active-contract-for-bitrix-point"},
+		State: &nativeState,
+	}
+	if err := contractRepo.Create(ctx, native); err != nil {
+		t.Fatalf("не удалось создать старый контракт: %v", err)
+	}
+	if err := contractRepo.ReplaceCompanyLinks(ctx, native, []string{comp.ID}); err != nil {
+		t.Fatalf("не удалось привязать старый контракт: %v", err)
+	}
+
+	svc := NewService(
+		logger.New("", "test", "error", true),
+		dbinfra.NewGormTransactor(db),
+		contractRepo,
+		companyRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	contractOn := false
+	contractType := "TS Standart"
+	snapshot := BuildDailySnapshotFromBitrixServicePoint(comp.ID, bitrix.ServicePoint{
+		B24ElementID: 777,
+		Name:         "Точка с выключенным контрактом",
+		ContractOn:   &contractOn,
+		ContractType: &contractType,
+	})
+
+	if snapshot.Active {
+		t.Fatalf("ожидали неактивный снимок при ContractOn=false и типе %q", contractType)
+	}
+	if err := svc.SyncDailySnapshot(ctx, snapshot); err != nil {
+		t.Fatalf("SyncDailySnapshot завершился ошибкой: %v", err)
+	}
+
+	managed, err := contractRepo.GetByID(ctx, mailManagedContractID(comp.ID))
+	if err != nil {
+		t.Fatalf("не удалось прочитать managed-контракт: %v", err)
+	}
+	if managed.State == nil || *managed.State != "inactive" {
+		t.Fatalf("ожидали неактивный managed-контракт, получили %v", managed.State)
+	}
+
+	refreshedNative, err := contractRepo.GetByID(ctx, native.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать старый контракт: %v", err)
+	}
+	if refreshedNative.State == nil || *refreshedNative.State != "inactive" {
+		t.Fatalf("ожидали деактивацию старого контракта, получили %v", refreshedNative.State)
+	}
+
+	refreshedCompany, err := companyRepo.GetByID(ctx, comp.ID)
+	if err != nil {
+		t.Fatalf("не удалось перечитать компанию: %v", err)
+	}
+	if refreshedCompany.ActiveContract == nil || *refreshedCompany.ActiveContract {
+		t.Fatalf("ожидали неактивный статус компании, получили %v", refreshedCompany.ActiveContract)
 	}
 }
 

@@ -106,7 +106,7 @@ func (s *serviceImpl) syncDailySnapshots(ctx context.Context, snapshots []contra
 func (s *serviceImpl) upsertDailySnapshot(ctx context.Context, contractID string, snapshot contract.DailyCompanyContractSnapshot) error {
 	snapshot.ContractType = NormalizeServicePointContractType(snapshot.ContractType)
 	state := "inactive"
-	if snapshot.Active || IsServicePointContractActive(nil, snapshot.ContractType) {
+	if snapshot.Active {
 		state = "active"
 	}
 

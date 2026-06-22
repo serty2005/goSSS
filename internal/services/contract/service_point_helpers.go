@@ -25,6 +25,10 @@ func NormalizeServicePointName(name string) string {
 // BuildDailySnapshotFromBitrixServicePoint собирает доменный снимок контракта по локальной точке Bitrix24.
 func BuildDailySnapshotFromBitrixServicePoint(companyID string, point bitrixdom.ServicePoint) contractdom.DailyCompanyContractSnapshot {
 	contractType := NormalizeServicePointContractType(derefString(point.ContractType))
+	active := false
+	if point.ContractOn != nil {
+		active = *point.ContractOn
+	}
 	return contractdom.DailyCompanyContractSnapshot{
 		CompanyID:        strings.TrimSpace(companyID),
 		ServicePointID:   point.B24ElementID,
@@ -32,7 +36,7 @@ func BuildDailySnapshotFromBitrixServicePoint(companyID string, point bitrixdom.
 		ServicePointCode: derefString(point.OneCCode),
 		ContractorID:     derefString(point.OneCCode),
 		ContractType:     contractType,
-		Active:           IsServicePointContractActive(point.ContractOn, contractType),
+		Active:           active,
 		StartDate:        point.ContractStart,
 		EndDate:          point.ContractEnd,
 		ClientOrder:      derefString(point.ClientOrder),
