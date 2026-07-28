@@ -8,6 +8,15 @@ const normalizeHex = (value: unknown, fallback: string) => {
   return /^#[\da-f]{6}$/.test(candidate) ? candidate : fallback;
 };
 
+// Режим темы хранится и в профиле на сервере, и в localStorage. localStorage привязан
+// к origin, поэтому при смене домена он пустой — режим берём из профиля.
+export const themeModeFromProfileConfig = (
+  profileConfig: UserProfileConfigDTO | undefined,
+): ThemeMode | undefined => {
+  const mode = profileConfig?.interface?.theme_mode;
+  return mode === 'light' || mode === 'dark' ? mode : undefined;
+};
+
 export const paletteFromProfileConfig = (
   profileConfig: UserProfileConfigDTO | undefined,
   mode: ThemeMode,

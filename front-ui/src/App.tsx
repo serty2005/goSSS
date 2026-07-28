@@ -11,6 +11,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useLocalizationStore } from '@/store/localizationStore';
 import { getThemeConfig, getThemeCssVariables, resolveThemePalette } from '@/theme/themeConfig';
 import { paletteFromProfileConfig } from '@/theme/profileConfig';
+import { useProfileThemeSync } from '@/theme/useProfileThemeSync';
 import { SSEProvider } from '@/features/realtime/SSEProvider';
 
 const MainLayout = lazy(() => import('@/components/layout/MainLayout'));
@@ -106,6 +107,8 @@ const App: React.FC = () => {
   const resetLocalizationCatalog = useLocalizationStore((state) => state.resetCatalog);
   const paletteByMode = paletteFromProfileConfig(profileConfig, themeMode);
   const resolvedPalette = resolveThemePalette(themeMode, paletteByMode);
+
+  useProfileThemeSync();
   const getInlineMessageContainer = useCallback(() => resolveInlineMessageHost(), []);
 
   useEffect(() => {
