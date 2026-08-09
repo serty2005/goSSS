@@ -376,6 +376,7 @@ func (h *SearchHandler) groupWorkstationsByOwner(ctx context.Context, workstatio
 					Teamviewer:       ws.Teamviewer,
 					Litemanager:      ws.Litemanager,
 					Rustdesk:         ws.Rustdesk,
+					Posrelay:         ws.Posrelay,
 				},
 			})
 		}

@@ -60,7 +60,7 @@ func (companyHandlerServiceStub) ListParents(context.Context, string, int) ([]co
 	}, nil
 }
 
-func (companyHandlerServiceStub) GetInfrastructure(context.Context, string) ([]api.FoundEntityDTO, error) {
+func (companyHandlerServiceStub) GetInfrastructure(context.Context, string, bool) ([]api.FoundEntityDTO, error) {
 	return nil, nil
 }
 

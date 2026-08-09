@@ -175,6 +175,7 @@ func toWorkstationResponse(item workstation.Workstation) map[string]interface{} 
 		"anydesk":            item.Anydesk,
 		"litemanager":        item.Litemanager,
 		"rustdesk":           item.Rustdesk,
+		"posrelay":           item.Posrelay,
 		"device_name":        item.DeviceName,
 		"server_id":          item.ServerID,
 		"is_new":             item.IsNew,

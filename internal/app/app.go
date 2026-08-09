@@ -421,6 +421,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		app.Logger.With("component", "company_service"),
 		app.Config,
 		transactor,
+		app.DB,
 		repos.CompanyRepo,
 		repos.ServerRepo,
 		repos.WorkstationRepo,

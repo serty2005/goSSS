@@ -1567,6 +1567,7 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 		ws.Litemanager = normRIDPtr(data.LitemanagerID)
 		ws.Rustdesk = normRIDPtr(data.RustdeskID)
 		ws.Anydesk = normRIDPtr(data.AnydeskID)
+		ws.Posrelay = normRIDPtr(data.PosrelayID)
 		ws.IdentityHash = strPtr(identity)
 		ws.LastModifiedDate = &observedAt
 		ws.LastUpdatedBy = updater
@@ -1637,6 +1638,9 @@ func (s *agentObservationRepo) applyWorkstation(tx *gorm.DB, observationID uint,
 	}
 	if rd := normRIDPtr(data.RustdeskID); rd != nil {
 		updates["rustdesk"] = *rd
+	}
+	if pr := normRIDPtr(data.PosrelayID); pr != nil {
+		updates["posrelay"] = *pr
 	}
 
 	if err := tx.Model(&workstation.Workstation{}).Where("id = ?", ws.ID).Updates(updates).Error; err != nil {

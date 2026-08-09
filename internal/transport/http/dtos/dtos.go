@@ -310,6 +310,7 @@ type AgentDataDTO struct {
 	AnydeskID        string        `json:"anydesk_id"`
 	LitemanagerID    string        `json:"litemanager_id"`
 	RustdeskID       string        `json:"rustdesk_id"`
+	PosrelayID       string        `json:"pr_id"`
 	CurrentTime      string        `json:"current_time"`
 	VTime            string        `json:"v_time,omitempty"`
 	AgentVersion     string        `json:"agent_version"`
@@ -567,6 +568,7 @@ func (a *AgentDataDTO) UnmarshalJSON(data []byte) error {
 	delete(raw, "anydesk_id")
 	delete(raw, "litemanager_id")
 	delete(raw, "rustdesk_id")
+	delete(raw, "pr_id")
 	delete(raw, "current_time")
 	delete(raw, "v_time")
 	delete(raw, "agent_version")
@@ -939,6 +941,7 @@ type WorkstationRichDTO struct {
 	Teamviewer       *string     `json:"teamviewer,omitempty"`
 	Litemanager      *string     `json:"litemanager,omitempty"`
 	Rustdesk         *string     `json:"rustdesk,omitempty"`
+	Posrelay         *string     `json:"posrelay,omitempty"`
 }
 
 // FiscalRegisterRichDTO содержит полный набор полей Фискального регистратора для UI.

@@ -9,6 +9,7 @@ import (
 	contractdom "etalon-server/internal/domain/contract"
 	"etalon-server/internal/domain/fiscal"
 	"etalon-server/internal/domain/interfaces"
+	"etalon-server/internal/domain/models"
 	"etalon-server/internal/domain/repositories"
 	"etalon-server/internal/domain/server"
 	"etalon-server/internal/domain/workstation"
@@ -21,12 +22,15 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"gorm.io/gorm"
 )
 
 type serviceImpl struct {
 	logger          logger.LoggerInterface
 	cfg             *config.Config
 	tm              interfaces.Transactor
+	db              *gorm.DB
 	companyRepo     company.Repository
 	serverRepo      server.Repository
 	workstationRepo workstation.Repository
@@ -41,6 +45,7 @@ func NewService(
 	logger logger.LoggerInterface,
 	cfg *config.Config,
 	tm interfaces.Transactor,
+	db *gorm.DB,
 	companyRepo company.Repository,
 	serverRepo server.Repository,
 	workstationRepo workstation.Repository,
@@ -53,6 +58,7 @@ func NewService(
 		logger:          logger,
 		cfg:             cfg,
 		tm:              tm,
+		db:              db,
 		companyRepo:     companyRepo,
 		serverRepo:      serverRepo,
 		workstationRepo: workstationRepo,
@@ -61,6 +67,24 @@ func NewService(
 		bitrixRepo:      bitrixRepo,
 		contractSvc:     contractSvc,
 	}
+}
+
+// loadPendingDeletionKeys возвращает набор ключей "entity_type|entity_id" для сущностей,
+// у которых есть активный (PENDING) кандидат на удаление. Такие сущности ещё не удалены
+// физически (DeletedAt не проставлен), но должны скрываться из карточек оборудования.
+func (s *serviceImpl) loadPendingDeletionKeys(ctx context.Context) (map[string]struct{}, error) {
+	var rows []models.EntityDeletionCandidate
+	err := s.db.WithContext(ctx).
+		Where("status = ? AND entity_type IN ?", models.EntityDeletionCandidateStatusPending, []string{"Server", "Workstation", "FiscalRegister"}).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		keys[row.EntityType+"|"+row.EntityID] = struct{}{}
+	}
+	return keys, nil
 }
 
 func (s *serviceImpl) CreateCompany(ctx context.Context, dto *api.CompanyCreateDTO) (*company.Company, error) {
@@ -147,7 +171,7 @@ func (s *serviceImpl) GetChildren(ctx context.Context, companyID string) ([]comp
 }
 
 // GetInfrastructure возвращает плоский список оборудования компании.
-func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error) {
+func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string, excludePendingDeletion bool) ([]api.FoundEntityDTO, error) {
 	// 1. Проверяем существование компании
 	comp, err := s.companyRepo.GetByID(ctx, companyID)
 	if err != nil {
@@ -165,6 +189,20 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	pendingDeletionKeys := map[string]struct{}{}
+	if excludePendingDeletion {
+		keys, err := s.loadPendingDeletionKeys(ctx)
+		if err != nil {
+			s.logger.Error("GetInfrastructure: ошибка получения кандидатов на удаление", "error", err)
+		} else {
+			pendingDeletionKeys = keys
+		}
+	}
+	isPendingDeletion := func(entityType, entityID string) bool {
+		_, ok := pendingDeletionKeys[entityType+"|"+entityID]
+		return ok
+	}
+
 	// 2. Параллельно запрашиваем оборудование
 	wg.Add(3)
 
@@ -177,6 +215,9 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 			return
 		}
 		for _, srv := range servers {
+			if isPendingDeletion("Server", srv.ID) {
+				continue
+			}
 			// Получаем внешний ID
 			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", srv.ID)
 			var extUUID *string
@@ -235,6 +276,9 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 			return
 		}
 		for _, ws := range workstations {
+			if isPendingDeletion("Workstation", ws.ID) {
+				continue
+			}
 			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 			var extUUID *string
 			if link != nil {
@@ -259,6 +303,7 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 					Teamviewer:       ws.Teamviewer,
 					Litemanager:      ws.Litemanager,
 					Rustdesk:         ws.Rustdesk,
+					Posrelay:         ws.Posrelay,
 				},
 			}
 			mu.Lock()
@@ -276,6 +321,9 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string) (
 			return
 		}
 		for _, fr := range frs {
+			if isPendingDeletion("FiscalRegister", fr.ID) {
+				continue
+			}
 			link, _ := s.linkRepo.GetByInternalID(ctx, nil, "naumen", fr.ID)
 			var extUUID *string
 			if link != nil {

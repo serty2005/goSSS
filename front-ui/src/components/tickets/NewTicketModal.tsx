@@ -302,7 +302,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
 
   const { data: infrastructureData, isLoading: isInfrastructureLoading } = useQuery({
     queryKey: ['company-infrastructure', selectedCompanyId],
-    queryFn: () => companiesApi.getInfrastructure(selectedCompanyId ?? ''),
+    queryFn: () => companiesApi.getInfrastructure(selectedCompanyId ?? '', { excludePendingDeletion: true }),
     enabled: open && Boolean(selectedCompanyId),
     staleTime: 30_000,
   });
@@ -310,7 +310,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
   const parentCompanyID = selectedCompanyId ? companyMeta[selectedCompanyId]?.parent_id : undefined;
   const { data: parentInfrastructureData, isLoading: isParentInfrastructureLoading } = useQuery({
     queryKey: ['company-parent-infrastructure', parentCompanyID],
-    queryFn: () => companiesApi.getInfrastructure(parentCompanyID ?? ''),
+    queryFn: () => companiesApi.getInfrastructure(parentCompanyID ?? '', { excludePendingDeletion: true }),
     enabled: open && Boolean(parentCompanyID) && parentCompanyID !== selectedCompanyId,
     staleTime: 30_000,
   });
@@ -435,6 +435,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       { label: 'rdp', value: data.rdp as string | undefined },
       { label: 'LM', value: data.litemanager as string | undefined },
       { label: 'RustDesk', value: data.rustdesk as string | undefined },
+      ...(item.entity_type === 'Workstation' ? [{ label: 'POSRelay', value: data.posrelay as string | undefined }] : []),
       ...(item.entity_type === 'Server'
         ? [
           ...(iikoWebMeta ? [{ label: iikoWebMeta.label, value: iikoWebMeta.url, isLink: true }] : []),

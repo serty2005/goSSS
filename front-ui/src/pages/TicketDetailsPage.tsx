@@ -24,7 +24,7 @@ import { getPrimaryTicketPhone, getPrimaryTicketTelegram } from '@/utils/ticketC
 import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { useAuthStore } from '@/store/authStore';
-import { isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
+import { getTicketStatusMeta, isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 import AgentBadge from '@/components/agents/AgentBadge';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
@@ -85,6 +85,8 @@ const historyLabel = (entry: TicketHistoryDTO) => {
   }
 };
 
+const HISTORY_HTML_CONTENT_ACTIONS = new Set(['comment_added', 'comment_updated', 'comment_deleted']);
+
 const historySourceLabel = (source?: string) => {
   if (source === 'ui') return 'UI';
   if (source === 'bitrix') return 'Bitrix24';
@@ -98,6 +100,32 @@ const historyActorLabel = (entry: TicketHistoryDTO) => {
   if (entry.source === 'servicedesk') return 'ServiceDesk';
   if (entry.source === 'ui') return 'Сотрудник';
   return 'Система';
+};
+
+const renderHistoryDiffBadge = (prefix: string, entry: TicketHistoryDTO, value: string) => {
+  if (entry.action === 'connection_copied') {
+    return (
+      <Space size={4} key={`${prefix}-${value}`}>
+        <Text type="secondary">{prefix}:</Text>
+        <Text code>{value}</Text>
+      </Space>
+    );
+  }
+  if (entry.field === 'status') {
+    const meta = getTicketStatusMeta(value);
+    return (
+      <Space size={4} key={`${prefix}-${value}`}>
+        <Text type="secondary">{prefix}:</Text>
+        <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.label}</Tag>
+      </Space>
+    );
+  }
+  return (
+    <Space size={4} key={`${prefix}-${value}`}>
+      <Text type="secondary">{prefix}:</Text>
+      <Tag style={{ marginInlineEnd: 0 }}>{value}</Tag>
+    </Space>
+  );
 };
 
 const resolveTicketCreatedSource = (metadata?: TicketDetailsDTO['metadata']) => {
@@ -468,6 +496,8 @@ const TicketDetailsPage: React.FC = () => {
   const [highlightedComments, setHighlightedComments] = useState<Record<string, boolean>>({});
   const [copiedFieldKey, setCopiedFieldKey] = useState('');
   const [observationTarget, setObservationTarget] = useState<AgentObservationLookupTarget | null>(null);
+  const [editingWorkstationID, setEditingWorkstationID] = useState<string | null>(null);
+  const [workstationNameDraft, setWorkstationNameDraft] = useState('');
   const previousMetadataRef = useRef<TicketDetailsDTO['metadata'] | undefined>(undefined);
   const previousCommentsRef = useRef<Array<{ uuid: string; text: string; creation_date: string }>>([]);
   const commentComposerRef = useRef<HTMLDivElement | null>(null);
@@ -513,6 +543,22 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] }),
     ]);
   }, [id, queryClient]);
+  const renameWorkstationMutation = useMutation({
+    mutationFn: ({ entityID, name }: { entityID: string; name: string }) => equipmentApi.updateWorkstation(entityID, { device_name: name }),
+    onSuccess: async () => {
+      message.success('Имя станции обновлено');
+      await refreshTicketInfrastructure();
+    },
+    onError: () => message.error('Не удалось обновить имя станции'),
+  });
+  const commitWorkstationRename = () => {
+    const entityID = editingWorkstationID;
+    setEditingWorkstationID(null);
+    if (!entityID) return;
+    const trimmed = workstationNameDraft.trim();
+    if (!trimmed) return;
+    renameWorkstationMutation.mutate({ entityID, name: trimmed });
+  };
   const isCommentAuthor = (comment?: Pick<TicketCommentDTO, 'author_name' | 'author_user_id'>) => {
     const authorUserID = Number(comment?.author_user_id || 0);
     if (authorUserID > 0 && user?.id) {
@@ -610,7 +656,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const { data: infraResponse, isLoading: isInfraLoading } = useQuery({
     queryKey: ['company-infra', metadata?.company_id],
-    queryFn: () => companiesApi.getInfrastructure(metadata?.company_id || ''),
+    queryFn: () => companiesApi.getInfrastructure(metadata?.company_id || '', { excludePendingDeletion: true }),
     enabled: Boolean(metadata?.company_id),
     staleTime: 30_000,
   });
@@ -635,7 +681,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const { data: parentInfraResponse, isLoading: isParentInfraLoading } = useQuery({
     queryKey: ['company-parent-infra', parentCompanyID],
-    queryFn: () => companiesApi.getInfrastructure(parentCompanyID),
+    queryFn: () => companiesApi.getInfrastructure(parentCompanyID, { excludePendingDeletion: true }),
     enabled: Boolean(parentCompanyID),
     staleTime: 30_000,
   });
@@ -1433,19 +1479,55 @@ const TicketDetailsPage: React.FC = () => {
     );
   };
 
-  const renderEditLink = (path: string, title: string) => (
-    <Tooltip title={title}>
-      <Button
-        type="text"
-        size="small"
-        icon={<EditOutlined />}
-        href={path}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={title}
-      />
-    </Tooltip>
-  );
+  const renderEntityTitleLink = (path: string, title: string, tooltipTitle: string) => {
+    if (!path) {
+      return <Text strong>{title}</Text>;
+    }
+    return (
+      <Tooltip title={tooltipTitle}>
+        <a href={path} target="_blank" rel="noreferrer">
+          <Text strong>{title}</Text>
+        </a>
+      </Tooltip>
+    );
+  };
+
+  const renderWorkstationNameCell = (entityID: string, path: string, title: string) => {
+    if (entityID && editingWorkstationID === entityID) {
+      return (
+        <Input
+          autoFocus
+          size="small"
+          style={{ maxWidth: 220 }}
+          value={workstationNameDraft}
+          onChange={(event) => setWorkstationNameDraft(event.target.value)}
+          onBlur={commitWorkstationRename}
+          onPressEnter={commitWorkstationRename}
+        />
+      );
+    }
+    return renderEntityTitleLink(path, title, 'Открыть карточку рабочей станции');
+  };
+
+  const renderWorkstationRenameButton = (entityID: string, title: string) => {
+    if (!entityID || editingWorkstationID === entityID) {
+      return null;
+    }
+    return (
+      <Tooltip title="Переименовать станцию">
+        <Button
+          type="text"
+          size="small"
+          icon={<EditOutlined />}
+          onClick={() => {
+            setEditingWorkstationID(entityID);
+            setWorkstationNameDraft(title);
+          }}
+          aria-label="Переименовать станцию"
+        />
+      </Tooltip>
+    );
+  };
 
   const renderAgentBadge = (target: AgentObservationLookupTarget, agentType?: string) => {
     const agentID = target.agentID;
@@ -1565,15 +1647,16 @@ const TicketDetailsPage: React.FC = () => {
       { label: 'TeamViewer', field: 'teamviewer', value: normalizeTextValue(dataRow.teamviewer) },
       { label: 'LiteManager', field: 'litemanager', value: normalizeTextValue(dataRow.litemanager) },
       { label: 'RustDesk', field: 'rustdesk', value: normalizeTextValue(dataRow.rustdesk) },
+      { label: 'POSRelay', field: 'posrelay', value: normalizeTextValue(dataRow.posrelay) },
       { label: 'RDP', field: 'rdp', value: normalizeTextValue(dataRow.rdp) },
     ].filter((row) => row.value);
     return (
       <Card key={`workstation-${entityID || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space className="ticket-equipment-card__header">
-            <Text strong>{title}</Text>
+            {renderWorkstationNameCell(entityID, path, title)}
             <Space size={4}>
-              {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
+              {renderWorkstationRenameButton(entityID, title)}
             </Space>
           </Space>
           {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
@@ -1601,10 +1684,9 @@ const TicketDetailsPage: React.FC = () => {
       <Card key={`fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} size="small" className="glass-panel ticket-equipment-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space className="ticket-equipment-card__header">
-            <Text strong>{title}</Text>
+            {renderEntityTitleLink(path, title, 'Открыть карточку фискального регистратора')}
             <Space size={4}>
               {renderFiscalFnBadge(fnExpireDate)}
-              {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
             </Space>
           </Space>
           <Text type="secondary">Серийный номер: {normalizeTextValue(dataRow.serial_number) || '-'}</Text>
@@ -1630,14 +1712,13 @@ const TicketDetailsPage: React.FC = () => {
     const fiscalIDs = group.fiscals
       .map((item) => normalizeTextValue(toInfraData(item).uuid))
       .filter(Boolean);
+    const agentBadgeNode = renderAgentBadge({ agentID: group.agentID, workstationIDs, fiscalIDs }, group.agentType);
+    const hasWorkstations = group.workstations.length > 0;
 
     return (
       <Card key={group.key} size="small" className="glass-panel ticket-equipment-card ticket-agent-equipment-card">
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <div className="ticket-agent-equipment-card__badge-row">
-            {renderAgentBadge({ agentID: group.agentID, workstationIDs, fiscalIDs }, group.agentType)}
-          </div>
-        {group.workstations.map((item) => {
+        {group.workstations.map((item, index) => {
           const dataRow = toInfraData(item);
           const entityID = normalizeTextValue(dataRow.uuid);
           const path = entityID ? `/workstations/${entityID}` : '';
@@ -1647,15 +1728,17 @@ const TicketDetailsPage: React.FC = () => {
             { label: 'TeamViewer', field: 'teamviewer', value: normalizeTextValue(dataRow.teamviewer) },
             { label: 'LiteManager', field: 'litemanager', value: normalizeTextValue(dataRow.litemanager) },
             { label: 'RustDesk', field: 'rustdesk', value: normalizeTextValue(dataRow.rustdesk) },
+            { label: 'POSRelay', field: 'posrelay', value: normalizeTextValue(dataRow.posrelay) },
             { label: 'RDP', field: 'rdp', value: normalizeTextValue(dataRow.rdp) },
           ].filter((row) => row.value);
 
           return (
             <div key={`agent-workstation-${entityID || title}`} className="ticket-agent-equipment-card__section">
               <Space className="ticket-equipment-card__header">
-                <Text strong>{title}</Text>
+                {renderWorkstationNameCell(entityID, path, title)}
                 <Space size={4}>
-                  {path ? renderEditLink(path, 'Открыть карточку рабочей станции') : null}
+                  {index === 0 ? agentBadgeNode : null}
+                  {renderWorkstationRenameButton(entityID, title)}
                 </Space>
               </Space>
               {remoteRows.length > 0 ? renderCopyValueGrid(remoteRows.map((row) => renderCopyValueRow({
@@ -1669,7 +1752,7 @@ const TicketDetailsPage: React.FC = () => {
             </div>
           );
         })}
-        {group.fiscals.map((item) => {
+        {group.fiscals.map((item, index) => {
           const dataRow = toInfraData(item);
           const entityID = normalizeTextValue(dataRow.uuid);
           const path = entityID ? `/fiscals/${entityID}` : '';
@@ -1681,10 +1764,10 @@ const TicketDetailsPage: React.FC = () => {
           return (
             <div key={`agent-fiscal-${entityID || normalizeTextValue(dataRow.serial_number) || title}`} className="ticket-agent-equipment-card__section">
               <Space className="ticket-equipment-card__header">
-                <Text strong>{title}</Text>
+                {renderEntityTitleLink(path, title, 'Открыть карточку фискального регистратора')}
                 <Space size={4}>
+                  {!hasWorkstations && index === 0 ? agentBadgeNode : null}
                   {renderFiscalFnBadge(fnExpireDate)}
-                  {path ? renderEditLink(path, 'Открыть карточку фискального регистратора') : null}
                 </Space>
               </Space>
               <Text type="secondary">Серийный номер: {normalizeTextValue(dataRow.serial_number) || '-'}</Text>
@@ -2495,27 +2578,39 @@ const TicketDetailsPage: React.FC = () => {
                               ) : (
                                 <List
                                   style={{ marginTop: 12 }}
+                                  className="ticket-history-list"
                                   dataSource={(details.history || []).slice().sort((a, b) => dayjs(b.created_at).valueOf() - dayjs(a.created_at).valueOf())}
-                                  renderItem={(item) => (
-                                    <List.Item key={`${item.id}-${item.created_at}`}>
-                                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                        <Text strong>{historyLabel(item)}</Text>
-                                        <Text type="secondary">
-                                          {dayjs(item.created_at).format('DD.MM.YYYY HH:mm')}
-                                          {' • '}
-                                          {historyActorLabel(item)}
-                                          {' • '}
-                                          {historySourceLabel(item.source)}
-                                        </Text>
-                                        {item.old_value && <Text type="secondary">Было: {item.old_value}</Text>}
-                                        {item.new_value && (
-                                          item.action === 'connection_copied' ?
-                                            <Text>Скопировано: {item.new_value}</Text> :
-                                            <Text>Стало: {item.new_value}</Text>
-                                        )}
-                                      </Space>
-                                    </List.Item>
-                                  )}
+                                  renderItem={(item) => {
+                                    const isHtmlContent = HISTORY_HTML_CONTENT_ACTIONS.has(item.action);
+                                    return (
+                                      <List.Item key={`${item.id}-${item.created_at}`} className="ticket-history-item">
+                                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                          <Text strong>{historyLabel(item)}</Text>
+                                          <Text type="secondary" style={{ fontSize: 12 }}>
+                                            {dayjs(item.created_at).format('DD.MM.YYYY HH:mm')}
+                                            {' • '}
+                                            {historyActorLabel(item)}
+                                            {' • '}
+                                            {historySourceLabel(item.source)}
+                                          </Text>
+                                          {isHtmlContent ? (
+                                            <div className="ticket-history-item__html-preview">
+                                              <SafeHtmlContent html={item.new_value || item.old_value || ''} style={{ whiteSpace: 'pre-wrap' }} />
+                                            </div>
+                                          ) : (
+                                            <Space size={6} wrap className="ticket-history-item__diff">
+                                              {item.old_value ? renderHistoryDiffBadge('Было', item, item.old_value) : null}
+                                              {item.new_value ? renderHistoryDiffBadge(
+                                                item.action === 'connection_copied' ? 'Скопировано' : 'Стало',
+                                                item,
+                                                item.new_value,
+                                              ) : null}
+                                            </Space>
+                                          )}
+                                        </Space>
+                                      </List.Item>
+                                    );
+                                  }}
                                 />
                               )}
                             </>

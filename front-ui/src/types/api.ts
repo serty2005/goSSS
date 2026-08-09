@@ -136,6 +136,7 @@ export interface WorkstationEntity {
   teamviewer?: string;
   litemanager?: string;
   rustdesk?: string;
+  posrelay?: string;
 
   health_status: "ok" | "attention_required" | "locked";
   status_details?: unknown;
@@ -1126,6 +1127,7 @@ export interface WorkstationDetailDTO {
   anydesk?: string;
   litemanager?: string;
   rustdesk?: string;
+  posrelay?: string;
   description?: string;
   health_status?: "ok" | "attention_required" | "locked";
   owner_id?: string;
@@ -1226,6 +1228,7 @@ export interface UpdateWorkstationPayload {
   teamviewer?: string;
   litemanager?: string;
   rustdesk?: string;
+  posrelay?: string;
   description?: string;
   owner_id?: string;
 }

@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS workstations
+  ADD COLUMN IF NOT EXISTS posrelay TEXT;

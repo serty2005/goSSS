@@ -225,6 +225,9 @@ const WorkstationDetails: React.FC = () => {
           <Descriptions.Item label="RustDesk">
             <InlineFieldEditor value={ws.rustdesk} editable={canEdit} onSave={(v) => saveField('rustdesk', v)} saving={updateMutation.isPending && activeField === 'rustdesk'} />
           </Descriptions.Item>
+          <Descriptions.Item label="POSRelay">
+            <InlineFieldEditor value={ws.posrelay} editable={canEdit} onSave={(v) => saveField('posrelay', v)} saving={updateMutation.isPending && activeField === 'posrelay'} />
+          </Descriptions.Item>
         </Descriptions>
       </Card>
 

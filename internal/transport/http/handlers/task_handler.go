@@ -418,6 +418,7 @@ func (h *TaskHandler) modelToWorkstationRichDTO(ctx context.Context, ws workstat
 		Teamviewer:    ws.Teamviewer,
 		Litemanager:   ws.Litemanager,
 		Rustdesk:      ws.Rustdesk,
+		Posrelay:      ws.Posrelay,
 	}
 	link, err := h.linkRepo.GetByInternalID(ctx, nil, "naumen", ws.ID)
 	if err == nil && link != nil {

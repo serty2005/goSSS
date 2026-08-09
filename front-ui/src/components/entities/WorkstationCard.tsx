@@ -123,7 +123,14 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
             </div>
           )}
 
-          {!data.anydesk && !data.teamviewer && !data.litemanager && !data.rustdesk && !data.description && (
+          {data.posrelay && (
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Text>POSRelay:</Text>
+              <Paragraph copyable={{ text: String(data.posrelay) }} style={{ margin: 0 }}>{String(data.posrelay)}</Paragraph>
+            </div>
+          )}
+
+          {!data.anydesk && !data.teamviewer && !data.litemanager && !data.rustdesk && !data.posrelay && !data.description && (
             <Text type="secondary" italic>Нет дополнительной информации</Text>
           )}
         </Space>

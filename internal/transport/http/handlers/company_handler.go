@@ -352,7 +352,8 @@ func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	items, err := h.service.GetInfrastructure(r.Context(), id)
+	excludePendingDeletion := r.URL.Query().Get("exclude_pending_deletion") == "true"
+	items, err := h.service.GetInfrastructure(r.Context(), id, excludePendingDeletion)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			middleware.GetLogger(r.Context()).Warn("company not found for infrastructure request", "id", id)

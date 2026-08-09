@@ -151,7 +151,7 @@ func (bitrixModuleCompanyServiceStub) ListParents(context.Context, string, int) 
 	return nil, nil
 }
 
-func (bitrixModuleCompanyServiceStub) GetInfrastructure(context.Context, string) ([]api.FoundEntityDTO, error) {
+func (bitrixModuleCompanyServiceStub) GetInfrastructure(context.Context, string, bool) ([]api.FoundEntityDTO, error) {
 	return nil, nil
 }
 

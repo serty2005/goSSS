@@ -15,7 +15,9 @@ type Service interface {
 	ListParents(ctx context.Context, term string, limit int) ([]ParentCompanyOption, error)
 
 	// GetInfrastructure возвращает список всего активного оборудования компании.
-	GetInfrastructure(ctx context.Context, companyID string) ([]api.FoundEntityDTO, error)
+	// Если excludePendingDeletion=true, сущности с активным (PENDING) кандидатом на удаление
+	// исключаются из результата (используется карточками тикетов).
+	GetInfrastructure(ctx context.Context, companyID string, excludePendingDeletion bool) ([]api.FoundEntityDTO, error)
 
 	// GetChildren возвращает список дочерних компаний для указанной hub-компании.
 	GetChildren(ctx context.Context, companyID string) ([]Company, error)

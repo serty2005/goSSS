@@ -1611,6 +1611,31 @@ body .ant-message .ant-message-notice-content {
   color: var(--app-color-primary);
 }
 
+.ticket-history-item {
+  align-items: flex-start;
+}
+
+.ticket-history-item__diff {
+  row-gap: 4px;
+}
+
+.ticket-history-item__html-preview {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--app-color-primary-soft);
+  border: 1px solid var(--app-color-border);
+  border-radius: 6px;
+}
+
+.ticket-history-item__html-preview p {
+  margin: 0 0 6px;
+}
+
+.ticket-history-item__html-preview p:last-child {
+  margin-bottom: 0;
+}
+
 .ticket-equipment-action-button .ticket-equipment-copy-row__label {
   color: var(--app-color-muted-text);
   font-size: 12px;

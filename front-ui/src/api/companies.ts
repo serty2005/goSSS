@@ -29,8 +29,12 @@ export const companiesApi = {
   },
 
   // Получение инфраструктуры (CMDB)
-  getInfrastructure: async (id: string) => {
-    const response = await apiClient.get<ApiResponse<InfrastructureItem[]>>(`/companies/${id}/infrastructure`);
+  // excludePendingDeletion скрывает сущности с активным кандидатом на удаление
+  // (используется карточками тикетов, где такое оборудование не должно предлагаться).
+  getInfrastructure: async (id: string, options?: { excludePendingDeletion?: boolean }) => {
+    const response = await apiClient.get<ApiResponse<InfrastructureItem[]>>(`/companies/${id}/infrastructure`, {
+      params: options?.excludePendingDeletion ? { exclude_pending_deletion: 'true' } : undefined,
+    });
     return response.data;
   },
 
