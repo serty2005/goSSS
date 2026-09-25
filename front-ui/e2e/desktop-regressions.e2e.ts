@@ -100,7 +100,40 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     expect(payload.contact_name).toBe('Ирина тест');
 
     await expect(dialog).toBeHidden();
+    const createdTicketLink = page.locator('.ant-message-notice-content').getByRole('link', { name: '#1101' });
+    await expect(createdTicketLink).toBeVisible();
+    await expect(createdTicketLink).toHaveAttribute('href', '/tickets/ticket-created-e2e');
     await expectDocumentHasNoHorizontalOverflow(page);
+    expectNoBrowserErrors(browserErrors);
+  });
+
+  test('создает тикет со страницы компании с предвыбранной компанией', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-модалку');
+
+    const browserErrors = collectBrowserErrors(page);
+    await loginAsAdmin(page);
+    await page.goto('/companies/company-1');
+
+    await page.getByRole('tab', { name: 'Тикеты' }).click();
+    await page.getByRole('button', { name: 'Создать тикет' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Новая заявка' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.ant-form-item').filter({ hasText: 'Компания' }).first()).toContainText('Ресторан Север');
+
+    await dialog.getByRole('combobox', { name: '* Тип заявки' }).click();
+    await page.keyboard.press('Enter');
+    await dialog.getByRole('combobox', { name: 'Точка обслуживания (Bitrix24)' }).click();
+    await page.keyboard.press('Enter');
+    await dialog.getByPlaceholder('Опишите проблему или запрос').fill('Заявка со страницы компании');
+    const [request] = await Promise.all([
+      page.waitForRequest((item) => item.method() === 'POST' && new URL(item.url()).pathname === '/api/tickets'),
+      dialog.getByRole('button', { name: 'Создать', exact: true }).click(),
+    ]);
+    const payload = JSON.parse(request.postData() || '{}') as { company_id?: string };
+    expect(payload.company_id).toBe('company-1');
+
+    await expect(dialog).toBeHidden();
+    await expect(page.locator('.ant-message-notice-content').getByRole('link', { name: '#1101' })).toBeVisible();
     expectNoBrowserErrors(browserErrors);
   });
 

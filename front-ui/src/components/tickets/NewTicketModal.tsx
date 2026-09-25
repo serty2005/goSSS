@@ -2,6 +2,7 @@
 import { AutoComplete, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { companiesApi } from '@/api/companies';
 import { telephonyApi } from '@/api/telephony';
 import { ticketsApi } from '@/api/tickets';
@@ -20,18 +21,7 @@ import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text, Paragraph } = Typography;
 
-interface Props {
-  open: boolean;
-  onClose: () => void;
-  presetCompany?: { id: string; title?: string } | null;
-  onCreated?: () => void;
-}
-
-const ACTIVE_TICKET_STATUSES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
-const RESOLVED_OR_CLOSED_TICKET_STATUSES = ['resolved', 'closed'];
-const MODAL_BODY_MAX_HEIGHT = 'calc(100vh - 240px)';
-
-type CompanyMeta = {
+export type CompanyMeta = {
   address?: string;
   additional?: string;
   title?: string;
@@ -40,6 +30,25 @@ type CompanyMeta = {
   active_contract?: boolean;
   contract_type?: string;
 };
+
+// meta позволяет сразу показать сведения о контракте предвыбранной компании, не дожидаясь поиска.
+export type NewTicketPresetCompany = {
+  id: string;
+  title?: string;
+  meta?: CompanyMeta;
+};
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  presetCompany?: NewTicketPresetCompany | null;
+  onCreated?: () => void;
+}
+
+const ACTIVE_TICKET_STATUSES = ['new', 'in_progress', 'pending', 'deferred', 'onsite', 'to_manager'];
+const RESOLVED_OR_CLOSED_TICKET_STATUSES = ['resolved', 'closed'];
+const MODAL_BODY_MAX_HEIGHT = 'calc(100vh - 240px)';
+const CREATED_MESSAGE_DURATION_SECONDS = 6;
 
 const getContractTypeBadgeMeta = (value?: string) => {
   const raw = String(value || '').trim();
@@ -67,6 +76,7 @@ const renderCompanyContractTags = (activeContract?: boolean, contractType?: stri
 const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreated }) => {
   const { t } = useTranslation(['common', 'tickets']);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [form] = Form.useForm();
   const [companySearch, setCompanySearch] = useState('');
   const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
@@ -261,6 +271,10 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         const exists = prev.some((opt) => opt.value === presetCompany.id);
         return exists ? prev : [option, ...prev];
       });
+      const presetMeta = presetCompany.meta;
+      if (presetMeta) {
+        setCompanyMeta((prev) => ({ ...prev, [presetCompany.id]: { ...presetMeta, ...prev[presetCompany.id] } }));
+      }
       form.setFieldsValue({ company_id: presetCompany.id });
     }
 
@@ -595,6 +609,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
     },
     onSuccess: async (response, values) => {
       const createdTicketID = String(response?.data?.id || '').trim();
+      const createdTicketNumber = response?.data?.number;
       let bindFailed = false;
       const selectedCallID = String(values.telephony_call_id || '').trim();
       const manualPhone = String(values.contact_phone || '').trim();
@@ -616,14 +631,42 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
         }
       }
 
+      const withTicketLink = (text: string): React.ReactNode => {
+        if (!createdTicketID || !createdTicketNumber) {
+          return text;
+        }
+        const ticketPath = `/tickets/${createdTicketID}`;
+        return (
+          <span>
+            {text}{' '}
+            <a
+              href={ticketPath}
+              onClick={(event) => {
+                // Ctrl/Cmd/Shift/средняя кнопка открывают тикет штатно в новой вкладке.
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                  return;
+                }
+                event.preventDefault();
+                navigate(ticketPath);
+              }}
+            >
+              #{createdTicketNumber}
+            </a>
+          </span>
+        );
+      };
+      const showCreatedMessage = (type: 'success' | 'warning', text: string) => {
+        message.open({ type, content: withTicketLink(text), duration: CREATED_MESSAGE_DURATION_SECONDS });
+      };
+
       if (selectedCallID && !bindFailed) {
-        message.success(t('tickets:newTicket.messages.createdAndLinked'));
+        showCreatedMessage('success', t('tickets:newTicket.messages.createdAndLinked'));
       } else if (manualPhone && !bindFailed) {
-        message.success(t('tickets:newTicket.messages.createdAndContactSaved'));
+        showCreatedMessage('success', t('tickets:newTicket.messages.createdAndContactSaved'));
       } else if (bindFailed) {
-        message.warning(t('tickets:newTicket.messages.createdLinkWarning'));
+        showCreatedMessage('warning', t('tickets:newTicket.messages.createdLinkWarning'));
       } else {
-        message.success(t('tickets:newTicket.messages.created'));
+        showCreatedMessage('success', t('tickets:newTicket.messages.created'));
       }
 
       form.resetFields();

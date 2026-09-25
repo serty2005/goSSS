@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, Tabs, Tag, Descriptions, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, Table, theme as antTheme, Popconfirm } from 'antd';
@@ -18,11 +18,14 @@ import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { formatServerEdition } from '@/utils/formatters';
 import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
-import { resolveCompanyID } from '@/utils/companyHierarchy';
+import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { formatMappedServicePointLabel } from './companyBitrixMappingState';
 import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 import { withApiError } from '@/utils/apiError';
 import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
+import type { NewTicketPresetCompany } from '@/components/tickets/NewTicketModal';
+
+const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 
 const { Title, Text } = Typography;
 
@@ -67,6 +70,7 @@ const CompanyPage: React.FC = () => {
   const [isCompanyEditOpen, setIsCompanyEditOpen] = useState(false);
   const [isContractEditOpen, setIsContractEditOpen] = useState(false);
   const [ticketScope, setTicketScope] = useState<'own' | 'with_children'>('own');
+  const [isCreateTicketOpen, setIsCreateTicketOpen] = useState(false);
   const [companyForm] = Form.useForm<{ title: string; address: string; parent_id?: string }>();
   const [contractForm] = Form.useForm<{ contract_type: string; contract_state: 'active' | 'inactive' }>();
   const [companySearch, setCompanySearch] = useState('');
@@ -133,6 +137,25 @@ const CompanyPage: React.FC = () => {
   const editableContractID = contractEditID || contractID || '';
   const contractType = company?.contract_type;
   const companyID = resolveCompanyID(company || {}) || company?.id || '';
+  const ticketPresetCompany = useMemo<NewTicketPresetCompany | null>(() => {
+    if (!company || !companyID) {
+      return null;
+    }
+    const title = resolveCompanyTitle(company);
+    return {
+      id: companyID,
+      title,
+      meta: {
+        title,
+        address: company.address || undefined,
+        additional: company.additional_name || undefined,
+        parent_title: resolveCompanyParentTitle(company) || undefined,
+        parent_id: company.parent_id || undefined,
+        active_contract: typeof company.active_contract === 'boolean' ? company.active_contract : undefined,
+        contract_type: company.contract_type || undefined,
+      },
+    };
+  }, [company, companyID]);
   const parentCompanyID = String(company?.parent_id || '').trim();
 
   const { data: contractHistoryRes, isLoading: loadingContractHistory } = useQuery({
@@ -852,7 +875,12 @@ const CompanyPage: React.FC = () => {
                 />
               )}
             </Space>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => console.log('Create Ticket')}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!ticketPresetCompany}
+              onClick={() => setIsCreateTicketOpen(true)}
+            >
               Создать тикет
             </Button>
           </div>
@@ -1259,6 +1287,15 @@ const CompanyPage: React.FC = () => {
           )}
         </Form>
       </Modal>
+      {isCreateTicketOpen && (
+        <Suspense fallback={null}>
+          <LazyNewTicketModal
+            open={isCreateTicketOpen}
+            onClose={() => setIsCreateTicketOpen(false)}
+            presetCompany={ticketPresetCompany}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };
