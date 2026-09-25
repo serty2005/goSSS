@@ -68,7 +68,7 @@ func (s *ticketHandlerServiceStub) UpdateDescription(context.Context, string, st
 func (s *ticketHandlerServiceStub) RefreshCommentsFromServiceDesk(context.Context, string) (int, error) {
 	return 0, nil
 }
-func (s *ticketHandlerServiceStub) UploadAttachments(context.Context, string, []*multipart.FileHeader) ([]tickets.Attachment, error) {
+func (s *ticketHandlerServiceStub) UploadAttachments(context.Context, string, []*multipart.FileHeader, string) ([]tickets.Attachment, error) {
 	return nil, nil
 }
 func (s *ticketHandlerServiceStub) Assign(context.Context, string, *uint, uint) (*tickets.Ticket, error) {

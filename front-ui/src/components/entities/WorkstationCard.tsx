@@ -8,6 +8,7 @@ import { getEntityIcon } from '@/utils/mappers';
 import { equipmentApi } from '@/api/equipment';
 import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import AgentBadge from '@/components/agents/AgentBadge';
+import { withApiError } from '@/utils/apiError';
 
 interface Props {
   data: WorkstationEntity;
@@ -33,7 +34,7 @@ const WorkstationCard: React.FC<Props> = ({ data }) => {
       queryClient.invalidateQueries({ queryKey: ['equipment', 'workstations'] });
       queryClient.invalidateQueries({ queryKey: ['workstation', data.uuid] });
     },
-    onError: () => message.error('Не удалось обновить имя станции'),
+    onError: (error) => message.error(withApiError('Не удалось обновить имя станции', error)),
   });
 
   const handleCardClick = () => {

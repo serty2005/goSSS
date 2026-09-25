@@ -4,6 +4,7 @@ import { TaskDTO, TaskResolutionPayload } from '@/types/api';
 import { tasksApi } from '@/api/tasks';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import TaskStatusTag from '@/components/common/TaskStatusTag';
+import { withApiError } from '@/utils/apiError';
 
 interface Props {
   task: TaskDTO | null;
@@ -25,7 +26,7 @@ const TaskResolutionModal: React.FC<Props> = ({ task, visible, onClose }) => {
       onClose();
       setComment('');
     },
-    onError: () => message.error('Ошибка при обработке задачи'),
+    onError: (error) => message.error(withApiError('Ошибка при обработке задачи', error)),
   });
 
   // Мутация для создания сущности в SD

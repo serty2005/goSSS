@@ -185,15 +185,13 @@ const EntityListToolbar: React.FC<EntityListToolbarProps> = ({
         }
 
         return (
-          <Space
+          <div
             key={`filters-row-${rowIndex}`}
-            wrap
-            size={12}
-            style={{ width: '100%', alignItems: 'flex-start' }}
+            style={{ display: 'flex', flexWrap: 'wrap', gap: 12, width: '100%', alignItems: 'flex-start' }}
           >
             {rowFilters.map(renderFilter)}
             {showColumnsHere ? renderColumnsButton() : null}
-          </Space>
+          </div>
         );
       })}
     </Space>

@@ -9,6 +9,7 @@ import { downloadBlob, extractFileNameFromContentDisposition } from '@/utils/rep
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { withApiError } from '@/utils/apiError';
 
 const { Text } = Typography;
 
@@ -64,8 +65,8 @@ const CompanyContractsReportPage: React.FC = () => {
       downloadBlob(payload.blob, fileName);
       message.success('Отчет выгружен');
     },
-    onError: () => {
-      message.error('Не удалось выгрузить отчет');
+    onError: (error) => {
+      message.error(withApiError('Не удалось выгрузить отчет', error));
     },
   });
   const exportReport = exportMutation.mutate;

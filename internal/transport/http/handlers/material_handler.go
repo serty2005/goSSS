@@ -12,6 +12,7 @@ import (
 	"etalon-server/internal/transport/http/response"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,7 @@ func NewMaterialHandler(db *gorm.DB, userRepo user.Repository) *MaterialHandler 
 func (h *MaterialHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/materials", func(r chi.Router) {
 		r.Get("/", h.List)
+		r.Get("/company-scope/{companyID}", h.CompanyScope)
 		r.Post("/", h.Create)
 		r.Get("/{id}", h.Get)
 		r.Put("/{id}", h.Update)
@@ -83,7 +85,7 @@ func (h *MaterialHandler) List(w http.ResponseWriter, r *http.Request) {
 	tx := h.db.WithContext(r.Context()).Model(&models.Material{})
 	if entityType != "" || entityID != "" {
 		if entityType == "" || entityID == "" {
-			response.RespondWithError(w, http.StatusBadRequest, "entity_type Рё entity_id РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ СѓРєР°Р·Р°РЅС‹ РІРјРµСЃС‚Рµ")
+			response.RespondWithError(w, http.StatusBadRequest, "entity_type и entity_id должны быть указаны вместе")
 			return
 		}
 		normalizedType, err := normalizeMaterialEntityType(entityType)
@@ -133,6 +135,178 @@ func (h *MaterialHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// materialSourceDTO описывает сущность, через которую материал попал в сводку компании.
+type materialSourceDTO struct {
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	Title      string `json:"title"`
+	Scope      string `json:"scope"`
+}
+
+type companyScopedMaterialDTO struct {
+	materialDTO
+	Sources []materialSourceDTO `json:"sources"`
+}
+
+const (
+	materialScopeCompany   = "company"
+	materialScopeParent    = "parent"
+	materialScopeEquipment = "equipment"
+)
+
+// CompanyScope возвращает материалы компании, ее родительской компании и оборудования компании.
+func (h *MaterialHandler) CompanyScope(w http.ResponseWriter, r *http.Request) {
+	companyID := strings.TrimSpace(chi.URLParam(r, "companyID"))
+	if companyID == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "ID компании обязателен")
+		return
+	}
+	ctx := r.Context()
+	db := h.db.WithContext(ctx)
+
+	var companyRow struct {
+		ID             string
+		Title          *string
+		AdditionalName *string
+		ParentID       *string
+	}
+	if err := db.Table("companies").
+		Select("id, title, additional_name, parent_id").
+		Where("id = ? AND deleted_at IS NULL", companyID).
+		Take(&companyRow).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Компания не найдена")
+			return
+		}
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить компанию: "+err.Error())
+		return
+	}
+
+	sources := map[string]materialSourceDTO{}
+	addSource := func(entityType, entityID, title, scope string) {
+		entityID = strings.TrimSpace(entityID)
+		if entityID == "" {
+			return
+		}
+		if strings.TrimSpace(title) == "" {
+			title = entityID
+		}
+		sources[entityType+":"+entityID] = materialSourceDTO{EntityType: entityType, EntityID: entityID, Title: title, Scope: scope}
+	}
+	addSource("Company", companyRow.ID, firstNonEmpty(companyRow.Title, companyRow.AdditionalName), materialScopeCompany)
+
+	if companyRow.ParentID != nil && strings.TrimSpace(*companyRow.ParentID) != "" && strings.TrimSpace(*companyRow.ParentID) != companyID {
+		var parentRow struct {
+			ID             string
+			Title          *string
+			AdditionalName *string
+		}
+		err := db.Table("companies").
+			Select("id, title, additional_name").
+			Where("id = ? AND deleted_at IS NULL", strings.TrimSpace(*companyRow.ParentID)).
+			Take(&parentRow).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить родительскую компанию: "+err.Error())
+			return
+		}
+		if err == nil {
+			addSource("Company", parentRow.ID, firstNonEmpty(parentRow.Title, parentRow.AdditionalName), materialScopeParent)
+		}
+	}
+
+	equipmentQueries := []struct {
+		entityType string
+		table      string
+		columns    string
+	}{
+		{"Server", "servers", "id, device_name AS name, server_name AS extra"},
+		{"Workstation", "workstations", "id, device_name AS name, NULL AS extra"},
+		{"FiscalRegister", "fiscal_registers", "id, model_kkt AS name, fr_serial_number AS extra"},
+	}
+	for _, item := range equipmentQueries {
+		var rows []struct {
+			ID    string
+			Name  *string
+			Extra *string
+		}
+		if err := db.Table(item.table).
+			Select(item.columns).
+			Where("owner_id = ? AND deleted_at IS NULL", companyID).
+			Scan(&rows).Error; err != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить оборудование компании: "+err.Error())
+			return
+		}
+		for _, row := range rows {
+			title := firstNonEmpty(row.Name, row.Extra)
+			if item.entityType == "FiscalRegister" {
+				title = strings.TrimSpace(strings.Join([]string{firstNonEmpty(row.Name), firstNonEmpty(row.Extra)}, " "))
+			}
+			addSource(item.entityType, row.ID, title, materialScopeEquipment)
+		}
+	}
+
+	conditions := make([]string, 0, len(sources))
+	args := make([]interface{}, 0, len(sources)*2)
+	for _, source := range sources {
+		conditions = append(conditions, "(entity_type = ? AND entity_id = ?)")
+		args = append(args, source.EntityType, source.EntityID)
+	}
+	var links []models.MaterialLink
+	if err := db.Where(strings.Join(conditions, " OR "), args...).Find(&links).Error; err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить связи материалов: "+err.Error())
+		return
+	}
+	if len(links) == 0 {
+		response.RespondWithJSON(w, http.StatusOK, []companyScopedMaterialDTO{})
+		return
+	}
+
+	materialSources := map[string][]materialSourceDTO{}
+	materialIDs := make([]string, 0, len(links))
+	for _, link := range links {
+		source, ok := sources[link.EntityType+":"+link.EntityID]
+		if !ok {
+			continue
+		}
+		if _, seen := materialSources[link.MaterialID]; !seen {
+			materialIDs = append(materialIDs, link.MaterialID)
+		}
+		materialSources[link.MaterialID] = append(materialSources[link.MaterialID], source)
+	}
+
+	var items []models.Material
+	if err := db.Preload("Links").
+		Where("id IN ?", materialIDs).
+		Order("updated_at DESC").
+		Find(&items).Error; err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить материалы: "+err.Error())
+		return
+	}
+
+	scopeOrder := map[string]int{materialScopeCompany: 0, materialScopeParent: 1, materialScopeEquipment: 2}
+	result := make([]companyScopedMaterialDTO, 0, len(items))
+	for _, item := range items {
+		itemSources := materialSources[item.ID]
+		sort.SliceStable(itemSources, func(i, j int) bool {
+			return scopeOrder[itemSources[i].Scope] < scopeOrder[itemSources[j].Scope]
+		})
+		result = append(result, companyScopedMaterialDTO{
+			materialDTO: toMaterialDTO(item),
+			Sources:     itemSources,
+		})
+	}
+	response.RespondWithJSON(w, http.StatusOK, result)
+}
+
+func firstNonEmpty(values ...*string) string {
+	for _, value := range values {
+		if value != nil && strings.TrimSpace(*value) != "" {
+			return strings.TrimSpace(*value)
+		}
+	}
+	return ""
+}
+
 func (h *MaterialHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	var item models.Material
@@ -161,7 +335,7 @@ func (h *MaterialHandler) Create(w http.ResponseWriter, r *http.Request) {
 	subject := strings.TrimSpace(payload.Subject)
 	content := strings.TrimSpace(payload.Content)
 	if subject == "" || content == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "РўРµРјР° Рё СЃРѕРґРµСЂР¶Р°РЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹")
+		response.RespondWithError(w, http.StatusBadRequest, "Тема и содержание обязательны")
 		return
 	}
 
@@ -171,7 +345,7 @@ func (h *MaterialHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(refs) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "РќСѓР¶РЅР° С…РѕС‚СЏ Р±С‹ РѕРґРЅР° РїСЂРёРІСЏР·РєР° Рє СЃСѓС‰РЅРѕСЃС‚Рё")
+		response.RespondWithError(w, http.StatusBadRequest, "Нужна хотя бы одна привязка к сущности")
 		return
 	}
 
@@ -221,7 +395,7 @@ func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
 	subject := strings.TrimSpace(payload.Subject)
 	content := strings.TrimSpace(payload.Content)
 	if subject == "" || content == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "РўРµРјР° Рё СЃРѕРґРµСЂР¶Р°РЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹")
+		response.RespondWithError(w, http.StatusBadRequest, "Тема и содержание обязательны")
 		return
 	}
 	refs, err := h.normalizeRefs(payload.EntityRefs)
@@ -230,7 +404,7 @@ func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(refs) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "РќСѓР¶РЅР° С…РѕС‚СЏ Р±С‹ РѕРґРЅР° РїСЂРёРІСЏР·РєР° Рє СЃСѓС‰РЅРѕСЃС‚Рё")
+		response.RespondWithError(w, http.StatusBadRequest, "Нужна хотя бы одна привязка к сущности")
 		return
 	}
 
@@ -304,14 +478,14 @@ func (h *MaterialHandler) normalizeRefs(refs []materialEntityRefDTO) ([]material
 		}
 		entityID := strings.TrimSpace(ref.EntityID)
 		if entityID == "" {
-			return nil, fmt.Errorf("entity_id РѕР±СЏР·Р°С‚РµР»РµРЅ")
+			return nil, fmt.Errorf("entity_id обязателен")
 		}
 		exists, err := h.entityExists(entityType, entityID)
 		if err != nil {
 			return nil, err
 		}
 		if !exists {
-			return nil, fmt.Errorf("СЃСѓС‰РЅРѕСЃС‚СЊ %s СЃ ID %s РЅРµ РЅР°Р№РґРµРЅР°", entityType, entityID)
+			return nil, fmt.Errorf("сущность %s с ID %s не найдена", entityType, entityID)
 		}
 		key := entityType + ":" + entityID
 		unique[key] = materialEntityRefDTO{
@@ -338,14 +512,14 @@ func normalizeMaterialEntityType(value string) (string, error) {
 	case "fiscalregister", "fiscal":
 		return "FiscalRegister", nil
 	default:
-		return "", fmt.Errorf("РЅРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ entity_type: %s", key)
+		return "", fmt.Errorf("неподдерживаемый entity_type: %s", key)
 	}
 }
 
 func (h *MaterialHandler) entityExists(entityType, entityID string) (bool, error) {
 	table, ok := allowedMaterialEntityTypes[entityType]
 	if !ok {
-		return false, fmt.Errorf("РЅРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ entity_type: %s", entityType)
+		return false, fmt.Errorf("неподдерживаемый entity_type: %s", entityType)
 	}
 	var count int64
 	if err := h.db.Table(table).Where("id = ?", entityID).Count(&count).Error; err != nil {
@@ -357,30 +531,30 @@ func (h *MaterialHandler) entityExists(entityType, entityID string) (bool, error
 func (h *MaterialHandler) resolveAuthor(ctx context.Context) (*uint, string) {
 	rawUserID := ctx.Value(contextkeys.UserIDContextKey)
 	if rawUserID == nil {
-		return nil, "РЎРѕС‚СЂСѓРґРЅРёРє"
+		return nil, "Сотрудник"
 	}
 	userIDStr := strings.TrimSpace(fmt.Sprintf("%v", rawUserID))
 	if userIDStr == "" {
-		return nil, "РЎРѕС‚СЂСѓРґРЅРёРє"
+		return nil, "Сотрудник"
 	}
 	parsed, err := strconv.ParseUint(userIDStr, 10, 32)
 	if err != nil {
-		return nil, "РЎРѕС‚СЂСѓРґРЅРёРє"
+		return nil, "Сотрудник"
 	}
 	userID := uint(parsed)
 	if h.userRepo == nil {
-		return &userID, "РЎРѕС‚СЂСѓРґРЅРёРє"
+		return &userID, "Сотрудник"
 	}
 	profile, err := h.userRepo.GetByID(ctx, userID)
 	if err != nil || profile == nil {
-		return &userID, "РЎРѕС‚СЂСѓРґРЅРёРє"
+		return &userID, "Сотрудник"
 	}
 	name := strings.TrimSpace(profile.FullName)
 	if name == "" {
 		name = strings.TrimSpace(profile.Username)
 	}
 	if name == "" {
-		name = "РЎРѕС‚СЂСѓРґРЅРёРє"
+		name = "Сотрудник"
 	}
 	return &userID, name
 }

@@ -12,6 +12,7 @@ const (
 	HistoryActionCommentUpdated   = "comment_updated"
 	HistoryActionCommentDeleted   = "comment_deleted"
 	HistoryActionConnectionCopied = "connection_copied"
+	HistoryActionChecklistChanged = "checklist_changed"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	HistoryFieldComment     = "comment"
 	HistoryFieldConnection  = "connection"
 	HistoryFieldBitrixLink  = "bitrix_link"
+	HistoryFieldChecklist   = "checklist"
 )
 
 type TicketHistory struct {

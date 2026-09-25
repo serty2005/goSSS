@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, MaterialDTO, MaterialPayload } from '@/types/api';
+import { ApiResponse, CompanyScopedMaterialDTO, MaterialDTO, MaterialPayload } from '@/types/api';
 
 type MaterialListParams = {
   term?: string;
@@ -27,6 +27,13 @@ export const materialsApi = {
         offset,
       },
     });
+    return response.data;
+  },
+
+  listCompanyScope: async (companyID: string) => {
+    const response = await apiClient.get<ApiResponse<CompanyScopedMaterialDTO[]>>(
+      `/materials/company-scope/${encodeURIComponent(companyID)}`,
+    );
     return response.data;
   },
 

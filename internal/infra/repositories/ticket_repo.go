@@ -672,9 +672,9 @@ func (r *ticketRepo) UpsertTicketFileLink(ctx context.Context, link *tickets.Tic
 	}
 	return r.db.WithContext(ctx).Exec(
 		`INSERT INTO ticket_file_links (id, ticket_id, file_id, relation_type, comment_uuid, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		 ON CONFLICT (ticket_id, file_id, relation_type, COALESCE(comment_uuid, ''))
-		 DO UPDATE SET updated_at = NOW()`,
+		 DO UPDATE SET updated_at = CURRENT_TIMESTAMP`,
 		link.ID, link.TicketID, link.FileID, link.RelationType, link.CommentUUID,
 	).Error
 }
@@ -687,6 +687,36 @@ func (r *ticketRepo) GetTicketFileLinksByRelation(ctx context.Context, ticketID 
 	}
 	err := query.Find(&links).Error
 	return links, err
+}
+
+func (r *ticketRepo) GetTicketFileLinksByFileID(ctx context.Context, fileID string) ([]tickets.TicketFileLink, error) {
+	var links []tickets.TicketFileLink
+	err := r.db.WithContext(ctx).Where("file_id = ?", fileID).Find(&links).Error
+	return links, err
+}
+
+// BindPendingInlineFiles привязывает загруженные, но еще не связанные с комментарием inline-файлы к комментарию.
+func (r *ticketRepo) BindPendingInlineFiles(ctx context.Context, ticketID string, relationType string, commentUUID string, fileIDs []string) error {
+	if len(fileIDs) == 0 || strings.TrimSpace(commentUUID) == "" {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&tickets.TicketFileLink{}).
+		Where("ticket_id = ? AND relation_type = ? AND comment_uuid IS NULL AND file_id IN ?", ticketID, relationType, fileIDs).
+		Updates(map[string]interface{}{
+			"comment_uuid": commentUUID,
+			"updated_at":   time.Now(),
+		}).Error
+}
+
+// DeleteFileAssetWithLinks удаляет запись файла и все его связи с тикетами.
+func (r *ticketRepo) DeleteFileAssetWithLinks(ctx context.Context, fileID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("file_id = ?", fileID).Delete(&tickets.TicketFileLink{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", fileID).Delete(&tickets.FileAsset{}).Error
+	})
 }
 
 func (r *ticketRepo) AddComments(ctx context.Context, comments []tickets.TicketComment) error {

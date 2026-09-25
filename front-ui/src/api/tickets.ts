@@ -1,6 +1,8 @@
 import apiClient from './axios';
 import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, ManagerTransferContactType, ManagerTransferTarget, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
 
+export type TicketUploadRelation = 'direct' | 'inline_comment' | 'inline_description';
+
 type TicketStatusChangeOptions = {
   comment?: string;
   deferredUntil?: string;
@@ -165,9 +167,12 @@ export const ticketsApi = {
     return response.data;
   },
 
-  uploadAttachments: async (id: number | string, files: File[]) => {
+  uploadAttachments: async (id: number | string, files: File[], relation?: TicketUploadRelation) => {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
+    if (relation) {
+      formData.append('relation', relation);
+    }
     const response = await apiClient.post<ApiResponse<{ items: TicketAttachmentDTO[] }>>(
       `/tickets/${id}/attachments`,
       formData,

@@ -6,6 +6,7 @@ import { equipmentApi } from '@/api/equipment';
 import { InstallServerLicensePayload } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
 import { canManageServerActions } from '@/utils/permissions';
+import { withApiError } from '@/utils/apiError';
 
 interface ServerLicenseStatusTagProps {
   serverID: string;
@@ -76,7 +77,7 @@ const ServerLicenseStatusTag: React.FC<ServerLicenseStatusTagProps> = ({
       void queryClient.invalidateQueries({ queryKey: ['equipment', 'servers'] });
       onInstalled?.();
     },
-    onError: () => message.error('Не удалось установить лицензию'),
+    onError: (error) => message.error(withApiError('Не удалось установить лицензию', error)),
   });
 
   const tooltipText = canInstallLicense

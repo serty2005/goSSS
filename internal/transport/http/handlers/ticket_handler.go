@@ -286,7 +286,13 @@ func (h *TicketHandler) UploadAttachments(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	items, err := h.service.UploadAttachments(r.Context(), id, files)
+	relation, ok := services.NormalizeTicketUploadRelation(r.FormValue("relation"))
+	if !ok {
+		response.RespondWithError(w, http.StatusBadRequest, "Неподдерживаемый тип вложения")
+		return
+	}
+
+	items, err := h.service.UploadAttachments(r.Context(), id, files, relation)
 	if err != nil {
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return

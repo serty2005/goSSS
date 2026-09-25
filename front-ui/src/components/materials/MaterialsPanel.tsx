@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Spin, Typography, message } from 'antd';
+import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10,6 +11,7 @@ import { equipmentApi } from '@/api/equipment';
 import { MaterialDTO, MaterialEntityRefDTO, MaterialPayload } from '@/types/api';
 import { useUiStore } from '@/store/uiStore';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { withApiError } from '@/utils/apiError';
 
 const { Text, Title } = Typography;
 
@@ -64,6 +66,10 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   const themeMode = useUiStore((state) => state.themeMode);
   const queryClient = useQueryClient();
   const [selectedID, setSelectedID] = useState<string>('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedMaterialID = searchParams.get('material') || '';
+  const requestedEdit = searchParams.get('edit') === '1';
+  const [pendingEditID, setPendingEditID] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MaterialDTO | null>(null);
   const [companySearch, setCompanySearch] = useState('');
@@ -102,14 +108,33 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   const materials = useMemo(() => materialsRes?.data || [], [materialsRes?.data]);
 
   useEffect(() => {
+    if (!requestedMaterialID || !materials.some((item) => item.id === requestedMaterialID)) {
+      return;
+    }
+    setSelectedID(requestedMaterialID);
+    if (requestedEdit) {
+      setPendingEditID(requestedMaterialID);
+    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('material');
+      next.delete('edit');
+      return next;
+    }, { replace: true });
+  }, [materials, requestedEdit, requestedMaterialID, setSearchParams]);
+
+  useEffect(() => {
     if (!materials.length) {
       setSelectedID('');
+      return;
+    }
+    if (requestedMaterialID && materials.some((item) => item.id === requestedMaterialID)) {
       return;
     }
     if (!selectedID || !materials.some((item) => item.id === selectedID)) {
       setSelectedID(materials[0].id);
     }
-  }, [materials, selectedID]);
+  }, [materials, requestedMaterialID, selectedID]);
 
   const selectedMaterial = useMemo(
     () => materials.find((item) => item.id === selectedID) || null,
@@ -374,8 +399,8 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
       form.resetFields();
       queryClient.invalidateQueries({ queryKey: ['materials', entityType, entityID] });
     },
-    onError: () => {
-      message.error('Не удалось сохранить материал');
+    onError: (error) => {
+      message.error(withApiError('Не удалось сохранить материал', error));
     },
   });
 
@@ -385,8 +410,8 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
       message.success('Материал удалён');
       queryClient.invalidateQueries({ queryKey: ['materials', entityType, entityID] });
     },
-    onError: () => {
-      message.error('Не удалось удалить материал');
+    onError: (error) => {
+      message.error(withApiError('Не удалось удалить материал', error));
     },
   });
 
@@ -417,6 +442,16 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
     void preloadReferenceLabels(item.entity_refs);
     setIsModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!pendingEditID || selectedMaterial?.id !== pendingEditID) {
+      return;
+    }
+    setPendingEditID('');
+    openEdit(selectedMaterial);
+    // openEdit пересоздается на каждом рендере; эффект реагирует только на запрос редактирования из URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEditID, selectedMaterial]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 12 }}>

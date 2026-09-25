@@ -40,7 +40,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Regex для РїРѕРёСЃРєР° UUID файлов РІ ссылках Naumen (./download?uuid=file$123...)
+// Regex для поиска UUID файлов в ссылках Naumen (./download?uuid=file$123...)
 var naumenFileRegex = regexp.MustCompile(`uuid=(file\$[0-9]+)`)
 
 var ticketTextPhoneRegex = regexp.MustCompile(`(^|[^\d+])(\+?79\d{9}|89\d{9}|9\d{9})([^\d]|$)`)
@@ -73,7 +73,7 @@ type TicketService interface {
 	) error
 	UpdateDescription(ctx context.Context, ticketID string, description string, userID uint) (*tickets.Ticket, error)
 	RefreshCommentsFromServiceDesk(ctx context.Context, ticketID string) (int, error)
-	UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error)
+	UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader, relationType string) ([]tickets.Attachment, error)
 	Assign(ctx context.Context, ticketID string, assigneeID *uint, actorID uint) (*tickets.Ticket, error)
 	ChangeCompany(ctx context.Context, ticketID string, companyID string, actorID uint) (*tickets.Ticket, error)
 	UpdateBitrixFields(ctx context.Context, ticketID string, bitrixServicePointID *int64, bitrixDealTitle string, actorID uint) (*tickets.Ticket, error)
@@ -306,7 +306,7 @@ func (s *ticketServiceImpl) CreateInternal(ctx context.Context, dto api.TicketCr
 		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
 	}
 
-	// Запись РІ историю
+	// Запись в историю
 	s.recordHistory(ctx, ticket.ID, &authorID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, "", tickets.StatusNew, nil)
 
 	return ticket, nil
@@ -576,7 +576,11 @@ func (s *ticketServiceImpl) addStatusComment(ctx context.Context, ticketID strin
 		IsInternal:      false,
 		IsPrivate:       false,
 	}
-	return s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment})
+	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
+		return err
+	}
+	s.bindCommentInlineFiles(ctx, ticketID, newComment.ServiceDeskUUID, newComment.Text)
+	return nil
 }
 
 func normalizeManagerTransferTarget(value string) string {
@@ -650,7 +654,7 @@ func (s *ticketServiceImpl) Assign(ctx context.Context, ticketID string, assigne
 	}
 
 	ticket.AssigneeID = assigneeID
-	// Если назначаем, переводим РІ InProgress, если РѕРЅ был New
+	// Если назначаем, переводим в InProgress, если он был New
 	if assigneeID != nil && ticket.Status == tickets.StatusNew {
 		ticket.Status = tickets.StatusInProgress
 	}
@@ -869,6 +873,7 @@ func (s *ticketServiceImpl) AddComment(ctx context.Context, ticketID string, com
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{*newComment}); err != nil {
 		return nil, err
 	}
+	s.bindCommentInlineFiles(ctx, ticket.ID, newComment.ServiceDeskUUID, text)
 	if err := s.bindTicketTelephonyByText(ctx, ticket, text, userID); err != nil {
 		s.logger.Warn("не удалось привязать телефонию по комментарию тикета", "ticket_id", ticket.ID, "comment_id", newComment.ID, "error", err)
 	}
@@ -926,6 +931,8 @@ func (s *ticketServiceImpl) UpdateComment(
 	if updated == nil {
 		return nil, ErrCommentNotFound
 	}
+	s.bindCommentInlineFiles(ctx, ticketID, commentBindingUUID(updated), text)
+	s.cleanupRemovedInlineFiles(ctx, ticketID, target.Text, text)
 
 	s.recordHistory(
 		ctx,
@@ -984,6 +991,7 @@ func (s *ticketServiceImpl) DeleteComment(
 	if deleted == nil {
 		return ErrCommentNotFound
 	}
+	s.cleanupRemovedInlineFiles(ctx, ticketID, deleted.Text, "")
 
 	s.recordHistory(
 		ctx,
@@ -1300,7 +1308,7 @@ func (s *ticketServiceImpl) recordEntityConnectionCopy(
 	})
 }
 
-// GetDetails возвращает детали тикета, историю Рё вложения.
+// GetDetails возвращает детали тикета, историю и вложения.
 func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error) {
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
@@ -1346,7 +1354,7 @@ func (s *ticketServiceImpl) GetDetails(ctx context.Context, ticketID string) (*t
 
 	details := &tickets.TicketDetails{
 		Metadata: *ticket,
-		// CompanyName: ticket.CompanyName, // Если это поле есть РІ структуре (gorm ->)
+		// CompanyName: ticket.CompanyName, // Если это поле есть в структуре (gorm ->)
 		Contact:     contact,
 		Contacts:    contacts,
 		Calls:       make([]tickets.TicketCall, 0),
@@ -1630,6 +1638,7 @@ func (s *ticketServiceImpl) UpdateDescription(ctx context.Context, ticketID stri
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
+	s.cleanupRemovedInlineFiles(ctx, ticket.ID, oldValue, description)
 	if err := s.bindTicketTelephonyByText(ctx, ticket, description, userID); err != nil {
 		s.logger.Warn("не удалось привязать телефонию по описанию тикета", "ticket_id", ticket.ID, "error", err)
 	}
@@ -1809,7 +1818,11 @@ func (s *ticketServiceImpl) RefreshCommentsFromServiceDesk(ctx context.Context, 
 	return len(toInsert), nil
 }
 
-func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader) ([]tickets.Attachment, error) {
+func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID string, files []*multipart.FileHeader, relationType string) ([]tickets.Attachment, error) {
+	relation, ok := NormalizeTicketUploadRelation(relationType)
+	if !ok {
+		return nil, fmt.Errorf("неподдерживаемый тип вложения: %s", relationType)
+	}
 	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
 	if err != nil {
 		return nil, err
@@ -1873,7 +1886,7 @@ func (s *ticketServiceImpl) UploadAttachments(ctx context.Context, ticketID stri
 		if err := s.ticketRepo.UpsertTicketFileLink(ctx, &tickets.TicketFileLink{
 			TicketID:     ticketID,
 			FileID:       asset.ID,
-			RelationType: tickets.RelationTypeDirectTicketAttachment,
+			RelationType: relation,
 		}); err != nil {
 			return nil, err
 		}
@@ -2074,7 +2087,7 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 		return fmt.Errorf("заявка не найдена")
 	}
 
-	// 2. Проверяем существование актива Рё совпадение владельца
+	// 2. Проверяем существование актива и совпадение владельца
 	var assetOwnerID string
 
 	switch assetType {
@@ -2104,8 +2117,8 @@ func (s *ticketServiceImpl) LinkToAsset(ctx context.Context, ticketID string, as
 	}
 
 	// 3. Сравниваем владельцев
-	// Если у оборудования нет владельца (пустая строка), считаем это СЂРёСЃРєРѕРј, РЅРѕ разрешаем (или запрещаем, зависит РѕС‚ бизнес-логики).
-	// Р’ данном случае запретим привязку Рє "чужому" оборудованию.
+	// Если у оборудования нет владельца (пустая строка), считаем это риском, но разрешаем (или запрещаем, зависит от бизнес-логики).
+	// В данном случае запретим привязку к "чужому" оборудованию.
 	if assetOwnerID != "" && assetOwnerID != ticket.CompanyID {
 		return fmt.Errorf("conflict: asset belongs to company %s, but ticket belongs to %s", assetOwnerID, ticket.CompanyID)
 	}
@@ -2183,8 +2196,8 @@ func (s *ticketServiceImpl) recordHistory(
 	})
 }
 
-// processHtmlContent ищет ссылки РЅР° файлы Naumen, скачивает РёС… Рё заменяет РЅР° локальные URL.
-// sdUUID - внешний UUID заявки (например, serviceCall$123), используется для РіСЂСѓРїРїРёСЂРѕРІРєРё файлов РІ папке.
+// processHtmlContent ищет ссылки на файлы Naumen, скачивает их и заменяет на локальные URL.
+// sdUUID - внешний UUID заявки (например, serviceCall$123), используется для группировки файлов в папке.
 func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string) string {
 	// Ищем все вхождения uuid=file$XXXXX
 	matches := naumenFileRegex.FindAllStringSubmatch(htmlContent, -1)
@@ -2207,8 +2220,8 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 
 		// 1. Проверяем, скачан ли файл
 		localFilePath := filepath.Join(ticketDir, fileUUID) // Сохраняем без расширения или пытаемся угадать
-		// Простой вариант: РёРјСЏ файла = UUID. Браузеры часто умеют определять тип РїРѕ контенту,
-		// РЅРѕ лучше сохранять расширение. Пока сохраняем как есть.
+		// Простой вариант: имя файла = UUID. Браузеры часто умеют определять тип по контенту,
+		// но лучше сохранять расширение. Пока сохраняем как есть.
 
 		if _, err := os.Stat(localFilePath); os.IsNotExist(err) {
 			// 2. РФайла нет - скачиваем
@@ -2219,19 +2232,19 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 			}
 		}
 
-		// 3. Заменяем ссылку РІ HTML
+		// 3. Заменяем ссылку в HTML
 		// Исходная: ... src="./download?uuid=file$13205558" ...
 		// Целевая:  ... src="/api/static/tickets/serviceCall$123/file$13205558" ...
 
-		// Находим полный кусок "./download?uuid=file$XXXX" Рё заменяем его
-		// Регулярка ищет только uuid=..., поэтому заменим грубо, РЅРѕ надежно для Naumen:
+		// Находим полный кусок "./download?uuid=file$XXXX" и заменяем его
+		// Регулярка ищет только uuid=..., поэтому заменим грубо, но надежно для Naumen:
 		// "./download?uuid=" + fileUUID -> "/api/static/tickets/" + sdUUID + "/" + fileUUID
 
 		oldLink := fmt.Sprintf("./download?uuid=%s", fileUUID)
 		newLink := fmt.Sprintf("/api/static/tickets/%s/%s", sdUUID, fileUUID)
 		processedHtml = strings.ReplaceAll(processedHtml, oldLink, newLink)
 
-		// На случай, если ссылка без точки РІ начале (бывает РїРѕ-разному)
+		// На случай, если ссылка без точки в начале (бывает по-разному)
 		oldLink2 := fmt.Sprintf("/download?uuid=%s", fileUUID)
 		processedHtml = strings.ReplaceAll(processedHtml, oldLink2, newLink)
 	}
@@ -2239,10 +2252,10 @@ func (s *ticketServiceImpl) processHtmlContent(sdUUID string, htmlContent string
 	return processedHtml
 }
 
-// downloadFileFromNaumen выполняет запрос Рє API Naumen Рё сохраняет файл.
+// downloadFileFromNaumen выполняет запрос к API Naumen и сохраняет файл.
 func (s *ticketServiceImpl) downloadFileFromNaumen(fileUUID, destPath string) error {
 	// URL: <baseURL>/services/rest/get-file/file$123?accessKey=<accessKey>
-	// Базовый URL РІ конфиге может быть с /sd или без, нужно аккуратно собрать.
+	// Базовый URL в конфиге может быть с /sd или без, нужно аккуратно собрать.
 	// Обычно cfg.ServiceDeskBaseURL = "https://myhoreca.itsm365.com/sd"
 
 	// Убираем trailing slash
@@ -2354,6 +2367,17 @@ func hasUserRole(roles []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// commentBindingUUID возвращает идентификатор комментария, которым помечаются его inline-файлы.
+func commentBindingUUID(comment *tickets.TicketComment) string {
+	if comment == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(comment.ServiceDeskUUID); value != "" {
+		return value
+	}
+	return strings.TrimSpace(comment.ID)
 }
 
 func shouldSoftDeleteComment(comment *tickets.TicketComment) bool {

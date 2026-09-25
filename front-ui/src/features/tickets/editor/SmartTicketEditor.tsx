@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Space, Upload, theme as antTheme } from 'antd';
+import { Button, Input, Modal, Space, Spin, Upload, message, theme as antTheme } from 'antd';
 import type { UploadProps } from 'antd';
 import { BlockOutlined, BoldOutlined, CodeOutlined, ItalicOutlined, LinkOutlined, PaperClipOutlined, PictureOutlined, UserOutlined } from '@ant-design/icons';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
@@ -9,6 +9,7 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import type { JSONContent } from '@tiptap/core';
 import { buildMentionHTML, extractMentionQuery, type MentionOption } from '@/features/tickets/editor/mentions';
+import { withApiError } from '@/utils/apiError';
 
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
@@ -19,7 +20,13 @@ type Props = {
   mentions?: MentionOption[];
   onImageUpload?: (file: File) => Promise<string | null>;
   onFileUpload?: (file: File) => Promise<string | null>;
+  onUploadingChange?: (uploading: boolean) => void;
   minHeight?: number;
+};
+
+type PendingUpload = {
+  id: number;
+  name: string;
 };
 
 type MentionRange = {
@@ -74,6 +81,7 @@ const SmartTicketEditor: React.FC<Props> = ({
   mentions = [],
   onImageUpload,
   onFileUpload,
+  onUploadingChange,
   minHeight = 120,
 }) => {
   const { token } = antTheme.useToken();
@@ -85,6 +93,22 @@ const SmartTicketEditor: React.FC<Props> = ({
   const mentionRangeRef = useRef<MentionRange | null>(null);
   const mentionItemsRef = useRef<MentionOption[]>([]);
   const editorRef = useRef<Editor | null>(null);
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
+  const uploadSeqRef = useRef(0);
+  const onUploadingChangeRef = useRef(onUploadingChange);
+  const isUploading = pendingUploads.length > 0;
+
+  useEffect(() => {
+    onUploadingChangeRef.current = onUploadingChange;
+  }, [onUploadingChange]);
+
+  useEffect(() => {
+    onUploadingChangeRef.current?.(isUploading);
+  }, [isUploading]);
+
+  useEffect(() => () => {
+    onUploadingChangeRef.current?.(false);
+  }, []);
 
   const extensions = useMemo(
     () => [
@@ -141,26 +165,40 @@ const SmartTicketEditor: React.FC<Props> = ({
     .replace(/'/g, '&#39;');
 
   const insertUploadedFile = useCallback(async (file: File) => {
-    const activeEditor = editorRef.current;
-    if (!activeEditor) return;
+    if (!editorRef.current) return;
     const isImage = file.type.startsWith('image/');
-    if (isImage && onImageUpload) {
-      const uploaded = await onImageUpload(file);
-      if (!uploaded) return;
-      activeEditor.chain().focus().setImage({ src: uploaded, alt: file.name }).run();
-      return;
+    const upload = isImage && onImageUpload ? onImageUpload : onFileUpload;
+    if (!upload) return;
+
+    uploadSeqRef.current += 1;
+    const pending: PendingUpload = { id: uploadSeqRef.current, name: file.name || (isImage ? 'Изображение' : 'Файл') };
+    setPendingUploads((prev) => [...prev, pending]);
+    try {
+      const uploaded = await upload(file);
+      const activeEditor = editorRef.current;
+      if (!uploaded || !activeEditor || activeEditor.isDestroyed) return;
+      if (isImage && onImageUpload) {
+        activeEditor.chain().focus().setImage({ src: uploaded, alt: file.name }).run();
+        return;
+      }
+      const safeHref = escapeHtml(uploaded);
+      const safeName = escapeHtml(file.name || 'Файл');
+      activeEditor.chain().focus().insertContent(`<a href="${safeHref}" target="_blank" rel="noreferrer">${safeName}</a>`).run();
+    } catch (error) {
+      message.error(withApiError(`Не удалось загрузить «${pending.name}»`, error));
+      throw error;
+    } finally {
+      setPendingUploads((prev) => prev.filter((item) => item.id !== pending.id));
     }
-    if (!onFileUpload) return;
-    const uploaded = await onFileUpload(file);
-    if (!uploaded) return;
-    const safeHref = escapeHtml(uploaded);
-    const safeName = escapeHtml(file.name || 'Файл');
-    activeEditor.chain().focus().insertContent(`<a href="${safeHref}" target="_blank" rel="noreferrer">${safeName}</a>`).run();
   }, [onFileUpload, onImageUpload]);
 
   const insertUploadedFiles = useCallback(async (files: File[]) => {
     for (let i = 0; i < files.length; i += 1) {
-      await insertUploadedFile(files[i]);
+      try {
+        await insertUploadedFile(files[i]);
+      } catch {
+        continue;
+      }
       if (i < files.length - 1 && editorRef.current) {
         editorRef.current.chain().focus().insertContent('<br/>').run();
       }
@@ -418,18 +456,29 @@ const SmartTicketEditor: React.FC<Props> = ({
           />
           {(onImageUpload || onFileUpload) && (
             <Upload showUploadList={false} customRequest={handleImageUpload}>
-              <Button size="small" icon={<PaperClipOutlined />} />
+              <Button size="small" icon={<PaperClipOutlined />} loading={isUploading} />
             </Upload>
           )}
           {onImageUpload && (
             <Upload showUploadList={false} accept="image/*" customRequest={handleImageUpload}>
-              <Button size="small" icon={<PictureOutlined />} />
+              <Button size="small" icon={<PictureOutlined />} loading={isUploading} />
             </Upload>
           )}
         </Space>
       </div>
 
       <EditorContent editor={editor} />
+
+      {isUploading && (
+        <div className="smart-ticket-editor__uploads" role="status" aria-live="polite">
+          <Spin size="small" />
+          <span className="smart-ticket-editor__uploads-text">
+            {pendingUploads.length > 1
+              ? `Загрузка файлов (${pendingUploads.length}): ${pendingUploads.map((item) => item.name).join(', ')}`
+              : `Загрузка: ${pendingUploads[0].name}`}
+          </span>
+        </div>
+      )}
 
       {mentionRange && visibleMentions.length > 0 && (
         <div className="smart-ticket-editor__mentions-popup">
@@ -530,6 +579,23 @@ const SmartTicketEditor: React.FC<Props> = ({
           pointer-events: none;
           float: left;
           height: 0;
+        }
+        .smart-ticket-editor__uploads {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 12px;
+          border-top: 1px dashed var(--ste-border);
+          background: var(--ste-toolbar-bg);
+          color: var(--ste-text-muted);
+          font-size: 12px;
+          border-radius: 0 0 8px 8px;
+        }
+        .smart-ticket-editor__uploads-text {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .smart-ticket-editor__mentions-popup {
           position: absolute;

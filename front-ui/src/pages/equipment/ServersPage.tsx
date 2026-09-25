@@ -413,7 +413,7 @@ const ServersPage: React.FC = () => {
         filterOption: false,
         onSearch: setCompanyFilterSearch,
         maxTagCount: undefined,
-        style: { width: '100%', minWidth: 0, flex: '1 1 260px' },
+        style: { width: '100%', minWidth: 280, flex: '1 1 100%' },
         onChange: setSelectedCompanyIDs,
       },
       {

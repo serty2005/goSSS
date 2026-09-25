@@ -97,6 +97,7 @@ type Application struct {
 	DebugHandler              *handlers.DebugHandler
 	SSEHandler                *handlers.SSEHandler
 	TicketHandler             *handlers.TicketHandler
+	TicketChecklistHandler    *handlers.TicketChecklistHandler
 	ServerHandler             *handlers.ServerHandler
 	WorkstationHandler        *handlers.WSHandler
 	FiscalHandler             *handlers.FiscalHandler
@@ -261,6 +262,7 @@ type Repositories struct {
 	CompanyRepo          company.Repository
 	ContractRepo         contract.Repository
 	TicketRepo           tickets.TicketRepository
+	ChecklistRepo        tickets.ChecklistRepository
 	ServerRepo           server.Repository
 	WorkstationRepo      workstation.Repository
 	FRRepo               fiscal.Repository
@@ -279,6 +281,7 @@ type Repositories struct {
 func setupRepositories(db *gorm.DB) Repositories {
 	return Repositories{
 		TicketRepo:           infraRepos.NewTicketRepo(db),
+		ChecklistRepo:        infraRepos.NewTicketChecklistRepo(db),
 		CompanyRepo:          infraRepos.NewCompanyRepo(db),
 		ContractRepo:         infraRepos.NewContractRepo(db),
 		ServerRepo:           infraRepos.NewServerRepo(db),
@@ -351,6 +354,7 @@ type Services struct {
 	ServerActionsService       services.ServerActionsService
 	EntityMatcherService       services.EntityMatcherService
 	TicketService              services.TicketService
+	TicketChecklistService     services.TicketChecklistService
 	CompanyService             company.Service
 	ContractService            contract.Service
 	ServerService              server.Service
@@ -529,6 +533,7 @@ func setupServices(app *Application, repos Repositories, clients ExternalClients
 		ServerActionsService:       services.NewServerActionsService(app.Config, app.Logger.With("component", "server_actions"), app.EventBus, repos.ServerRepo, repos.CompanyRepo, repos.OwnerHistoryRepo, clients.IikoClient),
 		EntityMatcherService:       services.NewEntityMatcherService(app.Logger.With("component", "entity_matcher"), repos.ServerRepo, repos.WorkstationRepo, repos.FRRepo),
 		TicketService:              ticketService,
+		TicketChecklistService:     services.NewTicketChecklistService(repos.ChecklistRepo, repos.TicketRepo, repos.UserRepo, app.Logger.With("component", "ticket_checklist_service")),
 		CompanyService:             companyService,
 		ContractService:            contractService,
 		ServerService:              serverSvc.NewService(app.Logger.With("component", "server_service"), transactor, repos.ServerRepo, repos.OwnerHistoryRepo),
@@ -611,6 +616,7 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.DebugHandler = handlers.NewDebugHandler(app.EventBus)
 	app.SSEHandler = handlers.NewSSEHandler(app.EventBus)
 	app.TicketHandler = handlers.NewTicketHandler(srvs.TicketService, app.EventBus, repos.PyrusRepo)
+	app.TicketChecklistHandler = handlers.NewTicketChecklistHandler(srvs.TicketChecklistService, app.EventBus)
 	app.BitrixHandler = handlers.NewBitrixHandler(srvs.BitrixSyncService, repos.ContractRepo, app.ContractGateway, repos.UserRepo, app.Config)
 	app.PyrusHandler = handlers.NewPyrusHandler(srvs.PyrusSyncService)
 	app.MegafonVATSHandler = handlers.NewMegafonVATSHandler(srvs.MegafonVATSSyncService)
@@ -764,6 +770,7 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/materials", func(r chi.Router) {
 			r.Get("/", a.MaterialHandler.List)
+			r.Get("/company-scope/{companyID}", a.MaterialHandler.CompanyScope)
 			r.Get("/{id}", a.MaterialHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.MaterialHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.MaterialHandler.Update)
@@ -820,6 +827,13 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/tickets", func(r chi.Router) {
 			a.TicketHandler.RegisterRoutes(r)
+			a.TicketChecklistHandler.RegisterTicketRoutes(r)
+		})
+		r.Route("/checklist-templates", func(r chi.Router) {
+			r.Get("/", a.TicketChecklistHandler.ListTemplates)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Post("/", a.TicketChecklistHandler.CreateTemplate)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Put("/{templateID}", a.TicketChecklistHandler.UpdateTemplate)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin)).Delete("/{templateID}", a.TicketChecklistHandler.DeleteTemplate)
 		})
 
 		if a.BitrixModule != nil {

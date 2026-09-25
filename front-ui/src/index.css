@@ -497,7 +497,7 @@ body .ant-message .ant-message-notice-content {
 
 .company-network-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(520px, 720px);
+  grid-template-columns: minmax(630px, 1fr) minmax(460px, 1fr);
   gap: 20px;
   align-items: stretch;
 }
@@ -535,13 +535,56 @@ body .ant-message .ant-message-notice-content {
 
 .company-network-children-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 12px;
 }
 
 .company-network-card {
   min-width: 0;
   width: 100%;
+}
+
+.company-network-card[role='link'] {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.company-network-card[role='link']:hover,
+.company-network-card[role='link']:focus-visible {
+  border-color: var(--ant-color-primary, #1677ff) !important;
+  outline: none;
+}
+
+.company-network-server {
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 8px;
+  cursor: copy;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.company-network-server:hover,
+.company-network-server:focus-visible {
+  background: rgba(22, 119, 255, 0.06);
+  outline: none;
+}
+
+.company-network-server.is-copied {
+  background: rgba(82, 196, 26, 0.1);
+}
+
+.company-network-server__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.company-network-server__copy {
+  flex: 0 0 auto;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .company-network-card .ant-card-body {
@@ -1773,7 +1816,7 @@ body .ant-message .ant-message-notice-content {
   }
 }
 
-@media (max-width: 1280px) {
+@media (max-width: 1400px) {
   .company-details-page {
     height: auto;
     min-height: 0;

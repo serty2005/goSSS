@@ -63,6 +63,7 @@ import {
   TICKET_STATUS_OPTIONS,
 } from "@/constants/ticketStatus";
 import i18n from "@/i18n/i18n";
+import { withApiError } from '@/utils/apiError';
 
 const { Text, Paragraph } = Typography;
 const { useBreakpoint } = Grid;
@@ -331,6 +332,8 @@ const TicketsPage: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
+  const [isCommentUploading, setIsCommentUploading] = useState(false);
+  const [isEditCommentUploading, setIsEditCommentUploading] = useState(false);
   const [commentIsPrivate, setCommentIsPrivate] = useState(false);
   const [editingCommentID, setEditingCommentID] = useState("");
   const [editingCommentDraft, setEditingCommentDraft] = useState("");
@@ -731,7 +734,7 @@ const TicketsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error(t("tickets:messages.statusUpdateError")),
+    onError: (error) => message.error(withApiError(t("tickets:messages.statusUpdateError"), error)),
   });
 
   const addCommentMutation = useMutation({
@@ -747,7 +750,7 @@ const TicketsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error(t("tickets:messages.commentAddError")),
+    onError: (error) => message.error(withApiError(t("tickets:messages.commentAddError"), error)),
   });
 
   const updateCommentMutation = useMutation({
@@ -768,7 +771,7 @@ const TicketsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error(t("tickets:messages.commentUpdateError")),
+    onError: (error) => message.error(withApiError(t("tickets:messages.commentUpdateError"), error)),
   });
 
   const deleteCommentMutation = useMutation({
@@ -781,7 +784,7 @@ const TicketsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: () => message.error(t("tickets:messages.commentDeleteError")),
+    onError: (error) => message.error(withApiError(t("tickets:messages.commentDeleteError"), error)),
   });
 
   const updateProfileConfigMutation = useMutation({
@@ -800,35 +803,19 @@ const TicketsPage: React.FC = () => {
       ticketsApi.recordConnectionCopy(payload.id, payload.label, payload.value),
   });
 
-  const uploadInlineImage = async (source: File): Promise<string | null> => {
+  const uploadCommentInline = async (source: File): Promise<string | null> => {
     if (!selectedTicketId) {
       return null;
     }
-    const response = await ticketsApi.uploadAttachments(selectedTicketId, [
-      source,
-    ]);
+    const response = await ticketsApi.uploadAttachments(
+      selectedTicketId,
+      [source],
+      "inline_comment",
+    );
     const uploaded = response.data?.items?.[0];
     if (!uploaded?.file_path) {
       return null;
     }
-    queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
-    return String(uploaded.file_path)
-      .replace(/^\/static\//, "/api/static/")
-      .replace(/^static\//, "/api/static/");
-  };
-
-  const uploadInlineFile = async (source: File): Promise<string | null> => {
-    if (!selectedTicketId) {
-      return null;
-    }
-    const response = await ticketsApi.uploadAttachments(selectedTicketId, [
-      source,
-    ]);
-    const uploaded = response.data?.items?.[0];
-    if (!uploaded?.file_path) {
-      return null;
-    }
-    queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     return String(uploaded.file_path)
       .replace(/^\/static\//, "/api/static/")
       .replace(/^static\//, "/api/static/");
@@ -1023,8 +1010,9 @@ const TicketsPage: React.FC = () => {
         onChange={setCommentDraft}
         placeholder={t("tickets:placeholders.addComment")}
         mentions={mentionOptions}
-        onImageUpload={uploadInlineImage}
-        onFileUpload={uploadInlineFile}
+        onImageUpload={uploadCommentInline}
+        onFileUpload={uploadCommentInline}
+        onUploadingChange={setIsCommentUploading}
         minHeight={96}
       />
       <label
@@ -1046,7 +1034,11 @@ const TicketsPage: React.FC = () => {
       <Button
         type="primary"
         loading={addCommentMutation.isPending}
-        disabled={!hasEditorContent(commentDraft) || !selectedTicketId}
+        disabled={
+          !hasEditorContent(commentDraft) ||
+          !selectedTicketId ||
+          isCommentUploading
+        }
         onClick={() => {
           if (!selectedTicketId) return;
           addCommentMutation.mutate({
@@ -1761,8 +1753,9 @@ const TicketsPage: React.FC = () => {
                               onChange={setEditingCommentDraft}
                               placeholder={t("tickets:placeholders.editComment")}
                               mentions={mentionOptions}
-                              onImageUpload={uploadInlineImage}
-                              onFileUpload={uploadInlineFile}
+                              onImageUpload={uploadCommentInline}
+                              onFileUpload={uploadCommentInline}
+                              onUploadingChange={setIsEditCommentUploading}
                               minHeight={96}
                             />
                             <Space>
@@ -1771,6 +1764,7 @@ const TicketsPage: React.FC = () => {
                                 loading={updateCommentMutation.isPending}
                                 disabled={
                                   !hasEditorContent(editingCommentDraft) ||
+                                  isEditCommentUploading ||
                                   !selectedTicketId
                                 }
                                 onClick={() => {

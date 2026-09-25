@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, Table, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
@@ -15,11 +15,13 @@ import TicketTable from '@/components/tickets/TicketTable';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
+import { formatServerEdition } from '@/utils/formatters';
 import { useAuthStore } from '@/store/authStore';
 import { canEditCompanyBase, canEditCompanyContract, isAdmin } from '@/utils/permissions';
 import { resolveCompanyID } from '@/utils/companyHierarchy';
 import { formatMappedServicePointLabel } from './companyBitrixMappingState';
 import ContractInfoModal from '@/components/contracts/ContractInfoModal';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -57,6 +59,7 @@ type NetworkCompanyNode = {
 const CompanyPage: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const goBack = useBackNavigation('/companies');
   const queryClient = useQueryClient();
@@ -70,6 +73,7 @@ const CompanyPage: React.FC = () => {
   const [spreadCompanyID, setSpreadCompanyID] = useState<string | undefined>(undefined);
   const [isNetworkContractModalOpen, setIsNetworkContractModalOpen] = useState(false);
   const [selectedNetworkContractCompanyID, setSelectedNetworkContractCompanyID] = useState('');
+  const [copiedNetworkServerKey, setCopiedNetworkServerKey] = useState('');
   const [isContractHistoryOpen, setIsContractHistoryOpen] = useState(false);
   const [selectedContractInfoID, setSelectedContractInfoID] = useState('');
   const [contractEditID, setContractEditID] = useState('');
@@ -209,7 +213,7 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contract'] });
       queryClient.invalidateQueries({ queryKey: ['companies', 'bitrix-mappings'] });
     },
-    onError: () => message.error('Не удалось сохранить сопоставление'),
+    onError: (error) => message.error(withApiError('Не удалось сохранить сопоставление', error)),
   });
 
   const { data: contractRes } = useQuery({
@@ -419,8 +423,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['company', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => {
-      message.error('Не удалось обновить компанию');
+    onError: (error) => {
+      message.error(withApiError('Не удалось обновить компанию', error));
     },
   });
 
@@ -438,8 +442,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
       setIsCompanyEditOpen(false);
     },
-    onError: () => {
-      message.error('Не удалось добавить компанию в кандидаты на удаление');
+    onError: (error) => {
+      message.error(withApiError('Не удалось добавить компанию в кандидаты на удаление', error));
     },
   });
 
@@ -466,8 +470,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contract', editableContractID, 'company-modal'] });
       queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
     },
-    onError: () => {
-      message.error('Не удалось обновить тип контракта');
+    onError: (error) => {
+      message.error(withApiError('Не удалось обновить тип контракта', error));
     },
   });
 
@@ -492,8 +496,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['company', id] });
       queryClient.invalidateQueries({ queryKey: ['company'] });
     },
-    onError: () => {
-      message.error('Не удалось создать контракт');
+    onError: (error) => {
+      message.error(withApiError('Не удалось создать контракт', error));
     },
   });
 
@@ -530,8 +534,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contract', editableContractID, 'company-modal'] });
       queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
     },
-    onError: () => {
-      message.error('Не удалось вывести компанию в отдельный контракт');
+    onError: (error) => {
+      message.error(withApiError('Не удалось вывести компанию в отдельный контракт', error));
     },
   });
 
@@ -554,8 +558,8 @@ const CompanyPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contracts', 'company', companyID] });
       queryClient.invalidateQueries({ queryKey: ['company'] });
     },
-    onError: () => {
-      message.error('Не удалось распространить контракт');
+    onError: (error) => {
+      message.error(withApiError('Не удалось распространить контракт', error));
     },
   });
 
@@ -754,87 +758,134 @@ const CompanyPage: React.FC = () => {
     setIsNetworkContractModalOpen(true);
   };
 
+  const copyNetworkServerAddress = async (serverKey: string, address: string) => {
+    if (!address) {
+      message.warning('У сервера не указан адрес');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedNetworkServerKey(serverKey);
+      window.setTimeout(() => {
+        setCopiedNetworkServerKey((current) => (current === serverKey ? '' : current));
+      }, 1600);
+    } catch {
+      message.error('Не удалось скопировать адрес');
+    }
+  };
+
   const renderNetworkCompanyCard = (node: NetworkCompanyNode, isRoot = false) => {
     const cardCompanyID = node.id;
     const item = node.company || {};
     const cardTitle = String(item.title || item.additional_name || cardCompanyID || 'Компания');
-    const cardAdditionalName = String(item.additional_name || '').trim();
     const cardAddress = String(item.address || '').trim();
     const cardServers = networkServersByCompanyID.get(cardCompanyID) || [];
     const isCurrent = cardCompanyID === companyID;
     const contractBadge = resolveContractBadge(item);
+    const openCompany = () => {
+      if (!isCurrent && cardCompanyID) {
+        navigate(`/companies/${cardCompanyID}`);
+      }
+    };
 
     return (
       <Card
         key={cardCompanyID || cardTitle}
         size="small"
-        className="company-network-card"
+        className={`company-network-card${isCurrent ? ' company-network-card--current' : ''}`}
+        role={isCurrent ? undefined : 'link'}
+        tabIndex={isCurrent ? undefined : 0}
+        onClick={openCompany}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            openCompany();
+          }
+        }}
         style={{
           borderColor: isCurrent ? token.colorPrimary : token.colorBorder,
           boxShadow: isCurrent ? `0 0 0 1px ${token.colorPrimary}` : undefined,
         }}
       >
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Space size={8} wrap>
-              {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
-              <Tag
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space size={8} wrap>
+            {isRoot && <Tag color="geekblue" style={{ marginRight: 0 }}>Родитель</Tag>}
+            <Tag
               color={contractBadge.color}
               style={{ marginRight: 0, cursor: 'pointer' }}
-              onClick={() => openNetworkContractModal(cardCompanyID)}
+              onClick={(event) => {
+                event.stopPropagation();
+                openNetworkContractModal(cardCompanyID);
+              }}
             >
               {contractBadge.label}
             </Tag>
           </Space>
           <div>
-            <Link to={`/companies/${cardCompanyID}`} style={{ fontWeight: 600, display: 'block' }}>
+            <Link
+              to={`/companies/${cardCompanyID}`}
+              style={{ fontWeight: 600, display: 'block' }}
+              onClick={(event) => event.stopPropagation()}
+            >
               {cardTitle}
             </Link>
-            <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
-              Юр. название: {cardAdditionalName || '-'}
-            </Text>
             <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
               Адрес: {cardAddress || '-'}
             </Text>
           </div>
-          <div>
-            {cardServers.length > 0 ? (
-              <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                {cardServers.map((server) => {
-                  const serverIP = String(server.ip || '').trim();
-                  return (
-                    <div key={server.uuid} style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8, padding: 8 }}>
-                      <Link to={`/servers/${server.uuid}`} style={{ fontWeight: 600 }}>
-                        {resolveServerTitle(server)}
-                      </Link>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-                        <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all' }}>
-                          {serverIP || '-'}
-                        </Text>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<CopyOutlined />}
-                          disabled={!serverIP}
-                          onClick={async () => {
-                            if (!serverIP) {
-                              return;
-                            }
-                            try {
-                              await navigator.clipboard.writeText(serverIP);
-                              message.success('IP скопирован');
-                            } catch {
-                              message.error('Не удалось скопировать IP');
-                            }
-                          }}
-                        >
-                        </Button>
-                      </div>
+          {cardServers.length > 0 ? (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              {cardServers.map((server) => {
+                const serverIP = String(server.ip || '').trim();
+                const serverKey = `${cardCompanyID}:${server.uuid}`;
+                const isCopied = copiedNetworkServerKey === serverKey;
+                const serverVersion = String(server.server_version || '').trim();
+                const serverEdition = String(server.server_edition || '').trim();
+                return (
+                  <div
+                    key={server.uuid}
+                    role="button"
+                    tabIndex={0}
+                    title={serverIP ? 'Нажмите, чтобы скопировать адрес' : undefined}
+                    className={`company-network-server${isCopied ? ' is-copied' : ''}`}
+                    style={{ borderColor: isCopied ? token.colorSuccess : token.colorBorderSecondary }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void copyNetworkServerAddress(serverKey, serverIP);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void copyNetworkServerAddress(serverKey, serverIP);
+                      }
+                    }}
+                  >
+                    <Link
+                      to={`/servers/${server.uuid}`}
+                      style={{ fontWeight: 600 }}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {resolveServerTitle(server)}
+                    </Link>
+                    <div className="company-network-server__row">
+                      <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                        {serverIP || '-'}
+                      </Text>
+                      <span className="company-network-server__copy" style={{ color: isCopied ? token.colorSuccess : token.colorTextTertiary }}>
+                        {isCopied ? <><CheckOutlined /> Скопировано</> : <CopyOutlined />}
+                      </span>
                     </div>
-                  );
-                })}
-              </Space>
-            ) : null }
-          </div>
+                    <Text style={{ display: 'block', fontSize: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Версия: </Text>
+                      {serverVersion || '-'}
+                      {serverEdition ? ` (${formatServerEdition(serverEdition)})` : ''}
+                    </Text>
+                  </div>
+                );
+              })}
+            </Space>
+          ) : null}
         </Space>
       </Card>
     );
@@ -925,7 +976,7 @@ const CompanyPage: React.FC = () => {
   ) : null;
 
   const renderCompanyTabs = (
-    <Tabs defaultActiveKey="equipment" items={items} />
+    <Tabs defaultActiveKey={searchParams.get('tab') === 'materials' ? 'materials' : 'equipment'} items={items} />
   );
 
   const companySummaryCard = (

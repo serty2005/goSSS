@@ -5,7 +5,7 @@ import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutline
 import type { UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { ticketsApi } from '@/api/tickets';
+import { ticketsApi, type TicketUploadRelation } from '@/api/tickets';
 import { telephonyApi } from '@/api/telephony';
 import { profileApi } from '@/api/profile';
 import { companiesApi } from '@/api/companies';
@@ -34,6 +34,12 @@ import TicketTable from '@/components/tickets/TicketTable';
 import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { canManageServerActions } from '@/utils/permissions';
+import { withApiError } from '@/utils/apiError';
+import { materialsApi } from '@/api/materials';
+import { checklistsApi, ticketChecklistQueryKey } from '@/api/checklists';
+import TicketMaterialsTab from '@/components/tickets/TicketMaterialsTab';
+import TicketChecklistTab from '@/components/tickets/TicketChecklistTab';
+import { collectChecklistStats } from '@/features/tickets/checklist/checklistTree';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -73,6 +79,8 @@ const historyLabel = (entry: TicketHistoryDTO) => {
       return 'Комментарий удалён';
     case 'connection_copied':
       return 'Скопировано подключение';
+    case 'checklist_changed':
+      return 'Изменён чеклист';
     case 'field_changed':
     default:
       if (entry.field === 'status') return 'Изменён статус';
@@ -407,7 +415,7 @@ const TicketServerPollButton: React.FC<TicketServerPollButtonProps> = ({ serverI
       setWaitingForStatus(true);
       void onRefresh();
     },
-    onError: () => message.error('Не удалось отправить опрос сервера'),
+    onError: (error) => message.error(withApiError('Не удалось отправить опрос сервера', error)),
   });
 
   useEffect(() => {
@@ -474,6 +482,9 @@ const TicketDetailsPage: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
   const [pendingDeferredAt, setPendingDeferredAt] = useState('');
   const [companySearch, setCompanySearch] = useState('');
+  const [isCommentUploading, setIsCommentUploading] = useState(false);
+  const [isEditCommentUploading, setIsEditCommentUploading] = useState(false);
+  const [isDescriptionUploading, setIsDescriptionUploading] = useState(false);
   const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
   const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
   const [isCompanyEditMode, setIsCompanyEditMode] = useState(false);
@@ -549,7 +560,7 @@ const TicketDetailsPage: React.FC = () => {
       message.success('Имя станции обновлено');
       await refreshTicketInfrastructure();
     },
-    onError: () => message.error('Не удалось обновить имя станции'),
+    onError: (error) => message.error(withApiError('Не удалось обновить имя станции', error)),
   });
   const commitWorkstationRename = () => {
     const entityID = editingWorkstationID;
@@ -737,6 +748,22 @@ const TicketDetailsPage: React.FC = () => {
     }
     return companyContractType || '-';
   }, [companyResponse?.data, contractResponse?.data?.services]);
+
+  const { data: companyMaterialsResponse } = useQuery({
+    queryKey: ['ticket-company-materials', metadata?.company_id],
+    queryFn: () => materialsApi.listCompanyScope(metadata?.company_id || ''),
+    enabled: Boolean(metadata?.company_id),
+    staleTime: 60_000,
+  });
+  const companyMaterials = useMemo(() => companyMaterialsResponse?.data || [], [companyMaterialsResponse?.data]);
+
+  const { data: checklistResponse, isLoading: isChecklistLoading } = useQuery({
+    queryKey: ticketChecklistQueryKey(id || ''),
+    queryFn: () => checklistsApi.list(id || ''),
+    enabled: Boolean(id),
+  });
+  const checklistItems = useMemo(() => checklistResponse?.data || [], [checklistResponse?.data]);
+  const checklistStats = useMemo(() => collectChecklistStats(checklistItems), [checklistItems]);
 
   const { data: usersResponse } = useQuery({
     queryKey: ['users-assignees'],
@@ -1044,7 +1071,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось добавить комментарий'),
+    onError: (error) => message.error(withApiError('Не удалось добавить комментарий', error)),
   });
 
   const updateCommentMutation = useMutation({
@@ -1059,7 +1086,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось обновить комментарий'),
+    onError: (error) => message.error(withApiError('Не удалось обновить комментарий', error)),
   });
 
   const deleteCommentMutation = useMutation({
@@ -1074,7 +1101,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось удалить комментарий'),
+    onError: (error) => message.error(withApiError('Не удалось удалить комментарий', error)),
   });
 
   const updateDescriptionMutation = useMutation({
@@ -1088,7 +1115,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось обновить описание'),
+    onError: (error) => message.error(withApiError('Не удалось обновить описание', error)),
   });
 
   const uploadAttachmentsMutation = useMutation({
@@ -1104,7 +1131,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось загрузить файлы'),
+    onError: (error) => message.error(withApiError('Не удалось загрузить файлы', error)),
   });
 
   const changeStatusMutation = useMutation({
@@ -1127,7 +1154,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось обновить статус'),
+    onError: (error) => message.error(withApiError('Не удалось обновить статус', error)),
   });
 
   const changeCompanyMutation = useMutation({
@@ -1145,7 +1172,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['company-parent-infra'] });
       queryClient.invalidateQueries({ queryKey: ['company-profile'] });
     },
-    onError: () => message.error('Не удалось обновить компанию'),
+    onError: (error) => message.error(withApiError('Не удалось обновить компанию', error)),
   });
 
   const assignMutation = useMutation({
@@ -1158,7 +1185,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось обновить исполнителя'),
+    onError: (error) => message.error(withApiError('Не удалось обновить исполнителя', error)),
   });
 
   const updateProfileConfigMutation = useMutation({
@@ -1189,9 +1216,9 @@ const TicketDetailsPage: React.FC = () => {
     };
     setUser({ ...user, profile_config: nextConfig as any });
     updateProfileConfigMutation.mutate(nextConfig as any, {
-      onError: () => {
+      onError: (error) => {
         setUser(previousUser);
-        message.error('Не удалось сохранить набор столбцов таблицы тикетов');
+        message.error(withApiError('Не удалось сохранить набор столбцов таблицы тикетов', error));
       },
     });
   }, [setUser, updateProfileConfigMutation, user]);
@@ -1238,7 +1265,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось обновить поля Bitrix24'),
+    onError: (error) => message.error(withApiError('Не удалось обновить поля Bitrix24', error)),
   });
 
   const unlinkBitrixMutation = useMutation({
@@ -1254,7 +1281,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error('Не удалось разорвать связь с Bitrix24'),
+    onError: (error) => message.error(withApiError('Не удалось разорвать связь с Bitrix24', error)),
   });
 
   const deleteTicketMutation = useMutation({
@@ -1267,7 +1294,7 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       navigate('/tickets');
     },
-    onError: () => message.error('Не удалось удалить тикет'),
+    onError: (error) => message.error(withApiError('Не удалось удалить тикет', error)),
   });
 
   const copyConnectionMutation = useMutation({
@@ -1308,8 +1335,8 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['telephony'] });
     },
-    onError: () => {
-      message.error('Не удалось привязать звонок');
+    onError: (error) => {
+      message.error(withApiError('Не удалось привязать звонок', error));
     },
   });
 
@@ -1324,8 +1351,8 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['telephony'] });
     },
-    onError: () => {
-      message.error('Не удалось отвязать звонок');
+    onError: (error) => {
+      message.error(withApiError('Не удалось отвязать звонок', error));
     },
   });
 
@@ -1370,8 +1397,11 @@ const TicketDetailsPage: React.FC = () => {
     }
   };
 
-  const uploadInlineImage = async (source: File): Promise<string | null> => {
-    const response = await uploadAttachmentsMutation.mutateAsync([source]);
+  const uploadInlineAsset = async (source: File, relation: TicketUploadRelation): Promise<string | null> => {
+    if (!id) {
+      return null;
+    }
+    const response = await ticketsApi.uploadAttachments(id, [source], relation);
     const uploaded = response.data?.items?.[0];
     if (!uploaded?.file_path) {
       return null;
@@ -1381,16 +1411,8 @@ const TicketDetailsPage: React.FC = () => {
       .replace(/^static\//, '/api/static/');
   };
 
-  const uploadInlineFile = async (source: File): Promise<string | null> => {
-    const response = await uploadAttachmentsMutation.mutateAsync([source]);
-    const uploaded = response.data?.items?.[0];
-    if (!uploaded?.file_path) {
-      return null;
-    }
-    return String(uploaded.file_path)
-      .replace(/^\/static\//, '/api/static/')
-      .replace(/^static\//, '/api/static/');
-  };
+  const uploadCommentInline = (source: File) => uploadInlineAsset(source, 'inline_comment');
+  const uploadDescriptionInline = (source: File) => uploadInlineAsset(source, 'inline_description');
 
   const copyValue = async (params: CopyValueParams) => {
     const value = normalizeTextValue(params.value);
@@ -1941,8 +1963,9 @@ const TicketDetailsPage: React.FC = () => {
           onChange={setCommentDraft}
           placeholder="Добавьте комментарий"
           mentions={mentionOptions}
-          onImageUpload={uploadInlineImage}
-          onFileUpload={uploadInlineFile}
+          onImageUpload={uploadCommentInline}
+          onFileUpload={uploadCommentInline}
+          onUploadingChange={setIsCommentUploading}
           minHeight={84}
         />
         <Checkbox checked={commentIsPrivate} onChange={(event) => setCommentIsPrivate(event.target.checked)}>
@@ -1959,7 +1982,7 @@ const TicketDetailsPage: React.FC = () => {
           <Button
             type="primary"
             loading={addCommentMutation.isPending}
-            disabled={!hasEditorContent(commentDraft)}
+            disabled={!hasEditorContent(commentDraft) || isCommentUploading}
             onClick={() => addCommentMutation.mutate()}
           >
             Отправить
@@ -2004,13 +2027,15 @@ const TicketDetailsPage: React.FC = () => {
               onChange={setDescriptionDraft}
               placeholder="Введите описание тикета"
               mentions={mentionOptions}
-              onImageUpload={uploadInlineImage}
-              onFileUpload={uploadInlineFile}
+              onImageUpload={uploadDescriptionInline}
+              onFileUpload={uploadDescriptionInline}
+              onUploadingChange={setIsDescriptionUploading}
             />
             <Space>
               <Button
                 type="primary"
                 loading={updateDescriptionMutation.isPending}
+                disabled={isDescriptionUploading}
                 onClick={() => updateDescriptionMutation.mutate()}
               >
                 Сохранить
@@ -2424,8 +2449,9 @@ const TicketDetailsPage: React.FC = () => {
                                                   onChange={setEditingCommentDraft}
                                                   placeholder="Измените комментарий"
                                                   mentions={mentionOptions}
-                                                  onImageUpload={uploadInlineImage}
-                                                  onFileUpload={uploadInlineFile}
+                                                  onImageUpload={uploadCommentInline}
+                                                  onFileUpload={uploadCommentInline}
+                                                  onUploadingChange={setIsEditCommentUploading}
                                                   minHeight={100}
                                                 />
                                                 {isPyrusLinkedTicket && !item.is_private && (
@@ -2439,7 +2465,7 @@ const TicketDetailsPage: React.FC = () => {
                                                   <Button
                                                     type="primary"
                                                     loading={updateCommentMutation.isPending}
-                                                    disabled={!hasEditorContent(editingCommentDraft)}
+                                                    disabled={!hasEditorContent(editingCommentDraft) || isEditCommentUploading}
                                                     onClick={() => updateCommentMutation.mutate()}
                                                   >
                                                     Сохранить
@@ -2566,6 +2592,23 @@ const TicketDetailsPage: React.FC = () => {
                           ),
                         },
                         {
+                          key: 'checklist',
+                          label: checklistStats.total > 0 ? `Чеклист ${checklistStats.done}/${checklistStats.total}` : 'Чеклист',
+                          children: (
+                            <TicketChecklistTab
+                              ticketID={id || ''}
+                              items={checklistItems}
+                              loading={isChecklistLoading}
+                              assigneeOptions={assigneeOptions}
+                            />
+                          ),
+                        },
+                        ...(companyMaterials.length > 0 ? [{
+                          key: 'materials',
+                          label: `Материалы (${companyMaterials.length})`,
+                          children: <TicketMaterialsTab materials={companyMaterials} />,
+                        }] : []),
+                        {
                           key: 'history',
                           label: 'История',
                           children: (
@@ -2597,6 +2640,8 @@ const TicketDetailsPage: React.FC = () => {
                                             <div className="ticket-history-item__html-preview">
                                               <SafeHtmlContent html={item.new_value || item.old_value || ''} style={{ whiteSpace: 'pre-wrap' }} />
                                             </div>
+                                          ) : item.action === 'checklist_changed' ? (
+                                            <Text>{item.new_value}</Text>
                                           ) : (
                                             <Space size={6} wrap className="ticket-history-item__diff">
                                               {item.old_value ? renderHistoryDiffBadge('Было', item, item.old_value) : null}

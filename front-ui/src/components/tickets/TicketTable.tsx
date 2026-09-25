@@ -23,6 +23,7 @@ import {
   estimateDataTableHeaderMinWidth,
   serializeDataTableLayout,
 } from '@/components/common/dataTableUtils';
+import { withApiError } from '@/utils/apiError';
 
 interface Props {
   companyId?: string;
@@ -714,10 +715,10 @@ const TicketTable: React.FC<Props> = ({
 
     setUser({ ...user, profile_config: nextConfig });
     updateProfileConfigMutation.mutate(nextConfig, {
-      onError: () => {
+      onError: (error) => {
         lastSubmittedLayoutSignatureRef.current = serializeDataTableLayout(currentLayoutColumns);
         setUser(previousUser);
-        message.error('Не удалось сохранить вид таблицы тикетов');
+        message.error(withApiError('Не удалось сохранить вид таблицы тикетов', error));
       },
     });
   }, [layoutStorage, onLayoutChange, resolvedLayoutKey, setUser, updateProfileConfigMutation, user]);

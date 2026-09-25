@@ -664,7 +664,7 @@ func (s *agentObservationRepo) RecalculateCandidates(ctx context.Context) (*Cand
 		var payload api.AgentDataDTO
 		if err := json.Unmarshal(observation.PayloadJSON, &payload); err != nil {
 			result.Errors++
-			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ payload РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° РєР°РЅРґРёРґР°С‚Р°",
+			s.logger.Error("Не удалось прочитать payload для пересчета кандидата",
 				"observation_id", observation.ID,
 				"error", err,
 			)
@@ -693,7 +693,7 @@ func (s *agentObservationRepo) RecalculateCandidates(ctx context.Context) (*Cand
 			return nil
 		}); err != nil {
 			result.Errors++
-			s.logger.Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРіРѕС‚РѕРІРёС‚СЊ РЅР°Р±Р»СЋРґРµРЅРёРµ Рє РїРµСЂРµСЃС‡РµС‚Сѓ",
+			s.logger.Error("Не удалось подготовить наблюдение к пересчету",
 				"observation_id", observation.ID,
 				"error", err,
 			)

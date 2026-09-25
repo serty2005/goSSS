@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons';
@@ -18,6 +18,7 @@ import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import dayjs from 'dayjs';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -96,6 +97,7 @@ const toTitle = (value: string | undefined, fallback: string) => {
 const ServerDetails: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const goBack = useBackNavigation('/servers');
@@ -225,7 +227,7 @@ const ServerDetails: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['company', server?.owner_id, 'infra', 'server-details-hierarchy'] });
       setActiveField(null);
     },
-    onError: () => message.error('Ошибка обновления'),
+    onError: (error) => message.error(withApiError('Ошибка обновления', error)),
   });
 
   const pollMutation = useMutation({
@@ -234,7 +236,7 @@ const ServerDetails: React.FC = () => {
       message.success('Запрос на опрос отправлен');
       void queryClient.invalidateQueries({ queryKey: ['server', id] });
     },
-    onError: () => message.error('Не удалось отправить запрос на опрос'),
+    onError: (error) => message.error(withApiError('Не удалось отправить запрос на опрос', error)),
   });
   const deleteMutation = useMutation({
     mutationFn: () => equipmentApi.deleteServer(id!),
@@ -244,7 +246,7 @@ const ServerDetails: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
       void queryClient.invalidateQueries({ queryKey: ['owner-history', 'Server', id] });
     },
-    onError: () => message.error('Ошибка удаления'),
+    onError: (error) => message.error(withApiError('Ошибка удаления', error)),
   });
 
   const companyOptions = useMemo(() => {
@@ -460,7 +462,7 @@ const ServerDetails: React.FC = () => {
         </Card>
 
         <Tabs
-          defaultActiveKey="history"
+          defaultActiveKey={searchParams.get('tab') === 'materials' ? 'materials' : 'history'}
           items={[
             {
               key: 'history',

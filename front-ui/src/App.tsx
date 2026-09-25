@@ -39,6 +39,7 @@ const FiscalsPage = lazy(() => import('@/pages/equipment/FiscalsPage'));
 const UsersAdminPage = lazy(() => import('@/pages/admin/UsersAdminPage'));
 const AdminTranslationsPage = lazy(() => import('@/pages/admin/AdminTranslationsPage'));
 const AdminTelephonyPage = lazy(() => import('@/pages/admin/AdminTelephonyPage'));
+const AdminChecklistTemplatesPage = lazy(() => import('@/pages/admin/AdminChecklistTemplatesPage'));
 const AdminSynchronizationsPage = lazy(() => import('@/pages/admin/AdminSynchronizationsPage'));
 const ServicePointsImportPage = lazy(() => import('@/pages/admin/ServicePointsImportPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
@@ -327,6 +328,14 @@ const App: React.FC = () => {
                       element={(
                         <AdminRoute>
                           <AdminTelephonyPage />
+                        </AdminRoute>
+                      )}
+                    />
+                    <Route
+                      path="admin/checklist-templates"
+                      element={(
+                        <AdminRoute>
+                          <AdminChecklistTemplatesPage />
                         </AdminRoute>
                       )}
                     />

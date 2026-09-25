@@ -34,6 +34,7 @@ import {
   NetworkCandidateWSStagingDTO,
 } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -268,7 +269,7 @@ const NetworkAcceptancePage: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: ['network-candidates'] });
       void queryClient.invalidateQueries({ queryKey: ['network-candidate', selectedID] });
     },
-    onError: () => message.error('Не удалось перенести группу'),
+    onError: (error) => message.error(withApiError('Не удалось перенести группу', error)),
   });
 
   const approveMutation = useMutation({
@@ -283,7 +284,7 @@ const NetworkAcceptancePage: React.FC = () => {
       setRouteState({}, true);
       void queryClient.invalidateQueries({ queryKey: ['network-candidates'] });
     },
-    onError: () => message.error('Не удалось подтвердить network-кандидата'),
+    onError: (error) => message.error(withApiError('Не удалось подтвердить network-кандидата', error)),
   });
 
   const rows = useMemo(() => ((listQuery.data?.data || []) as NetworkCandidateDTO[]), [listQuery.data?.data]);

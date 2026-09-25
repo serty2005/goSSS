@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { Button, Card, Checkbox, Form, Input, Select, Space, Typography, message } from 'antd';
 import { articlesApi } from '@/api/articles';
 import type { ArticleContentFormat, ArticlePayload, ArticleStatus, ArticleType } from '@/types/api';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -106,7 +107,7 @@ const ArticleEditorPage: React.FC = () => {
       await queryClient.invalidateQueries({ queryKey: ['articles-featured'] });
       navigate(`/info/articles/${response.data.id}`);
     },
-    onError: () => message.error('Не удалось сохранить публикацию'),
+    onError: (error) => message.error(withApiError('Не удалось сохранить публикацию', error)),
   });
 
   const initialValues = useMemo(() => {

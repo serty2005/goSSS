@@ -16,6 +16,8 @@ import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
+import MaterialsPanel from '@/components/materials/MaterialsPanel';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -109,7 +111,7 @@ const FiscalDetails: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['owner-history', 'FiscalRegister', id] });
       setActiveField(null);
     },
-    onError: () => message.error('Ошибка обновления'),
+    onError: (error) => message.error(withApiError('Ошибка обновления', error)),
   });
 
   const deleteMutation = useMutation({
@@ -119,7 +121,7 @@ const FiscalDetails: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'FiscalRegister', id] });
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
     },
-    onError: () => message.error('Ошибка удаления'),
+    onError: (error) => message.error(withApiError('Ошибка удаления', error)),
   });
 
   const fiscal = fiscalRes?.data;
@@ -350,6 +352,10 @@ const FiscalDetails: React.FC = () => {
               { title: 'Комментарий', dataIndex: 'comment', key: 'comment' },
             ]}
           />
+        </Card>
+
+        <Card title="Материалы" className="glass-panel" size="small">
+          <MaterialsPanel entityType="FiscalRegister" entityID={String(fiscal.id)} />
         </Card>
       </Space>
 

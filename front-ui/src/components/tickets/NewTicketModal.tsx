@@ -15,6 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
 import { getTicketStatusMeta } from '@/constants/ticketStatus';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { withApiError } from '@/utils/apiError';
 
 const { Text, Paragraph } = Typography;
 
@@ -633,8 +634,8 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       queryClient.invalidateQueries({ queryKey: ['telephony'] });
     },
-    onError: () => {
-      message.error(t('tickets:newTicket.messages.createError'));
+    onError: (error) => {
+      message.error(withApiError(t('tickets:newTicket.messages.createError'), error));
     },
   });
 

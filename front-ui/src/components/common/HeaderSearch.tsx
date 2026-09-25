@@ -15,6 +15,7 @@ import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 import { TICKET_ACTIVE_STATUS_VALUES, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import GlobalSearchLauncher from '@/components/search/GlobalSearchLauncher';
 import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { withApiError } from '@/utils/apiError';
 
 const { useBreakpoint } = Grid;
 const { Text } = Typography;
@@ -284,7 +285,7 @@ const HeaderSearch: React.FC = () => {
       clearSelectedTicketIDs();
       void queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: () => message.error(t('layout:headerSearch.ticket.bulkAssignError')),
+    onError: (error) => message.error(withApiError(t('layout:headerSearch.ticket.bulkAssignError'), error)),
   });
 
   const presets = useMemo<TicketPreset[]>(() => {

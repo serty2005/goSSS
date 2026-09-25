@@ -5,6 +5,7 @@ import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
 import { contractsApi } from '@/api/contracts';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -48,7 +49,7 @@ const ContractDetails: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contract', id] });
       queryClient.invalidateQueries({ queryKey: ['company'] });
     },
-    onError: () => message.error('Не удалось обновить контракт'),
+    onError: (error) => message.error(withApiError('Не удалось обновить контракт', error)),
   });
 
   const contract = contractRes?.data;

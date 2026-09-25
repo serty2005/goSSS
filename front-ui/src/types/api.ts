@@ -1286,6 +1286,63 @@ export interface MaterialPayload {
   entity_refs: MaterialEntityRefDTO[];
 }
 
+export type MaterialSourceScope = "company" | "parent" | "equipment";
+
+export interface MaterialSourceDTO {
+  entity_type: MaterialEntityRefDTO["entity_type"];
+  entity_id: string;
+  title: string;
+  scope: MaterialSourceScope;
+}
+
+export interface CompanyScopedMaterialDTO extends MaterialDTO {
+  sources: MaterialSourceDTO[];
+}
+
+// --- Ticket Checklist DTO ---
+export interface ChecklistUserRefDTO {
+  id: number;
+  name: string;
+}
+
+export interface TicketChecklistItemDTO {
+  id: string;
+  ticket_id: string;
+  parent_id: string | null;
+  title: string;
+  position: number;
+  is_done: boolean;
+  done_at?: string;
+  done_by?: ChecklistUserRefDTO;
+  created_by_id?: number;
+  assignees: ChecklistUserRefDTO[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChecklistTemplateNodeDTO {
+  title: string;
+  children?: ChecklistTemplateNodeDTO[];
+}
+
+export interface ChecklistTemplateDTO {
+  id: string;
+  title: string;
+  description: string;
+  items: ChecklistTemplateNodeDTO[];
+  is_active: boolean;
+  created_by_id?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChecklistTemplatePayload {
+  title: string;
+  description?: string;
+  items: ChecklistTemplateNodeDTO[];
+  is_active: boolean;
+}
+
 // --- Candidate Acceptance DTO ---
 export type CandidateStatus =
   | "NEW"

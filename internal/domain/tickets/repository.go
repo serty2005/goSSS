@@ -108,6 +108,9 @@ type TicketRepository interface {
 	GetFileAssetByStorageKey(ctx context.Context, storageKey string) (*FileAsset, error)
 	UpsertTicketFileLink(ctx context.Context, link *TicketFileLink) error
 	GetTicketFileLinksByRelation(ctx context.Context, ticketID string, relationTypes []string) ([]TicketFileLink, error)
+	GetTicketFileLinksByFileID(ctx context.Context, fileID string) ([]TicketFileLink, error)
+	BindPendingInlineFiles(ctx context.Context, ticketID string, relationType string, commentUUID string, fileIDs []string) error
+	DeleteFileAssetWithLinks(ctx context.Context, fileID string) error
 
 	AddComments(ctx context.Context, comments []TicketComment) error
 	GetComments(ctx context.Context, ticketID string) ([]TicketComment, error)

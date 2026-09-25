@@ -343,7 +343,8 @@ const MainLayout: React.FC = () => {
       const isTicketUpdateAction =
         action.includes("status") ||
         action.includes("description") ||
-        action.includes("comment");
+        action.includes("comment") ||
+        action.includes("checklist");
       const isDeferredDue = action === "ticket_deferred_due";
       const isSubscriptionMatch =
         notificationsConfig.subscriptions.includes(ticketID);
@@ -537,6 +538,9 @@ const MainLayout: React.FC = () => {
     if (location.pathname.startsWith("/admin/telephony")) {
       return "/admin/telephony";
     }
+    if (location.pathname.startsWith("/admin/checklist-templates")) {
+      return "/admin/checklist-templates";
+    }
     if (location.pathname.startsWith("/admin/translations")) {
       return "/admin/translations";
     }
@@ -654,6 +658,10 @@ const MainLayout: React.FC = () => {
         {
           key: "/admin/synchronizations",
           label: t("layout:menu.synchronizations"),
+        },
+        {
+          key: "/admin/checklist-templates",
+          label: t("layout:menu.checklistTemplates"),
         },
         { key: "/tasks", label: t("layout:menu.issues") },
         {

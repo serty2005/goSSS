@@ -28,6 +28,7 @@ import type {
 } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
 import { isAdmin } from '@/utils/permissions';
+import { withApiError } from '@/utils/apiError';
 
 const { Text } = Typography;
 
@@ -478,8 +479,8 @@ const TasksPage: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidates', 'details', candidateID] });
       message.success('Удаление подтверждено');
     },
-    onError: () => {
-      message.error('Не удалось подтвердить удаление');
+    onError: (error) => {
+      message.error(withApiError('Не удалось подтвердить удаление', error));
     },
   });
 
@@ -489,8 +490,8 @@ const TasksPage: React.FC = () => {
         keep_entity_id: payload.keepEntityID,
         delete_entity_id: payload.deleteEntityID,
       }),
-    onError: () => {
-      message.error('Не удалось применить ручной выбор дубля');
+    onError: (error) => {
+      message.error(withApiError('Не удалось применить ручной выбор дубля', error));
     },
   });
   const deletionColumns = [

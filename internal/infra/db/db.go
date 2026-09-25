@@ -42,6 +42,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&user.User{}, &user.Role{}, &user.Integration{},
 		&tickets.Ticket{}, &tickets.TicketHistory{}, &tickets.Attachment{}, &tickets.TicketComment{},
 		&tickets.FileAsset{}, &tickets.TicketFileLink{}, &tickets.TicketContact{},
+		&tickets.TicketChecklistItem{}, &tickets.TicketChecklistItemAssignee{}, &tickets.ChecklistTemplate{},
 		&company.Company{},
 		&server.Server{},
 		&workstation.Workstation{},

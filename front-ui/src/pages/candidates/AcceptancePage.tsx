@@ -46,6 +46,7 @@ import { StagedAgentEntities } from '@/components/candidates/StagedAgentEntities
 import { CompanySearchOption } from '@/components/companies/CompanySearchSelect';
 import { CandidateWorkstationDraft } from '@/components/candidates/StagedWorkstations';
 import { useAuthStore } from '@/store/authStore';
+import { extractApiErrorMessage, withApiError } from '@/utils/apiError';
 
 const { Title } = Typography;
 type CandidateFilter = 'ACTIVE' | CandidateStatus | 'ALL';
@@ -349,9 +350,11 @@ const AcceptancePage: React.FC = () => {
         void queryClient.invalidateQueries({ queryKey: ['candidate', selectedCandidateID] });
       }
     },
-    onError: () => {
+    onError: (error) => {
       notification.error({
         title: 'Не удалось выполнить пересчёт кандидатов',
+        description: extractApiErrorMessage(error) || undefined,
+        duration: 10,
       });
     },
   });
@@ -367,8 +370,8 @@ const AcceptancePage: React.FC = () => {
       closeDrawer();
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
-    onError: () => {
-      message.error('Не удалось отклонить кандидата');
+    onError: (error) => {
+      message.error(withApiError('Не удалось отклонить кандидата', error));
     },
   });
 
@@ -385,8 +388,12 @@ const AcceptancePage: React.FC = () => {
       closeDrawer();
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
-    onError: () => {
-      message.error('Не удалось подтвердить кандидата');
+    onError: (error) => {
+      notification.error({
+        title: isManualMode ? 'Не удалось добавить компанию и сервер в АО' : 'Не удалось принять кандидата на АО',
+        description: extractApiErrorMessage(error) || undefined,
+        duration: 10,
+      });
     },
   });
 
@@ -428,9 +435,9 @@ const AcceptancePage: React.FC = () => {
     onSuccess: (rows) => {
       setAgentObservations(rows);
     },
-    onError: () => {
+    onError: (error) => {
       setAgentObservations([]);
-      message.error('Не удалось загрузить полные данные агента');
+      message.error(withApiError('Не удалось загрузить полные данные агента', error));
     },
   });
 

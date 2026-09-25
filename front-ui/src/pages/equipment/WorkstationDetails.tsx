@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, Popconfirm, Tabs, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -17,6 +17,7 @@ import { CompanySearchSelect } from '@/components/companies/CompanySearchSelect'
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
+import { withApiError } from '@/utils/apiError';
 
 const { Title, Text } = Typography;
 
@@ -39,6 +40,7 @@ const sourceLabelMap: Record<string, string> = {
 const WorkstationDetails: React.FC = () => {
   const { token } = antTheme.useToken();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const goBack = useBackNavigation('/workstations');
@@ -87,7 +89,7 @@ const WorkstationDetails: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['owner-history', 'Workstation', id] });
       setActiveField(null);
     },
-    onError: () => message.error('Ошибка обновления'),
+    onError: (error) => message.error(withApiError('Ошибка обновления', error)),
   });
 
   const deleteMutation = useMutation({
@@ -97,7 +99,7 @@ const WorkstationDetails: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidate', 'Workstation', id] });
       void queryClient.invalidateQueries({ queryKey: ['deletion-candidates'] });
     },
-    onError: () => message.error('Ошибка удаления'),
+    onError: (error) => message.error(withApiError('Ошибка удаления', error)),
   });
 
   const ws = wsRes?.data;
@@ -233,7 +235,7 @@ const WorkstationDetails: React.FC = () => {
 
       <Tabs
         style={{ marginTop: 16 }}
-        defaultActiveKey="history"
+        defaultActiveKey={searchParams.get('tab') === 'materials' ? 'materials' : 'history'}
         items={[
           {
             key: 'history',

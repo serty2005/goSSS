@@ -16,6 +16,7 @@ import { getAgentUpdateMeta } from '@/utils/agentUpdates';
 import { useAuthStore } from '@/store/authStore';
 import { canManageServerActions } from '@/utils/permissions';
 import AgentBadge from '@/components/agents/AgentBadge';
+import { withApiError } from '@/utils/apiError';
 
 interface Props {
   data: ServerEntity;
@@ -65,7 +66,7 @@ const ServerCard: React.FC<Props> = ({ data }) => {
         predicate: (query) => query.queryKey[0] === 'company' || query.queryKey[0] === 'search',
       });
     },
-    onError: () => message.error('Не удалось выполнить опрос'),
+    onError: (error) => message.error(withApiError('Не удалось выполнить опрос', error)),
   });
 
   const handlePoll = (e: React.MouseEvent) => {
