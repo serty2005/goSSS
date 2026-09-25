@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, CompanyBitrixMappingRowDTO, CompanyModel, CompanyParentOptionDTO, InfrastructureItem } from '@/types/api';
+import { ApiResponse, CompanyBitrixMappingRowDTO, CompanyModel, CompanyNetworkDTO, CompanyParentOptionDTO, InfrastructureItem } from '@/types/api';
 
 export const companiesApi = {
   // Поиск/листинг компаний
@@ -41,6 +41,12 @@ export const companiesApi = {
   // Получение дочерних компаний
   getChildren: async (companyId: string) => {
     const response = await apiClient.get<ApiResponse<CompanyModel[]>>(`/companies/${companyId}/children`);
+    return response.data;
+  },
+
+  // Получение сети компании (корень, все потомки и их серверы) одним запросом
+  getNetwork: async (companyId: string) => {
+    const response = await apiClient.get<ApiResponse<CompanyNetworkDTO>>(`/companies/${companyId}/network`);
     return response.data;
   },
 

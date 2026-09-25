@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { Card, Checkbox, DatePicker, Select, Space, Spin, Typography } from 'antd';
+import { Card, Checkbox, DatePicker, Select, Space, Typography } from 'antd';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { companiesApi } from '@/api/companies';
@@ -217,7 +217,7 @@ const FiscalsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const { data: filterOptionsData, isFetching: isFilterOptionsLoading } = useQuery({
+  const { data: filterOptionsData } = useQuery({
     queryKey: ['equipment', 'fiscals', 'filter-options'],
     queryFn: () => equipmentApi.getFiscalFilterOptions(),
     staleTime: 5 * 60_000,
@@ -411,11 +411,10 @@ const FiscalsPage: React.FC = () => {
               {option.label}
             </Checkbox>
           ))}
-          {isFilterOptionsLoading && <Spin size="small" />}
         </Space>
       </Checkbox.Group>
     </Space>
-  ), [isFilterOptionsLoading, modelFilterOptions, selectedModels]);
+  ), [modelFilterOptions, selectedModels]);
 
   const ownerFilterContent = useMemo(() => (
     <Space direction="vertical" size={8} className="company-ticket-table__filter-popover" style={{ width: 340 }}>
@@ -586,7 +585,6 @@ const FiscalsPage: React.FC = () => {
         </Space>
       ) : null}
       <div ref={loadMoreRef} style={{ display: 'flex', justifyContent: 'center', minHeight: 40 }}>
-        {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
         {!hasNextPage && rows.length > 0 ? (
           <Text type="secondary">Показано: {rows.length} из {total}</Text>
         ) : null}

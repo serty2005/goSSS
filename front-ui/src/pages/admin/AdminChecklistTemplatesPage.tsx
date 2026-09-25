@@ -230,11 +230,10 @@ const AdminChecklistTemplatesPage: React.FC = () => {
         <Table<ChecklistTemplateDTO>
           rowKey="id"
           size="small"
-          loading={isLoading}
           dataSource={templates}
           columns={columns}
           pagination={false}
-          locale={{ emptyText: <Empty description="Шаблонов пока нет" /> }}
+          locale={{ emptyText: isLoading ? ' ' : <Empty description="Шаблонов пока нет" /> }}
         />
       </Card>
 

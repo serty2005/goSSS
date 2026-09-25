@@ -2,10 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Badge, Button, Card, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
+import { Badge, Button, Card, Form, Input, Select, Space, Typography, message } from 'antd';
 import { contractsApi } from '@/api/contracts';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -57,9 +58,7 @@ const ContractDetails: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div style={{ padding: 50, textAlign: 'center' }}>
-        <Spin size="large" />
-      </div>
+      <LoadingPlaceholder />
     );
   }
 

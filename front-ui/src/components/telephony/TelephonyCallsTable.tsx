@@ -9,7 +9,6 @@ import {
   Input,
   Select,
   Space,
-  Spin,
   Table,
   Tag,
   Typography,
@@ -22,6 +21,7 @@ import { telephonyApi } from "@/api/telephony";
 import { usersApi } from "@/api/users";
 import type { TelephonyCallDTO, TelephonyCallListParams } from "@/types/api";
 import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/hooks/useDebouncedValue";
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
@@ -507,16 +507,13 @@ const TelephonyCallsTable: React.FC<Props> = ({ mode, title, userId }) => {
           </Space>
 
           {isFetching && !data ? (
-            <div style={{ textAlign: "center", padding: 32 }}>
-              <Spin />
-            </div>
+            <LoadingPlaceholder />
           ) : (
             <Table<TelephonyCallDTO>
               rowKey="id"
               columns={columns}
               dataSource={data?.items || []}
-              loading={isFetching}
-              locale={{ emptyText: <Empty description="Звонки не найдены" /> }}
+              locale={{ emptyText: isFetching ? ' ' : <Empty description="Звонки не найдены" /> }}
               pagination={{
                 current: page,
                 pageSize,

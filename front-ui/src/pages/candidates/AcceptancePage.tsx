@@ -14,7 +14,6 @@ import {
   Row,
   Select,
   Space,
-  Spin,
   Table,
   Tag,
   Typography,
@@ -47,6 +46,7 @@ import { CompanySearchOption } from '@/components/companies/CompanySearchSelect'
 import { CandidateWorkstationDraft } from '@/components/candidates/StagedWorkstations';
 import { useAuthStore } from '@/store/authStore';
 import { extractApiErrorMessage, withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title } = Typography;
 type CandidateFilter = 'ACTIVE' | CandidateStatus | 'ALL';
@@ -966,7 +966,7 @@ const AcceptancePage: React.FC = () => {
 
       <Card className="glass-panel">
         {isCandidatesLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin size="large" /></div>
+          <LoadingPlaceholder />
         ) : candidates.length === 0 ? (
           <Empty description="Кандидатов на принятие нет" />
         ) : (
@@ -1016,7 +1016,7 @@ const AcceptancePage: React.FC = () => {
         )}
 
         {!isManualMode && (isCandidateLoading || !selectedCandidate) ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+          <LoadingPlaceholder />
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             {isManualMode ? (
@@ -1245,9 +1245,7 @@ const AcceptancePage: React.FC = () => {
         footer={null}
       >
         {agentObservationsMutation.isPending ? (
-          <div style={{ textAlign: 'center', padding: 24 }}>
-            <Spin />
-          </div>
+          <LoadingPlaceholder />
         ) : agentObservations.length === 0 ? (
           <Empty description="Полные данные наблюдений не найдены" />
         ) : (

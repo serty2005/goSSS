@@ -608,9 +608,7 @@ const TicketChecklistTab: React.FC<Props> = ({ ticketID, items, loading, assigne
         </Space>
       </div>
 
-      {loading && items.length === 0 ? (
-        <Text type="secondary">Загрузка чеклиста...</Text>
-      ) : tree.length === 0 ? (
+      {loading && items.length === 0 ? null : tree.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="В чеклисте пока нет пунктов" />
       ) : (
         <div className="ticket-checklist__list">{renderLevel(tree, null)}</div>

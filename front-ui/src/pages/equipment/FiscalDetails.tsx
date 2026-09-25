@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Popconfirm, Table, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Badge, message, Popconfirm, Table, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
@@ -18,6 +18,7 @@ import AgentObservationRawModal from '@/components/agents/AgentObservationRawMod
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -183,7 +184,7 @@ const FiscalDetails: React.FC = () => {
       .filter((item) => item.licenseID === '17' || item.licenseID === '19');
   }, [fiscal?.licenses]);
 
-  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
+  if (isLoading) return <LoadingPlaceholder />;
   if (!fiscal) return <div>Фискальный регистратор не найден</div>;
 
   const saveOwner = (value: string) => {

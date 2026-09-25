@@ -155,6 +155,10 @@ func (bitrixModuleCompanyServiceStub) GetInfrastructure(context.Context, string,
 	return nil, nil
 }
 
+func (bitrixModuleCompanyServiceStub) GetNetwork(context.Context, string) (*company.Network, error) {
+	return nil, nil
+}
+
 func (bitrixModuleCompanyServiceStub) GetChildren(context.Context, string) ([]company.Company, error) {
 	return nil, nil
 }

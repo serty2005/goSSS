@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Typography, Tabs, Tag, Descriptions, Spin, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, Table, theme as antTheme, Popconfirm } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Typography, Tabs, Tag, Descriptions, Empty, Card, Button, Space, Modal, Form, Input, message, Select, Segmented, Table, theme as antTheme, Popconfirm } from 'antd';
 import { BankOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined, PlusOutlined, EditOutlined, CopyOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { companiesApi } from '@/api/companies';
 import { ticketsApi } from '@/api/tickets';
@@ -22,6 +22,7 @@ import { resolveCompanyID } from '@/utils/companyHierarchy';
 import { formatMappedServicePointLabel } from './companyBitrixMappingState';
 import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -92,7 +93,12 @@ const CompanyPage: React.FC = () => {
     enabled: !!id,
   });
 
-  const { data: infraRes, isLoading: loadingInfra } = useQuery({
+  const {
+    data: infraRes,
+    isLoading: loadingInfra,
+    isError: isInfraError,
+    refetch: refetchInfra,
+  } = useQuery({
     queryKey: ['company', id, 'infra'],
     queryFn: () => companiesApi.getInfrastructure(id!),
     enabled: !!id,
@@ -104,37 +110,16 @@ const CompanyPage: React.FC = () => {
     enabled: Boolean(id) && canViewDeletionCandidate,
   });
 
-  const { data: companyChildrenIDs = [], isLoading: loadingCompanyChildren } = useQuery({
-    queryKey: ['company', id, 'children-tree'],
+  const {
+    data: networkRes,
+    isLoading: loadingNetwork,
+    isError: isNetworkError,
+    refetch: refetchNetwork,
+  } = useQuery({
+    queryKey: ['company', id, 'network'],
+    queryFn: () => companiesApi.getNetwork(id!),
     enabled: !!id,
-    queryFn: async () => {
-      const rootID = String(id || '').trim();
-      if (!rootID) {
-        return [] as string[];
-      }
-
-      const visited = new Set<string>([rootID]);
-      const childIDs: string[] = [];
-      const queue: string[] = [rootID];
-
-      while (queue.length > 0) {
-        const parentID = queue.shift()!;
-        const response = await companiesApi.getChildren(parentID);
-        const items = response?.data || [];
-        items.forEach((item) => {
-          const childID = String(item.id || '').trim();
-          if (!childID || visited.has(childID)) {
-            return;
-          }
-          visited.add(childID);
-          childIDs.push(childID);
-          queue.push(childID);
-        });
-      }
-
-      return childIDs;
-    },
-    staleTime: 60_000,
+    staleTime: 30_000,
   });
 
   const company = companyRes?.data;
@@ -228,117 +213,32 @@ const CompanyPage: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const { data: networkRootCompanyRes, isLoading: loadingNetworkRootCompany } = useQuery({
-    queryKey: ['company', parentCompanyID, 'network-root'],
-    queryFn: () => companiesApi.getCompany(parentCompanyID),
-    enabled: Boolean(parentCompanyID),
-    staleTime: 30_000,
-  });
+  const networkRootID = String(networkRes?.data?.root_id || '').trim();
 
-  const networkRootCompany = useMemo(() => {
-    if (parentCompanyID) {
-      return networkRootCompanyRes?.data;
-    }
-    return company;
-  }, [company, networkRootCompanyRes?.data, parentCompanyID]);
+  const networkNodes = useMemo(() => (
+    (networkRes?.data?.nodes || []).map((node): NetworkCompanyNode => ({
+      id: String(node.company?.id || ''),
+      parentID: String(node.parent_id || ''),
+      depth: node.depth,
+      company: node.company,
+    })).filter((node) => node.id)
+  ), [networkRes?.data?.nodes]);
 
-  const networkRootID = resolveCompanyID(networkRootCompany || {}) || networkRootCompany?.id || '';
+  const hasNetwork = Boolean(parentCompanyID) || networkNodes.length > 1 || isNetworkError;
 
-  const { data: networkGraphNodes = [], isLoading: loadingNetworkGraph } = useQuery({
-    queryKey: ['company', networkRootID, 'network-graph'],
-    enabled: Boolean(networkRootID),
-    staleTime: 30_000,
-    queryFn: async () => {
-      const rootID = String(networkRootID || '').trim();
-      if (!rootID) {
-        return [] as NetworkCompanyNode[];
-      }
-
-      const visited = new Set<string>([rootID]);
-      const queue: Array<{ id: string; depth: number }> = [{ id: rootID, depth: 0 }];
-      const nodes: NetworkCompanyNode[] = [];
-
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        const childrenRes = await companiesApi.getChildren(current.id);
-        const children = childrenRes?.data || [];
-        children.forEach((child) => {
-          const childID = String(resolveCompanyID(child || {}) || child.id || '').trim();
-          if (!childID || visited.has(childID)) {
-            return;
-          }
-          visited.add(childID);
-          nodes.push({
-            id: childID,
-            parentID: current.id,
-            depth: current.depth + 1,
-            company: child,
-          });
-          queue.push({ id: childID, depth: current.depth + 1 });
-        });
-      }
-
-      return nodes;
-    },
-  });
-
-  const hasNetwork = Boolean(parentCompanyID) || networkGraphNodes.length > 0;
-  const networkCompanyIDs = useMemo(() => {
-    if (!networkRootID) {
-      return [] as string[];
-    }
-    const ids = new Set<string>([networkRootID]);
-    networkGraphNodes.forEach((node) => ids.add(node.id));
-    return Array.from(ids);
-  }, [networkGraphNodes, networkRootID]);
-
-  const networkCompanyProfileQueries = useQueries({
-    queries: hasNetwork
-      ? networkCompanyIDs.map((networkCompanyID) => ({
-        queryKey: ['company', networkCompanyID, 'profile', 'network'],
-        queryFn: () => companiesApi.getCompany(networkCompanyID),
-        staleTime: 30_000,
-      }))
-      : [],
-  });
-
-  const loadingNetworkProfiles = networkCompanyProfileQueries.some((query) => query.isLoading);
   const networkCompanyByID = useMemo(() => {
     const result = new Map<string, CompanyModel>();
-    if (networkRootID && networkRootCompany) {
-      result.set(networkRootID, networkRootCompany);
-    }
-    networkGraphNodes.forEach((node) => {
-      result.set(node.id, node.company);
-    });
-    networkCompanyIDs.forEach((networkCompanyID, index) => {
-      const profile = networkCompanyProfileQueries[index]?.data?.data;
-      if (profile) {
-        result.set(networkCompanyID, profile);
-      }
+    networkNodes.forEach((node) => result.set(node.id, node.company));
+    return result;
+  }, [networkNodes]);
+
+  const networkServersByCompanyID = useMemo(() => {
+    const result = new Map<string, ServerEntity[]>();
+    (networkRes?.data?.nodes || []).forEach((node) => {
+      result.set(String(node.company?.id || ''), node.servers || []);
     });
     return result;
-  }, [networkCompanyIDs, networkCompanyProfileQueries, networkGraphNodes, networkRootCompany, networkRootID]);
-
-  const networkNodes = useMemo(() => {
-    if (!networkRootID) {
-      return [] as NetworkCompanyNode[];
-    }
-    const rootCompanyData = networkCompanyByID.get(networkRootID) || networkRootCompany || {};
-    const nodes: NetworkCompanyNode[] = [{
-      id: networkRootID,
-      parentID: '',
-      depth: 0,
-      company: rootCompanyData,
-    }];
-    networkGraphNodes.forEach((node) => {
-      nodes.push({
-        ...node,
-        company: networkCompanyByID.get(node.id) || node.company,
-      });
-    });
-    return nodes;
-  }, [networkCompanyByID, networkGraphNodes, networkRootCompany, networkRootID]);
+  }, [networkRes?.data?.nodes]);
 
   const networkChildNodes = useMemo(() => {
     return networkNodes
@@ -354,28 +254,37 @@ const CompanyPage: React.FC = () => {
       });
   }, [networkNodes]);
 
-  const networkInfrastructureQueries = useQueries({
-    queries: hasNetwork
-      ? networkCompanyIDs.map((networkCompanyID) => ({
-        queryKey: ['company', networkCompanyID, 'infra', 'network'],
-        queryFn: () => companiesApi.getInfrastructure(networkCompanyID),
-        staleTime: 30_000,
-      }))
-      : [],
-  });
-
-  const loadingNetworkInfrastructure = networkInfrastructureQueries.some((query) => query.isLoading);
-  const networkServersByCompanyID = useMemo(() => {
-    const result = new Map<string, ServerEntity[]>();
-    networkCompanyIDs.forEach((networkCompanyID, index) => {
-      const queryData = networkInfrastructureQueries[index]?.data?.data || [];
-      const servers = queryData
-        .filter((item) => item.entity_type === 'Server')
-        .map((item) => item.data as ServerEntity);
-      result.set(networkCompanyID, servers);
+  // Все потомки текущей компании внутри сети (для тикетов «текущая + дочерние»).
+  const companyChildrenIDs = useMemo(() => {
+    const currentID = String(id || '').trim();
+    if (!currentID) {
+      return [] as string[];
+    }
+    const childrenByParent = new Map<string, string[]>();
+    networkNodes.forEach((node) => {
+      if (!node.parentID) {
+        return;
+      }
+      const list = childrenByParent.get(node.parentID) || [];
+      list.push(node.id);
+      childrenByParent.set(node.parentID, list);
     });
+    const result: string[] = [];
+    const visited = new Set<string>([currentID]);
+    const queue = [currentID];
+    while (queue.length > 0) {
+      const parentID = queue.shift()!;
+      (childrenByParent.get(parentID) || []).forEach((childID) => {
+        if (visited.has(childID)) {
+          return;
+        }
+        visited.add(childID);
+        result.push(childID);
+        queue.push(childID);
+      });
+    }
     return result;
-  }, [networkCompanyIDs, networkInfrastructureQueries]);
+  }, [id, networkNodes]);
 
   const selectedNetworkContractCompany = useMemo(
     () => networkCompanyByID.get(selectedNetworkContractCompanyID),
@@ -626,9 +535,7 @@ const CompanyPage: React.FC = () => {
 
   if (loadingCompany) {
     return (
-      <div style={{ padding: 50, textAlign: 'center' }}>
-        <Spin size="large" />
-      </div>
+      <LoadingPlaceholder />
     );
   }
 
@@ -689,7 +596,11 @@ const CompanyPage: React.FC = () => {
 
   const renderEquipmentTab = (
     <div style={{ marginTop: 10 }}>
-      {loadingInfra ? <Spin /> : (
+      {loadingInfra ? null : isInfraError ? (
+        <Empty description="Не удалось загрузить оборудование компании">
+          <Button size="small" onClick={() => void refetchInfra()}>Повторить</Button>
+        </Empty>
+      ) : (
         <>
           {renderSection(
             'Серверы',
@@ -895,8 +806,10 @@ const CompanyPage: React.FC = () => {
 
   const renderNetworkTab = (
     <div style={{ marginTop: 10 }}>
-      {(loadingNetworkRootCompany || loadingNetworkGraph || loadingNetworkProfiles || loadingNetworkInfrastructure) ? (
-        <Spin />
+      {loadingNetwork ? null : isNetworkError ? (
+        <Empty description="Не удалось загрузить структуру сети">
+          <Button size="small" onClick={() => void refetchNetwork()}>Повторить</Button>
+        </Empty>
       ) : !rootNode ? (
         <Empty description="Структура сети не найдена" />
       ) : (
@@ -937,9 +850,6 @@ const CompanyPage: React.FC = () => {
                     { label: 'Текущая + дочерние', value: 'with_children' },
                   ]}
                 />
-              )}
-              {loadingCompanyChildren && (
-                <Text type="secondary">Загрузка дочерних компаний...</Text>
               )}
             </Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => console.log('Create Ticket')}>
@@ -1150,11 +1060,10 @@ const CompanyPage: React.FC = () => {
       >
         <Table
           rowKey="id"
-          loading={loadingContractHistory}
           dataSource={contractHistory}
           pagination={false}
           size="small"
-          locale={{ emptyText: 'Контракты не найдены' }}
+          locale={{ emptyText: loadingContractHistory ? ' ' : 'Контракты не найдены' }}
           onRow={(record) => ({
             tabIndex: 0,
             style: { cursor: 'pointer' },

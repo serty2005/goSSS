@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Space, Spin, Table, Typography } from 'antd';
+import { Button, Card, Empty, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { companiesApi } from '@/api/companies';
 import { equipmentApi } from '@/api/equipment';
@@ -12,6 +12,7 @@ import EntityListToolbar, {
   type EntityListFilterOption,
 } from '@/components/equipment/EntityListToolbar';
 import { useLayoutHeader } from '@/components/layout/LayoutHeaderContext';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -471,9 +472,7 @@ const ServersPage: React.FC = () => {
       <Card className="glass-panel">
         <div>
           {isLoading ? (
-            <div style={{ textAlign: 'center', padding: 32 }}>
-              <Spin />
-            </div>
+            <LoadingPlaceholder />
           ) : rows.length === 0 ? (
             <Empty description="Серверы не найдены" />
           ) : (
@@ -500,7 +499,6 @@ const ServersPage: React.FC = () => {
         )}
 
         <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40, gap: 8 }}>
-          {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
           {!hasNextPage && rows.length > 0 ? (
             <Text type="secondary">Показано: {rows.length} из {total}</Text>
           ) : null}

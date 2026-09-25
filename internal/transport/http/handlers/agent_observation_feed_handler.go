@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"etalon-server/internal/domain/models"
 	"etalon-server/internal/transport/http/response"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,6 +26,7 @@ func NewAgentObservationFeedHandler(db *gorm.DB) *AgentObservationFeedHandler {
 
 func (h *AgentObservationFeedHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/agent-observations", h.ListLatestByAgent)
+	r.Get("/agent-observations/latest", h.ListLatestForAgents)
 	r.Get("/agent-observations/{id}", h.GetObservationByID)
 	r.Get("/agents-list", h.ListAgents)
 }
@@ -208,6 +210,75 @@ func (h *AgentObservationFeedHandler) ListLatestByAgent(w http.ResponseWriter, r
 			return compareTimeValues(left.ObservedAt, right.ObservedAt, order == "asc")
 		}
 	})
+
+	response.RespondWithJSON(w, http.StatusOK, result)
+}
+
+// latestForAgentsMaxIDs ограничивает число агентов в одном пакетном запросе.
+const latestForAgentsMaxIDs = 500
+
+// ListLatestForAgents возвращает последнее наблюдение для каждого агента из agent_uuids
+// (список через запятую) одним запросом. Агенты без наблюдений в ответ не попадают.
+func (h *AgentObservationFeedHandler) ListLatestForAgents(w http.ResponseWriter, r *http.Request) {
+	agentIDs := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, item := range strings.Split(r.URL.Query().Get("agent_uuids"), ",") {
+		id := strings.TrimSpace(item)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		agentIDs = append(agentIDs, id)
+	}
+	if len(agentIDs) == 0 {
+		response.RespondWithJSON(w, http.StatusOK, []observationFeedRow{})
+		return
+	}
+	if len(agentIDs) > latestForAgentsMaxIDs {
+		response.RespondWithError(w, http.StatusBadRequest, fmt.Sprintf("Слишком много агентов в запросе: максимум %d", latestForAgentsMaxIDs))
+		return
+	}
+
+	// Наблюдение относится к агенту по agent_uuid, а для legacy-записей без agent_uuid — по source.
+	// Сначала выбираются только ID последних наблюдений, затем полные строки по этим ID.
+	var latestIDs []uint
+	if err := h.db.WithContext(r.Context()).Raw(`
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (
+				PARTITION BY CASE WHEN agent_uuid IN ? THEN agent_uuid ELSE source END
+				ORDER BY observed_at DESC, id DESC
+			) AS rn
+			FROM agent_observations
+			WHERE agent_uuid IN ? OR source IN ?
+		) ranked
+		WHERE rn = 1
+	`, agentIDs, agentIDs, agentIDs).Scan(&latestIDs).Error; err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить наблюдения агентов")
+		return
+	}
+
+	result := make([]observationFeedRow, 0, len(latestIDs))
+	if len(latestIDs) > 0 {
+		var rawRows []observationFeedDBRow
+		if err := h.db.WithContext(r.Context()).
+			Model(&models.AgentObservation{}).
+			Select("id, observed_at, source, agent_uuid, workstation_id, fr_id, payload_json").
+			Where("id IN ?", latestIDs).
+			Find(&rawRows).Error; err != nil {
+			response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить наблюдения агентов")
+			return
+		}
+		for i := range rawRows {
+			row := parseObservationFeedRow(rawRows[i])
+			if _, requested := seen[trimPtrValue(row.AgentUUID)]; !requested {
+				continue
+			}
+			result = append(result, row)
+		}
+	}
 
 	response.RespondWithJSON(w, http.StatusOK, result)
 }

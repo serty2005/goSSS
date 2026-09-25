@@ -2,7 +2,7 @@ import React from 'react';
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Col, Empty, Row, Space, Spin, Statistic, Table, Typography } from 'antd';
+import { Button, Card, Col, Empty, Row, Space, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ticketsApi } from '@/api/tickets';
 import {
@@ -11,6 +11,7 @@ import {
   DashboardServerStatusDTO,
 } from '@/types/api';
 import { useTicketParamsStore } from '@/store/ticketParamsStore';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text } = Typography;
 
@@ -43,7 +44,7 @@ const DashboardStatsPanel: React.FC = () => {
   });
 
   if (isLoading) {
-    return <div style={{ textAlign: 'center', padding: 50 }}><Spin size="large" /></div>;
+    return <LoadingPlaceholder />;
   }
 
   const stats = data?.data;

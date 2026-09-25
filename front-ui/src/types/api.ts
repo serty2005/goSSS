@@ -183,6 +183,20 @@ export interface FiscalEntity {
 
 export type EntityData = ServerEntity | WorkstationEntity | FiscalEntity;
 
+// Узел сети компании: профиль компании, её положение в дереве и серверы.
+export interface CompanyNetworkNodeDTO {
+  company: CompanyModel;
+  parent_id: string;
+  depth: number;
+  servers: ServerEntity[];
+}
+
+// Сеть компании: корень (прямой родитель или сама компания) и все узлы, корень первым.
+export interface CompanyNetworkDTO {
+  root_id: string;
+  nodes: CompanyNetworkNodeDTO[];
+}
+
 export interface InfrastructureItem {
   entity_type: "Server" | "Workstation" | "FiscalRegister";
   data: EntityData;

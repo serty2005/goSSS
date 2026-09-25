@@ -1,5 +1,6 @@
 import React, { startTransition, useEffect, useState } from "react";
-import { Button, Empty, Popover, Space, Spin, Tag, Typography } from "antd";
+import { Button, Empty, Popover, Space, Tag, Typography } from "antd";
+import { PhoneFilled } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { telephonyApi } from "@/api/telephony";
@@ -7,6 +8,7 @@ import { useSSE } from "@/features/realtime/useSSE";
 import { useAuthStore } from "@/store/authStore";
 import { isAdmin } from "@/utils/permissions";
 import type { TelephonyLineDTO } from "@/types/api";
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text } = Typography;
 
@@ -55,6 +57,14 @@ const TelephonyLineIndicator: React.FC = () => {
   };
   const employees = Array.isArray(line.employees) ? line.employees : [];
   const indicatorColor = colorMap[line.color] ?? colorMap.red;
+  const statusLabel =
+    line.color === "blue"
+      ? `Есть необработанные пропущенные: ${line.missed_open_count}`
+      : line.color === "yellow"
+        ? "Есть активный разговор"
+        : line.color === "green"
+          ? "Сотрудники доступны"
+          : "Сотрудники не в сети";
   const missedCallsURL = isAdmin(user?.roles)
     ? "/admin/telephony?only_missed=true"
     : user?.id
@@ -70,9 +80,7 @@ const TelephonyLineIndicator: React.FC = () => {
       content={
         <div style={{ minWidth: 320, maxWidth: 420 }}>
           {isLoading ? (
-            <div style={{ textAlign: "center", padding: 16 }}>
-              <Spin size="small" />
-            </div>
+            <LoadingPlaceholder />
           ) : (
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               {line.missed_open_count > 0 ? (
@@ -177,34 +185,18 @@ const TelephonyLineIndicator: React.FC = () => {
         </div>
       }
     >
-      <Button type="text" style={{ paddingInline: 0, height: "auto" }}>
-        <Space size={10}>
-          <span
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: "50%",
-              backgroundColor: indicatorColor,
-              boxShadow: `0 0 0 4px ${indicatorColor}22`,
-              flex: "0 0 auto",
-            }}
-          />
-          <Space
-            direction="vertical"
-            size={0}
-            style={{ alignItems: "flex-start" }}
-          >
-            <Text strong>Линия: {line.on_line_count} на связи</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {line.color === "blue"
-                ? "Есть необработанные пропущенные"
-                : line.color === "yellow"
-                  ? "Есть активный разговор"
-                  : line.color === "green"
-                    ? "Сотрудники доступны"
-                    : "Сотрудники не в сети"}
-            </Text>
-          </Space>
+      <Button
+        type="text"
+        className="telephony-line-indicator"
+        title={statusLabel}
+        aria-label={`${statusLabel}. На связи: ${line.on_line_count}`}
+        style={{ paddingInline: 4 }}
+      >
+        <Space size={6}>
+          <PhoneFilled style={{ color: indicatorColor, fontSize: 16 }} />
+          <Text strong style={{ whiteSpace: "nowrap" }}>
+            {line.on_line_count} на связи
+          </Text>
         </Space>
       </Button>
     </Popover>

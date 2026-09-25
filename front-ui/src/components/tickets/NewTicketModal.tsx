@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Spin, Typography, Tag, Checkbox } from 'antd';
+import { AutoComplete, Form, Input, Modal, Select, Space, Button, message, Row, Col, Card, Empty, Typography, Tag, Checkbox } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { companiesApi } from '@/api/companies';
@@ -16,6 +16,7 @@ import { isAdmin } from '@/utils/permissions';
 import { getTicketStatusMeta } from '@/constants/ticketStatus';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text, Paragraph } = Typography;
 
@@ -702,9 +703,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                     style={{ marginBottom: 12 }}
                   >
                     {isContactCompaniesLoading ? (
-                      <div style={{ textAlign: 'center', padding: 16 }}>
-                        <Spin />
-                      </div>
+                      <LoadingPlaceholder />
                     ) : contactCompanies.length === 0 ? (
                       <Empty
                         description={t('tickets:newTicket.telephony.historyNotFound')}
@@ -755,9 +754,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                       style={{ marginBottom: 12 }}
                     >
                       {isActiveTicketsLoading ? (
-                        <div style={{ textAlign: 'center', padding: 16 }}>
-                          <Spin />
-                        </div>
+                        <LoadingPlaceholder />
                       ) : activeTickets.length === 0 ? (
                         <Empty description={t('tickets:newTicket.telephony.noActiveTickets')} />
                       ) : (
@@ -1030,9 +1027,7 @@ const NewTicketModal: React.FC<Props> = ({ open, onClose, presetCompany, onCreat
                 bodyStyle={{ maxHeight: `calc(${MODAL_BODY_MAX_HEIGHT} - 56px)`, overflowY: 'auto' }}
               >
                 {isInfrastructureLoading || isParentInfrastructureLoading ? (
-                  <div style={{ textAlign: 'center', padding: 16 }}>
-                    <Spin />
-                  </div>
+                  <LoadingPlaceholder />
                 ) : connectionsGroups.length === 0 ? (
                   <Empty description={t('tickets:newTicket.connections.empty')} />
                 ) : (

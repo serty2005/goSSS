@@ -12,6 +12,7 @@ type Repository interface {
 	GetByID(ctx context.Context, internalID string) (*Company, error)
 	GetByIDs(ctx context.Context, internalIDs []string) ([]Company, error)
 	GetChildren(ctx context.Context, parentID string) ([]Company, error)
+	GetDetailedChildrenByParentIDs(ctx context.Context, parentIDs []string) ([]Company, error)
 	GetByIDUnscoped(ctx context.Context, internalID string) (*Company, error)
 	GetAllParentIDs(ctx context.Context, childID string) ([]string, error)
 	GetAllIDsAndDates(ctx context.Context) (map[string]*Company, error)

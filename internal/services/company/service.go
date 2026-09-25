@@ -3,6 +3,7 @@ package company
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	domain "etalon-server/internal/domain"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
@@ -170,6 +171,114 @@ func (s *serviceImpl) GetChildren(ctx context.Context, companyID string) ([]comp
 	return children, nil
 }
 
+// toServerRichDTO собирает DTO сервера для карточек UI.
+func toServerRichDTO(srv server.Server, extUUID *string) api.ServerRichDTO {
+	var statusDetails interface{}
+	_ = json.Unmarshal(srv.StatusDetails, &statusDetails)
+
+	partnersLink := validators.BuildPartnersPortalLink(
+		utils.SafeStringDereference(srv.CabinetLink),
+		utils.SafeStringDereference(srv.IP),
+	)
+
+	return api.ServerRichDTO{
+		UUID:              srv.ID,
+		ServiceDeskUUID:   extUUID,
+		DeviceName:        srv.DeviceName,
+		LastUpdatedBy:     srv.LastUpdatedBy,
+		LastModifiedDate:  srv.LastModifiedDate,
+		UpdatedAt:         srv.UpdatedAt,
+		IP:                srv.IP,
+		OperationalStatus: srv.Status,
+		HealthStatus:      srv.HealthStatus,
+		StatusDetails:     statusDetails,
+		Anydesk:           srv.Anydesk,
+		Teamviewer:        srv.Teamviewer,
+		RDP:               srv.RDP,
+		Litemanager:       srv.Litemanager,
+		UniqueID:          srv.UniqueID,
+		CRMid:             srv.CRMid,
+		IikoWebLink:       srv.IikoWebLink,
+		PartnersLink:      partnersLink,
+		ServerName:        srv.ServerName,
+		ServerVersion:     srv.ServerVersion,
+		ServerEdition:     srv.ServerEdition,
+		LastPolledAt:      srv.LastPolledAt,
+	}
+}
+
+// networkMaxDepth ограничивает глубину обхода сети компаний.
+const networkMaxDepth = 10
+
+// GetNetwork возвращает сеть компании: корень (прямой родитель или сама компания),
+// всех потомков корня и серверы каждой компании сети.
+func (s *serviceImpl) GetNetwork(ctx context.Context, companyID string) (*company.Network, error) {
+	comp, err := s.companyRepo.GetByID(ctx, companyID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("ошибка при получении компании: %w", err)
+	}
+	if comp == nil {
+		return nil, domain.ErrNotFound
+	}
+
+	root := comp
+	if parentID := strings.TrimSpace(utils.SafeStringDereference(comp.ParentID)); parentID != "" {
+		parent, err := s.companyRepo.GetByID(ctx, parentID)
+		switch {
+		case err == nil && parent != nil:
+			root = parent
+		case err != nil && !errors.Is(err, domain.ErrNotFound):
+			return nil, fmt.Errorf("ошибка при получении родительской компании: %w", err)
+		}
+	}
+
+	nodes := []company.NetworkNode{{Company: *root}}
+	visited := map[string]struct{}{root.ID: {}}
+	level := []string{root.ID}
+	for depth := 1; len(level) > 0 && depth <= networkMaxDepth; depth++ {
+		children, err := s.companyRepo.GetDetailedChildrenByParentIDs(ctx, level)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка при получении дочерних компаний: %w", err)
+		}
+		next := make([]string, 0, len(children))
+		for _, child := range children {
+			if _, ok := visited[child.ID]; ok {
+				continue
+			}
+			visited[child.ID] = struct{}{}
+			nodes = append(nodes, company.NetworkNode{
+				Company:  child,
+				ParentID: utils.SafeStringDereference(child.ParentID),
+				Depth:    depth,
+			})
+			next = append(next, child.ID)
+		}
+		level = next
+	}
+
+	ownerIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ownerIDs = append(ownerIDs, node.Company.ID)
+	}
+	servers, err := s.serverRepo.FindByOwnerIDs(ctx, ownerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при получении серверов сети: %w", err)
+	}
+	serversByOwner := make(map[string][]api.ServerRichDTO, len(nodes))
+	for _, srv := range servers {
+		ownerID := utils.SafeStringDereference(srv.OwnerID)
+		serversByOwner[ownerID] = append(serversByOwner[ownerID], toServerRichDTO(srv, nil))
+	}
+	for i := range nodes {
+		nodes[i].Servers = serversByOwner[nodes[i].Company.ID]
+	}
+
+	return &company.Network{RootID: root.ID, Nodes: nodes}, nil
+}
+
 // GetInfrastructure возвращает плоский список оборудования компании.
 func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string, excludePendingDeletion bool) ([]api.FoundEntityDTO, error) {
 	// 1. Проверяем существование компании
@@ -225,41 +334,9 @@ func (s *serviceImpl) GetInfrastructure(ctx context.Context, companyID string, e
 				extUUID = &link.ServiceDeskUUID
 			}
 
-			// Парсим детали статуса
-			var statusDetails interface{}
-			_ = json.Unmarshal(srv.StatusDetails, &statusDetails)
-
-			partnersLink := validators.BuildPartnersPortalLink(
-				utils.SafeStringDereference(srv.CabinetLink),
-				utils.SafeStringDereference(srv.IP),
-			)
-
 			dto := api.FoundEntityDTO{
 				EntityType: "Server",
-				Data: api.ServerRichDTO{
-					UUID:              srv.ID,
-					ServiceDeskUUID:   extUUID,
-					DeviceName:        srv.DeviceName,
-					LastUpdatedBy:     srv.LastUpdatedBy,
-					LastModifiedDate:  srv.LastModifiedDate,
-					UpdatedAt:         srv.UpdatedAt,
-					IP:                srv.IP,
-					OperationalStatus: srv.Status,
-					HealthStatus:      srv.HealthStatus,
-					StatusDetails:     statusDetails,
-					Anydesk:           srv.Anydesk,
-					Teamviewer:        srv.Teamviewer,
-					RDP:               srv.RDP,
-					Litemanager:       srv.Litemanager,
-					UniqueID:          srv.UniqueID,
-					CRMid:             srv.CRMid,
-					IikoWebLink:       srv.IikoWebLink,
-					PartnersLink:      partnersLink,
-					ServerName:        srv.ServerName,
-					ServerVersion:     srv.ServerVersion,
-					ServerEdition:     srv.ServerEdition,
-					LastPolledAt:      srv.LastPolledAt,
-				},
+				Data:       toServerRichDTO(srv, extUUID),
 			}
 			mu.Lock()
 			results = append(results, dto)

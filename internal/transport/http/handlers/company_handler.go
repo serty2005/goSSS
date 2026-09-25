@@ -370,6 +370,28 @@ func (h *CompanyHandler) GetInfrastructure(w http.ResponseWriter, r *http.Reques
 	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
+// GetNetwork возвращает сеть компании (корень, потомки и их серверы) одним ответом.
+func (h *CompanyHandler) GetNetwork(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Не указан ID компании")
+		return
+	}
+
+	network, err := h.service.GetNetwork(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.RespondWithError(w, http.StatusNotFound, "Компания не найдена")
+			return
+		}
+		middleware.GetLogger(r.Context()).Error("не удалось получить сеть компании", "id", id, "error", err)
+		response.RespondWithError(w, http.StatusInternalServerError, "Не удалось получить сеть компании")
+		return
+	}
+
+	response.RespondWithJSON(w, http.StatusOK, toCompanyNetworkDTO(*network))
+}
+
 // GetChildren возвращает список дочерних компаний для hub-компании.
 func (h *CompanyHandler) GetChildren(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -399,6 +421,20 @@ func (h *CompanyHandler) GetChildren(w http.ResponseWriter, r *http.Request) {
 	response.RespondWithJSON(w, http.StatusOK, items)
 }
 
+// companyNetworkNodeDTO описывает компанию сети вместе с её серверами.
+type companyNetworkNodeDTO struct {
+	Company  companyResponseDTO  `json:"company"`
+	ParentID string              `json:"parent_id"`
+	Depth    int                 `json:"depth"`
+	Servers  []api.ServerRichDTO `json:"servers"`
+}
+
+// companyNetworkDTO описывает сеть компании: корень и все узлы (корень первым).
+type companyNetworkDTO struct {
+	RootID string                  `json:"root_id"`
+	Nodes  []companyNetworkNodeDTO `json:"nodes"`
+}
+
 type companyResponseDTO struct {
 	ID               string  `json:"id"`
 	Title            string  `json:"title"`
@@ -410,6 +446,23 @@ type companyResponseDTO struct {
 	ContractID       *string `json:"contract_id,omitempty"`
 	ContractType     *string `json:"contract_type,omitempty"`
 	LastModifiedDate *string `json:"last_modified_date,omitempty"`
+}
+
+func toCompanyNetworkDTO(network company.Network) companyNetworkDTO {
+	nodes := make([]companyNetworkNodeDTO, 0, len(network.Nodes))
+	for _, node := range network.Nodes {
+		servers := node.Servers
+		if servers == nil {
+			servers = []api.ServerRichDTO{}
+		}
+		nodes = append(nodes, companyNetworkNodeDTO{
+			Company:  toCompanyResponseDTO(node.Company),
+			ParentID: node.ParentID,
+			Depth:    node.Depth,
+			Servers:  servers,
+		})
+	}
+	return companyNetworkDTO{RootID: network.RootID, Nodes: nodes}
 }
 
 type companyParentDTO struct {

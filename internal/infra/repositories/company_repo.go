@@ -20,6 +20,29 @@ func NewCompanyRepo(db *gorm.DB) company.Repository {
 	return &companyRepo{db: db}
 }
 
+// companyDetailedSelect выбирает компанию вместе с названием родителя
+// и актуальным контрактом (ID и тип услуги).
+const companyDetailedSelect = `
+	companies.*,
+	parent.title AS parent_title,
+	(
+		SELECT c.id
+		FROM contracts c
+		JOIN company_contracts cc ON cc.contract_id = c.id
+		WHERE cc.company_id = companies.id
+		ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
+		LIMIT 1
+	) AS contract_id,
+	(
+		SELECT c.services->>0
+		FROM contracts c
+		JOIN company_contracts cc ON cc.contract_id = c.id
+		WHERE cc.company_id = companies.id
+		ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
+		LIMIT 1
+	) AS contract_type
+`
+
 func (r *companyRepo) getDB(ctx context.Context) *gorm.DB {
 	return infraDB.ExtractDB(ctx, r.db)
 }
@@ -54,26 +77,7 @@ func (r *companyRepo) GetByID(ctx context.Context, internalID string) (*company.
 	var entity company.Company
 	err := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Select(`
-			companies.*,
-			parent.title AS parent_title,
-			(
-				SELECT c.id
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_id,
-			(
-				SELECT c.services->>0
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_type
-		`).
+		Select(companyDetailedSelect).
 		Where("companies.id = ?", internalID).
 		First(&entity).Error
 	if err != nil {
@@ -97,6 +101,22 @@ func (r *companyRepo) GetByIDs(ctx context.Context, internalIDs []string) ([]com
 func (r *companyRepo) GetChildren(ctx context.Context, parentID string) ([]company.Company, error) {
 	var entities []company.Company
 	err := r.getDB(ctx).WithContext(ctx).Where("parent_id = ?", parentID).Find(&entities).Error
+	return entities, err
+}
+
+// GetDetailedChildrenByParentIDs возвращает дочерние компании для набора родителей
+// с названием родителя и данными актуального контракта.
+func (r *companyRepo) GetDetailedChildrenByParentIDs(ctx context.Context, parentIDs []string) ([]company.Company, error) {
+	if len(parentIDs) == 0 {
+		return nil, nil
+	}
+	var entities []company.Company
+	err := r.getDB(ctx).WithContext(ctx).
+		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
+		Select(companyDetailedSelect).
+		Where("companies.parent_id IN ?", parentIDs).
+		Order("LOWER(COALESCE(companies.title, '')) ASC").
+		Find(&entities).Error
 	return entities, err
 }
 
@@ -177,26 +197,7 @@ func (r *companyRepo) Search(ctx context.Context, term string, showInactive bool
 	var entities []company.Company
 	query := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Select(`
-			companies.*,
-			parent.title AS parent_title,
-			(
-				SELECT c.id
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_id,
-			(
-				SELECT c.services->>0
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_type
-		`)
+		Select(companyDetailedSelect)
 	query = applyCompanySearchTerm(query, term)
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)
@@ -229,26 +230,7 @@ func (r *companyRepo) SearchWithTotal(ctx context.Context, term string, showInac
 	var entities []company.Company
 	query := r.getDB(ctx).WithContext(ctx).
 		Joins("LEFT JOIN companies parent ON parent.id = companies.parent_id").
-		Select(`
-			companies.*,
-			parent.title AS parent_title,
-			(
-				SELECT c.id
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_id,
-			(
-				SELECT c.services->>0
-				FROM contracts c
-				JOIN company_contracts cc ON cc.contract_id = c.id
-				WHERE cc.company_id = companies.id
-				ORDER BY (c.id = ('mail-contract:' || cc.company_id)) DESC, (c.state = 'active') DESC, c.updated_at DESC
-				LIMIT 1
-			) AS contract_type
-		`)
+		Select(companyDetailedSelect)
 	query = applyCompanySearchTerm(query, term)
 	if !showInactive {
 		query = query.Where("companies.active_contract = ?", true)

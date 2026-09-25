@@ -1,11 +1,11 @@
 import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Descriptions, Empty, Modal, Spin, Tag, Typography } from 'antd';
+import { Alert, Descriptions, Empty, Modal, Tag } from 'antd';
 import dayjs from 'dayjs';
 import { agentObservationsApi } from '@/api/agentObservations';
 import JsonDataViewer from '@/components/common/JsonDataViewer';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
-const { Text } = Typography;
 
 export type AgentObservationRawSummary = {
   agentUUID?: string;
@@ -110,12 +110,7 @@ const AgentObservationRawModal: React.FC<Props> = ({
       cancelButtonProps={{ style: { display: 'none' } }}
     >
       {lookupLoading ? (
-        <div style={{ textAlign: 'center', padding: 24 }}>
-          <Spin />
-          <div style={{ marginTop: 12 }}>
-            <Text type="secondary">Ищем последнее наблюдение агента...</Text>
-          </div>
-        </div>
+        <LoadingPlaceholder report />
       ) : lookupError ? (
         <Alert
           type="error"
@@ -126,9 +121,7 @@ const AgentObservationRawModal: React.FC<Props> = ({
       ) : !observationID ? (
         <Empty description={emptyDescription || 'Для агента пока нет наблюдений'} />
       ) : isLoading ? (
-        <div style={{ textAlign: 'center', padding: 24 }}>
-          <Spin />
-        </div>
+        <LoadingPlaceholder />
       ) : isError ? (
         <Alert
           type="error"

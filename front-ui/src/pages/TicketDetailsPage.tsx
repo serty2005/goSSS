@@ -1,6 +1,6 @@
 ﻿import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -40,6 +40,7 @@ import { checklistsApi, ticketChecklistQueryKey } from '@/api/checklists';
 import TicketMaterialsTab from '@/components/tickets/TicketMaterialsTab';
 import TicketChecklistTab from '@/components/tickets/TicketChecklistTab';
 import { collectChecklistStats } from '@/features/tickets/checklist/checklistTree';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -1371,7 +1372,7 @@ const TicketDetailsPage: React.FC = () => {
   };
 
   if (isLoading || !details || !metadata) {
-    return <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>;
+    return <LoadingPlaceholder />;
   }
 
   const hasBitrixLink = Boolean(String(metadata.bitrix_deal_url || '').trim());
@@ -1813,7 +1814,7 @@ const TicketDetailsPage: React.FC = () => {
 
   const equipmentTabContent = (
     (isInfraLoading || isParentInfraLoading) ? (
-      <div style={{ textAlign: 'center', padding: 12 }}><Spin /></div>
+      <LoadingPlaceholder />
     ) : serverItems.length === 0
       && parentServerItems.length === 0
       && agentEquipmentGroups.length === 0
@@ -2829,9 +2830,7 @@ const TicketDetailsPage: React.FC = () => {
           />
         </Space>
         {isAttachableCallsLoading ? (
-          <div style={{ textAlign: 'center', padding: 24 }}>
-            <Spin />
-          </div>
+          <LoadingPlaceholder />
         ) : attachableCalls.length === 0 ? (
           <Empty description="Свободных звонков не найдено" />
         ) : (

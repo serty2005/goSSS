@@ -6,7 +6,6 @@ import {
   Descriptions,
   Modal,
   Radio,
-  Spin,
   Space,
   Table,
   Tabs,
@@ -800,17 +799,15 @@ const TasksPage: React.FC = () => {
           <Table<EntityDeletionCandidateDTO>
             rowKey="id"
             pagination={false}
-            loading={isDeletionCandidatesLoading}
             dataSource={allDeletionCandidates}
             columns={deletionColumns}
             onRow={(record) => ({
               onClick: () => setSelectedDeletionCandidate(record),
               style: { cursor: 'pointer' },
             })}
-            locale={{ emptyText: 'Нет кандидатов на удаление' }}
+            locale={{ emptyText: isDeletionCandidatesLoading ? ' ' : 'Нет кандидатов на удаление' }}
           />
           <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
-            {(isDeletionCandidatesFetchingNextPage || (hasDeletionCandidatesNextPage && allDeletionCandidates.length > 0)) && <Spin size="small" />}
             {!hasDeletionCandidatesNextPage && allDeletionCandidates.length > 0 && (
               <Text type="secondary">Показано: {allDeletionCandidates.length} из {deletionCandidatesTotal}</Text>
             )}

@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Tag, Space, Typography, Spin, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Tag, Space, Typography, message, Table, Tabs, Empty, Popconfirm, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
@@ -19,6 +19,7 @@ import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import dayjs from 'dayjs';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -268,7 +269,7 @@ const ServerDetails: React.FC = () => {
     return base;
   }, [companiesRes?.data, ownerCompanyRes?.data]);
 
-  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
+  if (isLoading) return <LoadingPlaceholder />;
   if (!server) return <div>Сервер не найден</div>;
 
   const normalizedStatus = String(server.status || '').toLowerCase();

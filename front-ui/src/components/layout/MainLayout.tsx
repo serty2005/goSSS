@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Layout,
   Menu,
@@ -34,6 +34,8 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import HeaderSearch from "@/components/common/HeaderSearch";
+import GlobalLoadingIndicator from "@/components/layout/GlobalLoadingIndicator";
+import RouteLoadingFallback from "@/components/layout/RouteLoadingFallback";
 import GlobalSearchLauncher from "@/components/search/GlobalSearchLauncher";
 import { formatLocaleDateTime } from "@/i18n/formatters";
 import { useAppLocale } from "@/i18n/useAppLocale";
@@ -1067,6 +1069,7 @@ const MainLayout: React.FC = () => {
                 onClick={() => navigate("/")}
                 aria-label={t("layout:accessibility.openHome")}
               />
+              <GlobalLoadingIndicator />
               <Popover
                 trigger="click"
                 placement="leftTop"
@@ -1132,7 +1135,9 @@ const MainLayout: React.FC = () => {
               setHeaderAddonPlacement,
             }}
           >
-            <Outlet />
+            <Suspense fallback={<RouteLoadingFallback />}>
+              <Outlet />
+            </Suspense>
           </LayoutHeaderContext.Provider>
           <div id="inline-message-host" aria-live="polite" />
           {ticketNotifications.length > 0 && (

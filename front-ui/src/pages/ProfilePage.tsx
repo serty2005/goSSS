@@ -492,7 +492,7 @@ const ProfilePage: React.FC = () => {
         </Card>
       ) : null}
 
-      <Card className="glass-panel" loading={profileQuery.isLoading}>
+      <Card className="glass-panel">
         <Form<CredentialsForm>
           form={form}
           layout="vertical"

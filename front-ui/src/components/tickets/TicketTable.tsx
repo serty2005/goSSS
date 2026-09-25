@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Checkbox, DatePicker, Space, Spin, Tag, Tooltip, Typography, message, theme } from 'antd';
+import { Checkbox, DatePicker, Space, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { LinkOutlined } from '@ant-design/icons';
@@ -781,7 +781,6 @@ const TicketTable: React.FC<Props> = ({
               ))}
             </Space>
           </Checkbox.Group>
-          {filter.loading && <Text type="secondary">Загрузка...</Text>}
         </Space>
       );
     }
@@ -1007,7 +1006,6 @@ const TicketTable: React.FC<Props> = ({
 
       {showFooter && (
       <div ref={loadMoreRef} style={{ marginTop: 4, display: 'flex', justifyContent: 'center', minHeight: 28 }}>
-        {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
         {!hasNextPage && rows.length > 0 && (
           <Text type="secondary">Показано: {rows.length} из {visibleTotal}</Text>
         )}

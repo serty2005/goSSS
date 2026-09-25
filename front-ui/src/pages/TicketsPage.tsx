@@ -25,7 +25,6 @@ import {
   Row,
   Select,
   Space,
-  Spin,
   Tag,
   Tooltip,
   Typography,
@@ -64,6 +63,7 @@ import {
 } from "@/constants/ticketStatus";
 import i18n from "@/i18n/i18n";
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text, Paragraph } = Typography;
 const { useBreakpoint } = Grid;
@@ -495,7 +495,7 @@ const TicketsPage: React.FC = () => {
     };
   }, [headerAddon, setHeaderAddon, setHeaderAddonPlacement]);
 
-  const { data, isLoading, isFetching, isFetchingNextPage, hasNextPage, fetchNextPage } =
+  const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
     useInfiniteQuery({
       queryKey: [
         "tickets",
@@ -549,7 +549,6 @@ const TicketsPage: React.FC = () => {
   );
   const visibleTickets = tickets;
   const total = data?.pages?.[0]?.meta?.total || 0;
-  const isRefreshingTickets = isFetching && !isFetchingNextPage && !isLoading;
   const statusCounts = useMemo(() => {
     const counts = new Map<string, number>();
     visibleTickets.forEach((ticket) => {
@@ -1083,32 +1082,9 @@ const TicketsPage: React.FC = () => {
             </Button>
           </section>
         )}
-        {isRefreshingTickets && (
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              minHeight: 28,
-              marginBottom: 12,
-              padding: "4px 10px",
-              borderRadius: 8,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              background: token.colorBgContainer,
-            }}
-          >
-            <Spin size="small" />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {t("tickets:labels.searching")}
-            </Text>
-          </div>
-        )}
         {viewMode === "list" && (
           <List
-            loading={{
-              spinning: isLoading || isRefreshingTickets,
-              tip: t("tickets:labels.searching"),
-            }}
+            locale={{ emptyText: isLoading ? " " : undefined }}
             dataSource={visibleTickets}
             renderItem={(item) => {
               const meta = getTicketStatusMeta(item.status);
@@ -1204,9 +1180,7 @@ const TicketsPage: React.FC = () => {
         )}
 
         {viewMode === "cards" && isLoading && (
-          <div style={{ display: "flex", justifyContent: "center", padding: 32 }}>
-            <Spin />
-          </div>
+          <LoadingPlaceholder />
         )}
 
         {viewMode === "cards" && !isLoading && (
@@ -1329,10 +1303,7 @@ const TicketsPage: React.FC = () => {
             variant="workspace"
             dataSource={visibleTickets}
             total={total}
-            loading={{
-              spinning: isLoading || isRefreshingTickets,
-              tip: t("tickets:labels.searching"),
-            }}
+            loading={isLoading}
             visibleColumnKeys={selectedTableColumnKeys}
             availableColumnKeys={availableTableColumnKeys}
             onVisibleColumnKeysChange={(keys) => {
@@ -1414,10 +1385,6 @@ const TicketsPage: React.FC = () => {
             minHeight: 40,
           }}
         >
-          {(isFetchingNextPage ||
-            (hasNextPage && visibleTickets.length > 0)) && (
-            <Spin size="small" />
-          )}
           {!hasNextPage && visibleTickets.length > 0 && (
             <Text type="secondary">
               {t("tickets:labels.showing", {
@@ -1472,9 +1439,7 @@ const TicketsPage: React.FC = () => {
         mask={isMobile}
       >
         {isDetailsLoading || !details || !metadata ? (
-          <div style={{ padding: 24, textAlign: "center" }}>
-            <Spin />
-          </div>
+          <LoadingPlaceholder />
         ) : (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <div className="ticket-quick-preview-actions">
@@ -1623,9 +1588,7 @@ const TicketsPage: React.FC = () => {
 
             <Card size="small" title={t("tickets:cards.connections")}>
               {isInfraLoading ? (
-                <div style={{ textAlign: "center", padding: 12 }}>
-                  <Spin />
-                </div>
+                <LoadingPlaceholder />
               ) : connections.length === 0 ? (
                 <Text type="secondary">{t("tickets:fallback.noConnections")}</Text>
               ) : (

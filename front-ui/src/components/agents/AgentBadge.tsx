@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tag, Tooltip } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import { agentObservationsApi } from '@/api/agentObservations';
+import { loadLatestAgentObservation } from '@/api/agentObservations';
 import { isAgentDataStale, resolveAgentDataTimestamp } from '@/utils/agentUpdates';
 
 type Props = {
@@ -14,11 +14,11 @@ type Props = {
 const AgentBadge: React.FC<Props> = ({ agentID, label = 'Агент', onClick, variant = 'tag' }) => {
   const { data } = useQuery({
     queryKey: ['agent-observation', 'latest', agentID],
-    queryFn: () => agentObservationsApi.listFeed({ agent_uuid: agentID, sort_by: 'latest', order: 'desc', limit: 1 }),
+    queryFn: () => loadLatestAgentObservation(agentID),
     enabled: Boolean(agentID),
     staleTime: 5 * 60_000,
   });
-  const observation = data?.data?.[0];
+  const observation = data ?? undefined;
   const timestamp = resolveAgentDataTimestamp(observation);
   const stale = isAgentDataStale(timestamp);
   const title = stale

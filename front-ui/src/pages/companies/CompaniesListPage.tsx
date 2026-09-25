@@ -22,6 +22,7 @@ import {
   formatDataTableText,
 } from '@/components/common/dataTableUtils';
 import { formatMappedServicePointLabel } from './companyBitrixMappingState';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -1051,7 +1052,7 @@ const CompaniesListPage: React.FC = () => {
   const companiesContent = (
     <div className="companies-table-surface">
       {isCompaniesLoading || (canMapBitrix && isMappingsLoading) ? (
-        <div className="companies-table-loader"><Spin size="large" /></div>
+        <LoadingPlaceholder />
       ) : (
         <>
           <DataTable<CompanyBitrixMappingRowDTO>
@@ -1070,7 +1071,6 @@ const CompaniesListPage: React.FC = () => {
           />
           {!canMapBitrix && (
             <div ref={companiesLoadMoreRef} className="companies-load-more">
-              {(isFetchingNextPage || (hasNextPage && companies.length > 0)) && <Spin size="small" />}
               {!hasNextPage && companies.length > 0 && (
                 <Text type="secondary">Показано: {companies.length} из {companiesTotal}</Text>
               )}
@@ -1078,7 +1078,6 @@ const CompaniesListPage: React.FC = () => {
           )}
           {canMapBitrix && (
             <div ref={mappingsLoadMoreRef} className="companies-load-more">
-              {(isFetchingNextMappingsPage || (hasNextMappingsPage && mappings.length > 0)) && <Spin size="small" />}
               {!hasNextMappingsPage && mappings.length > 0 && (
                 <Text type="secondary">Загружено сопоставлений: {mappings.length}</Text>
               )}
@@ -1092,7 +1091,7 @@ const CompaniesListPage: React.FC = () => {
   const servicePointsContent = (
     <div className="companies-table-surface">
       {isServicePointsLoading ? (
-        <div className="companies-table-loader"><Spin size="large" /></div>
+        <LoadingPlaceholder />
       ) : (
         <>
           <DataTable<BitrixServicePointDTO>
@@ -1110,7 +1109,6 @@ const CompaniesListPage: React.FC = () => {
             emptyText="Точки обслуживания Bitrix24 не найдены"
           />
           <div ref={servicePointsLoadMoreRef} className="companies-load-more">
-            {(isFetchingNextServicePointsPage || (hasNextServicePointsPage && servicePoints.length > 0)) && <Spin size="small" />}
             {!hasNextServicePointsPage && servicePoints.length > 0 && (
               <Text type="secondary">Загружено точек Bitrix24: {servicePoints.length}</Text>
             )}

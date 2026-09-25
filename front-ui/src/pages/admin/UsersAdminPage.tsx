@@ -798,7 +798,7 @@ const UsersAdminPage: React.FC = () => {
       <Card className="glass-panel">
         <Table<UserAdminDTO>
           rowKey="id"
-          loading={isLoading}
+          locale={{ emptyText: isLoading ? ' ' : undefined }}
           columns={columns}
           dataSource={users}
           pagination={false}

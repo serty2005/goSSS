@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Space, Spin, Upload, message, theme as antTheme } from 'antd';
+import { Button, Input, Modal, Space, Upload, message, theme as antTheme } from 'antd';
 import type { UploadProps } from 'antd';
 import { BlockOutlined, BoldOutlined, CodeOutlined, ItalicOutlined, LinkOutlined, PaperClipOutlined, PictureOutlined, UserOutlined } from '@ant-design/icons';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
@@ -10,6 +10,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import type { JSONContent } from '@tiptap/core';
 import { buildMentionHTML, extractMentionQuery, type MentionOption } from '@/features/tickets/editor/mentions';
 import { withApiError } from '@/utils/apiError';
+import { useReportGlobalLoading } from '@/hooks/useGlobalLoading';
 
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
@@ -97,6 +98,7 @@ const SmartTicketEditor: React.FC<Props> = ({
   const uploadSeqRef = useRef(0);
   const onUploadingChangeRef = useRef(onUploadingChange);
   const isUploading = pendingUploads.length > 0;
+  useReportGlobalLoading(isUploading);
 
   useEffect(() => {
     onUploadingChangeRef.current = onUploadingChange;
@@ -471,7 +473,6 @@ const SmartTicketEditor: React.FC<Props> = ({
 
       {isUploading && (
         <div className="smart-ticket-editor__uploads" role="status" aria-live="polite">
-          <Spin size="small" />
           <span className="smart-ticket-editor__uploads-text">
             {pendingUploads.length > 1
               ? `Загрузка файлов (${pendingUploads.length}): ${pendingUploads.map((item) => item.name).join(', ')}`

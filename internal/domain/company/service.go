@@ -22,8 +22,26 @@ type Service interface {
 	// GetChildren возвращает список дочерних компаний для указанной hub-компании.
 	GetChildren(ctx context.Context, companyID string) ([]Company, error)
 
+	// GetNetwork возвращает сеть компании одним ответом: корень сети (прямой родитель
+	// компании или сама компания), всех его потомков и серверы каждой компании сети.
+	GetNetwork(ctx context.Context, companyID string) (*Network, error)
+
 	ListBitrixMappings(ctx context.Context, term string, limit, offset int, parentIDs []string) ([]BitrixMappingRow, error)
 	GetBitrixMappingByCompanyID(ctx context.Context, companyID string) (*BitrixMappingRow, error)
 	UpdateBitrixMapping(ctx context.Context, companyID *string, bitrixServicePointID *int64) error
 	SyncBitrixContract(ctx context.Context, companyID string) error
+}
+
+// NetworkNode описывает компанию внутри сети.
+type NetworkNode struct {
+	Company  Company
+	ParentID string
+	Depth    int
+	Servers  []api.ServerRichDTO
+}
+
+// Network описывает сеть компании: корень и узлы в порядке обхода в ширину (корень первым).
+type Network struct {
+	RootID string
+	Nodes  []NetworkNode
 }

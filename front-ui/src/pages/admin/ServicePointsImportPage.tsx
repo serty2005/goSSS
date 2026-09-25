@@ -1225,10 +1225,9 @@ const ServicePointsImportPage: React.FC = () => {
                       rowKey="key"
                       dataSource={filteredBlockedItems}
                       columns={blockedColumns}
-                      loading={contractSyncQuery.isLoading}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
                       scroll={{ x: 980 }}
-                      locale={{ emptyText: search ? 'По текущему поиску среди заблокированных строк совпадений нет' : 'Заблокированные строки отсутствуют' }}
+                      locale={{ emptyText: contractSyncQuery.isLoading ? ' ' : search ? 'По текущему поиску среди заблокированных строк совпадений нет' : 'Заблокированные строки отсутствуют' }}
                     />
                   )}
                 </Card>
@@ -1260,7 +1259,6 @@ const ServicePointsImportPage: React.FC = () => {
                       rowClassName={rowClassName}
                       dataSource={filteredUpsertItems}
                       columns={upsertColumns}
-                      loading={contractSyncQuery.isLoading}
                       rowSelection={{
                         selectedRowKeys: selectedUpsertKeys,
                         preserveSelectedRowKeys: true,
@@ -1269,7 +1267,7 @@ const ServicePointsImportPage: React.FC = () => {
                       }}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
                       scroll={{ x: 880 }}
-                      locale={{ emptyText: search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
+                      locale={{ emptyText: contractSyncQuery.isLoading ? ' ' : search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
                     />
                   )}
                 </Card>
@@ -1307,7 +1305,6 @@ const ServicePointsImportPage: React.FC = () => {
                       rowClassName={rowClassName}
                       dataSource={filteredDeleteItems}
                       columns={deleteColumns}
-                      loading={contractSyncQuery.isLoading}
                       rowSelection={{
                         selectedRowKeys: selectedDeleteKeys,
                         preserveSelectedRowKeys: true,
@@ -1316,7 +1313,7 @@ const ServicePointsImportPage: React.FC = () => {
                       }}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
                       scroll={{ x: 1130 }}
-                      locale={{ emptyText: search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
+                      locale={{ emptyText: contractSyncQuery.isLoading ? ' ' : search ? 'По текущему поиску и фильтрам совпадений нет' : 'Нет строк для выбранного режима' }}
                     />
                   )}
                 </Card>
@@ -1537,10 +1534,9 @@ const ServicePointsImportPage: React.FC = () => {
                       rowKey="id"
                       dataSource={recentRuns}
                       columns={runColumns}
-                      loading={contractSyncQuery.isLoading}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
                       scroll={{ x: 980 }}
-                      locale={{ emptyText: 'История применений пуста' }}
+                      locale={{ emptyText: contractSyncQuery.isLoading ? ' ' : 'История применений пуста' }}
                       onRow={(record) => ({
                         onClick: () => setSelectedRunID(record.id),
                         style: { cursor: 'pointer' },
@@ -1554,10 +1550,9 @@ const ServicePointsImportPage: React.FC = () => {
                     rowKey="id"
                     dataSource={recentImports}
                     columns={importColumns}
-                    loading={contractSyncQuery.isLoading}
                     pagination={{ pageSize: 10, hideOnSinglePage: true }}
                     scroll={{ x: 1080 }}
-                    locale={{ emptyText: 'История импортов пуста' }}
+                    locale={{ emptyText: contractSyncQuery.isLoading ? ' ' : 'История импортов пуста' }}
                   />
                 </Card>
               </Space>

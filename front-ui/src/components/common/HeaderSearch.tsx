@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AutoComplete, Button, Checkbox, DatePicker, Divider, Grid, Input, Modal, Popover, Segmented, Select, Space, Switch, Typography, message } from 'antd';
 import { DeleteOutlined, LogoutOutlined, PlusOutlined, SaveOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
@@ -14,6 +14,7 @@ import { useTicketParamsStore } from '@/store/ticketParamsStore';
 import { getCompanyHierarchyParts } from '@/utils/companyHierarchy';
 import { TICKET_ACTIVE_STATUS_VALUES, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import GlobalSearchLauncher from '@/components/search/GlobalSearchLauncher';
+import GlobalLoadingIndicator from '@/components/layout/GlobalLoadingIndicator';
 import { TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { withApiError } from '@/utils/apiError';
 
@@ -124,12 +125,6 @@ const HeaderSearch: React.FC = () => {
   const requestCreateTicket = useTicketParamsStore((state) => state.requestCreateTicket);
   const selectedTicketIDs = useTicketParamsStore((state) => state.selectedTicketIDs);
   const clearSelectedTicketIDs = useTicketParamsStore((state) => state.clearSelectedTicketIDs);
-  const ticketsFetchCount = useIsFetching({ queryKey: ['tickets'] });
-  const companiesFetchCount = useIsFetching({ queryKey: ['companies', 'list'] });
-  const serversFetchCount = useIsFetching({ queryKey: ['equipment', 'servers'] });
-  const workstationsFetchCount = useIsFetching({ queryKey: ['equipment', 'workstations'] });
-  const fiscalsFetchCount = useIsFetching({ queryKey: ['equipment', 'fiscals'] });
-  const agentsFetchCount = useIsFetching({ queryKey: ['agent-diagnostics-list'] });
   const ticketParams = useMemo(() => new URLSearchParams(ticketParamsRaw), [ticketParamsRaw]);
   const [ticketTerm, setTicketTerm] = useState(ticketParams.get('q') || '');
   const debouncedTicketTerm = useDebouncedValue(ticketTerm, TEXT_SEARCH_DEBOUNCE_MS);
@@ -154,14 +149,6 @@ const HeaderSearch: React.FC = () => {
   const companyParamKey = archiveMode === 'archive' ? 'archive_company' : 'company';
   const periodFromParamKey = archiveMode === 'archive' ? 'archive_period_from' : 'period_from';
   const periodToParamKey = archiveMode === 'archive' ? 'archive_period_to' : 'period_to';
-  const isTicketSearchLoading = ticketsFetchCount > 0;
-  const isSectionSearchLoading =
-    (isCompaniesPage && companiesFetchCount > 0)
-    || (isServersPage && serversFetchCount > 0)
-    || (isWorkstationsPage && workstationsFetchCount > 0)
-    || (isFiscalsPage && fiscalsFetchCount > 0)
-    || (isAgentsPage && agentsFetchCount > 0);
-
   useEffect(() => {
     if (!isTicketsPage || !location.search) {
       return;
@@ -1019,7 +1006,9 @@ const HeaderSearch: React.FC = () => {
   );
 
   const renderMobileSettingsButton = (content?: React.ReactNode) => (
-    <Popover
+    <>
+      <GlobalLoadingIndicator />
+      <Popover
       trigger="click"
       placement="bottomRight"
       arrow={false}
@@ -1036,7 +1025,8 @@ const HeaderSearch: React.FC = () => {
         icon={<SettingOutlined />}
         aria-label={t('layout:accessibility.openMobileSettings')}
       />
-    </Popover>
+      </Popover>
+    </>
   );
 
   if (isTicketsPage) {
@@ -1358,7 +1348,6 @@ const HeaderSearch: React.FC = () => {
               className="ticket-header-mobile-search"
               placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
               allowClear
-              loading={isTicketSearchLoading}
               value={ticketTerm}
               onChange={handleTicketSearchChange}
               onSearch={applyTicketSearch}
@@ -1388,7 +1377,6 @@ const HeaderSearch: React.FC = () => {
             className="ticket-header-search-input"
             placeholder={t('layout:headerSearch.ticket.searchPlaceholder')}
             allowClear
-            loading={isTicketSearchLoading}
             value={ticketTerm}
             onChange={handleTicketSearchChange}
             onSearch={applyTicketSearch}
@@ -1457,7 +1445,6 @@ const HeaderSearch: React.FC = () => {
             className="ticket-header-mobile-search"
             placeholder={sectionPlaceholder}
             allowClear
-            loading={isSectionSearchLoading}
             value={sectionSearchTerm}
             onChange={handleSectionSearchChange}
             onSearch={handleSectionSearchSubmit}
@@ -1471,7 +1458,6 @@ const HeaderSearch: React.FC = () => {
       <Input.Search
         placeholder={sectionPlaceholder}
         allowClear
-        loading={isSectionSearchLoading}
         value={sectionSearchTerm}
         onChange={handleSectionSearchChange}
         onSearch={handleSectionSearchSubmit}

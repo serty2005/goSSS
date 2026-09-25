@@ -68,6 +68,10 @@ func (companyHandlerServiceStub) GetChildren(context.Context, string) ([]company
 	return nil, nil
 }
 
+func (companyHandlerServiceStub) GetNetwork(context.Context, string) (*company.Network, error) {
+	return nil, nil
+}
+
 func (companyHandlerServiceStub) ListBitrixMappings(context.Context, string, int, int, []string) ([]company.BitrixMappingRow, error) {
 	return nil, nil
 }

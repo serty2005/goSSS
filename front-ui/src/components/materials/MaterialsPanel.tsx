@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Spin, Typography, message } from 'antd';
+import { Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Typography, message } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
@@ -12,6 +12,7 @@ import { MaterialDTO, MaterialEntityRefDTO, MaterialPayload } from '@/types/api'
 import { useUiStore } from '@/store/uiStore';
 import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text, Title } = Typography;
 
@@ -461,7 +462,7 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
         extra={<Button size="small" type="primary" onClick={openCreate}>Новый</Button>}
       >
         {isLoading ? (
-          <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div>
+          <LoadingPlaceholder />
         ) : materials.length === 0 ? (
           <Empty description="Материалов пока нет" />
         ) : (

@@ -158,5 +158,9 @@
     "openHome": "Open home",
     "openProfileMenu": "Open profile menu",
     "selectLanguage": "Select interface language"
+  },
+  "globalLoading": {
+    "active": "Loading (operations: {{count}})",
+    "idle": "All data loaded"
   }
 }

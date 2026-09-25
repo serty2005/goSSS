@@ -14,7 +14,6 @@ import {
   Modal,
   Select,
   Space,
-  Spin,
   Table,
   Tag,
   Typography,
@@ -35,6 +34,7 @@ import {
 } from '@/types/api';
 import { resolveCompanyID, resolveCompanyParentTitle, resolveCompanyTitle } from '@/utils/companyHierarchy';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -474,7 +474,7 @@ const NetworkAcceptancePage: React.FC = () => {
 
       <Card className="glass-panel">
         {listQuery.isLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin size="large" /></div>
+          <LoadingPlaceholder />
         ) : rows.length === 0 ? (
           <Empty description="Кандидатов на принятие нет" />
         ) : (
@@ -559,7 +559,7 @@ const NetworkAcceptancePage: React.FC = () => {
         )}
       >
         {!details || detailsQuery.isLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+          <LoadingPlaceholder />
         ) : (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Card size="small" title="Обнаруженные данные">

@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Card, Empty, Space, Spin, Table, Typography } from 'antd';
+import { Card, Empty, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { equipmentApi } from '@/api/equipment';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -100,7 +101,7 @@ const WorkstationsPage: React.FC = () => {
       </Title>
       <Card className="glass-panel">
         {isLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+          <LoadingPlaceholder />
         ) : rows.length === 0 ? (
           <Empty description="Рабочие станции не найдены" />
         ) : (
@@ -117,7 +118,6 @@ const WorkstationsPage: React.FC = () => {
         )}
         {!isLoading && rows.length > 0 && <Text type="secondary">Найдено: {total}</Text>}
         <div ref={loadMoreRef} style={{ marginTop: 16, display: 'flex', justifyContent: 'center', minHeight: 40 }}>
-          {(isFetchingNextPage || (hasNextPage && rows.length > 0)) && <Spin size="small" />}
           {!hasNextPage && rows.length > 0 && (
             <Text type="secondary">Показано: {rows.length} из {total}</Text>
           )}

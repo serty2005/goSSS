@@ -178,7 +178,7 @@ const EntityHierarchyExplorer: React.FC<EntityHierarchyExplorerProps> = ({
   };
 
   if (loading) {
-    return <Text type="secondary">Загрузка иерархии...</Text>;
+    return null;
   }
 
   const showParent = focus.type === 'company' && Boolean(parentCompany);

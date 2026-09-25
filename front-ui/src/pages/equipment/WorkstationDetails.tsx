@@ -1,7 +1,7 @@
 ﻿import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Descriptions, Button, Space, Typography, Spin, Badge, message, Table, Popconfirm, Tabs, theme as antTheme } from 'antd';
+import { Card, Descriptions, Button, Space, Typography, Badge, message, Table, Popconfirm, Tabs, theme as antTheme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { equipmentApi } from '@/api/equipment';
 import { deletionCandidatesApi } from '@/api/deletionCandidates';
@@ -18,6 +18,7 @@ import AgentObservationRawModal from '@/components/agents/AgentObservationRawMod
 import MaterialsPanel from '@/components/materials/MaterialsPanel';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
 import { withApiError } from '@/utils/apiError';
+import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
 
@@ -122,7 +123,7 @@ const WorkstationDetails: React.FC = () => {
   }, [companiesRes?.data, ownerCompanyRes?.data]);
   const agentUpdate = useMemo(() => (ws ? getAgentUpdateMeta(ws) : null), [ws]);
 
-  if (isLoading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
+  if (isLoading) return <LoadingPlaceholder />;
   if (!ws) return <div>Рабочая станция не найдена</div>;
 
   const saveField = (field: keyof UpdateWorkstationPayload, value: string) => {

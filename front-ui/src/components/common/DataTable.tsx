@@ -125,6 +125,12 @@ export const DataTableTextCell: React.FC<{
   );
 };
 
+// Состояние загрузки таблицы. Overlay-спиннер не показывается: ожидание отображает
+// единый индикатор в header, а таблица только скрывает текст «нет данных».
+const isTableLoading = (loading: TableProps<object>['loading']) => (
+  typeof loading === 'object' && loading !== null ? Boolean(loading.spinning) : Boolean(loading)
+);
+
 const compareValues = (
   left?: string | number | boolean | null,
   right?: string | number | boolean | null,
@@ -713,7 +719,6 @@ const DataTable = <T extends object>({
             dataSource={sortedRows}
             columns={normalizedColumns}
             rowKey={rowKey}
-            loading={loading}
             pagination={pagination}
             size={size}
             bordered={bordered}
@@ -725,7 +730,7 @@ const DataTable = <T extends object>({
                 cell: DraggableHeaderCell,
               },
             }}
-            locale={{ emptyText }}
+            locale={{ emptyText: isTableLoading(loading) ? ' ' : emptyText }}
             rowClassName={rowClassName}
             onHeaderRow={() => ({
               onContextMenu: (event) => {

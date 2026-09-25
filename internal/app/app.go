@@ -728,6 +728,7 @@ func (a *Application) setupRouter() *chi.Mux {
 			r.Get("/{id}", a.CompanyHandler.Get)
 			r.Get("/{id}/infrastructure", a.CompanyHandler.GetInfrastructure)
 			r.Get("/{id}/children", a.CompanyHandler.GetChildren)
+			r.Get("/{id}/network", a.CompanyHandler.GetNetwork)
 
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.CompanyHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.CompanyHandler.Update)
