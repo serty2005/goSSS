@@ -112,8 +112,8 @@ func TestChangeStatus_ToManagerWithTelegramStoresPrimaryContact(t *testing.T) {
 	if comments[0].Text != "Контакт в телеграмм: @client_login" {
 		t.Fatalf("неверный текст комментария: %q", comments[0].Text)
 	}
-	if comments[0].IsPrivate || comments[0].IsInternal {
-		t.Fatalf("комментарий с Telegram-контактом должен быть публичным: %+v", comments[0])
+	if comments[0].IsPrivate || !comments[0].IsInternal {
+		t.Fatalf("комментарий с Telegram-контактом должен быть внутренним (не уходит в Pyrus, доходит до менеджера в Bitrix24): %+v", comments[0])
 	}
 	contacts, err := ticketRepo.ListTicketContacts(ctx, ticket.ID)
 	if err != nil {

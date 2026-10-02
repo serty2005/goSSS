@@ -9,6 +9,7 @@ type TicketStatusChangeOptions = {
   managerTransferTarget?: ManagerTransferTarget;
   clientContactType?: ManagerTransferContactType;
   clientContactValue?: string;
+  bitrixServicePointId?: number;
 };
 
 export const ticketsApi = {
@@ -56,6 +57,7 @@ export const ticketsApi = {
       manager_transfer_target: options.managerTransferTarget,
       client_contact_type: options.clientContactType,
       client_contact_value: options.clientContactValue,
+      bitrix_service_point_id: options.bitrixServicePointId,
     });
     return response.data;
   },
@@ -86,7 +88,7 @@ export const ticketsApi = {
     return response.data;
   },
 
-  updateBitrixFields: async (id: number | string, payload: { bitrix_service_point_id?: number; bitrix_deal_title: string }) => {
+  updateBitrixFields: async (id: number | string, payload: { bitrix_service_point_id?: number; bitrix_deal_title?: string }) => {
     const response = await apiClient.patch<ApiResponse<TicketDTO>>(`/tickets/${id}/bitrix`, {
       bitrix_service_point_id: payload.bitrix_service_point_id,
       bitrix_deal_title: payload.bitrix_deal_title,

@@ -99,6 +99,8 @@ type EntityDeletionCandidateDetailsDTO struct {
 // ErrorResponseDTO стандартизированный ответ с ошибкой.
 type ErrorResponseDTO struct {
 	Error string `json:"error"`
+	// Code - машинный код ошибки для сценариев, где клиент должен предложить пользователю следующий шаг.
+	Code string `json:"code,omitempty"`
 }
 
 // --- DTO для взаимодействия с Агентами ---
@@ -438,6 +440,8 @@ type TicketStatusChangeDTO struct {
 	ManagerTransferTarget string `json:"manager_transfer_target"`
 	ClientContactType     string `json:"client_contact_type"`
 	ClientContactValue    string `json:"client_contact_value"`
+	// BitrixServicePointID - точка обслуживания Bitrix24, выбранная оператором при передаче менеджеру.
+	BitrixServicePointID *int64 `json:"bitrix_service_point_id"`
 }
 
 // TicketCreateInternalDTO - создание тикета вручную (через API).

@@ -47,5 +47,15 @@ func RegisterBitrixEventHandlers(
 		}
 	})
 
+	bus.Subscribe(events.TicketCommentImported, func(ctx context.Context, event eventbus.Event) {
+		payload, ok := event.Payload.(events.TicketCommentImportedPayload)
+		if !ok || payload.Source == events.CommentImportSourceBitrix || payload.TicketID == "" || payload.Comment == nil || payload.Comment.IsPrivate {
+			return
+		}
+		if err := bitrixSync.SyncPendingComments(ctx, payload.TicketID); err != nil {
+			log.Error("Bitrix24: ошибка отправки импортированного комментария", "ticket_id", payload.TicketID, "comment_id", payload.Comment.ID, "source", payload.Source, "error", err)
+		}
+	})
+
 	log.Info("Bitrix24: мост событий зарегистрирован")
 }

@@ -54,3 +54,16 @@ export const withApiError = (fallback: string, error: unknown): string => {
   }
   return `${normalizedFallback}: ${detail}`;
 };
+
+/** Машинный код ошибки из ответа API (`{error: {error, code}}`); пустая строка, если кода нет. */
+export const getApiErrorCode = (error: unknown): string => {
+  if (!error || typeof error !== 'object') return '';
+  const data = (error as ApiErrorShape).response?.data;
+  if (!data || typeof data !== 'object') return '';
+  const nested = (data as Record<string, unknown>).error;
+  if (!nested || typeof nested !== 'object') return '';
+  return readString((nested as Record<string, unknown>).code);
+};
+
+/** Код ошибки: тикет нельзя связать с Bitrix24, пока оператор не выберет точку обслуживания. */
+export const BITRIX_SERVICE_POINT_REQUIRED = 'bitrix_service_point_required';

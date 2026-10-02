@@ -102,6 +102,9 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 	response.RespondWithJSON(w, http.StatusCreated, ticket)
 }
 
+// bitrixServicePointRequiredCode - код ошибки, по которому UI предлагает выбрать точку обслуживания Bitrix24.
+const bitrixServicePointRequiredCode = "bitrix_service_point_required"
+
 func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var dto api.TicketStatusChangeDTO
@@ -116,8 +119,13 @@ func (h *TicketHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		ManagerTransferTarget: dto.ManagerTransferTarget,
 		ClientContactType:     dto.ClientContactType,
 		ClientContactValue:    dto.ClientContactValue,
+		BitrixServicePointID:  dto.BitrixServicePointID,
 	}, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrBitrixServicePointRequired) {
+			response.RespondWithErrorCode(w, http.StatusConflict, bitrixServicePointRequiredCode, err.Error())
+			return
+		}
 		response.RespondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -486,6 +494,10 @@ func (h *TicketHandler) UpdateBitrixFields(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Не найдено")
+			return
+		}
+		if errors.Is(err, services.ErrBitrixServicePointRequired) {
+			response.RespondWithErrorCode(w, http.StatusConflict, bitrixServicePointRequiredCode, err.Error())
 			return
 		}
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())

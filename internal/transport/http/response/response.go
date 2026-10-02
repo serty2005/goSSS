@@ -25,6 +25,18 @@ func RespondWithError(w http.ResponseWriter, code int, message string) {
 	sendJSON(w, code, resp)
 }
 
+// RespondWithErrorCode отправляет ошибку с машинным кодом, по которому клиент предлагает пользователю следующий шаг.
+func RespondWithErrorCode(w http.ResponseWriter, httpCode int, errorCode string, message string) {
+	resp := Response{
+		Status: "error",
+		Error: dtos.ErrorResponseDTO{
+			Error: message,
+			Code:  errorCode,
+		},
+	}
+	sendJSON(w, httpCode, resp)
+}
+
 // RespondWithJSON отправляет успешный JSON-ответ.
 // Автоматически разделяет пагинированные данные на Data и Meta.
 func RespondWithJSON(w http.ResponseWriter, code int, payload interface{}) {

@@ -28,6 +28,9 @@ type PyrusSyncService interface {
 	Start(ctx context.Context)
 	EnqueueEvent(ctx context.Context, eventName string, payload events.PyrusSyncEntityPayload) error
 	ListMembers(ctx context.Context) ([]pyrusplugin.Member, error)
+	// EnqueueImportedComment ставит в очередь отправку в Pyrus комментария, пришедшего из другой системы (например, от менеджера в Bitrix24).
+	// Тикеты без связанной задачи Pyrus пропускаются.
+	EnqueueImportedComment(ctx context.Context, payload events.TicketCommentImportedPayload) error
 }
 
 type pyrusSyncService struct {
@@ -113,6 +116,42 @@ func (s *pyrusSyncService) EnqueueEvent(ctx context.Context, eventName string, p
 		)
 	}
 	return nil
+}
+
+func (s *pyrusSyncService) EnqueueImportedComment(ctx context.Context, payload events.TicketCommentImportedPayload) error {
+	comment := payload.Comment
+	if s == nil || s.repo == nil || s.ticketRepo == nil || comment == nil || strings.TrimSpace(payload.TicketID) == "" {
+		return nil
+	}
+	if comment.IsPrivate || comment.IsInternal || payload.Source == events.CommentImportSourcePyrus {
+		return nil
+	}
+	taskID := int64(0)
+	link, err := s.repo.GetTicketLinkByTicketID(ctx, payload.TicketID)
+	if err != nil {
+		return err
+	}
+	if link != nil {
+		taskID = link.PyrusTaskID
+	}
+	if taskID <= 0 {
+		ticket, err := s.ticketRepo.GetByID(ctx, payload.TicketID)
+		if err != nil {
+			return err
+		}
+		if ticket != nil {
+			taskID = parsePyrusTaskIDFromServiceDeskUUID(ticket.ServiceDeskUUID)
+		}
+	}
+	if taskID <= 0 {
+		return nil
+	}
+	return s.EnqueueEvent(ctx, events.PyrusCommentSyncRequested, events.PyrusSyncEntityPayload{
+		TicketID: payload.TicketID,
+		TaskID:   taskID,
+		Comment:  comment,
+		Reason:   "comment_imported_from_" + payload.Source,
+	})
 }
 
 func (s *pyrusSyncService) Start(ctx context.Context) {
@@ -356,6 +395,10 @@ func (s *pyrusSyncService) handleStatusSync(
 
 	if err := s.syncPendingPublicComments(ctx, taskID, ticketID); err != nil {
 		return "", "", err
+	}
+	// Передача менеджеру - внутренний процесс ServiceDesk и Bitrix24: статус задачи в Pyrus не меняется.
+	if strings.TrimSpace(payload.Status) == tickets.StatusToManager {
+		return pyrus.OutgoingEventStatusIgnored, "статус «передано менеджеру» не передаётся в Pyrus", nil
 	}
 
 	task, err := s.client.GetTask(ctx, taskID)

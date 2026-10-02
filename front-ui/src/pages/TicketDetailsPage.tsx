@@ -28,13 +28,15 @@ import { getTicketStatusMeta, isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } 
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
 import AgentBadge from '@/components/agents/AgentBadge';
 import ServerLicenseStatusTag from '@/components/entities/ServerLicenseStatusTag';
-import ManagerTransferModal, { ManagerTransferPayload } from '@/components/tickets/ManagerTransferModal';
+import BitrixServicePointModal from '@/components/tickets/BitrixServicePointModal';
+import ManagerTransferModal from '@/components/tickets/ManagerTransferModal';
+import type { StatusChangePayload } from '@/components/tickets/statusChangePayload';
 import TicketContactsControl from '@/components/tickets/TicketContactsControl';
 import TicketTable from '@/components/tickets/TicketTable';
 import ContractInfoModal from '@/components/contracts/ContractInfoModal';
 import { SELECT_SEARCH_DEBOUNCE_MS, TEXT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { canManageServerActions } from '@/utils/permissions';
-import { withApiError } from '@/utils/apiError';
+import { BITRIX_SERVICE_POINT_REQUIRED, getApiErrorCode, withApiError } from '@/utils/apiError';
 import { materialsApi } from '@/api/materials';
 import { checklistsApi, ticketChecklistQueryKey } from '@/api/checklists';
 import TicketMaterialsTab from '@/components/tickets/TicketMaterialsTab';
@@ -493,6 +495,7 @@ const TicketDetailsPage: React.FC = () => {
   const [isBitrixTitleEditMode, setIsBitrixTitleEditMode] = useState(false);
   const [isBitrixPointEditMode, setIsBitrixPointEditMode] = useState(false);
   const [isBitrixSyncModalOpen, setIsBitrixSyncModalOpen] = useState(false);
+  const [servicePointPickerPayload, setServicePointPickerPayload] = useState<StatusChangePayload | null>(null);
   const [draftBitrixPointID, setDraftBitrixPointID] = useState<number | undefined>(undefined);
   const [draftBitrixDealTitle, setDraftBitrixDealTitle] = useState('');
   const [isDescriptionEditMode, setIsDescriptionEditMode] = useState(false);
@@ -886,7 +889,7 @@ const TicketDetailsPage: React.FC = () => {
       return;
     }
     setDraftBitrixPointID(metadata.bitrix_service_point_id ?? undefined);
-    setDraftBitrixDealTitle(metadata.bitrix_deal_title || '');
+    setDraftBitrixDealTitle(metadata.bitrix_deal_title || metadata.subject || '');
     setIsBitrixSyncModalOpen(true);
   };
 
@@ -1136,26 +1139,30 @@ const TicketDetailsPage: React.FC = () => {
   });
 
   const changeStatusMutation = useMutation({
-    mutationFn: async (payload: {
-      id: string;
-      status: TicketStatus;
-      comment?: string;
-      deferredUntil?: string;
-    } & Partial<ManagerTransferPayload>) =>
+    mutationFn: async (payload: StatusChangePayload) =>
       ticketsApi.changeStatus(payload.id, payload.status, {
         comment: payload.comment,
         deferredUntil: payload.deferredUntil,
         managerTransferTarget: payload.managerTransferTarget,
         clientContactType: payload.clientContactType,
         clientContactValue: payload.clientContactValue,
+        bitrixServicePointId: payload.bitrixServicePointId,
       }),
     onSuccess: () => {
       message.success('Статус обновлён');
       resetPendingStatusState();
+      setServicePointPickerPayload(null);
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: (error) => message.error(withApiError('Не удалось обновить статус', error)),
+    onError: (error, payload) => {
+      // У компании нет сопоставления с точкой Bitrix24: просим выбрать точку и повторяем передачу менеджеру.
+      if (payload.status === 'to_manager' && getApiErrorCode(error) === BITRIX_SERVICE_POINT_REQUIRED) {
+        setServicePointPickerPayload(payload);
+        return;
+      }
+      message.error(withApiError('Не удалось обновить статус', error));
+    },
   });
 
   const changeCompanyMutation = useMutation({
@@ -1255,7 +1262,7 @@ const TicketDetailsPage: React.FC = () => {
       if (!id) return;
       return ticketsApi.updateBitrixFields(id, {
         bitrix_service_point_id: draftBitrixPointID,
-        bitrix_deal_title: draftBitrixDealTitle.trim(),
+        bitrix_deal_title: draftBitrixDealTitle.trim() || undefined,
       });
     },
     onSuccess: () => {
@@ -1266,7 +1273,14 @@ const TicketDetailsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['ticket', id] });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
     },
-    onError: (error) => message.error(withApiError('Не удалось обновить поля Bitrix24', error)),
+    onError: (error) => {
+      // Точку по компании определить не удалось: открываем выбор точки вместо ошибки.
+      if (getApiErrorCode(error) === BITRIX_SERVICE_POINT_REQUIRED) {
+        openBitrixSyncModal();
+        return;
+      }
+      message.error(withApiError('Не удалось обновить поля Bitrix24', error));
+    },
   });
 
   const unlinkBitrixMutation = useMutation({
@@ -1381,7 +1395,6 @@ const TicketDetailsPage: React.FC = () => {
     || Boolean(metadata.bitrix_service_point_id)
     || Boolean(String(metadata.bitrix_deal_title || '').trim())
     || String(metadata.service_desk_uuid || '').trim().startsWith('b24:deal:');
-  const canPushToBitrix = Boolean(metadata.bitrix_service_point_id) && Boolean(String(metadata.bitrix_deal_title || '').trim());
 
   const uploadAttachmentsRequest = async (options: UploadRequestOption) => {
     const source = options.file as File;
@@ -2161,10 +2174,7 @@ const TicketDetailsPage: React.FC = () => {
             <Button
               loading={updateBitrixMutation.isPending}
               onClick={() => {
-                if (!metadata.sync_with_bitrix || !canPushToBitrix) {
-                  openBitrixSyncModal();
-                  return;
-                }
+                // Точка берётся из сопоставления компании; выбор показывается, только если сопоставления нет.
                 updateBitrixMutation.mutate();
               }}
             >
@@ -2788,6 +2798,15 @@ const TicketDetailsPage: React.FC = () => {
           />
         )}
       </Modal>
+      <BitrixServicePointModal
+        open={servicePointPickerPayload !== null}
+        confirmLoading={changeStatusMutation.isPending}
+        onCancel={() => setServicePointPickerPayload(null)}
+        onSubmit={(servicePointId) => {
+          if (!servicePointPickerPayload) return;
+          changeStatusMutation.mutate({ ...servicePointPickerPayload, bitrixServicePointId: servicePointId });
+        }}
+      />
       <ManagerTransferModal
         open={pendingStatus === 'to_manager'}
         initialTarget={metadata?.manager_transfer_target}

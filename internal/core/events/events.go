@@ -122,7 +122,24 @@ const (
 	// PyrusTicketExtIDSyncRequested публикуется после локального создания тикета из Pyrus для обратной записи ext_id.
 	// Payload: PyrusSyncEntityPayload.
 	PyrusTicketExtIDSyncRequested = "pyrus.ticket.extid.sync.requested"
+	// TicketCommentImported публикуется после импорта комментария из внешней системы (Bitrix24, Pyrus) в тикет:
+	// остальные интеграции доставляют его своим получателям. Payload: TicketCommentImportedPayload.
+	TicketCommentImported = "ticket.comment.imported"
 )
+
+// Источники импортированных комментариев (TicketCommentImportedPayload.Source).
+const (
+	CommentImportSourceBitrix = "bitrix"
+	CommentImportSourcePyrus  = "pyrus"
+)
+
+// TicketCommentImportedPayload - комментарий, появившийся в тикете из внешней системы.
+type TicketCommentImportedPayload struct {
+	TicketID string
+	Comment  *tickets.TicketComment
+	// Source - система, из которой пришёл комментарий; в неё он не отправляется обратно.
+	Source string
+}
 
 // BitrixSyncEntityPayload — унифицированная сущность для событий исходящей синхронизации Bitrix24.
 // Для событий тикета заполняются TicketID и Reason.
@@ -171,11 +188,11 @@ type TelephonyLineEmployeePayload struct {
 
 // TelephonyLineUpdatedPayload описывает текущее агрегированное состояние линии телефонии.
 type TelephonyLineUpdatedPayload struct {
-	Color             string                        `json:"color"`
-	OnLineCount       int                           `json:"on_line_count"`
-	MissedOpenCount   int                           `json:"missed_open_count"`
-	Employees         []TelephonyLineEmployeePayload `json:"employees"`
-	OccurredAt        time.Time                     `json:"occurred_at,omitzero"`
+	Color           string                         `json:"color"`
+	OnLineCount     int                            `json:"on_line_count"`
+	MissedOpenCount int                            `json:"missed_open_count"`
+	Employees       []TelephonyLineEmployeePayload `json:"employees"`
+	OccurredAt      time.Time                      `json:"occurred_at,omitzero"`
 }
 
 // AgentObservationUpdatedPayload описывает актуальное состояние агента для UI-ленты наблюдений.

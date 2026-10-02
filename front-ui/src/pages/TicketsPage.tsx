@@ -42,9 +42,9 @@ import { profileApi } from "@/api/profile";
 import { useLayoutHeader } from "@/components/layout/LayoutHeaderContext";
 import TelephonyLineIndicator from "@/components/telephony/TelephonyLineIndicator";
 import TicketTable from "@/components/tickets/TicketTable";
-import ManagerTransferModal, {
-  ManagerTransferPayload,
-} from "@/components/tickets/ManagerTransferModal";
+import BitrixServicePointModal from "@/components/tickets/BitrixServicePointModal";
+import type { StatusChangePayload } from "@/components/tickets/statusChangePayload";
+import ManagerTransferModal from "@/components/tickets/ManagerTransferModal";
 import TicketContactsControl from "@/components/tickets/TicketContactsControl";
 import { TicketDetailsDTO, TicketStatus } from "@/types/api";
 import SmartTicketEditor from "@/features/tickets/editor/SmartTicketEditor";
@@ -62,7 +62,7 @@ import {
   TICKET_STATUS_OPTIONS,
 } from "@/constants/ticketStatus";
 import i18n from "@/i18n/i18n";
-import { withApiError } from '@/utils/apiError';
+import { BITRIX_SERVICE_POINT_REQUIRED, getApiErrorCode, withApiError } from '@/utils/apiError';
 import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Text, Paragraph } = Typography;
@@ -339,6 +339,7 @@ const TicketsPage: React.FC = () => {
   const [editingCommentDraft, setEditingCommentDraft] = useState("");
   const [statusComment, setStatusComment] = useState("");
   const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const [servicePointPickerPayload, setServicePointPickerPayload] = useState<StatusChangePayload | null>(null);
   const [pendingDeferredAt, setPendingDeferredAt] = useState<string>("");
 
   const resetPendingStatusState = useCallback(() => {
@@ -714,26 +715,30 @@ const TicketsPage: React.FC = () => {
   }, [commentsNewFirst, details?.comments, t]);
 
   const changeStatusMutation = useMutation({
-    mutationFn: async (payload: {
-      id: string;
-      status: TicketStatus;
-      comment?: string;
-      deferredUntil?: string;
-    } & Partial<ManagerTransferPayload>) =>
+    mutationFn: async (payload: StatusChangePayload) =>
       ticketsApi.changeStatus(payload.id, payload.status, {
         comment: payload.comment,
         deferredUntil: payload.deferredUntil,
         managerTransferTarget: payload.managerTransferTarget,
         clientContactType: payload.clientContactType,
         clientContactValue: payload.clientContactValue,
+        bitrixServicePointId: payload.bitrixServicePointId,
       }),
     onSuccess: () => {
       message.success(t("tickets:messages.statusUpdated"));
       resetPendingStatusState();
+      setServicePointPickerPayload(null);
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket", selectedTicketId] });
     },
-    onError: (error) => message.error(withApiError(t("tickets:messages.statusUpdateError"), error)),
+    onError: (error, payload) => {
+      // У компании нет сопоставления с точкой Bitrix24: просим выбрать точку и повторяем передачу менеджеру.
+      if (payload.status === "to_manager" && getApiErrorCode(error) === BITRIX_SERVICE_POINT_REQUIRED) {
+        setServicePointPickerPayload(payload);
+        return;
+      }
+      message.error(withApiError(t("tickets:messages.statusUpdateError"), error));
+    },
   });
 
   const addCommentMutation = useMutation({
@@ -1832,6 +1837,15 @@ const TicketsPage: React.FC = () => {
           </Button>
         </Space>
       </Drawer>
+      <BitrixServicePointModal
+        open={servicePointPickerPayload !== null}
+        confirmLoading={changeStatusMutation.isPending}
+        onCancel={() => setServicePointPickerPayload(null)}
+        onSubmit={(servicePointId) => {
+          if (!servicePointPickerPayload) return;
+          changeStatusMutation.mutate({ ...servicePointPickerPayload, bitrixServicePointId: servicePointId });
+        }}
+      />
       <ManagerTransferModal
         open={pendingStatus === "to_manager"}
         initialTarget={details?.metadata.manager_transfer_target}

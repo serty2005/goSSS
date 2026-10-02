@@ -744,6 +744,7 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 				},
 			})
 		}
+		s.publishCommentImported(ticket.ID, &newComment)
 		return nil
 	}
 
@@ -1502,6 +1503,21 @@ func (s *bitrixIncomingService) publishTicketUpdated(ticketID, action, source, m
 			Source:     strings.TrimSpace(source),
 			Message:    strings.TrimSpace(message),
 			OccurredAt: time.Now(),
+		},
+	})
+}
+
+// publishCommentImported сообщает остальным интеграциям (Pyrus) о новом комментарии из Bitrix24, например от менеджера.
+func (s *bitrixIncomingService) publishCommentImported(ticketID string, comment *tickets.TicketComment) {
+	if s.eventBus == nil || comment == nil || comment.IsPrivate || comment.IsInternal {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type: events.TicketCommentImported,
+		Payload: events.TicketCommentImportedPayload{
+			TicketID: ticketID,
+			Comment:  comment,
+			Source:   events.CommentImportSourceBitrix,
 		},
 	})
 }

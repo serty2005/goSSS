@@ -45,5 +45,15 @@ func RegisterPyrusEventHandlers(
 	register(events.PyrusTicketAssigneeSyncRequested)
 	register(events.PyrusTicketExtIDSyncRequested)
 
+	bus.Subscribe(events.TicketCommentImported, func(ctx context.Context, event eventbus.Event) {
+		payload, ok := event.Payload.(events.TicketCommentImportedPayload)
+		if !ok || payload.Source == events.CommentImportSourcePyrus {
+			return
+		}
+		if err := pyrusSync.EnqueueImportedComment(ctx, payload); err != nil {
+			log.Error("Pyrus: ошибка постановки импортированного комментария в очередь", "ticket_id", payload.TicketID, "source", payload.Source, "error", err)
+		}
+	})
+
 	log.Info("Pyrus: мост событий зарегистрирован")
 }

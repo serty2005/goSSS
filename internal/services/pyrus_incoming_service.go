@@ -900,9 +900,25 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 				},
 			})
 		}
+		s.publishCommentImported(ticket.ID, &item)
 		added++
 	}
 	return added, nil
+}
+
+// publishCommentImported сообщает остальным интеграциям (Bitrix24) о новом комментарии из Pyrus.
+func (s *pyrusIncomingService) publishCommentImported(ticketID string, comment *tickets.TicketComment) {
+	if s.eventBus == nil || comment == nil || comment.IsPrivate || comment.IsInternal {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type: events.TicketCommentImported,
+		Payload: events.TicketCommentImportedPayload{
+			TicketID: ticketID,
+			Comment:  comment,
+			Source:   events.CommentImportSourcePyrus,
+		},
+	})
 }
 
 func (s *pyrusIncomingService) upsertPyrusTicketContext(ctx context.Context, ticketID string, taskContext *pyrusTaskContext) error {
@@ -1149,6 +1165,10 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 
 func (s *pyrusIncomingService) applyPyrusStatusToTicket(ctx context.Context, ticket *tickets.Ticket, task *pyrusplugin.Task) (bool, error) {
 	if ticket == nil || task == nil {
+		return false, nil
+	}
+	// Тикет, переданный менеджеру, ведётся в Bitrix24: статус задачи Pyrus не должен возвращать его в работу.
+	if strings.TrimSpace(ticket.Status) == tickets.StatusToManager {
 		return false, nil
 	}
 	nextStatus := resolvePyrusTaskStatus(task)

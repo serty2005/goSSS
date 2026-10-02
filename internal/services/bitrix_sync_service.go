@@ -54,6 +54,9 @@ type BitrixSyncService interface {
 	EnsureContactByPhone(ctx context.Context, input BitrixEnsureContactInput) (*BitrixEnsureContactResult, error)
 	SyncTicketByID(ctx context.Context, ticketID string) error
 	SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error
+	// SyncPendingComments отправляет в сделку тикета комментарии, которых там ещё нет (например, пришедшие из Pyrus).
+	// Тикет без сделки пропускается: при создании сделки комментарии уходят вместе с ней.
+	SyncPendingComments(ctx context.Context, ticketID string) error
 	ReconcileCommentSends(ctx context.Context) (int, error)
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
@@ -300,6 +303,30 @@ func (s *bitrixSyncService) syncDealContactBinding(ctx context.Context, dealID i
 	}
 
 	return s.client.DealContactItemsSet(ctx, dealID, items)
+}
+
+func (s *bitrixSyncService) SyncPendingComments(ctx context.Context, ticketID string) error {
+	if !s.IsEnabled() || strings.TrimSpace(ticketID) == "" {
+		return nil
+	}
+	ticket, err := s.ticketRepo.GetByID(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if ticket == nil || ticket.IsArchived || !ticket.SyncWithBitrix {
+		return nil
+	}
+	if ticket.BitrixServicePointID == nil || *ticket.BitrixServicePointID <= 0 {
+		return nil
+	}
+	link, err := s.repo.GetDealLinkByTicketID(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if link == nil || link.B24DealID <= 0 {
+		return nil
+	}
+	return s.syncPendingComments(ctx, ticket, link.B24DealID)
 }
 
 func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error {

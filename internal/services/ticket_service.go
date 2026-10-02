@@ -89,6 +89,8 @@ type TicketStatusChangeOptions struct {
 	ManagerTransferTarget string
 	ClientContactType     string
 	ClientContactValue    string
+	// BitrixServicePointID - точка обслуживания, выбранная оператором, когда у компании нет сопоставления.
+	BitrixServicePointID *int64
 }
 
 type DeferredStatusActivation struct {
@@ -131,6 +133,9 @@ var ErrTicketNotFound = errors.New("заявка не найдена")
 var ErrTicketForbidden = errors.New("недостаточно прав для операции с тикетом")
 var ErrCommentNotFound = errors.New("комментарий не найден")
 var ErrCommentForbidden = errors.New("недостаточно прав для операции с комментарием")
+
+// ErrBitrixServicePointRequired - для компании тикета нет сопоставления с точкой обслуживания Bitrix24, оператор должен выбрать точку.
+var ErrBitrixServicePointRequired = errors.New("для компании тикета не определена точка обслуживания Bitrix24: выберите точку")
 
 func NewTicketService(
 	logger logger.LoggerInterface,
@@ -443,7 +448,14 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 
 	managerTransferTarget := ""
 	managerContactComment := ""
+	var managerBinding *bitrixBinding
 	if status == tickets.StatusToManager {
+		// Сделку менеджеру создаёт Bitrix24, поэтому тикет должен быть привязан к точке обслуживания до передачи
+		// (после передачи привязка заблокирована). Проверка идёт раньше сохранения контактов, чтобы отказ не оставлял побочных эффектов.
+		managerBinding, err = s.prepareBitrixBindingForManagerTransfer(ctx, ticket, options.BitrixServicePointID)
+		if err != nil {
+			return nil, err
+		}
 		managerTransferTarget, managerContactComment, err = s.prepareManagerTransfer(ctx, ticket, options)
 		if err != nil {
 			return nil, err
@@ -464,11 +476,16 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		nextDeferredByID = nil
 	}
 
+	oldBitrixSync := ticket.SyncWithBitrix
+	oldBitrixPoint, oldBitrixTitle := bitrixBindingSnapshot(ticket)
 	ticket.Status = status
 	ticket.DeferredUntil = nextDeferredUntil
 	ticket.DeferredByID = nextDeferredByID
 	if status == tickets.StatusToManager {
 		ticket.ManagerTransferTarget = managerTransferTarget
+		if managerBinding != nil {
+			managerBinding.applyTo(ticket)
+		}
 	} else {
 		ticket.ManagerTransferTarget = ""
 	}
@@ -480,6 +497,10 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		return nil, err
 	}
 
+	if managerBinding != nil {
+		s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
+		s.recordBitrixBindingHistory(ctx, ticket, userID, oldBitrixPoint, oldBitrixTitle, oldBitrixSync)
+	}
 	if oldStatus != status {
 		// Запись в историю
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionFieldChanged, tickets.HistoryFieldStatus, tickets.HistorySourceUI, oldStatus, status, nil)
@@ -493,7 +514,8 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", comment, nil)
 	}
 	if managerContactComment != "" {
-		if err := s.addStatusComment(ctx, ticket.ID, managerContactComment, userID); err != nil {
+		// Контакт клиента нужен менеджеру в Bitrix24, но не должен показываться клиенту в Pyrus.
+		if err := s.addStatusCommentWithVisibility(ctx, ticket.ID, managerContactComment, userID, true); err != nil {
 			return nil, err
 		}
 		s.recordHistory(ctx, ticket.ID, &userID, tickets.HistoryActionCommentAdded, tickets.HistoryFieldComment, tickets.HistorySourceUI, "", managerContactComment, nil)
@@ -504,6 +526,22 @@ func (s *ticketServiceImpl) ChangeStatus(ctx context.Context, ticketID string, s
 	}
 
 	return ticket, nil
+}
+
+// prepareBitrixBindingForManagerTransfer возвращает привязку к Bitrix24, которую нужно записать в тикет при передаче менеджеру,
+// или nil, если Bitrix24 отключён либо тикет уже привязан. Без определимой точки возвращает ErrBitrixServicePointRequired.
+func (s *ticketServiceImpl) prepareBitrixBindingForManagerTransfer(ctx context.Context, ticket *tickets.Ticket, selectedPointID *int64) (*bitrixBinding, error) {
+	if s.cfg == nil || !s.cfg.EnableBitrixGateway {
+		return nil, nil
+	}
+	if ticket.SyncWithBitrix && isValidBitrixServicePointID(ticket.BitrixServicePointID) && !isValidBitrixServicePointID(selectedPointID) {
+		return nil, nil
+	}
+	binding, err := s.resolveBitrixBinding(ctx, ticket, selectedPointID, "")
+	if err != nil {
+		return nil, err
+	}
+	return &binding, nil
 }
 
 func (s *ticketServiceImpl) prepareManagerTransfer(ctx context.Context, ticket *tickets.Ticket, options TicketStatusChangeOptions) (string, string, error) {
@@ -560,6 +598,12 @@ func (s *ticketServiceImpl) prepareManagerTransfer(ctx context.Context, ticket *
 }
 
 func (s *ticketServiceImpl) addStatusComment(ctx context.Context, ticketID string, text string, userID uint) error {
+	return s.addStatusCommentWithVisibility(ctx, ticketID, text, userID, false)
+}
+
+// addStatusCommentWithVisibility добавляет служебный комментарий смены статуса. Внутренний комментарий не отправляется в Pyrus,
+// но доходит до менеджера в Bitrix24 (приватные не уходят ни в одну внешнюю систему).
+func (s *ticketServiceImpl) addStatusCommentWithVisibility(ctx context.Context, ticketID string, text string, userID uint, internal bool) error {
 	authorName := "Сотрудник"
 	u, uErr := s.userRepo.GetByID(ctx, userID)
 	if uErr == nil && u != nil && strings.TrimSpace(u.FullName) != "" {
@@ -573,7 +617,7 @@ func (s *ticketServiceImpl) addStatusComment(ctx context.Context, ticketID strin
 		Text:            strings.TrimSpace(text),
 		AuthorName:      authorName,
 		CreationDate:    time.Now(),
-		IsInternal:      false,
+		IsInternal:      internal,
 		IsPrivate:       false,
 	}
 	if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
@@ -734,33 +778,76 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 		return nil, fmt.Errorf("тикет передан менеджеру: доступно только добавление комментариев")
 	}
 
-	nextTitle := strings.TrimSpace(bitrixDealTitle)
-	if bitrixServicePointID == nil || *bitrixServicePointID <= 0 {
-		return nil, fmt.Errorf("Не выбрана точка обслуживания Bitrix24")
+	binding, err := s.resolveBitrixBinding(ctx, ticket, bitrixServicePointID, bitrixDealTitle)
+	if err != nil {
+		return nil, err
 	}
-	if nextTitle == "" {
-		return nil, fmt.Errorf("Не заполнен заголовок сделки Bitrix24")
-	}
-
-	oldPoint := ""
-	if ticket.BitrixServicePointID != nil {
-		oldPoint = fmt.Sprintf("%d", *ticket.BitrixServicePointID)
-	}
-	nextPoint := ""
-	if bitrixServicePointID != nil {
-		nextPoint = fmt.Sprintf("%d", *bitrixServicePointID)
-	}
-	oldTitle := strings.TrimSpace(ticket.BitrixDealTitle)
 	oldSync := ticket.SyncWithBitrix
-
-	ticket.BitrixServicePointID = bitrixServicePointID
-	ticket.BitrixDealTitle = nextTitle
-	ticket.SyncWithBitrix = true
+	oldPoint, oldTitle := bitrixBindingSnapshot(ticket)
+	binding.applyTo(ticket)
 	if err := s.ticketRepo.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
 	s.persistBitrixCompanyServicePointMapping(ctx, ticket.CompanyID, ticket.BitrixServicePointID)
+	s.recordBitrixBindingHistory(ctx, ticket, actorID, oldPoint, oldTitle, oldSync)
+	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
+	return ticket, nil
+}
 
+// bitrixBinding - значения привязки тикета к Bitrix24, которые нужно записать в тикет.
+type bitrixBinding struct {
+	servicePointID int64
+	dealTitle      string
+}
+
+func (b bitrixBinding) applyTo(ticket *tickets.Ticket) {
+	pointID := b.servicePointID
+	ticket.BitrixServicePointID = &pointID
+	ticket.BitrixDealTitle = b.dealTitle
+	ticket.SyncWithBitrix = true
+}
+
+// resolveBitrixBinding определяет точку обслуживания и заголовок сделки для тикета: точка берётся из явного выбора оператора,
+// затем из точки тикета и сопоставления его компании; заголовок - из введённого значения, затем из тикета (тема).
+// Если точку определить нельзя, возвращает ErrBitrixServicePointRequired.
+func (s *ticketServiceImpl) resolveBitrixBinding(ctx context.Context, ticket *tickets.Ticket, explicitPointID *int64, explicitTitle string) (bitrixBinding, error) {
+	pointID := explicitPointID
+	if !isValidBitrixServicePointID(pointID) {
+		pointID = ticket.BitrixServicePointID
+	}
+	if !isValidBitrixServicePointID(pointID) {
+		mapped, err := s.resolveMappedBitrixServicePointID(ctx, ticket.CompanyID)
+		if err != nil {
+			return bitrixBinding{}, fmt.Errorf("не удалось получить сопоставление компании с точкой Bitrix24: %w", err)
+		}
+		pointID = mapped
+	}
+	if !isValidBitrixServicePointID(pointID) {
+		return bitrixBinding{}, ErrBitrixServicePointRequired
+	}
+	title := strings.TrimSpace(explicitTitle)
+	if title == "" {
+		title = strings.TrimSpace(ticket.BitrixDealTitle)
+	}
+	if title == "" {
+		title = strings.TrimSpace(ticket.Subject)
+	}
+	if title == "" {
+		return bitrixBinding{}, fmt.Errorf("Не заполнен заголовок сделки Bitrix24")
+	}
+	return bitrixBinding{servicePointID: *pointID, dealTitle: title}, nil
+}
+
+func bitrixBindingSnapshot(ticket *tickets.Ticket) (string, string) {
+	point := ""
+	if ticket.BitrixServicePointID != nil {
+		point = fmt.Sprintf("%d", *ticket.BitrixServicePointID)
+	}
+	return point, strings.TrimSpace(ticket.BitrixDealTitle)
+}
+
+func (s *ticketServiceImpl) recordBitrixBindingHistory(ctx context.Context, ticket *tickets.Ticket, actorID uint, oldPoint string, oldTitle string, oldSync bool) {
+	nextPoint, nextTitle := bitrixBindingSnapshot(ticket)
 	if oldPoint != nextPoint {
 		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "bitrix_service_point_id", tickets.HistorySourceUI, oldPoint, nextPoint, nil)
 	}
@@ -770,8 +857,6 @@ func (s *ticketServiceImpl) UpdateBitrixFields(ctx context.Context, ticketID str
 	if !oldSync {
 		s.recordHistory(ctx, ticket.ID, &actorID, tickets.HistoryActionFieldChanged, "sync_with_bitrix", tickets.HistorySourceUI, "false", "true", nil)
 	}
-	ticket.IsCommonContract = s.isCommonContractID(ticket.ContractID)
-	return ticket, nil
 }
 
 func (s *ticketServiceImpl) UnlinkFromBitrix(ctx context.Context, ticketID string, actorID uint, roles []string) (*tickets.Ticket, error) {
