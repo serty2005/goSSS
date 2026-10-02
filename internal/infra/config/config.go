@@ -133,6 +133,12 @@ type Config struct {
 	BitrixIncomingRetryMax      time.Duration
 	BitrixIncomingMaxAttempts   int
 	BitrixSuppressTTL           time.Duration
+	// BitrixWriteTimeout - таймаут HTTP-запроса для неидемпотентных методов Bitrix24; должен превышать серверный лимит запроса (60 с).
+	BitrixWriteTimeout time.Duration
+	// BitrixCommentConfirmGrace - сколько ждать подтверждения исходящего комментария, прежде чем сверять его с Bitrix24.
+	BitrixCommentConfirmGrace time.Duration
+	// BitrixCommentReconcileEvery - период фоновой сверки неподтверждённых исходящих комментариев.
+	BitrixCommentReconcileEvery time.Duration
 	BitrixIntegrationUserID     int64
 	BitrixTestServicePointID    int64
 	BitrixTestCompanyIDs        []int64
@@ -288,6 +294,9 @@ func New() *Config {
 		BitrixIncomingRetryMax:      time.Duration(getEnvAsInt("BITRIX_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
 		BitrixIncomingMaxAttempts:   getEnvAsInt("BITRIX_INCOMING_MAX_ATTEMPTS", 10),
 		BitrixSuppressTTL:           time.Duration(getEnvAsInt("BITRIX_SUPPRESS_TTL_SEC", 20)) * time.Second,
+		BitrixWriteTimeout:          time.Duration(getEnvAsInt("BITRIX_WRITE_TIMEOUT_SEC", 65)) * time.Second,
+		BitrixCommentConfirmGrace:   time.Duration(getEnvAsInt("BITRIX_COMMENT_CONFIRM_GRACE_SEC", 120)) * time.Second,
+		BitrixCommentReconcileEvery: time.Duration(getEnvAsInt("BITRIX_COMMENT_RECONCILE_SEC", 30)) * time.Second,
 		BitrixIntegrationUserID:     bitrixIntegrationUserID,
 		BitrixTestServicePointID:    int64(getEnvAsInt("BITRIX_TEST_SERVICE_POINT_ID", 0)),
 		BitrixTestCompanyIDs:        getEnvAsInt64Slice("BITRIX_TEST_COMPANY_IDS"),

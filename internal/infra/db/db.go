@@ -82,6 +82,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&models.EquipmentStatusLog{},
 		&bitrix.DealLink{},
 		&bitrix.CommentLink{},
+		&bitrix.CommentSendState{},
 		&bitrix.IgnoredDeal{},
 		&bitrix.UserMap{},
 		&bitrix.ServicePoint{},

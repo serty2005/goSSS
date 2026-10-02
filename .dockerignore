@@ -19,3 +19,4 @@ ftp_cache
 .env
 .env.*
 docker/.env
+**/.env

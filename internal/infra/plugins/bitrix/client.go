@@ -10,6 +10,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -113,6 +114,34 @@ const (
 	bitrixMaxAttempts            = 5
 )
 
+// ErrResultUnknown означает, что запрос к неидемпотентному методу Bitrix24 мог быть обработан, но результат не получен.
+// Такой вызов нельзя повторять автоматически: сначала нужно сверить состояние в Bitrix24.
+var ErrResultUnknown = errors.New("результат вызова Bitrix24 неизвестен")
+
+// nonIdempotentMethods - методы, повторный вызов которых создаёт новую сущность в Bitrix24.
+var nonIdempotentMethods = map[string]struct{}{
+	"crm.timeline.comment.add": {},
+}
+
+func isNonIdempotentMethod(method string) bool {
+	_, ok := nonIdempotentMethods[method]
+	return ok
+}
+
+// requestMayHaveBeenDelivered сообщает, мог ли запрос дойти до сервера до возникновения ошибки.
+// Ошибка установки соединения и ошибка DNS гарантируют, что запрос не отправлялся.
+func requestMayHaveBeenDelivered(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return false
+	}
+	return true
+}
+
 type batchCommand struct {
 	ID     string
 	Method string
@@ -127,8 +156,11 @@ type batchResult struct {
 }
 
 type Client struct {
-	baseURL            string
-	httpClient         *http.Client
+	baseURL    string
+	httpClient *http.Client
+	// writeHTTPClient используется для неидемпотентных методов: его таймаут превышает серверный лимит Bitrix24 на запрос,
+	// поэтому клиент не обрывает ответ, пока Bitrix24 еще выполняет запрос.
+	writeHTTPClient    *http.Client
 	logger             logger.LoggerInterface
 	limiter            *rate.Limiter
 	rateLimitPerSecond float64
@@ -154,10 +186,18 @@ func NewClient(cfg *config.Config, log logger.LoggerInterface) *Client {
 	}
 	rateLimitPerSecond := max(float64(limitPerMinute)/60.0, 1.0/60.0)
 
+	writeTimeout := timeout
+	if cfg != nil && cfg.BitrixWriteTimeout > writeTimeout {
+		writeTimeout = cfg.BitrixWriteTimeout
+	}
+
 	return &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: timeout,
+		},
+		writeHTTPClient: &http.Client{
+			Timeout: writeTimeout,
 		},
 		logger:             log,
 		limiter:            rate.NewLimiter(rate.Limit(rateLimitPerSecond), limitBurst),
@@ -289,22 +329,74 @@ func (c *Client) TimelineCommentUpdateWithFiles(ctx context.Context, commentID i
 }
 
 func (c *Client) TimelineCommentList(ctx context.Context, dealID int64, start int) ([]TimelineComment, int, error) {
+	return c.timelineCommentListPage(ctx, dealID, start, nil)
+}
+
+func (c *Client) timelineCommentListPage(ctx context.Context, dealID int64, start int, order map[string]string) ([]TimelineComment, int, error) {
 	body := map[string]interface{}{
 		"filter": map[string]interface{}{
 			"ENTITY_TYPE": "deal",
 			"ENTITY_ID":   dealID,
 		},
-		"select": []string{"ID", "COMMENT", "AUTHOR_ID", "ENTITY_TYPE", "ENTITY_ID"},
+		"select": []string{"ID", "COMMENT", "AUTHOR_ID", "ENTITY_TYPE", "ENTITY_ID", "CREATED"},
 		"start":  start,
+	}
+	if len(order) > 0 {
+		body["order"] = order
 	}
 	raw, next, _, err := c.call(ctx, "crm.timeline.comment.list", body)
 	if err != nil {
 		return nil, 0, err
 	}
+	return parseTimelineComments(raw), next, nil
+}
 
+// TimelineCommentListSince возвращает комментарии сделки с ID больше minID, читая страницы от новых к старым
+// и останавливаясь на первой странице, дошедшей до minID.
+func (c *Client) TimelineCommentListSince(ctx context.Context, dealID int64, minID int64) ([]TimelineComment, error) {
+	var out []TimelineComment
+	start := 0
+	for {
+		items, next, err := c.timelineCommentListPage(ctx, dealID, start, map[string]string{"ID": "DESC"})
+		if err != nil {
+			return nil, err
+		}
+		reachedBoundary := false
+		for _, item := range items {
+			if item.ID <= minID {
+				reachedBoundary = true
+				continue
+			}
+			out = append(out, item)
+		}
+		if reachedBoundary || next <= 0 || next == start {
+			return out, nil
+		}
+		start = next
+	}
+}
+
+// TimelineCommentListAll возвращает все комментарии таймлайна сделки, последовательно обходя страницы.
+func (c *Client) TimelineCommentListAll(ctx context.Context, dealID int64) ([]TimelineComment, error) {
+	var out []TimelineComment
+	start := 0
+	for {
+		items, next, err := c.TimelineCommentList(ctx, dealID, start)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if next <= 0 || next == start {
+			return out, nil
+		}
+		start = next
+	}
+}
+
+func parseTimelineComments(raw interface{}) []TimelineComment {
 	items, ok := raw.([]interface{})
 	if !ok {
-		return []TimelineComment{}, next, nil
+		return []TimelineComment{}
 	}
 
 	out := make([]TimelineComment, 0, len(items))
@@ -329,7 +421,7 @@ func (c *Client) TimelineCommentList(ctx context.Context, dealID int64, start in
 			Raw:        m,
 		})
 	}
-	return out, next, nil
+	return out
 }
 
 func (c *Client) TimelineCommentGet(ctx context.Context, commentID int64) (*TimelineComment, error) {
@@ -840,6 +932,7 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 
 	var lastErr error
 	limited := false
+	nonIdempotent := isNonIdempotentMethod(method)
 	for attempt := 0; attempt < bitrixMaxAttempts; attempt++ {
 		if c.limiter != nil {
 			if err := c.limiter.Wait(ctx); err != nil {
@@ -860,10 +953,17 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := c.httpClient.Do(req)
+		httpClient := c.httpClient
+		if nonIdempotent {
+			httpClient = c.writeHTTPClient
+		}
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = redactWebhookError(err)
 			c.logger.Error("Bitrix24 ошибка HTTP-запроса", "method", method, "url", redactedURL, "attempt", attempt+1, "error", lastErr)
+			if nonIdempotent && requestMayHaveBeenDelivered(err) {
+				return nil, 0, 0, unknownResultError(method, lastErr)
+			}
 			continue
 		}
 
@@ -872,6 +972,9 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 		if readErr != nil {
 			lastErr = readErr
 			c.logger.Error("Bitrix24 ошибка чтения ответа", "method", method, "url", redactedURL, "attempt", attempt+1, "status_code", resp.StatusCode, "error", readErr)
+			if nonIdempotent {
+				return nil, 0, 0, unknownResultError(method, lastErr)
+			}
 			continue
 		}
 		c.logger.Info("Bitrix24 ответ", "method", method, "url", redactedURL, "attempt", attempt+1, "status_code", resp.StatusCode, "body", string(rawBody))
@@ -880,6 +983,9 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 		if err := json.Unmarshal(rawBody, &env); err != nil {
 			lastErr = fmt.Errorf("не удалось распарсить ответ Bitrix24 (%s): %w", method, err)
 			c.logger.Error("Bitrix24 ошибка парсинга JSON", "method", method, "url", redactedURL, "attempt", attempt+1, "error", err)
+			if nonIdempotent {
+				return nil, 0, 0, unknownResultError(method, lastErr)
+			}
 			continue
 		}
 
@@ -898,6 +1004,10 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
 			lastErr = fmt.Errorf("временная ошибка Bitrix24 (%s): %d", method, resp.StatusCode)
 			limited = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable
+			// 429 и 503 означают отказ по лимиту без обработки запроса, остальные 5xx (например, 502/504) могут прийти после обработки.
+			if nonIdempotent && !limited {
+				return nil, 0, 0, unknownResultError(method, lastErr)
+			}
 			continue
 		}
 
@@ -905,6 +1015,10 @@ func (c *Client) call(ctx context.Context, method string, body map[string]interf
 	}
 
 	return nil, 0, 0, fmt.Errorf("вызов Bitrix24 %s завершился ошибкой: %w", method, lastErr)
+}
+
+func unknownResultError(method string, cause error) error {
+	return fmt.Errorf("%w: %s: %v", ErrResultUnknown, method, cause)
 }
 
 func bitrixRetryDelay(attempt int, limited bool) time.Duration {

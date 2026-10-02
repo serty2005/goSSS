@@ -30,6 +30,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	commentLinkDirectionEtalonToB24 = "etalon_to_b24"
+	commentLinkDirectionB24ToEtalon = "b24_to_etalon"
+)
+
 var bitrixDiskPlaceholderRe = regexp.MustCompile(regexp.QuoteMeta(bitrixDiskPlaceholderPrefix) + `([0-9]+)__`)
 
 var (
@@ -64,6 +69,8 @@ type bitrixIncomingService struct {
 
 	consumerName string
 	dealLocks    keyedMutex
+	// commentLocks сериализует обработку событий одного комментария Bitrix24: повторная доставка и параллельные обработчики не создают дублей.
+	commentLocks keyedMutex
 }
 
 func NewBitrixIncomingService(
@@ -473,6 +480,9 @@ func (s *bitrixIncomingService) handleDealDelete(ctx context.Context, dealID int
 }
 
 func (s *bitrixIncomingService) handleTimelineCommentAdd(ctx context.Context, commentID int64) (string, string, error) {
+	unlock := s.commentLocks.Lock(commentID)
+	defer unlock()
+
 	if s.isSuppressedComment(ctx, commentID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
@@ -486,6 +496,24 @@ func (s *bitrixIncomingService) handleTimelineCommentAdd(ctx context.Context, co
 	if ticket.IsArchived {
 		return bitrix.IncomingEventStatusIgnored, "тикет находится в архиве", nil
 	}
+
+	link, err := s.repo.GetCommentLinkByB24ID(ctx, commentID)
+	if err != nil {
+		return "", "", err
+	}
+	if link != nil && link.Direction == commentLinkDirectionEtalonToB24 {
+		return bitrix.IncomingEventStatusIgnored, "комментарий создан самим ServiceDesk", nil
+	}
+	if link == nil {
+		adopted, err := s.adoptOutgoingComment(ctx, ticket.ID, comment)
+		if err != nil {
+			return "", "", err
+		}
+		if adopted {
+			return bitrix.IncomingEventStatusIgnored, "подтверждение собственного исходящего комментария", nil
+		}
+	}
+
 	if isClosedTicketStatus(ticket.Status) {
 		return bitrix.IncomingEventStatusIgnored, "тикет закрыт/решён, импорт комментария пропущен", nil
 	}
@@ -497,6 +525,9 @@ func (s *bitrixIncomingService) handleTimelineCommentAdd(ctx context.Context, co
 }
 
 func (s *bitrixIncomingService) handleTimelineCommentUpdate(ctx context.Context, commentID int64) (string, string, error) {
+	unlock := s.commentLocks.Lock(commentID)
+	defer unlock()
+
 	if s.isSuppressedComment(ctx, commentID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
@@ -510,6 +541,9 @@ func (s *bitrixIncomingService) handleTimelineCommentUpdate(ctx context.Context,
 	if ticket.IsArchived {
 		return bitrix.IncomingEventStatusIgnored, "тикет находится в архиве", nil
 	}
+	if s.isOutgoingEcho(ctx, commentID, comment) {
+		return bitrix.IncomingEventStatusIgnored, "эхо собственного изменения комментария", nil
+	}
 	if isClosedTicketStatus(ticket.Status) {
 		return bitrix.IncomingEventStatusIgnored, "тикет закрыт/решён, обновление комментария пропущено", nil
 	}
@@ -520,7 +554,46 @@ func (s *bitrixIncomingService) handleTimelineCommentUpdate(ctx context.Context,
 	return bitrix.IncomingEventStatusDone, "", nil
 }
 
+// adoptOutgoingComment связывает комментарий Bitrix24 с отправкой ServiceDesk, ожидающей подтверждения.
+// Так вебхук, пришедший раньше ответа Bitrix24 или позже окна anti-loop, не превращается в чужой комментарий.
+func (s *bitrixIncomingService) adoptOutgoingComment(ctx context.Context, ticketID string, comment *b24.TimelineComment) (bool, error) {
+	open, err := s.repo.ListOpenCommentSendsByTicket(ctx, ticketID)
+	if err != nil {
+		return false, err
+	}
+	for i := range open {
+		if !bitrixCommentMatchesSend(*comment, open[i], s.cfg.BitrixIntegrationUserID) {
+			continue
+		}
+		confirmed, err := s.repo.ConfirmCommentSend(ctx, open[i].EtalonCommentID, comment.ID, true)
+		if err != nil {
+			return false, err
+		}
+		if confirmed {
+			s.log.Info("Bitrix24: входящее событие подтвердило исходящий комментарий", "ticket_id", ticketID, "comment_id", open[i].EtalonCommentID, "bitrix_comment_id", comment.ID)
+		}
+		return confirmed, nil
+	}
+	return false, nil
+}
+
+// isOutgoingEcho определяет, что событие изменения вызвано исходящей версией комментария ServiceDesk, а не правкой в Bitrix24.
+func (s *bitrixIncomingService) isOutgoingEcho(ctx context.Context, b24CommentID int64, comment *b24.TimelineComment) bool {
+	link, err := s.repo.GetCommentLinkByB24ID(ctx, b24CommentID)
+	if err != nil || link == nil || link.Direction != commentLinkDirectionEtalonToB24 {
+		return false
+	}
+	state, err := s.repo.GetCommentSendState(ctx, link.EtalonCommentID)
+	if err != nil || state == nil || state.Fingerprint == "" {
+		return false
+	}
+	return bitrixCommentFingerprint(comment.Comment) == state.Fingerprint
+}
+
 func (s *bitrixIncomingService) handleTimelineCommentDelete(ctx context.Context, commentID int64) (string, string, error) {
+	unlock := s.commentLocks.Lock(commentID)
+	defer unlock()
+
 	if s.isSuppressedComment(ctx, commentID) {
 		return bitrix.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
@@ -629,6 +702,19 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 	}
 
 	if link == nil {
+		// Связь резервируется до создания комментария: параллельный или повторный обработчик не импортирует тот же комментарий второй раз.
+		claimed, err := s.repo.InsertCommentLinkIfAbsent(ctx, &bitrix.CommentLink{
+			EtalonCommentID: commentLocalID,
+			B24CommentID:    comment.ID,
+			TicketID:        ticket.ID,
+			Direction:       commentLinkDirectionB24ToEtalon,
+		})
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
 		newComment := tickets.TicketComment{
 			ID:              commentLocalID,
 			TicketID:        ticket.ID,
@@ -640,6 +726,9 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 			IsPrivate:       false,
 		}
 		if err := s.ticketRepo.AddComments(ctx, []tickets.TicketComment{newComment}); err != nil {
+			if delErr := s.repo.DeleteCommentLinkByB24ID(ctx, comment.ID); delErr != nil {
+				s.log.Warn("Bitrix24: не удалось снять резерв связи после ошибки импорта комментария", "bitrix_comment_id", comment.ID, "error", delErr)
+			}
 			return err
 		}
 		if s.history != nil {
@@ -655,12 +744,7 @@ func (s *bitrixIncomingService) addOrUpdateCommentFromBitrix(ctx context.Context
 				},
 			})
 		}
-		return s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
-			EtalonCommentID: commentLocalID,
-			B24CommentID:    comment.ID,
-			TicketID:        ticket.ID,
-			Direction:       "b24_to_etalon",
-		})
+		return nil
 	}
 
 	if err := s.ticketRepo.UpdateCommentFromBitrix(ctx, commentLocalID, commentText, authorName); err != nil {

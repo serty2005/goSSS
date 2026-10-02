@@ -1,6 +1,9 @@
 package bitrix
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Repository interface {
 	UpsertDealLink(ctx context.Context, link *DealLink) error
@@ -14,6 +17,31 @@ type Repository interface {
 	GetCommentLinkByEtalonID(ctx context.Context, etalonCommentID string) (*CommentLink, error)
 	GetCommentLinkByB24ID(ctx context.Context, b24CommentID int64) (*CommentLink, error)
 	DeleteCommentLinksByTicketID(ctx context.Context, ticketID string) error
+	// InsertCommentLinkIfAbsent атомарно резервирует связь; возвращает false, если комментарий Bitrix24 или ServiceDesk уже связан.
+	InsertCommentLinkIfAbsent(ctx context.Context, link *CommentLink) (bool, error)
+	DeleteCommentLinkByB24ID(ctx context.Context, b24CommentID int64) error
+	// MaxCommentLinkB24ID возвращает наибольший ID комментария Bitrix24 среди связанных (0, если связей нет).
+	MaxCommentLinkB24ID(ctx context.Context) (int64, error)
+
+	// ClaimCommentSend резервирует исходящую отправку комментария. Возвращает true только если вызывающий вправе обращаться к Bitrix24;
+	// иначе возвращается актуальное состояние, повторять отправку нельзя.
+	ClaimCommentSend(ctx context.Context, state *CommentSendState, maxAttempts int) (*CommentSendState, bool, error)
+	GetCommentSendState(ctx context.Context, etalonCommentID string) (*CommentSendState, error)
+	// MarkCommentSendAmbiguous и MarkCommentSendRejected переводят состояние только из sending.
+	MarkCommentSendAmbiguous(ctx context.Context, etalonCommentID string, errText string) error
+	MarkCommentSendRejected(ctx context.Context, etalonCommentID string, errText string) error
+	// MarkCommentSendNeedsReconcile переводит устаревшее sending в ambiguous и возвращает false, если состояние уже изменилось.
+	MarkCommentSendNeedsReconcile(ctx context.Context, etalonCommentID string) (bool, error)
+	// ResolveCommentSendAbsent переводит ambiguous/sending в rejected после подтверждённого отсутствия комментария в Bitrix24.
+	ResolveCommentSendAbsent(ctx context.Context, etalonCommentID string, errText string) (bool, error)
+	// ConfirmCommentSend в одной транзакции записывает связь и подтверждает отправку. Повторное подтверждение тем же ID безопасно;
+	// возвращает false, если комментарий уже подтверждён другим идентификатором Bitrix24.
+	ConfirmCommentSend(ctx context.Context, etalonCommentID string, b24CommentID int64, finalizePending bool) (bool, error)
+	SetCommentSendFinalizePending(ctx context.Context, etalonCommentID string, pending bool) error
+	UpdateCommentSendFingerprint(ctx context.Context, etalonCommentID string, fingerprint string) error
+	ListOpenCommentSendsByTicket(ctx context.Context, ticketID string) ([]CommentSendState, error)
+	// ListCommentSendsForReconcile возвращает неподтверждённые отправки, не менявшиеся с openBefore, и подтверждённые с недооформленным превью.
+	ListCommentSendsForReconcile(ctx context.Context, openBefore time.Time, finalizeBefore time.Time, limit int) ([]CommentSendState, error)
 
 	UpsertUserMap(ctx context.Context, item *UserMap) error
 	GetUserMapByEtalonID(ctx context.Context, etalonUserID uint) (*UserMap, error)

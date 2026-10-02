@@ -23,6 +23,41 @@ type CommentLink struct {
 
 func (CommentLink) TableName() string { return "comment_link" }
 
+// Статусы исходящей отправки комментария в Bitrix24.
+const (
+	// CommentSendStatusSending - запрос к Bitrix24 выполняется прямо сейчас.
+	CommentSendStatusSending = "sending"
+	// CommentSendStatusAmbiguous - запрос мог дойти до Bitrix24, но результат неизвестен. Повторная отправка запрещена до сверки.
+	CommentSendStatusAmbiguous = "ambiguous"
+	// CommentSendStatusRejected - Bitrix24 достоверно не создал комментарий, отправку можно повторить в пределах лимита попыток.
+	CommentSendStatusRejected = "rejected"
+	// CommentSendStatusConfirmed - идентификатор комментария Bitrix24 известен, связь записана.
+	CommentSendStatusConfirmed = "confirmed"
+)
+
+// CommentSendState хранит журнал исходящей отправки комментария: резервирует отправку до вызова Bitrix24,
+// фиксирует неоднозначный результат и позволяет подтвердить комментарий по отпечатку текста.
+type CommentSendState struct {
+	EtalonCommentID string `json:"etalon_comment_id" gorm:"primaryKey;type:text"`
+	TicketID        string `json:"ticket_id" gorm:"type:text;index;not null"`
+	B24DealID       int64  `json:"b24_deal_id" gorm:"not null"`
+	Status          string `json:"status" gorm:"type:varchar(16);not null;index"`
+	// Fingerprint - SHA-256 нормализованного текста последней исходящей версии комментария.
+	Fingerprint  string `json:"fingerprint" gorm:"type:char(64)"`
+	B24CommentID *int64 `json:"b24_comment_id" gorm:"index"`
+	// WatermarkB24ID - максимальный известный ID комментария Bitrix24 на момент первой отправки. ID комментариев Bitrix24
+	// растут монотонно, поэтому созданный после отправки комментарий всегда имеет ID выше этой границы.
+	WatermarkB24ID  int64     `json:"watermark_b24_id" gorm:"not null;default:0"`
+	Attempts        int       `json:"attempts" gorm:"not null;default:0"`
+	FinalizePending bool      `json:"finalize_pending" gorm:"not null;default:false"`
+	LastAttemptAt   time.Time `json:"last_attempt_at" gorm:"index"`
+	LastError       *string   `json:"last_error" gorm:"type:text"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (CommentSendState) TableName() string { return "comment_send_state" }
+
 type IgnoredDeal struct {
 	B24DealID int64     `json:"b24_deal_id" gorm:"primaryKey"`
 	TicketID  string    `json:"ticket_id" gorm:"type:text;index"`

@@ -112,6 +112,11 @@ func (m *bitrixModule) start(ctx context.Context, wg *sync.WaitGroup) {
 			defer wg.Done()
 			m.startDictionarySyncLoop(ctx)
 		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.startCommentReconcileLoop(ctx)
+		}()
 	}
 	if m.cfg.BitrixWebhookEnabled && m.incomingService != nil {
 		wg.Add(1)
@@ -145,6 +150,36 @@ func (m *bitrixModule) startDictionarySyncLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.refreshBitrixDictionaries(ctx)
+		}
+	}
+}
+
+// startCommentReconcileLoop периодически сверяет неподтверждённые исходящие комментарии с таймлайном сделок Bitrix24.
+func (m *bitrixModule) startCommentReconcileLoop(ctx context.Context) {
+	if m.syncService == nil {
+		return
+	}
+	interval := m.cfg.BitrixCommentReconcileEvery
+	if interval < 5*time.Second {
+		interval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			handled, err := m.syncService.ReconcileCommentSends(ctx)
+			if err != nil {
+				m.log.Error("Bitrix24: ошибка сверки исходящих комментариев", "error", err)
+				continue
+			}
+			if handled > 0 {
+				m.log.Info("Bitrix24: сверены исходящие комментарии", "count", handled)
+			}
 		}
 	}
 }

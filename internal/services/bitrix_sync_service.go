@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"etalon-server/internal/domain/bitrix"
 	"etalon-server/internal/domain/company"
 	"etalon-server/internal/domain/server"
@@ -53,6 +54,7 @@ type BitrixSyncService interface {
 	EnsureContactByPhone(ctx context.Context, input BitrixEnsureContactInput) (*BitrixEnsureContactResult, error)
 	SyncTicketByID(ctx context.Context, ticketID string) error
 	SyncComment(ctx context.Context, ticketID string, comment *tickets.TicketComment, etalonUserID uint) error
+	ReconcileCommentSends(ctx context.Context) (int, error)
 	RefreshServicePoints(ctx context.Context) (int, error)
 	ListServicePoints(ctx context.Context) ([]bitrix.ServicePoint, error)
 	ListServicePointMappingCompanies(ctx context.Context, pointIDs []int64) (map[int64][]BitrixServicePointMappedCompany, error)
@@ -342,65 +344,29 @@ func (s *bitrixSyncService) SyncComment(ctx context.Context, ticketID string, co
 	if err != nil {
 		return err
 	}
-	message := s.buildCommentBody(ctx, ticketID, comment, authorID, authorName)
 	if authorID != nil {
 		s.log.Info("Bitrix24: определен пользователь для внутренней ссылки автора комментария", "ticket_id", ticketID, "comment_id", comment.ID, "etalon_user_id", etalonUserID, "b24_user_id", *authorID)
 	}
 
-	files, err := s.buildCommentFilesPayload(ctx, ticketID, comment)
+	out, err := s.buildOutgoingComment(ctx, ticketID, comment, authorID, authorName)
 	if err != nil {
 		return err
 	}
 
 	if existing != nil {
-		if err := s.client.TimelineCommentUpdateWithFiles(ctx, existing.B24CommentID, message, files); err != nil {
+		// Отпечаток обновляется до вызова Bitrix24, чтобы эхо-событие собственного изменения распознавалось даже при запоздавшем вебхуке.
+		if err := s.repo.UpdateCommentSendFingerprint(ctx, comment.ID, out.Fingerprint); err != nil {
+			s.log.Warn("Bitrix24: не удалось обновить отпечаток комментария", "ticket_id", ticketID, "comment_id", comment.ID, "error", err)
+		}
+		s.setCommentSuppress(ctx, existing.B24CommentID)
+		if err := s.client.TimelineCommentUpdateWithFiles(ctx, existing.B24CommentID, out.Message, out.Files); err != nil {
 			return err
 		}
 		s.setCommentSuppress(ctx, existing.B24CommentID)
-		if len(files) > 0 {
-			finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, existing.B24CommentID, message, files)
-			if textErr != nil {
-				return textErr
-			}
-			if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
-				if err := s.client.TimelineCommentUpdateWithFiles(ctx, existing.B24CommentID, finalText, nil); err != nil {
-					return err
-				}
-				s.setCommentSuppress(ctx, existing.B24CommentID)
-			}
-		}
-		return nil
+		return s.applyImagePreview(ctx, existing.B24CommentID, out.Message, out.Files)
 	}
 
-	var b24ID int64
-	if len(files) > 0 {
-		b24ID, err = s.client.TimelineCommentAddWithFiles(ctx, "deal", link.B24DealID, message, files)
-	} else {
-		b24ID, err = s.client.TimelineCommentAdd(ctx, link.B24DealID, message, nil)
-	}
-	if err != nil {
-		return err
-	}
-	s.setCommentSuppress(ctx, b24ID)
-	if len(files) > 0 {
-		finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, b24ID, message, files)
-		if textErr != nil {
-			return textErr
-		}
-		if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
-			if err := s.client.TimelineCommentUpdateWithFiles(ctx, b24ID, finalText, nil); err != nil {
-				return err
-			}
-			s.setCommentSuppress(ctx, b24ID)
-		}
-	}
-
-	return s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
-		EtalonCommentID: comment.ID,
-		B24CommentID:    b24ID,
-		TicketID:        ticketID,
-		Direction:       "etalon_to_b24",
-	})
+	return s.sendNewComment(ctx, ticketID, link.B24DealID, comment, out)
 }
 
 func (s *bitrixSyncService) RefreshServicePoints(ctx context.Context) (int, error) {
@@ -594,39 +560,14 @@ func (s *bitrixSyncService) syncPendingComments(ctx context.Context, ticket *tic
 		if existing != nil {
 			continue
 		}
-		message := s.buildCommentBody(ctx, ticket.ID, &comment, nil, "")
-		files, err := s.buildCommentFilesPayload(ctx, ticket.ID, &comment)
+		out, err := s.buildOutgoingComment(ctx, ticket.ID, &comment, nil, "")
 		if err != nil {
 			return err
 		}
-		var b24ID int64
-		if len(files) > 0 {
-			b24ID, err = s.client.TimelineCommentAddWithFiles(ctx, "deal", dealID, message, files)
-		} else {
-			b24ID, err = s.client.TimelineCommentAdd(ctx, dealID, message, nil)
-		}
-		if err != nil {
-			return err
-		}
-		s.setCommentSuppress(ctx, b24ID)
-		if len(files) > 0 {
-			finalText, textErr := s.rewriteCommentForBitrixImagePreview(ctx, b24ID, message, files)
-			if textErr != nil {
-				return textErr
+		if err := s.sendNewComment(ctx, ticket.ID, dealID, &comment, out); err != nil {
+			if errors.Is(err, errBitrixCommentSendExhausted) {
+				continue
 			}
-			if strings.TrimSpace(finalText) != strings.TrimSpace(message) {
-				if err := s.client.TimelineCommentUpdateWithFiles(ctx, b24ID, finalText, nil); err != nil {
-					return err
-				}
-				s.setCommentSuppress(ctx, b24ID)
-			}
-		}
-		if err := s.repo.UpsertCommentLink(ctx, &bitrix.CommentLink{
-			EtalonCommentID: comment.ID,
-			B24CommentID:    b24ID,
-			TicketID:        ticket.ID,
-			Direction:       "etalon_to_b24",
-		}); err != nil {
 			return err
 		}
 	}
