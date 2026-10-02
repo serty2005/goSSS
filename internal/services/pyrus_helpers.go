@@ -58,6 +58,11 @@ type pyrusCatalogValue struct {
 	Rows    [][]string `json:"rows"`
 }
 
+// pyrusTicketServiceDeskUUID - внешний идентификатор тикета, созданного из задачи Pyrus.
+func pyrusTicketServiceDeskUUID(taskID int64) string {
+	return fmt.Sprintf("pyrus:task:%d", taskID)
+}
+
 func pyrusWebhookSecret(cfg *config.Config) string {
 	if cfg == nil {
 		return ""

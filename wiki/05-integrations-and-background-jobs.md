@@ -10,6 +10,10 @@
 - Мегафон ВАТС;
 - S3/MinIO (каталог адаптеров и медиа).
 
+## Входящие события Pyrus
+
+Статусы, правила повторов, ожидание данных (`waiting`) и ручной повтор по задачам описаны в `README.md`, раздел «Входящие события Pyrus». Код: `internal/services/pyrus_incoming_service.go`, список и повтор - `internal/services/integration_sync_service.go`, UI - `front-ui/src/components/admin/PyrusIncomingTasksPanel.tsx`.
+
 ## Фоновые процессы (категории)
 
 - синхронизация сущностей и заявок;

@@ -18,6 +18,7 @@ import (
 	"etalon-server/internal/infra/logger"
 	pyrusplugin "etalon-server/internal/infra/plugins/pyrus"
 	infraRepos "etalon-server/internal/infra/repositories"
+	"etalon-server/internal/infra/testdb"
 	"etalon-server/pkg/eventbus"
 	"fmt"
 	"strings"
@@ -42,17 +43,11 @@ type pyrusTestEnv struct {
 	userRepo      user.Repository
 	ticketService TicketService
 	incoming      *pyrusIncomingService
+	api           *fakePyrusAPI
 }
 
-func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
-	t.Helper()
-
-	dbName := fmt.Sprintf("file:pyrus-test-%d?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("не удалось открыть sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(
+func pyrusTestModels() []any {
+	return []any{
 		&user.User{},
 		&user.Role{},
 		&user.Integration{},
@@ -71,9 +66,30 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		&pyrus.TicketContext{},
 		&pyrus.IncomingEvent{},
 		&pyrus.OutgoingEvent{},
-	); err != nil {
+	}
+}
+
+// openPyrusTestDB открывает реальный PostgreSQL при заданном TEST_POSTGRES_DSN, иначе общую in-memory sqlite.
+func openPyrusTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	if testdb.PostgresDSN() != "" {
+		return testdb.OpenPostgres(t, pyrusTestModels()...)
+	}
+	dbName := fmt.Sprintf("file:pyrus-test-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("не удалось открыть sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(pyrusTestModels()...); err != nil {
 		t.Fatalf("не удалось подготовить схему БД: %v", err)
 	}
+	return db
+}
+
+func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
+	t.Helper()
+
+	db := openPyrusTestDB(t)
 
 	cfg := &config.Config{
 		CommonContractID:    "common-contract",
@@ -146,6 +162,9 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		t.Fatalf("не удалось привести входящий сервис Pyrus к concrete type")
 	}
 
+	api := newFakePyrusAPI()
+	concreteIncoming.client = api
+
 	t.Cleanup(func() {
 		cancel()
 	})
@@ -164,6 +183,7 @@ func newPyrusTestEnv(t *testing.T, startBus bool) *pyrusTestEnv {
 		userRepo:      userRepo,
 		ticketService: ticketService,
 		incoming:      concreteIncoming,
+		api:           api,
 	}
 }
 
@@ -214,6 +234,7 @@ func TestPyrusIncomingService_CreateTicketFromPyrusAndQueueExtIDSync(t *testing.
 		},
 	}
 
+	env.api.setTask(task)
 	status, reason, err := env.incoming.handleIncomingEvent(context.Background(), &pyrus.IncomingEvent{
 		ID:         "incoming-create-1",
 		EventName:  "form_task_changed",
@@ -379,6 +400,7 @@ func TestPyrusIncomingService_FailsOnAmbiguousCRMID(t *testing.T) {
 		},
 	}
 
+	env.api.setTask(task)
 	_, _, err := env.incoming.handleIncomingEvent(context.Background(), &pyrus.IncomingEvent{
 		ID:         "incoming-ambiguous-1",
 		EventName:  "form_task_changed",
@@ -521,6 +543,7 @@ func TestPyrusIncomingService_CreateTicketFromPyrusSavesContextAndIikoWebLink(t 
 		},
 	}
 
+	env.api.setTask(task)
 	status, reason, err := env.incoming.handleIncomingEvent(context.Background(), &pyrus.IncomingEvent{
 		ID:         "incoming-context-1",
 		EventName:  "form_task_changed",

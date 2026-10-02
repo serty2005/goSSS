@@ -254,6 +254,16 @@ Inline-файлы не показываются во вложениях. Есл�
 
 Вложенность ограничена тремя уровнями. Добавление, удаление, отметка выполнения и применение шаблона пишутся в историю тикета (`action=checklist_changed`) и рассылаются через SSE `ticket.updated`. Шаблоны: `GET /api/checklist-templates` доступен всем пользователям (только активные, `?all=true` для администратора), создание, изменение и удаление - только `admin`, UI - `/admin/checklist-templates`.
 
+### Входящие события Pyrus
+
+Webhook `POST /api/integrations/pyrus/webhook` сохраняет событие в `pyrus_incoming_events` до ответа 202 и ставит его в Redis Streams (при недоступном Redis события берутся из Postgres). Статусы события: `new`, `queued`, `processing`, `done`, `ignored`, `failed` и `waiting`.
+
+- Тикет собирается по актуальной задаче из Pyrus API, потому что снимок задачи в webhook содержит только новый комментарий. Поэтому любое событие задачи, в том числе повторённое вручную, восстанавливает все комментарии и вложения.
+- Обработка идемпотентна: если для задачи уже есть тикет (связка `pyrus_ticket_links`, `ext_id` или тикет с `service_desk_uuid = pyrus:task:<id>` после прерванного создания), событие обновляет его, а не создаёт дубль.
+- Если данных не хватает (в задаче не заполнен CRMID, по CRMID не найден или неоднозначен сервер с владельцем, Pyrus API недоступен), событие получает статус `waiting`. Попытки при этом не расходуются. Повтор идёт автоматически: интервал равен пятой части времени ожидания в пределах `PYRUS_INCOMING_WAIT_RETRY_BASE_SEC` (60) и `PYRUS_INCOMING_WAIT_RETRY_MAX_SEC` (1800). Через `PYRUS_INCOMING_WAIT_MAX_AGE_HOURS` (336) ожидание прекращается и событие становится `failed`.
+- Остальные ошибки повторяются до `PYRUS_INCOMING_MAX_ATTEMPTS` с экспоненциальной паузой, после чего событие остаётся `failed`.
+- Просмотр и ручной повтор доступны роли `admin` в UI `/admin/synchronizations`, блок «Входящие события Pyrus»: события сгруппированы по задачам, видны CRMID, тема, причина и срок следующей попытки. API (все маршруты под `/api/integrations/pyrus/sync`): `GET /incoming-tasks?scope=problem|all`, `GET /incoming-events?task_id=&status=`, `GET /incoming-events/{id}` (access_token из payload скрыт), `POST /incoming-events/{id}/replay`, `POST /incoming-tasks/{taskID}/replay` (все `failed` и `waiting` события задачи), `POST /incoming-tasks/replay-problem` (все проблемные задачи).
+
 ## 9. Конфигурация
 
 Backend читает первый найденный `.env`, поднимаясь от текущей директории к корню. Основной шаблон - `.env.example`.

@@ -339,7 +339,7 @@ func (s *ticketServiceImpl) CreateFromPyrus(ctx context.Context, input TicketCre
 		CompanyID:       strings.TrimSpace(input.CompanyID),
 		ReporterName:    reporterName,
 		ReporterEmail:   strings.TrimSpace(input.ReporterEmail),
-		ServiceDeskUUID: fmt.Sprintf("pyrus:task:%d", input.TaskID),
+		ServiceDeskUUID: pyrusTicketServiceDeskUUID(input.TaskID),
 		SyncWithBitrix:  false,
 	}
 	ticket.LastUpdatedBy = "pyrus_webhook"

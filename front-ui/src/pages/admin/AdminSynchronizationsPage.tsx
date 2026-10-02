@@ -22,6 +22,7 @@ import {
   PyrusDirectoryUserDTO,
   PyrusUsersRefreshDTO,
 } from '@/types/api';
+import PyrusIncomingTasksPanel from '@/components/admin/PyrusIncomingTasksPanel';
 import { useAuthStore } from '@/store/authStore';
 
 const { Title, Text } = Typography;
@@ -250,6 +251,8 @@ const AdminSynchronizationsPage: React.FC = () => {
           <Text type="secondary">Интеграция Pyrus сейчас недоступна.</Text>
         )}
       </Card>
+
+      {isPyrusEnabled ? <PyrusIncomingTasksPanel /> : null}
 
       <Card
         className="glass-panel"

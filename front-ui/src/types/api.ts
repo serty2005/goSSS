@@ -1057,6 +1057,50 @@ export interface PyrusUsersRefreshDTO {
   users: PyrusDirectoryUserDTO[];
 }
 
+// Статусы входящего события Pyrus: waiting - событие ждёт данных (например, CRMID сервера) и повторяется само.
+export type PyrusIncomingEventStatus =
+  | 'new'
+  | 'queued'
+  | 'processing'
+  | 'waiting'
+  | 'failed'
+  | 'done'
+  | 'ignored';
+
+export interface PyrusIncomingTaskDTO {
+  task_id: number;
+  subject?: string;
+  crm_id?: string;
+  client_name?: string;
+  ticket_id?: string;
+  events_total: number;
+  status_counts: Partial<Record<PyrusIncomingEventStatus, number>>;
+  needs_attention: boolean;
+  first_received_at: string;
+  last_received_at: string;
+  last_error?: string;
+  next_retry_at?: string;
+}
+
+export interface PyrusIncomingEventDTO {
+  id: string;
+  event_name: string;
+  status: PyrusIncomingEventStatus;
+  attempts: number;
+  replay_count?: number;
+  last_error?: string;
+  next_retry_at?: string;
+  received_at?: string;
+  processed_at?: string;
+  updated_at: string;
+}
+
+export interface PyrusReplayResultDTO {
+  status: string;
+  events: number;
+  tasks?: number;
+}
+
 // DTO для обновления оборудования
 export interface UpdateServerDTO {
   device_name?: string;

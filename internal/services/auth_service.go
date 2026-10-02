@@ -104,6 +104,7 @@ func (s *authServiceImpl) Login(ctx context.Context, username, password string) 
 			Position:         u.Position,
 			Roles:            rolesStr,
 			BitrixEnabled:    s.cfg != nil && s.cfg.EnableBitrixGateway,
+			PyrusEnabled:     s.cfg != nil && s.cfg.EnablePyrusGateway,
 			ExternalSystemID: u.ExternalID,
 			ExternalType:     u.ExternalType,
 			ScheduleType:     u.ScheduleType,

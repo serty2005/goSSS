@@ -237,11 +237,14 @@ func (r *pyrusRepo) ResetIncomingEventForReplay(ctx context.Context, id string) 
 	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
 		Where("id = ?", strings.TrimSpace(id)).
 		Updates(map[string]any{
-			"status":       pyrus.IncomingEventStatusNew,
-			"attempts":     0,
-			"last_error":   nil,
-			"processed_at": nil,
-			"updated_at":   time.Now(),
+			"status":          pyrus.IncomingEventStatusNew,
+			"attempts":        0,
+			"last_error":      nil,
+			"processed_at":    nil,
+			"next_retry_at":   nil,
+			"wait_started_at": nil,
+			"replay_count":    gorm.Expr("replay_count + 1"),
+			"updated_at":      time.Now(),
 		}).Error
 }
 
@@ -267,10 +270,12 @@ func (r *pyrusRepo) MarkIncomingDone(ctx context.Context, id string) error {
 	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
 		Where("id = ?", strings.TrimSpace(id)).
 		Updates(map[string]any{
-			"status":       pyrus.IncomingEventStatusDone,
-			"last_error":   nil,
-			"processed_at": &now,
-			"updated_at":   now,
+			"status":          pyrus.IncomingEventStatusDone,
+			"last_error":      nil,
+			"processed_at":    &now,
+			"next_retry_at":   nil,
+			"wait_started_at": nil,
+			"updated_at":      now,
 		}).Error
 }
 
@@ -278,9 +283,35 @@ func (r *pyrusRepo) MarkIncomingFailed(ctx context.Context, id string, errText s
 	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
 		Where("id = ?", strings.TrimSpace(id)).
 		Updates(map[string]any{
-			"status":     pyrus.IncomingEventStatusFailed,
-			"last_error": strings.TrimSpace(errText),
-			"updated_at": time.Now(),
+			"status":        pyrus.IncomingEventStatusFailed,
+			"last_error":    strings.TrimSpace(errText),
+			"next_retry_at": nil,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
+func (r *pyrusRepo) MarkIncomingExpired(ctx context.Context, id string, errText string, attempts int) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("id = ?", strings.TrimSpace(id)).
+		Updates(map[string]any{
+			"status":        pyrus.IncomingEventStatusFailed,
+			"attempts":      attempts,
+			"last_error":    strings.TrimSpace(errText),
+			"next_retry_at": nil,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
+func (r *pyrusRepo) MarkIncomingWaiting(ctx context.Context, id string, reason string, waitStartedAt time.Time, nextRetryAt time.Time) error {
+	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("id = ?", strings.TrimSpace(id)).
+		Updates(map[string]any{
+			"status":          pyrus.IncomingEventStatusWaiting,
+			"attempts":        gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END"),
+			"last_error":      strings.TrimSpace(reason),
+			"wait_started_at": waitStartedAt,
+			"next_retry_at":   nextRetryAt,
+			"updated_at":      time.Now(),
 		}).Error
 }
 
@@ -289,14 +320,16 @@ func (r *pyrusRepo) MarkIncomingIgnored(ctx context.Context, id string, reason s
 	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
 		Where("id = ?", strings.TrimSpace(id)).
 		Updates(map[string]any{
-			"status":       pyrus.IncomingEventStatusIgnored,
-			"last_error":   strings.TrimSpace(reason),
-			"processed_at": &now,
-			"updated_at":   now,
+			"status":          pyrus.IncomingEventStatusIgnored,
+			"last_error":      strings.TrimSpace(reason),
+			"processed_at":    &now,
+			"next_retry_at":   nil,
+			"wait_started_at": nil,
+			"updated_at":      now,
 		}).Error
 }
 
-func (r *pyrusRepo) ListIncomingNewOrFailedForEnqueue(ctx context.Context, limit int, maxAttempts int) ([]pyrus.IncomingEvent, error) {
+func (r *pyrusRepo) ListIncomingDueForProcessing(ctx context.Context, limit int, maxAttempts int) ([]pyrus.IncomingEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -306,10 +339,12 @@ func (r *pyrusRepo) ListIncomingNewOrFailedForEnqueue(ctx context.Context, limit
 	items := make([]pyrus.IncomingEvent, 0, limit)
 	err := r.getDB(ctx).WithContext(ctx).
 		Where(
-			"(status = ?) OR (status = ? AND attempts < ?)",
+			"(status = ?) OR (status = ? AND attempts < ?) OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?))",
 			pyrus.IncomingEventStatusNew,
 			pyrus.IncomingEventStatusFailed,
 			maxAttempts,
+			pyrus.IncomingEventStatusWaiting,
+			time.Now(),
 		).
 		Order("received_at asc").
 		Limit(limit).
@@ -328,6 +363,9 @@ func (r *pyrusRepo) ListIncomingEvents(ctx context.Context, filter pyrus.Incomin
 	query := r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{})
 	if len(filter.Status) > 0 {
 		query = query.Where("status IN ?", filter.Status)
+	}
+	if filter.TaskID > 0 {
+		query = query.Where("pyrus_task_id = ?", filter.TaskID)
 	}
 
 	var total int64
@@ -452,4 +490,82 @@ func (r *pyrusRepo) GetOutgoingEventByID(ctx context.Context, id string) (*pyrus
 		return nil, nil
 	}
 	return &item, err
+}
+
+func (r *pyrusRepo) GetIncomingEventsByIDs(ctx context.Context, ids []string) ([]pyrus.IncomingEvent, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var items []pyrus.IncomingEvent
+	err := r.getDB(ctx).WithContext(ctx).Where("id IN ?", ids).Find(&items).Error
+	return items, err
+}
+
+func (r *pyrusRepo) ListReplayableIncomingEventsByTask(ctx context.Context, taskID int64) ([]pyrus.IncomingEvent, error) {
+	var items []pyrus.IncomingEvent
+	err := r.getDB(ctx).WithContext(ctx).
+		Where("pyrus_task_id = ? AND status IN ?", taskID, []string{pyrus.IncomingEventStatusFailed, pyrus.IncomingEventStatusWaiting}).
+		Order("received_at asc").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *pyrusRepo) ListProblemTaskIDs(ctx context.Context) ([]int64, error) {
+	var ids []int64
+	err := r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("pyrus_task_id IS NOT NULL AND status IN ?", []string{pyrus.IncomingEventStatusFailed, pyrus.IncomingEventStatusWaiting}).
+		Distinct().
+		Order("pyrus_task_id asc").
+		Pluck("pyrus_task_id", &ids).Error
+	return ids, err
+}
+
+// incomingTaskGroupQuery строит запрос сводки по задачам; выражения переносимы между PostgreSQL и sqlite, чтобы запрос проверялся обоими драйверами.
+const incomingTaskGroupQuery = `
+SELECT
+	e.pyrus_task_id AS pyrus_task_id,
+	l.ticket_id AS ticket_id,
+	COUNT(*) AS events_total,
+	SUM(CASE WHEN e.status = 'new' THEN 1 ELSE 0 END) AS new_count,
+	SUM(CASE WHEN e.status = 'queued' THEN 1 ELSE 0 END) AS queued_count,
+	SUM(CASE WHEN e.status = 'processing' THEN 1 ELSE 0 END) AS processing_count,
+	SUM(CASE WHEN e.status = 'waiting' THEN 1 ELSE 0 END) AS waiting_count,
+	SUM(CASE WHEN e.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+	SUM(CASE WHEN e.status = 'done' THEN 1 ELSE 0 END) AS done_count,
+	SUM(CASE WHEN e.status = 'ignored' THEN 1 ELSE 0 END) AS ignored_count,
+	(SELECT x.received_at FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at ASC LIMIT 1) AS first_received_at,
+	(SELECT x.received_at FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at DESC LIMIT 1) AS last_received_at,
+	(SELECT x.id FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at DESC LIMIT 1) AS last_event_id,
+	(SELECT x.last_error FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id AND x.status IN ('failed', 'waiting') ORDER BY x.updated_at DESC LIMIT 1) AS last_error,
+	(SELECT x.next_retry_at FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id AND x.status = 'waiting' ORDER BY x.next_retry_at ASC LIMIT 1) AS next_retry_at
+FROM pyrus_incoming_events e
+LEFT JOIN pyrus_ticket_links l ON l.pyrus_task_id = e.pyrus_task_id
+WHERE e.pyrus_task_id IS NOT NULL
+GROUP BY e.pyrus_task_id, l.ticket_id`
+
+const incomingTaskGroupProblemFilter = `
+HAVING SUM(CASE WHEN e.status IN ('failed', 'waiting') THEN 1 ELSE 0 END) > 0`
+
+func (r *pyrusRepo) ListIncomingTaskGroups(ctx context.Context, filter pyrus.IncomingTaskGroupFilter) ([]pyrus.IncomingTaskGroup, int64, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	query := incomingTaskGroupQuery
+	if filter.OnlyProblem {
+		query += incomingTaskGroupProblemFilter
+	}
+
+	var total int64
+	if err := r.getDB(ctx).WithContext(ctx).Raw("SELECT COUNT(*) FROM (" + query + ") g").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	items := make([]pyrus.IncomingTaskGroup, 0, filter.Limit)
+	err := r.getDB(ctx).WithContext(ctx).
+		Raw(query+" ORDER BY MAX(e.received_at) DESC LIMIT ? OFFSET ?", filter.Limit, filter.Offset).
+		Scan(&items).Error
+	return items, total, err
 }

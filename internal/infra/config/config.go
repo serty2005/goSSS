@@ -156,7 +156,12 @@ type Config struct {
 	PyrusIncomingRetryBase   time.Duration
 	PyrusIncomingRetryMax    time.Duration
 	PyrusIncomingMaxAttempts int
-	PyrusSuppressTTL         time.Duration
+	// PyrusIncomingWaitRetryBase и PyrusIncomingWaitRetryMax ограничивают интервал повторов события, ожидающего данных (например, CRMID сервера).
+	PyrusIncomingWaitRetryBase time.Duration
+	PyrusIncomingWaitRetryMax  time.Duration
+	// PyrusIncomingWaitMaxAge - предельный срок ожидания данных, после которого событие переводится в failed.
+	PyrusIncomingWaitMaxAge time.Duration
+	PyrusSuppressTTL        time.Duration
 
 	EnableMegafonVATS              bool
 	MegafonVATSBaseURL             string
@@ -301,20 +306,23 @@ func New() *Config {
 		BitrixTestServicePointID:    int64(getEnvAsInt("BITRIX_TEST_SERVICE_POINT_ID", 0)),
 		BitrixTestCompanyIDs:        getEnvAsInt64Slice("BITRIX_TEST_COMPANY_IDS"),
 
-		EnablePyrusGateway:       getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),
-		PyrusAPIBaseURL:          normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
-		PyrusLogin:               strings.TrimSpace(getEnv("PYRUS_LOGIN", "")),
-		PyrusSecurityKey:         strings.TrimSpace(getEnv("PYRUS_SECURITY_KEY", "")),
-		PyrusFormID:              int64(getEnvAsInt("PYRUS_FORM_ID", 2315062)),
-		PyrusWebhookEnabled:      getEnvAsBool("PYRUS_WEBHOOK_ENABLED", false),
-		PyrusWebhookSecret:       strings.TrimSpace(getEnv("PYRUS_WEBHOOK_SECRET", "")),
-		PyrusEventsStreamName:    strings.TrimSpace(getEnv("PYRUS_EVENTS_STREAM_NAME", "pyrus:events")),
-		PyrusEventsConsumerGroup: strings.TrimSpace(getEnv("PYRUS_EVENTS_CONSUMER_GROUP", "pyrus-workers")),
-		PyrusIncomingParallelism: getEnvAsInt("PYRUS_INCOMING_PARALLELISM", 4),
-		PyrusIncomingRetryBase:   time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_BASE_MS", 500)) * time.Millisecond,
-		PyrusIncomingRetryMax:    time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
-		PyrusIncomingMaxAttempts: getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
-		PyrusSuppressTTL:         time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
+		EnablePyrusGateway:         getEnvAsBool("ENABLE_PYRUS_GATEWAY", false),
+		PyrusAPIBaseURL:            normalizeAPIBaseURL(getEnv("PYRUS_API_BASE_URL", "https://api.pyrus.com/v4/")),
+		PyrusLogin:                 strings.TrimSpace(getEnv("PYRUS_LOGIN", "")),
+		PyrusSecurityKey:           strings.TrimSpace(getEnv("PYRUS_SECURITY_KEY", "")),
+		PyrusFormID:                int64(getEnvAsInt("PYRUS_FORM_ID", 2315062)),
+		PyrusWebhookEnabled:        getEnvAsBool("PYRUS_WEBHOOK_ENABLED", false),
+		PyrusWebhookSecret:         strings.TrimSpace(getEnv("PYRUS_WEBHOOK_SECRET", "")),
+		PyrusEventsStreamName:      strings.TrimSpace(getEnv("PYRUS_EVENTS_STREAM_NAME", "pyrus:events")),
+		PyrusEventsConsumerGroup:   strings.TrimSpace(getEnv("PYRUS_EVENTS_CONSUMER_GROUP", "pyrus-workers")),
+		PyrusIncomingParallelism:   getEnvAsInt("PYRUS_INCOMING_PARALLELISM", 4),
+		PyrusIncomingRetryBase:     time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_BASE_MS", 500)) * time.Millisecond,
+		PyrusIncomingRetryMax:      time.Duration(getEnvAsInt("PYRUS_INCOMING_RETRY_MAX_MS", 30000)) * time.Millisecond,
+		PyrusIncomingMaxAttempts:   getEnvAsInt("PYRUS_INCOMING_MAX_ATTEMPTS", 10),
+		PyrusIncomingWaitRetryBase: time.Duration(getEnvAsInt("PYRUS_INCOMING_WAIT_RETRY_BASE_SEC", 60)) * time.Second,
+		PyrusIncomingWaitRetryMax:  time.Duration(getEnvAsInt("PYRUS_INCOMING_WAIT_RETRY_MAX_SEC", 1800)) * time.Second,
+		PyrusIncomingWaitMaxAge:    time.Duration(getEnvAsInt("PYRUS_INCOMING_WAIT_MAX_AGE_HOURS", 336)) * time.Hour,
+		PyrusSuppressTTL:           time.Duration(getEnvAsInt("PYRUS_SUPPRESS_TTL_SEC", 20)) * time.Second,
 
 		EnableMegafonVATS:              getEnvAsBool("ENABLE_MEGAFON_VATS", false),
 		MegafonVATSBaseURL:             normalizeAPIBaseURL(getEnv("MEGAFON_VATS_BASE_URL", "")),

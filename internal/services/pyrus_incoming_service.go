@@ -34,10 +34,30 @@ var (
 	ErrPyrusWebhookBadRequest   = errors.New("некорректный payload вебхука Pyrus")
 )
 
+// pyrusDeferredError помечает ошибку, которая снимется сама после появления данных или восстановления внешней системы:
+// событие не считается сбойным, а повторяется по расписанию в статусе waiting.
+type pyrusDeferredError struct {
+	reason string
+	err    error
+}
+
+func (e *pyrusDeferredError) Error() string { return e.reason }
+
+func (e *pyrusDeferredError) Unwrap() error { return e.err }
+
+func newPyrusDeferredError(format string, args ...any) error {
+	reason := fmt.Sprintf(format, args...)
+	return &pyrusDeferredError{reason: reason, err: errors.New(reason)}
+}
+
 type PyrusIncomingService interface {
 	HandleWebhook(ctx context.Context, rawBody []byte, signature string) error
 	Start(ctx context.Context)
 	ReplayEvent(ctx context.Context, id string) error
+	// ReplayTask повторно запускает все события задачи Pyrus в статусах failed и waiting и возвращает их число.
+	ReplayTask(ctx context.Context, taskID int64) (int, error)
+	// ReplayProblemTasks повторно запускает события всех задач, у которых есть failed или waiting; возвращает число задач и событий.
+	ReplayProblemTasks(ctx context.Context) (int, int, error)
 }
 
 type pyrusIncomingService struct {
@@ -167,6 +187,50 @@ func (s *pyrusIncomingService) ReplayEvent(ctx context.Context, id string) error
 	return s.repo.MarkIncomingQueued(ctx, eventID)
 }
 
+func (s *pyrusIncomingService) ReplayTask(ctx context.Context, taskID int64) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, fmt.Errorf("Pyrus incoming service не настроен")
+	}
+	if taskID <= 0 {
+		return 0, fmt.Errorf("не указан task_id")
+	}
+	items, err := s.repo.ListReplayableIncomingEventsByTask(ctx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	replayed := 0
+	for i := range items {
+		if err := s.ReplayEvent(ctx, items[i].ID); err != nil {
+			return replayed, err
+		}
+		replayed++
+	}
+	s.log.Info("Pyrus: повторно запущены события задачи", "task_id", taskID, "events", replayed)
+	return replayed, nil
+}
+
+func (s *pyrusIncomingService) ReplayProblemTasks(ctx context.Context) (int, int, error) {
+	if s == nil || s.repo == nil {
+		return 0, 0, fmt.Errorf("Pyrus incoming service не настроен")
+	}
+	taskIDs, err := s.repo.ListProblemTaskIDs(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	tasks, total := 0, 0
+	for _, taskID := range taskIDs {
+		count, err := s.ReplayTask(ctx, taskID)
+		total += count
+		if count > 0 {
+			tasks++
+		}
+		if err != nil {
+			return tasks, total, err
+		}
+	}
+	return tasks, total, nil
+}
+
 func (s *pyrusIncomingService) Start(ctx context.Context) {
 	if s == nil || s.cfg == nil || !s.cfg.EnablePyrusGateway || !s.cfg.PyrusWebhookEnabled {
 		if s != nil && s.log != nil {
@@ -260,7 +324,7 @@ func (s *pyrusIncomingService) dispatchLoop(ctx context.Context) {
 		if s.redis == nil {
 			continue
 		}
-		items, err := s.repo.ListIncomingNewOrFailedForEnqueue(ctx, 200, s.maxAttempts())
+		items, err := s.repo.ListIncomingDueForProcessing(ctx, 200, s.maxAttempts())
 		if err != nil {
 			s.log.Error("Pyrus: не удалось получить входящие события для enqueue", "error", err)
 			continue
@@ -348,7 +412,7 @@ func (s *pyrusIncomingService) consumeFromPostgresLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		items, err := s.repo.ListIncomingNewOrFailedForEnqueue(ctx, parallelism*4, s.maxAttempts())
+		items, err := s.repo.ListIncomingDueForProcessing(ctx, parallelism*4, s.maxAttempts())
 		if err != nil {
 			s.log.Error("Pyrus: не удалось получить входящие события из Postgres", "error", err)
 			continue
@@ -449,6 +513,11 @@ func (s *pyrusIncomingService) processIncomingEvent(ctx context.Context, eventID
 		s.log.Warn("Pyrus: не удалось отметить событие как processing", "event_id", item.ID, "error", err)
 	}
 	status, reason, procErr := s.handleIncomingEvent(ctx, item)
+	var deferred *pyrusDeferredError
+	if errors.As(procErr, &deferred) {
+		s.deferIncomingEvent(ctx, item, deferred)
+		return
+	}
 	if procErr != nil {
 		s.log.Error("Pyrus: ошибка обработки входящего события", "event_id", item.ID, "task_id", safeInt64Pointer(item.PyrusTaskID), "error", procErr)
 		_ = s.repo.MarkIncomingFailed(ctx, item.ID, procErr.Error())
@@ -461,6 +530,33 @@ func (s *pyrusIncomingService) processIncomingEvent(ctx context.Context, eventID
 	}
 	s.log.Debug("Pyrus: входящее событие успешно обработано", "event_id", item.ID, "task_id", safeInt64Pointer(item.PyrusTaskID), "result_status", status)
 	_ = s.repo.MarkIncomingDone(ctx, item.ID)
+}
+
+// deferIncomingEvent переводит событие в ожидание данных и назначает следующую попытку; после предельного срока ожидания событие становится failed.
+func (s *pyrusIncomingService) deferIncomingEvent(ctx context.Context, item *pyrus.IncomingEvent, cause *pyrusDeferredError) {
+	now := time.Now()
+	waitStartedAt := now
+	if item.WaitStartedAt != nil {
+		waitStartedAt = *item.WaitStartedAt
+	}
+	waited := now.Sub(waitStartedAt)
+	taskID := safeInt64Pointer(item.PyrusTaskID)
+	if waited >= s.waitMaxAge() {
+		s.log.Error("Pyrus: срок ожидания данных для события истёк", "event_id", item.ID, "task_id", taskID, "waited", waited.Round(time.Second).String(), "error", cause)
+		_ = s.repo.MarkIncomingExpired(ctx, item.ID, fmt.Sprintf("ожидание данных прекращено через %s: %s", waited.Round(time.Minute), cause.Error()), s.maxAttempts())
+		return
+	}
+	nextRetryAt := now.Add(s.waitRetryDelay(waited))
+	s.log.Warn(
+		"Pyrus: событие ожидает данных, повтор по расписанию",
+		"event_id", item.ID,
+		"task_id", taskID,
+		"reason", cause.Error(),
+		"next_retry_at", nextRetryAt.Format(time.RFC3339),
+	)
+	if err := s.repo.MarkIncomingWaiting(ctx, item.ID, cause.Error(), waitStartedAt, nextRetryAt); err != nil {
+		s.log.Error("Pyrus: не удалось перевести событие в ожидание", "event_id", item.ID, "error", err)
+	}
 }
 
 func (s *pyrusIncomingService) handleIncomingEvent(ctx context.Context, item *pyrus.IncomingEvent) (string, string, error) {
@@ -487,31 +583,78 @@ func (s *pyrusIncomingService) handleIncomingEvent(ctx context.Context, item *py
 		return pyrus.IncomingEventStatusIgnored, "подавлено anti-loop ключом", nil
 	}
 
-	task, err := s.loadTask(ctx, payload, taskID)
+	// Снимок задачи из webhook содержит только новый комментарий, поэтому тикет собирается по актуальной задаче из Pyrus API:
+	// так любое событие задачи (в том числе повторённое вручную) восстанавливает все комментарии и вложения, а не только свои.
+	ticketID, err := s.findLinkedTicketID(ctx, payload, taskID)
+	if err != nil {
+		return "", "", err
+	}
+	needActualTask := ticketID == "" || item.ReplayCount > 0 || item.WaitStartedAt != nil
+	var task *pyrusplugin.Task
+	if needActualTask {
+		task, err = s.loadActualTask(ctx, taskID)
+	} else {
+		task, err = s.loadTask(ctx, payload, taskID)
+	}
 	if err != nil {
 		return "", "", err
 	}
 	if task == nil {
 		return pyrus.IncomingEventStatusIgnored, "задача Pyrus не найдена", nil
 	}
-	s.log.Debug("Pyrus: загружена задача для обработки webhook", "event_id", item.ID, "task_id", taskID, "task", pyrusTaskSummary(task))
+	s.log.Debug("Pyrus: загружена задача для обработки webhook", "event_id", item.ID, "task_id", taskID, "task", pyrusTaskSummary(task), "actual_task", needActualTask)
 	if task.FormID != s.cfg.PyrusFormID {
 		return pyrus.IncomingEventStatusIgnored, "форма не входит в поддерживаемый контур", nil
 	}
 
-	extID := strings.TrimSpace(extractPyrusFieldString(task, "ext_id"))
-	if extID == "" {
+	if ticketID == "" {
+		ticketID = strings.TrimSpace(extractPyrusFieldString(task, "ext_id"))
+	}
+	if ticketID == "" {
 		s.log.Debug("Pyrus: webhook распознан как создание нового тикета", "event_id", item.ID, "task_id", taskID)
 		if _, err := s.createTicketFromPyrusTask(ctx, task); err != nil {
 			return "", "", err
 		}
 		return pyrus.IncomingEventStatusDone, "", nil
 	}
-	s.log.Debug("Pyrus: webhook распознан как обновление существующего тикета", "event_id", item.ID, "task_id", taskID, "ext_id", extID)
-	if err := s.syncExistingTicketFromPyrusTask(ctx, task, extID); err != nil {
+	s.log.Debug("Pyrus: webhook распознан как обновление существующего тикета", "event_id", item.ID, "task_id", taskID, "ticket_id", ticketID)
+	if err := s.syncExistingTicketFromPyrusTask(ctx, task, ticketID); err != nil {
 		return "", "", err
 	}
 	return pyrus.IncomingEventStatusDone, "", nil
+}
+
+// findLinkedTicketID возвращает идентификатор уже созданного для задачи тикета: по ext_id из снимка webhook или по связке задачи с тикетом.
+func (s *pyrusIncomingService) findLinkedTicketID(ctx context.Context, payload *pyrusplugin.WebhookPayload, taskID int64) (string, error) {
+	if payload != nil {
+		if extID := strings.TrimSpace(extractPyrusFieldString(&payload.Task, "ext_id")); extID != "" {
+			return extID, nil
+		}
+	}
+	link, err := s.repo.GetTicketLinkByTaskID(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	if link == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(link.TicketID), nil
+}
+
+// loadActualTask читает текущее состояние задачи из Pyrus API; недоступность API откладывает событие, а отсутствие задачи (404) возвращает nil.
+func (s *pyrusIncomingService) loadActualTask(ctx context.Context, taskID int64) (*pyrusplugin.Task, error) {
+	if s.client == nil || !s.client.IsConfigured() {
+		return nil, newPyrusDeferredError("клиент Pyrus API не настроен")
+	}
+	task, err := s.client.GetTask(ctx, taskID)
+	if err != nil {
+		var httpErr *pyrusplugin.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, &pyrusDeferredError{reason: fmt.Sprintf("не удалось получить задачу из Pyrus API: %v", err), err: err}
+	}
+	return task, nil
 }
 
 func (s *pyrusIncomingService) loadTask(ctx context.Context, payload *pyrusplugin.WebhookPayload, taskID int64) (*pyrusplugin.Task, error) {
@@ -528,27 +671,37 @@ func (s *pyrusIncomingService) loadTask(ctx context.Context, payload *pyrusplugi
 
 func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, task *pyrusplugin.Task) (*tickets.Ticket, error) {
 	taskContext := buildPyrusTaskContext(task)
-	companyID, err := s.resolveCompanyIDByCRMID(ctx, taskContext.CRMID)
-	if err != nil {
-		return nil, err
-	}
-	s.log.Debug("Pyrus: определён company_id для нового тикета", "task_id", task.ID, "company_id", companyID)
 
-	// TODO: после подтверждения бизнес-контракта формы Pyrus заменить временный консервативный маппинг статусов и типа тикета.
-	ticket, err := s.ticketService.CreateFromPyrus(ctx, TicketCreateFromPyrusInput{
-		TaskID:        task.ID,
-		CompanyID:     companyID,
-		Subject:       strings.TrimSpace(taskContext.Subject),
-		Description:   buildPyrusTicketDescription(task),
-		ReporterName:  resolvePyrusTaskClientNameFromContext(taskContext),
-		ReporterEmail: strings.TrimSpace(taskContext.SenderEmail),
-		Status:        resolvePyrusTaskStatus(task),
-		Type:          strings.TrimSpace(taskContext.CallType),
-	})
+	// Прерванное создание оставляет тикет без связки с задачей: достраиваем его, а не создаём дубль.
+	ticket, err := s.ticketRepo.GetByServiceDeskUUID(ctx, pyrusTicketServiceDeskUUID(task.ID))
 	if err != nil {
 		return nil, err
 	}
-	s.log.Info("Pyrus: создан новый тикет из webhook", "task_id", task.ID, "ticket_id", ticket.ID, "company_id", companyID, "subject", ticket.Subject)
+	if ticket != nil {
+		s.log.Info("Pyrus: достраиваем ранее начатый тикет задачи", "task_id", task.ID, "ticket_id", ticket.ID)
+	} else {
+		companyID, err := s.resolveCompanyIDByCRMID(ctx, taskContext.CRMID)
+		if err != nil {
+			return nil, err
+		}
+		s.log.Debug("Pyrus: определён company_id для нового тикета", "task_id", task.ID, "company_id", companyID)
+
+		// TODO: после подтверждения бизнес-контракта формы Pyrus заменить временный консервативный маппинг статусов и типа тикета.
+		ticket, err = s.ticketService.CreateFromPyrus(ctx, TicketCreateFromPyrusInput{
+			TaskID:        task.ID,
+			CompanyID:     companyID,
+			Subject:       strings.TrimSpace(taskContext.Subject),
+			Description:   buildPyrusTicketDescription(task),
+			ReporterName:  resolvePyrusTaskClientNameFromContext(taskContext),
+			ReporterEmail: strings.TrimSpace(taskContext.SenderEmail),
+			Status:        resolvePyrusTaskStatus(task),
+			Type:          strings.TrimSpace(taskContext.CallType),
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.log.Info("Pyrus: создан новый тикет из webhook", "task_id", task.ID, "ticket_id", ticket.ID, "company_id", companyID, "subject", ticket.Subject)
+	}
 
 	now := time.Now()
 	if err := s.repo.UpsertTicketLink(ctx, &pyrus.TicketLink{
@@ -1028,7 +1181,7 @@ func (s *pyrusIncomingService) applyPyrusStatusToTicket(ctx context.Context, tic
 func (s *pyrusIncomingService) resolveCompanyIDByCRMID(ctx context.Context, crmID string) (string, error) {
 	normalizedCRMID := strings.TrimSpace(crmID)
 	if normalizedCRMID == "" {
-		return "", fmt.Errorf("в задаче Pyrus отсутствует CRMID")
+		return "", newPyrusDeferredError("в задаче Pyrus не заполнен CRMID")
 	}
 	servers, err := s.serverRepo.ListByCRMid(ctx, normalizedCRMID)
 	if err != nil {
@@ -1052,11 +1205,11 @@ func (s *pyrusIncomingService) resolveCompanyIDByCRMID(ctx context.Context, crmI
 	}
 	switch len(ownerIDs) {
 	case 0:
-		return "", fmt.Errorf("по CRMID=%s не найден однозначный owner_id", normalizedCRMID)
+		return "", newPyrusDeferredError("по CRMID=%s не найден сервер с владельцем (owner_id)", normalizedCRMID)
 	case 1:
 		return ownerIDs[0], nil
 	default:
-		return "", fmt.Errorf("по CRMID=%s найдено несколько owner_id", normalizedCRMID)
+		return "", newPyrusDeferredError("по CRMID=%s найдено несколько owner_id", normalizedCRMID)
 	}
 }
 
@@ -1184,6 +1337,26 @@ func (s *pyrusIncomingService) isSuppressedTask(ctx context.Context, taskID int6
 	return true
 }
 
+func (s *pyrusIncomingService) waitMaxAge() time.Duration {
+	if s.cfg.PyrusIncomingWaitMaxAge <= 0 {
+		return 14 * 24 * time.Hour
+	}
+	return s.cfg.PyrusIncomingWaitMaxAge
+}
+
+// waitRetryDelay растит интервал повторов вместе со временем ожидания: пятая часть прошедшего срока в пределах [base, max].
+func (s *pyrusIncomingService) waitRetryDelay(waited time.Duration) time.Duration {
+	base := s.cfg.PyrusIncomingWaitRetryBase
+	if base <= 0 {
+		base = time.Minute
+	}
+	limit := s.cfg.PyrusIncomingWaitRetryMax
+	if limit <= 0 {
+		limit = 30 * time.Minute
+	}
+	return min(max(waited/5, base), max(limit, base))
+}
+
 func (s *pyrusIncomingService) maxAttempts() int {
 	if s.cfg.PyrusIncomingMaxAttempts <= 0 {
 		return 10
@@ -1225,6 +1398,9 @@ func (s *pyrusIncomingService) retryDelay(attempts int) time.Duration {
 func (s *pyrusIncomingService) shouldProcessIncomingNow(item *pyrus.IncomingEvent) bool {
 	if item == nil {
 		return false
+	}
+	if strings.TrimSpace(item.Status) == pyrus.IncomingEventStatusWaiting {
+		return item.NextRetryAt == nil || !time.Now().Before(*item.NextRetryAt)
 	}
 	if strings.TrimSpace(item.Status) == pyrus.IncomingEventStatusFailed {
 		if item.Attempts >= s.maxAttempts() {

@@ -28,6 +28,9 @@ func (h *IntegrationSyncHandler) RegisterRoutes(r chi.Router) {
 		r.Get("/incoming-events/{id}", h.GetIncomingEvent)
 		r.Get("/outgoing-events/{id}", h.GetOutgoingEvent)
 		r.Post("/incoming-events/{id}/replay", h.ReplayIncomingEvent)
+		r.Get("/incoming-tasks", h.ListIncomingTasks)
+		r.Post("/incoming-tasks/replay-problem", h.ReplayProblemIncomingTasks)
+		r.Post("/incoming-tasks/{taskID}/replay", h.ReplayIncomingTask)
 	})
 }
 
@@ -39,6 +42,7 @@ func (h *IntegrationSyncHandler) ListIncomingEvents(w http.ResponseWriter, r *ht
 	provider := chi.URLParam(r, "provider")
 	filter := services.IntegrationSyncEventListFilter{
 		Status: parseStringCSV(r.URL.Query().Get("status")),
+		TaskID: int64(parseQueryInt(r, "task_id", 0)),
 		Limit:  parseQueryInt(r, "limit", 50),
 		Offset: parseQueryInt(r, "offset", 0),
 	}
@@ -119,6 +123,62 @@ func (h *IntegrationSyncHandler) ReplayIncomingEvent(w http.ResponseWriter, r *h
 		return
 	}
 	response.RespondWithJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+func (h *IntegrationSyncHandler) ListIncomingTasks(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "контур контроля синхронизации интеграций недоступен")
+		return
+	}
+	filter := services.PyrusIncomingTaskListFilter{
+		OnlyProblem: r.URL.Query().Get("scope") != "all",
+		Limit:       parseQueryInt(r, "limit", 50),
+		Offset:      parseQueryInt(r, "offset", 0),
+	}
+	items, total, err := h.service.ListIncomingTasks(r.Context(), chi.URLParam(r, "provider"), filter)
+	if err != nil {
+		h.respondSyncError(w, r, err)
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{
+		Data:    items,
+		Total:   total,
+		Limit:   filter.Limit,
+		Offset:  filter.Offset,
+		HasNext: int64(filter.Offset+len(items)) < total,
+		HasPrev: filter.Offset > 0,
+	})
+}
+
+func (h *IntegrationSyncHandler) ReplayIncomingTask(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "контур контроля синхронизации интеграций недоступен")
+		return
+	}
+	taskID, err := strconv.ParseInt(chi.URLParam(r, "taskID"), 10, 64)
+	if err != nil || taskID <= 0 {
+		response.RespondWithError(w, http.StatusBadRequest, "некорректный идентификатор задачи")
+		return
+	}
+	replayed, err := h.service.ReplayIncomingTask(r.Context(), chi.URLParam(r, "provider"), taskID)
+	if err != nil {
+		h.respondSyncError(w, r, err)
+		return
+	}
+	response.RespondWithJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "events": replayed})
+}
+
+func (h *IntegrationSyncHandler) ReplayProblemIncomingTasks(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "контур контроля синхронизации интеграций недоступен")
+		return
+	}
+	tasks, events, err := h.service.ReplayProblemIncomingTasks(r.Context(), chi.URLParam(r, "provider"))
+	if err != nil {
+		h.respondSyncError(w, r, err)
+		return
+	}
+	response.RespondWithJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "tasks": tasks, "events": events})
 }
 
 func (h *IntegrationSyncHandler) respondSyncError(w http.ResponseWriter, r *http.Request, err error) {
