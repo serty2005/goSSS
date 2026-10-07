@@ -234,8 +234,8 @@ func (r *pyrusRepo) InsertIncomingEventIfNotExists(ctx context.Context, event *p
 }
 
 func (r *pyrusRepo) ResetIncomingEventForReplay(ctx context.Context, id string) error {
-	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
-		Where("id = ?", strings.TrimSpace(id)).
+	result := r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("id = ? AND status IN ?", strings.TrimSpace(id), []string{pyrus.IncomingEventStatusFailed, pyrus.IncomingEventStatusWaiting}).
 		Updates(map[string]any{
 			"status":          pyrus.IncomingEventStatusNew,
 			"attempts":        0,
@@ -245,24 +245,51 @@ func (r *pyrusRepo) ResetIncomingEventForReplay(ctx context.Context, id string) 
 			"wait_started_at": nil,
 			"replay_count":    gorm.Expr("replay_count + 1"),
 			"updated_at":      time.Now(),
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return pyrus.ErrIncomingEventNotReplayable
+	}
+	return nil
 }
 
 func (r *pyrusRepo) MarkIncomingQueued(ctx context.Context, id string) error {
 	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
-		Where("id = ?", strings.TrimSpace(id)).
+		Where("id = ? AND status = ?", strings.TrimSpace(id), pyrus.IncomingEventStatusNew).
 		Updates(map[string]any{"status": pyrus.IncomingEventStatusQueued, "updated_at": time.Now()}).Error
 }
 
-func (r *pyrusRepo) MarkIncomingProcessing(ctx context.Context, id string) error {
-	return r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
-		Where("id = ?", strings.TrimSpace(id)).
+func (r *pyrusRepo) TryMarkIncomingProcessing(ctx context.Context, id string) (bool, error) {
+	result := r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("id = ? AND status IN ?", strings.TrimSpace(id), []string{pyrus.IncomingEventStatusNew, pyrus.IncomingEventStatusQueued, pyrus.IncomingEventStatusFailed, pyrus.IncomingEventStatusWaiting}).
 		Updates(map[string]any{
 			"status":     pyrus.IncomingEventStatusProcessing,
 			"attempts":   gorm.Expr("attempts + 1"),
 			"last_error": nil,
 			"updated_at": time.Now(),
-		}).Error
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
+// CancelIncomingEvents отменяет ожидающие события по ID либо все ожидающие события одной задачи.
+func (r *pyrusRepo) CancelIncomingEvents(ctx context.Context, id string, taskID int64) (int, error) {
+	query := r.getDB(ctx).WithContext(ctx).Model(&pyrus.IncomingEvent{}).
+		Where("status IN ?", []string{pyrus.IncomingEventStatusNew, pyrus.IncomingEventStatusQueued, pyrus.IncomingEventStatusFailed, pyrus.IncomingEventStatusWaiting})
+	if id != "" {
+		query = query.Where("id = ?", id)
+	} else if taskID > 0 {
+		query = query.Where("pyrus_task_id = ?", taskID)
+	} else {
+		return 0, pyrus.ErrIncomingEventNotReplayable
+	}
+	now := time.Now()
+	result := query.Updates(map[string]any{
+		"status": pyrus.IncomingEventStatusCancelled, "last_error": "Отменено оператором", "processed_at": now,
+		"next_retry_at": nil, "wait_started_at": nil, "updated_at": now,
+	})
+	return int(result.RowsAffected), result.Error
 }
 
 func (r *pyrusRepo) MarkIncomingDone(ctx context.Context, id string) error {
@@ -533,6 +560,7 @@ SELECT
 	SUM(CASE WHEN e.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
 	SUM(CASE WHEN e.status = 'done' THEN 1 ELSE 0 END) AS done_count,
 	SUM(CASE WHEN e.status = 'ignored' THEN 1 ELSE 0 END) AS ignored_count,
+	SUM(CASE WHEN e.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
 	(SELECT x.received_at FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at ASC LIMIT 1) AS first_received_at,
 	(SELECT x.received_at FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at DESC LIMIT 1) AS last_received_at,
 	(SELECT x.id FROM pyrus_incoming_events x WHERE x.pyrus_task_id = e.pyrus_task_id ORDER BY x.received_at DESC LIMIT 1) AS last_event_id,

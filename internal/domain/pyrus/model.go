@@ -1,10 +1,13 @@
 package pyrus
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/datatypes"
 )
+
+var ErrIncomingEventNotReplayable = errors.New("событие Pyrus нельзя повторить или отменить в текущем статусе")
 
 type TicketLink struct {
 	TicketID       string     `json:"ticket_id" gorm:"primaryKey;type:text"`
@@ -88,6 +91,7 @@ const (
 	IncomingEventStatusDone       = "done"
 	IncomingEventStatusFailed     = "failed"
 	IncomingEventStatusIgnored    = "ignored"
+	IncomingEventStatusCancelled  = "cancelled"
 	// IncomingEventStatusWaiting - событие ждёт внешних данных (например, сервера с нужным CRMID) и повторяется по расписанию.
 	IncomingEventStatusWaiting = "waiting"
 )

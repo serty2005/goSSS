@@ -81,6 +81,7 @@ type IntegrationSyncControlService interface {
 	GetIncomingEvent(ctx context.Context, provider string, id string) (*IntegrationSyncEventDetail, error)
 	GetOutgoingEvent(ctx context.Context, provider string, id string) (*IntegrationSyncEventDetail, error)
 	ReplayIncomingEvent(ctx context.Context, provider string, id string) error
+	CancelIncomingEvents(ctx context.Context, provider string, id string, taskID int64) (int, error)
 	// ListIncomingTasks возвращает сводку входящих событий по задачам внешней системы (поддерживается только Pyrus).
 	ListIncomingTasks(ctx context.Context, provider string, filter PyrusIncomingTaskListFilter) ([]PyrusIncomingTaskItem, int64, error)
 	// ReplayIncomingTask повторно запускает все неуспешные события одной задачи и возвращает их число.
@@ -270,6 +271,32 @@ func (s *integrationSyncControlService) ReplayIncomingEvent(ctx context.Context,
 	}
 }
 
+func (s *integrationSyncControlService) CancelIncomingEvents(ctx context.Context, provider string, id string, taskID int64) (int, error) {
+	if normalizeIntegrationProvider(provider) != "pyrus" {
+		return 0, ErrIntegrationProviderNotSupported
+	}
+	if s.pyrusRepo == nil {
+		return 0, fmt.Errorf("репозиторий Pyrus не настроен")
+	}
+	if id != "" {
+		item, err := s.pyrusRepo.GetIncomingEventByID(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		if item == nil {
+			return 0, ErrIntegrationEventNotFound
+		}
+	}
+	count, err := s.pyrusRepo.CancelIncomingEvents(ctx, id, taskID)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, pyrus.ErrIncomingEventNotReplayable
+	}
+	return count, nil
+}
+
 func (s *integrationSyncControlService) ListIncomingTasks(
 	ctx context.Context,
 	provider string,
@@ -318,6 +345,7 @@ func (s *integrationSyncControlService) ListIncomingTasks(
 				pyrus.IncomingEventStatusFailed:     group.FailedCount,
 				pyrus.IncomingEventStatusDone:       group.DoneCount,
 				pyrus.IncomingEventStatusIgnored:    group.IgnoredCount,
+				pyrus.IncomingEventStatusCancelled:  group.CancelledCount,
 			},
 			NeedsAttention:  group.FailedCount+group.WaitingCount > 0,
 			FirstReceivedAt: group.FirstReceivedAt,

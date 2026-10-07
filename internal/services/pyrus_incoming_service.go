@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"etalon-server/internal/core/events"
 	domain "etalon-server/internal/domain"
@@ -509,8 +510,13 @@ func (s *pyrusIncomingService) processIncomingEvent(ctx context.Context, eventID
 		"attempts", item.Attempts,
 		"status", item.Status,
 	)
-	if err := s.repo.MarkIncomingProcessing(ctx, item.ID); err != nil {
+	marked, err := s.repo.TryMarkIncomingProcessing(ctx, item.ID)
+	if err != nil {
 		s.log.Warn("Pyrus: не удалось отметить событие как processing", "event_id", item.ID, "error", err)
+		return
+	}
+	if !marked {
+		return
 	}
 	status, reason, procErr := s.handleIncomingEvent(ctx, item)
 	var deferred *pyrusDeferredError
@@ -589,7 +595,7 @@ func (s *pyrusIncomingService) handleIncomingEvent(ctx context.Context, item *py
 	if err != nil {
 		return "", "", err
 	}
-	needActualTask := ticketID == "" || item.ReplayCount > 0 || item.WaitStartedAt != nil
+	needActualTask := ticketID == "" || item.ReplayCount > 0 || item.WaitStartedAt != nil || item.Attempts > 0
 	var task *pyrusplugin.Task
 	if needActualTask {
 		task, err = s.loadActualTask(ctx, taskID)
@@ -719,7 +725,7 @@ func (s *pyrusIncomingService) createTicketFromPyrusTask(ctx context.Context, ta
 		return nil, err
 	}
 
-	if _, err := s.syncTaskAttachments(ctx, ticket.ID, task.ID, nil, task.Attachments); err != nil {
+	if _, err := s.syncAllTaskAttachments(ctx, ticket.ID, task); err != nil {
 		return nil, err
 	}
 	if _, err := s.syncTaskComments(ctx, ticket, task); err != nil {
@@ -767,7 +773,7 @@ func (s *pyrusIncomingService) syncExistingTicketFromPyrusTask(ctx context.Conte
 		}
 	}
 
-	if _, err := s.syncTaskAttachments(ctx, ticket.ID, task.ID, nil, task.Attachments); err != nil {
+	if _, err := s.syncAllTaskAttachments(ctx, ticket.ID, task); err != nil {
 		return err
 	}
 	commentCount, err := s.syncTaskComments(ctx, ticket, task)
@@ -908,7 +914,7 @@ func (s *pyrusIncomingService) syncTaskComments(ctx context.Context, ticket *tic
 
 // publishCommentImported сообщает остальным интеграциям (Bitrix24) о новом комментарии из Pyrus.
 func (s *pyrusIncomingService) publishCommentImported(ticketID string, comment *tickets.TicketComment) {
-	if s.eventBus == nil || comment == nil || comment.IsPrivate || comment.IsInternal {
+	if s.eventBus == nil || comment == nil {
 		return
 	}
 	s.eventBus.Publish(eventbus.Event{
@@ -989,6 +995,60 @@ func (s *pyrusIncomingService) upsertPyrusCommentLink(ctx context.Context, taskI
 	return s.repo.UpsertCommentLink(ctx, link)
 }
 
+// syncAllTaskAttachments сохраняет файлы задачи, комментариев и файловых полей формы как вложения тикета.
+func (s *pyrusIncomingService) syncAllTaskAttachments(ctx context.Context, ticketID string, task *pyrusplugin.Task) (int, error) {
+	attachments := append([]pyrusplugin.Attachment(nil), task.Attachments...)
+	for _, comment := range task.Comments {
+		attachments = append(attachments, comment.Attachments...)
+		files, err := pyrusFieldAttachments(comment.FieldUpdates)
+		if err != nil {
+			return 0, err
+		}
+		attachments = append(attachments, files...)
+	}
+	files, err := pyrusFieldAttachments(task.Fields)
+	if err != nil {
+		return 0, err
+	}
+	attachments = append(attachments, files...)
+	return s.syncTaskAttachments(ctx, ticketID, task.ID, nil, attachments)
+}
+
+func pyrusFieldAttachments(fields []pyrusplugin.Field) ([]pyrusplugin.Attachment, error) {
+	var attachments []pyrusplugin.Attachment
+	for _, field := range flattenPyrusFields(fields) {
+		if field.Type != "file" && field.Type != "table" {
+			continue
+		}
+		raw, err := json.Marshal(field.Value)
+		if err != nil {
+			return nil, fmt.Errorf("не удалось прочитать вложения поля Pyrus %d: %w", field.ID, err)
+		}
+		if field.Type == "file" {
+			var files []pyrusplugin.Attachment
+			if err := json.Unmarshal(raw, &files); err != nil {
+				return nil, fmt.Errorf("не удалось прочитать файлы поля Pyrus %d: %w", field.ID, err)
+			}
+			attachments = append(attachments, files...)
+		} else {
+			var rows []struct {
+				Cells []pyrusplugin.Field `json:"cells"`
+			}
+			if err := json.Unmarshal(raw, &rows); err != nil {
+				return nil, fmt.Errorf("не удалось прочитать таблицу Pyrus %d: %w", field.ID, err)
+			}
+			for _, row := range rows {
+				files, err := pyrusFieldAttachments(row.Cells)
+				if err != nil {
+					return nil, err
+				}
+				attachments = append(attachments, files...)
+			}
+		}
+	}
+	return attachments, nil
+}
+
 func (s *pyrusIncomingService) syncTaskAttachments(
 	ctx context.Context,
 	ticketID string,
@@ -1059,6 +1119,11 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 		return false, "", "", fmt.Errorf("во вложении Pyrus отсутствует attachment.id")
 	}
 
+	relationType := tickets.RelationTypeDirectTicketAttachment
+	if commentID != nil && strings.TrimSpace(*commentID) != "" {
+		relationType = tickets.RelationTypeInlineComment
+	}
+
 	existingLink, err := s.repo.GetFileLinkByPyrusAttachmentID(ctx, attachment.ID)
 	if err != nil {
 		return false, "", "", err
@@ -1069,6 +1134,11 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 			return false, "", "", assetErr
 		}
 		if asset != nil {
+			if err := s.ticketRepo.UpsertTicketFileLink(ctx, &tickets.TicketFileLink{
+				TicketID: ticketID, FileID: asset.ID, RelationType: relationType, CommentUUID: commentID,
+			}); err != nil {
+				return false, "", "", err
+			}
 			s.log.Debug("Pyrus: вложение уже было импортировано ранее", "task_id", taskID, "ticket_id", ticketID, "attachment_id", attachment.ID, "file_id", asset.ID)
 			return false, "/api/static/tickets/" + asset.StorageKey, asset.OriginalName, nil
 		}
@@ -1126,10 +1196,6 @@ func (s *pyrusIncomingService) persistPyrusAttachment(
 		return false, "", "", fmt.Errorf("не удалось сохранить файл Pyrus")
 	}
 
-	relationType := tickets.RelationTypeDirectTicketAttachment
-	if commentID != nil && strings.TrimSpace(*commentID) != "" {
-		relationType = tickets.RelationTypeInlineComment
-	}
 	if err := s.ticketRepo.UpsertTicketFileLink(ctx, &tickets.TicketFileLink{
 		TicketID:     ticketID,
 		FileID:       asset.ID,
@@ -1429,7 +1495,7 @@ func (s *pyrusIncomingService) shouldProcessIncomingNow(item *pyrus.IncomingEven
 		nextTryAt := item.UpdatedAt.Add(s.retryDelay(item.Attempts))
 		return !time.Now().Before(nextTryAt)
 	}
-	return true
+	return item.Status == pyrus.IncomingEventStatusNew || item.Status == pyrus.IncomingEventStatusQueued
 }
 
 func sanitizePyrusAttachmentName(name string) string {

@@ -33,6 +33,7 @@ type IncomingTaskGroup struct {
 	FailedCount     int64      `gorm:"column:failed_count"`
 	DoneCount       int64      `gorm:"column:done_count"`
 	IgnoredCount    int64      `gorm:"column:ignored_count"`
+	CancelledCount  int64      `gorm:"column:cancelled_count"`
 	FirstReceivedAt time.Time  `gorm:"column:first_received_at"`
 	LastReceivedAt  time.Time  `gorm:"column:last_received_at"`
 	LastEventID     string     `gorm:"column:last_event_id"`
@@ -71,7 +72,8 @@ type Repository interface {
 	InsertIncomingEventIfNotExists(ctx context.Context, event *IncomingEvent) (bool, error)
 	ResetIncomingEventForReplay(ctx context.Context, id string) error
 	MarkIncomingQueued(ctx context.Context, id string) error
-	MarkIncomingProcessing(ctx context.Context, id string) error
+	TryMarkIncomingProcessing(ctx context.Context, id string) (bool, error)
+	CancelIncomingEvents(ctx context.Context, id string, taskID int64) (int, error)
 	MarkIncomingDone(ctx context.Context, id string) error
 	MarkIncomingFailed(ctx context.Context, id string, errText string) error
 	// MarkIncomingExpired окончательно переводит событие в failed и выставляет счётчик попыток, чтобы автоповтор его больше не брал.

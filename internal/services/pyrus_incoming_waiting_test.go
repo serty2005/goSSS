@@ -22,14 +22,17 @@ import (
 
 // fakePyrusAPI отдаёт заранее заданные задачи вместо обращения к Pyrus API.
 type fakePyrusAPI struct {
-	mu       sync.Mutex
-	tasks    map[int64]pyrusplugin.Task
-	getErr   error
-	getCalls int
+	mu          sync.Mutex
+	tasks       map[int64]pyrusplugin.Task
+	getErr      error
+	getCalls    int
+	files       map[int64]pyrusplugin.DownloadedFile
+	downloadErr error
+	downloads   map[int64]int
 }
 
 func newFakePyrusAPI() *fakePyrusAPI {
-	return &fakePyrusAPI{tasks: make(map[int64]pyrusplugin.Task)}
+	return &fakePyrusAPI{tasks: make(map[int64]pyrusplugin.Task), files: make(map[int64]pyrusplugin.DownloadedFile), downloads: make(map[int64]int)}
 }
 
 func (f *fakePyrusAPI) setTask(task *pyrusplugin.Task) {
@@ -64,8 +67,18 @@ func (f *fakePyrusAPI) UpdateTaskExtID(context.Context, int64, string) (*pyruspl
 	return nil, errors.New("не поддерживается заглушкой")
 }
 
-func (f *fakePyrusAPI) DownloadFile(context.Context, int64) (*pyrusplugin.DownloadedFile, error) {
-	return nil, errors.New("не поддерживается заглушкой")
+func (f *fakePyrusAPI) DownloadFile(_ context.Context, id int64) (*pyrusplugin.DownloadedFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.downloads[id]++
+	if f.downloadErr != nil {
+		return nil, f.downloadErr
+	}
+	file, ok := f.files[id]
+	if !ok {
+		return nil, fmt.Errorf("файл %d не найден в заглушке", id)
+	}
+	return &file, nil
 }
 
 func (f *fakePyrusAPI) UploadFile(context.Context, string, string, []byte) (string, error) {

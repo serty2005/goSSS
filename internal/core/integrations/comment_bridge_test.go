@@ -93,11 +93,11 @@ func TestImportedCommentIsBridgedBetweenBitrixAndPyrusWithoutEcho(t *testing.T) 
 		TicketID: "t-2", Comment: &tickets.TicketComment{ID: "c-2", IsPrivate: true}, Source: events.CommentImportSourcePyrus,
 	}})
 	deadline = time.Now().Add(2 * time.Second)
-	for bitrixSync.count() < 1 && time.Now().Before(deadline) {
+	for bitrixSync.count() < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if bitrixSync.count() != 1 || pyrusSync.count() != 1 {
-		t.Fatalf("комментарий из Pyrus должен уйти только в Bitrix24, приватный не уходит: pyrus=%d bitrix=%d", pyrusSync.count(), bitrixSync.count())
+	if bitrixSync.count() != 2 || pyrusSync.count() != 1 {
+		t.Fatalf("все комментарии из Pyrus должны уйти только в Bitrix24: pyrus=%d bitrix=%d", pyrusSync.count(), bitrixSync.count())
 	}
 }

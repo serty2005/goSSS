@@ -49,7 +49,7 @@ func RegisterBitrixEventHandlers(
 
 	bus.Subscribe(events.TicketCommentImported, func(ctx context.Context, event eventbus.Event) {
 		payload, ok := event.Payload.(events.TicketCommentImportedPayload)
-		if !ok || payload.Source == events.CommentImportSourceBitrix || payload.TicketID == "" || payload.Comment == nil || payload.Comment.IsPrivate {
+		if !ok || payload.Source == events.CommentImportSourceBitrix || payload.TicketID == "" || payload.Comment == nil || (payload.Comment.IsPrivate && payload.Source != events.CommentImportSourcePyrus) {
 			return
 		}
 		if err := bitrixSync.SyncPendingComments(ctx, payload.TicketID); err != nil {

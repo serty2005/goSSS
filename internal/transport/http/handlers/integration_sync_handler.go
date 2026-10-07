@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"etalon-server/internal/domain/pyrus"
 	"etalon-server/internal/services"
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/middleware"
@@ -28,9 +29,11 @@ func (h *IntegrationSyncHandler) RegisterRoutes(r chi.Router) {
 		r.Get("/incoming-events/{id}", h.GetIncomingEvent)
 		r.Get("/outgoing-events/{id}", h.GetOutgoingEvent)
 		r.Post("/incoming-events/{id}/replay", h.ReplayIncomingEvent)
+		r.Post("/incoming-events/{id}/cancel", h.CancelIncomingEvents)
 		r.Get("/incoming-tasks", h.ListIncomingTasks)
 		r.Post("/incoming-tasks/replay-problem", h.ReplayProblemIncomingTasks)
 		r.Post("/incoming-tasks/{taskID}/replay", h.ReplayIncomingTask)
+		r.Post("/incoming-tasks/{taskID}/cancel", h.CancelIncomingEvents)
 	})
 }
 
@@ -181,9 +184,33 @@ func (h *IntegrationSyncHandler) ReplayProblemIncomingTasks(w http.ResponseWrite
 	response.RespondWithJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "tasks": tasks, "events": events})
 }
 
+func (h *IntegrationSyncHandler) CancelIncomingEvents(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.service == nil {
+		response.RespondWithError(w, http.StatusServiceUnavailable, "контур контроля синхронизации интеграций недоступен")
+		return
+	}
+	var taskID int64
+	if value := chi.URLParam(r, "taskID"); value != "" {
+		var err error
+		taskID, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || taskID <= 0 {
+			response.RespondWithError(w, http.StatusBadRequest, "некорректный идентификатор задачи")
+			return
+		}
+	}
+	count, err := h.service.CancelIncomingEvents(r.Context(), chi.URLParam(r, "provider"), chi.URLParam(r, "id"), taskID)
+	if err != nil {
+		h.respondSyncError(w, r, err)
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, map[string]any{"status": "cancelled", "events": count})
+}
+
 func (h *IntegrationSyncHandler) respondSyncError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError
 	switch {
+	case errors.Is(err, pyrus.ErrIncomingEventNotReplayable):
+		status = http.StatusConflict
 	case errors.Is(err, services.ErrIntegrationProviderNotSupported):
 		status = http.StatusNotFound
 	case errors.Is(err, services.ErrIntegrationEventNotFound):

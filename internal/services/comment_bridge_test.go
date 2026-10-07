@@ -55,7 +55,9 @@ func TestPyrusIncomingService_PublishesImportedCommentsOnce(t *testing.T) {
 	const taskID = int64(8101)
 	ownerID := createCompanyRecord(t, env.db, "company-bridge-in", "Компания")
 	createServerRecord(t, env.db, "CRM-BRIDGE", ownerID)
-	actual := pyrusTestTask(env, taskID, "CRM-BRIDGE", pyrusTestComment(501, "Первый"), pyrusTestComment(502, "Второй"))
+	privateComment := pyrusTestComment(502, "Приватный из Pyrus")
+	privateComment.Channel = nil
+	actual := pyrusTestTask(env, taskID, "CRM-BRIDGE", pyrusTestComment(501, "Первый"), privateComment)
 	env.api.setTask(&actual)
 	insertPyrusTestEvent(t, env, "11111111-0000-4000-8000-000000000501", time.Now(), actual)
 	insertPyrusTestEvent(t, env, "11111111-0000-4000-8000-000000000502", time.Now().Add(time.Second), actual)

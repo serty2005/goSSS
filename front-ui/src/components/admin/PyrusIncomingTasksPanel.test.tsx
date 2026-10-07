@@ -15,6 +15,8 @@ vi.mock('@/api/pyrusAdmin', () => ({
     listIncomingTasks: vi.fn(),
     listTaskEvents: vi.fn(),
     replayTask: vi.fn(),
+    cancelTask: vi.fn(),
+    cancelEvent: vi.fn(),
     replayEvent: vi.fn(),
     replayProblemTasks: vi.fn(),
   },
@@ -98,7 +100,18 @@ describe('PyrusIncomingTasksPanel', () => {
     expect(api.replayEvent).not.toHaveBeenCalled();
   });
 
-  it('блокирует повтор у задачи без проблемных событий', async () => {
+  it('отменяет ожидающие события задачи после подтверждения', async () => {
+    api.listIncomingTasks.mockResolvedValue({ status: 'success', data: [problemTask], meta: { total: 1, limit: 20, offset: 0, has_next: false, has_prev: false } });
+    api.cancelTask.mockResolvedValue({ status: 'success', data: { status: 'cancelled', events: 7 } });
+    renderPanel();
+    await userEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
+    expect(api.cancelTask).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Отменить обработку' }));
+    await waitFor(() => expect(api.cancelTask).toHaveBeenCalledWith(problemTask.task_id));
+    expect(api.replayTask).not.toHaveBeenCalled();
+  });
+
+  it('блокирует повтор у задачи без проблемных событий' , async () => {
     api.listIncomingTasks.mockResolvedValue({
       status: 'success',
       data: [{ ...problemTask, needs_attention: false, status_counts: { done: 3 }, last_error: undefined, ticket_id: 'ticket-1' }],

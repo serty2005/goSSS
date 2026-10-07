@@ -268,7 +268,7 @@ func (r *serverRepo) ListByCRMid(ctx context.Context, crmid string) ([]server.Se
 	}
 	var items []server.Server
 	err := r.dbOrTx(ctx, nil).WithContext(ctx).
-		Where("crm_id = ? AND status != ?", normalizedCRMID, "locked").
+		Where("crm_id = ?", normalizedCRMID).
 		Find(&items).Error
 	return items, err
 }

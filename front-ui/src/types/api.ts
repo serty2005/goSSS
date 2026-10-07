@@ -1065,7 +1065,8 @@ export type PyrusIncomingEventStatus =
   | 'waiting'
   | 'failed'
   | 'done'
-  | 'ignored';
+  | 'ignored'
+  | 'cancelled';
 
 export interface PyrusIncomingTaskDTO {
   task_id: number;

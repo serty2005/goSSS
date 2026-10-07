@@ -33,6 +33,7 @@ const PYRUS_EVENT_STATUS_LABELS: Record<PyrusIncomingEventStatus, string> = {
   failed: 'Ошибка',
   done: 'Обработано',
   ignored: 'Пропущено',
+  cancelled: 'Отменено',
 };
 
 const PYRUS_EVENT_STATUS_COLORS: Record<PyrusIncomingEventStatus, string> = {
@@ -43,9 +44,10 @@ const PYRUS_EVENT_STATUS_COLORS: Record<PyrusIncomingEventStatus, string> = {
   failed: 'error',
   done: 'success',
   ignored: 'default',
+  cancelled: 'default',
 };
 
-const STATUS_ORDER: PyrusIncomingEventStatus[] = ['failed', 'waiting', 'processing', 'queued', 'new', 'done', 'ignored'];
+const STATUS_ORDER: PyrusIncomingEventStatus[] = ['failed', 'waiting', 'processing', 'queued', 'new', 'done', 'ignored', 'cancelled'];
 
 const formatDateTime = (value?: string) => {
   if (!value) {
@@ -62,11 +64,17 @@ const extractErrorText = (error: unknown, fallback: string) => {
 
 const canReplayEvent = (status: PyrusIncomingEventStatus) => status === 'failed' || status === 'waiting';
 
+const canCancelEvent = (status: PyrusIncomingEventStatus) => ['new', 'queued', 'waiting', 'failed'].includes(status);
+
+const canCancelTask = (task: PyrusIncomingTaskDTO) => STATUS_ORDER.some((status) => canCancelEvent(status) && (task.status_counts[status] ?? 0) > 0);
+
 const TaskEventsTable: React.FC<{
   taskId: number;
   onReplayEvent: (eventId: string) => void;
   replayingEventId?: string;
-}> = ({ taskId, onReplayEvent, replayingEventId }) => {
+  onCancelEvent: (eventId: string) => void;
+  cancellingEventId?: string;
+}> = ({ taskId, onReplayEvent, replayingEventId, onCancelEvent, cancellingEventId }) => {
   const { data, isError } = useQuery({
     queryKey: ['pyrus-incoming-events', taskId],
     queryFn: async () => (await pyrusAdminApi.listTaskEvents(taskId)).data || [],
@@ -115,20 +123,39 @@ const TaskEventsTable: React.FC<{
     {
       title: '',
       key: 'actions',
-      width: 130,
+      width: 230,
       render: (_, record) => (
-        <Button
-          size="small"
-          icon={<RedoOutlined />}
-          disabled={!canReplayEvent(record.status)}
-          loading={replayingEventId === record.id}
-          onClick={() => onReplayEvent(record.id)}
-        >
-          Повторить
-        </Button>
+        <Space>
+          <Button
+            size="small"
+            icon={<RedoOutlined />}
+            disabled={!canReplayEvent(record.status) || cancellingEventId === record.id}
+            loading={replayingEventId === record.id}
+            onClick={() => onReplayEvent(record.id)}
+          >
+            Повторить
+          </Button>
+          <Popconfirm
+            title="Отменить обработку события?"
+            description="Автоматические и ручные повторы этого события будут отключены."
+            okText="Отменить событие"
+            cancelText="Назад"
+            onConfirm={() => onCancelEvent(record.id)}
+            disabled={!canCancelEvent(record.status) || replayingEventId === record.id}
+          >
+            <Button
+              size="small"
+              danger
+              disabled={!canCancelEvent(record.status) || replayingEventId === record.id}
+              loading={cancellingEventId === record.id}
+            >
+              Отменить
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
-  ], [onReplayEvent, replayingEventId]);
+  ], [onReplayEvent, replayingEventId, onCancelEvent, cancellingEventId]);
 
   if (isError) {
     return <Text type="danger">Не удалось загрузить события задачи</Text>;
@@ -141,6 +168,7 @@ const TaskEventsTable: React.FC<{
       columns={columns}
       dataSource={data ?? []}
       pagination={false}
+      scroll={{ x: 900 }}
     />
   );
 };
@@ -162,6 +190,24 @@ const PyrusIncomingTasksPanel: React.FC = () => {
     void queryClient.invalidateQueries({ queryKey: ['pyrus-incoming-tasks'] });
     void queryClient.invalidateQueries({ queryKey: ['pyrus-incoming-events'] });
   };
+
+  const cancelTaskMutation = useMutation({
+    mutationFn: (taskId: number) => pyrusAdminApi.cancelTask(taskId),
+    onSuccess: (response) => {
+      message.success(`Отменено событий: ${response.data?.events ?? 0}`);
+      invalidate();
+    },
+    onError: (error) => message.error(extractErrorText(error, 'Не удалось отменить задачу')),
+  });
+
+  const cancelEventMutation = useMutation({
+    mutationFn: (eventId: string) => pyrusAdminApi.cancelEvent(eventId),
+    onSuccess: () => {
+      message.success('Обработка события отменена');
+      invalidate();
+    },
+    onError: (error) => message.error(extractErrorText(error, 'Не удалось отменить событие')),
+  });
 
   const replayTaskMutation = useMutation({
     mutationFn: (taskId: number) => pyrusAdminApi.replayTask(taskId),
@@ -249,7 +295,7 @@ const PyrusIncomingTasksPanel: React.FC = () => {
         <Space orientation="vertical" size={0}>
           {record.last_error ? (
             <Tooltip title={record.last_error}>
-              <Text type="danger" ellipsis style={{ maxWidth: 320 }}>{record.last_error}</Text>
+              <Text type={record.needs_attention ? 'danger' : 'secondary'} ellipsis style={{ maxWidth: 320 }}>{record.last_error}</Text>
             </Tooltip>
           ) : <Text type="secondary">—</Text>}
           {record.next_retry_at ? (
@@ -268,72 +314,95 @@ const PyrusIncomingTasksPanel: React.FC = () => {
     {
       title: '',
       key: 'actions',
-      width: 150,
+      width: 250,
       render: (_, record) => (
-        <Button
-          size="small"
-          type={record.needs_attention ? 'primary' : 'default'}
-          icon={<RedoOutlined />}
-          disabled={!record.needs_attention}
-          loading={replayTaskMutation.isPending && replayTaskMutation.variables === record.task_id}
-          onClick={() => replayTaskMutation.mutate(record.task_id)}
-        >
-          Повторить задачу
-        </Button>
+        <Space>
+          <Button
+            size="small"
+            type={record.needs_attention ? 'primary' : 'default'}
+            icon={<RedoOutlined />}
+            disabled={!record.needs_attention || cancelTaskMutation.isPending}
+            loading={replayTaskMutation.isPending && replayTaskMutation.variables === record.task_id}
+            onClick={() => replayTaskMutation.mutate(record.task_id)}
+          >
+            Повторить задачу
+          </Button>
+          <Popconfirm
+            title="Отменить обработку задачи?"
+            description="Ожидающие события будут отменены. Созданный тикет и события, уже взятые в работу, сохранятся. Новые события Pyrus обрабатываются отдельно."
+            okText="Отменить обработку"
+            cancelText="Назад"
+            onConfirm={() => cancelTaskMutation.mutate(record.task_id)}
+            disabled={replayTaskMutation.isPending || !canCancelTask(record)}
+          >
+            <Button
+              size="small"
+              danger
+              disabled={replayTaskMutation.isPending || !canCancelTask(record)}
+              loading={cancelTaskMutation.isPending && cancelTaskMutation.variables === record.task_id}
+            >
+              Отменить
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
-  ], [replayTaskMutation]);
+  ], [replayTaskMutation, cancelTaskMutation]);
 
   return (
     <Card
       className="glass-panel"
-      title="Входящие события Pyrus"
-      extra={(
-        <Space wrap>
-          <Segmented<TasksScope>
-            value={scope}
-            onChange={(value) => {
-              setScope(value);
-              setPage(1);
-              setExpandedKeys([]);
-            }}
-            options={[
-              { label: 'Требуют внимания', value: 'problem' },
-              { label: 'Все задачи', value: 'all' },
-            ]}
-          />
-          <Button icon={<ReloadOutlined />} onClick={invalidate}>
-            Обновить
-          </Button>
-          <Popconfirm
-            title="Повторить все проблемные задачи?"
-            description="События каждой задачи обрабатываются вместе: тикет собирается по актуальной задаче Pyrus, дублей не будет."
-            okText="Повторить"
-            cancelText="Отмена"
-            onConfirm={() => replayProblemMutation.mutate()}
-          >
-            <Button
-              type="primary"
-              icon={<RedoOutlined />}
-              loading={replayProblemMutation.isPending}
-              disabled={scope !== 'problem' || total === 0}
-            >
-              Повторить все
+      styles={{ header: { paddingBlock: 12 }, title: { whiteSpace: 'normal' } }}
+      title={(
+        <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+          <span>Входящие события Pyrus</span>
+          <Space wrap>
+            <Segmented<TasksScope>
+              value={scope}
+              onChange={(value) => {
+                setScope(value);
+                setPage(1);
+                setExpandedKeys([]);
+              }}
+              options={[
+                { label: 'Требуют внимания', value: 'problem' },
+                { label: 'Все задачи', value: 'all' },
+              ]}
+            />
+            <Button icon={<ReloadOutlined />} onClick={invalidate}>
+              Обновить
             </Button>
-          </Popconfirm>
+            <Popconfirm
+              title="Повторить все проблемные задачи?"
+              description="События каждой задачи обрабатываются вместе: тикет собирается по актуальной задаче Pyrus, дублей не будет."
+              okText="Повторить"
+              cancelText="Отмена"
+              onConfirm={() => replayProblemMutation.mutate()}
+            >
+              <Button
+                type="primary"
+                icon={<RedoOutlined />}
+                loading={replayProblemMutation.isPending}
+                disabled={scope !== 'problem' || total === 0}
+              >
+                Повторить все
+              </Button>
+            </Popconfirm>
+          </Space>
         </Space>
       )}
     >
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         <Text type="secondary">
           Событие со статусом «Ждёт данных» повторяется автоматически, пока не появятся нужные данные
-          (например, у сервера не проставлен CRMID). После исправления данных можно не ждать и повторить задачу вручную.
+          (например, у сервера не проставлен CRMID). После исправления данных можно не ждать и повторить задачу вручную. Ненужные события можно отменить.
         </Text>
         <Table<PyrusIncomingTaskDTO>
           size="small"
           rowKey="task_id"
           columns={columns}
           dataSource={tasks}
+          scroll={{ x: 1300 }}
           locale={{
             emptyText: (
               <Empty
@@ -348,6 +417,8 @@ const PyrusIncomingTasksPanel: React.FC = () => {
             expandedRowRender: (record) => (
               <TaskEventsTable
                 taskId={record.task_id}
+                onCancelEvent={(eventId) => cancelEventMutation.mutate(eventId)}
+                cancellingEventId={cancelEventMutation.isPending ? cancelEventMutation.variables : undefined}
                 onReplayEvent={(eventId) => replayEventMutation.mutate(eventId)}
                 replayingEventId={replayEventMutation.isPending ? replayEventMutation.variables : undefined}
               />

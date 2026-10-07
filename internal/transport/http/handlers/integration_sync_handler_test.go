@@ -274,3 +274,39 @@ func TestIntegrationSyncHandler_ReplayPyrusTasks(t *testing.T) {
 		t.Fatalf("ожидали replay всех проблемных задач, code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestIntegrationSyncHandler_CancelsPyrusTaskAndEvent(t *testing.T) {
+	router, _ := newPyrusTasksTestRouter(t, "integration-sync-cancel")
+	for _, url := range []string{"/pyrus/sync/incoming-events/e-1/cancel", "/pyrus/sync/incoming-tasks/500/cancel"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, url, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("отмена %s: HTTP %d, %s", url, rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/pyrus/sync/incoming-tasks?scope=all", nil))
+	var payload pyrusTasksResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range payload.Data {
+		if task.TaskID == 500 && (task.NeedsAttention || task.StatusCounts[pyrus.IncomingEventStatusCancelled] != 2) {
+			t.Fatalf("неверная сводка отмены: %+v", task)
+		}
+	}
+	for _, tc := range []struct {
+		url    string
+		status int
+	}{
+		{"/pyrus/sync/incoming-events/e-1/cancel", http.StatusConflict},
+		{"/pyrus/sync/incoming-events/missing/cancel", http.StatusNotFound},
+		{"/pyrus/sync/incoming-tasks/invalid/cancel", http.StatusBadRequest},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, tc.url, nil))
+		if rec.Code != tc.status {
+			t.Fatalf("ожидали HTTP %d для %s, получили %d", tc.status, tc.url, rec.Code)
+		}
+	}
+}

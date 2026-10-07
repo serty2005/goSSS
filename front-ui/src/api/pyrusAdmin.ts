@@ -36,6 +36,16 @@ export const pyrusAdminApi = {
     return response.data;
   },
 
+  cancelTask: async (taskId: number) => {
+    const response = await apiClient.post<ApiResponse<PyrusReplayResultDTO>>(`/integrations/pyrus/sync/incoming-tasks/${taskId}/cancel`);
+    return response.data;
+  },
+
+  cancelEvent: async (eventId: string) => {
+    const response = await apiClient.post<ApiResponse<PyrusReplayResultDTO>>(`/integrations/pyrus/sync/incoming-events/${eventId}/cancel`);
+    return response.data;
+  },
+
   replayTask: async (taskId: number) => {
     const response = await apiClient.post<ApiResponse<PyrusReplayResultDTO>>(`/integrations/pyrus/sync/incoming-tasks/${taskId}/replay`);
     return response.data;

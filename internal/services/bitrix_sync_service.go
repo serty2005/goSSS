@@ -577,7 +577,7 @@ func (s *bitrixSyncService) syncPendingComments(ctx context.Context, ticket *tic
 	}
 	for i := range comments {
 		comment := comments[i]
-		if comment.IsPrivate {
+		if comment.IsPrivate && comment.Source != tickets.CommentSourcePyrus {
 			continue
 		}
 		existing, err := s.repo.GetCommentLinkByEtalonID(ctx, comment.ID)
