@@ -1117,9 +1117,10 @@ const MainLayout: React.FC = () => {
           ) : null}
         </div>
         <Content
+          className="app-main-content"
           style={{
-            margin: screens.md ? "24px 16px" : "12px 8px",
-            padding: screens.md ? 24 : "8px 8px calc(76px + env(safe-area-inset-bottom))",
+            // На md+ отступы задаются CSS-переменными (на ноутбуках с малым экраном они компактнее).
+            ...(screens.md ? {} : { margin: "12px 8px", padding: "8px 8px calc(76px + env(safe-area-inset-bottom))" }),
             minHeight: 280,
             overflow: "initial",
             position: "relative",

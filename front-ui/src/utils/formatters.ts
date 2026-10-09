@@ -95,3 +95,18 @@ export const formatDate = (date?: string): string => {
   if (!date) return '-';
   return dayjs(date).format('DD.MM.YYYY HH:mm');
 };
+
+export const formatFileSize = (bytes?: number): string => {
+  if (!Number.isFinite(bytes) || (bytes as number) < 0) return '';
+  const value = bytes as number;
+  if (value < 1024) return `${value} Б`;
+  const units = ['КБ', 'МБ', 'ГБ'];
+  let size = value / 1024;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 10 ? Math.round(size) : Math.round(size * 10) / 10;
+  return `${String(rounded).replace('.', ',')} ${units[unitIndex]}`;
+};

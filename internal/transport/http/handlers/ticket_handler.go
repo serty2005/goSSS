@@ -43,6 +43,7 @@ var archivedStatusesForCompanyFilter = []string{
 func (h *TicketHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Get("/filters", h.Filters)
+	r.Get("/status-counts", h.StatusCounts)
 	r.Get("/stats/dashboard", h.DashboardStats)
 	r.Post("/", h.Create) // Создание внутреннего тикета
 	r.Get("/{id}", h.GetDetails)
@@ -774,10 +775,8 @@ func resolveAssigneeRecipient(assigneeID *uint, actorUserID uint) *uint {
 	return &recipient
 }
 
-// List возвращает список заявок с фильтрацией.
-func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
-	log := middleware.GetLogger(r.Context())
-
+// parseTicketListFilter разбирает параметры пагинации и фильтры списка заявок из query-строки.
+func parseTicketListFilter(r *http.Request) (tickets.TicketFilter, int, int) {
 	// Получаем параметры пагинации.
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
@@ -806,6 +805,10 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		filter.Statuses = expandStatuses(strings.Split(statusStr, ","))
 	}
+	// Исключаемые статусы нужны, чтобы не загружать свернутые группы статусов.
+	if excludeStr := r.URL.Query().Get("exclude_status"); excludeStr != "" {
+		filter.ExcludeStatuses = expandStatuses(strings.Split(excludeStr, ","))
+	}
 	if assigneeIDs := parseUintCSV(r.URL.Query().Get("assignee_ids")); len(assigneeIDs) > 0 {
 		filter.AssigneeIDs = assigneeIDs
 	}
@@ -830,6 +833,31 @@ func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
 	if assetID := r.URL.Query().Get("asset_id"); assetID != "" {
 		filter.AssetID = &assetID
 	}
+
+	return filter, limit, offset
+}
+
+// StatusCounts возвращает число заявок по статусам для текущих фильтров списка без учета фильтра по статусу.
+func (h *TicketHandler) StatusCounts(w http.ResponseWriter, r *http.Request) {
+	filter, _, _ := parseTicketListFilter(r)
+	filter.Statuses = nil
+	filter.ExcludeStatuses = nil
+
+	counts, err := h.service.CountByStatus(r.Context(), filter)
+	if err != nil {
+		response.RespondWithError(w, http.StatusInternalServerError, "Ошибка подсчета заявок по статусам")
+		return
+	}
+	response.RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"counts": counts,
+	})
+}
+
+// List возвращает список заявок с фильтрацией.
+func (h *TicketHandler) List(w http.ResponseWriter, r *http.Request) {
+	log := middleware.GetLogger(r.Context())
+
+	filter, limit, offset := parseTicketListFilter(r)
 
 	items, total, err := h.service.List(r.Context(), filter)
 	if err != nil {

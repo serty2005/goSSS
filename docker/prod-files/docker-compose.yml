@@ -153,6 +153,18 @@ services:
       - traefik.http.middlewares.minio-recordings-rewrite.replacepathregex.replacement=/telephony-recordings/$${1}
       - traefik.http.middlewares.minio-recordings-strip-auth.headers.customrequestheaders.Authorization=
 
+      - traefik.http.routers.minio-material-files.rule=(Host(`${TRAEFIK_DOMAIN}`) || Host(`${TRAEFIK_SECONDARY_DOMAIN}`)) && PathPrefix(`/material-files`)
+      - traefik.http.routers.minio-material-files.entrypoints=websecure
+      - traefik.http.routers.minio-material-files.tls=true
+      - traefik.http.routers.minio-material-files.tls.certresolver=le
+      - traefik.http.routers.minio-material-files.priority=178
+      - traefik.http.routers.minio-material-files.service=minio-material-files
+      - traefik.http.routers.minio-material-files.middlewares=minio-material-files-rewrite,minio-material-files-strip-auth,etalon-secure-headers
+      - traefik.http.services.minio-material-files.loadbalancer.server.port=9000
+      - traefik.http.middlewares.minio-material-files-rewrite.replacepathregex.regex=^/material-files/(.*)
+      - traefik.http.middlewares.minio-material-files-rewrite.replacepathregex.replacement=/${MATERIAL_FILES_BUCKET:-material-files}/$${1}
+      - traefik.http.middlewares.minio-material-files-strip-auth.headers.customrequestheaders.Authorization=
+
   minio-init:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
     restart: "no"
@@ -162,7 +174,7 @@ services:
       - /bin/sh
       - -ec
     command:
-      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; if [ -n "${MEGAFON_VATS_RECORDINGS_BUCKET}" ]; then mc mb --ignore-existing "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; mc anonymous set download "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; fi'
+      - 'until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do echo "Ожидание готовности MinIO..."; sleep 2; done; mc mb --ignore-existing "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; mc anonymous set download "local/${AGENT_ADAPTER_CATALOG_BUCKET}"; if [ -n "${MEGAFON_VATS_RECORDINGS_BUCKET}" ]; then mc mb --ignore-existing "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; mc anonymous set download "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"; fi; if [ -n "${MATERIAL_FILES_BUCKET}" ]; then mc mb --ignore-existing "local/${MATERIAL_FILES_BUCKET}"; mc anonymous set download "local/${MATERIAL_FILES_BUCKET}"; fi'
     depends_on:
       - minio
     networks:

@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { Button, Empty, List, Modal, Space, Tag, Typography } from 'antd';
-import { EditOutlined, FileTextOutlined } from '@ant-design/icons';
+import { EditOutlined, FileTextOutlined, PaperClipOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import dayjs from 'dayjs';
+import MaterialFilesList from '@/components/materials/MaterialFilesList';
 import type { CompanyScopedMaterialDTO, MaterialSourceDTO, MaterialSourceScope } from '@/types/api';
 
 const { Text } = Typography;
@@ -108,7 +109,15 @@ const TicketMaterialsTab: React.FC<Props> = ({ materials }) => {
                     <FileTextOutlined />
                     <Text strong>{item.subject}</Text>
                     {item.sources.map(renderSourceTag)}
+                    {item.files.length > 0 ? (
+                      <Tag icon={<PaperClipOutlined />} style={{ marginInlineEnd: 0 }}>{item.files.length}</Tag>
+                    ) : null}
                   </Space>
+                  {item.files.length > 0 ? (
+                    <div onClick={(event) => event.stopPropagation()}>
+                      <MaterialFilesList files={item.files} />
+                    </div>
+                  ) : null}
                   {buildPreview(item.content) ? (
                     <Text type="secondary" className="ticket-materials-tab__preview">{buildPreview(item.content)}</Text>
                   ) : null}
@@ -148,9 +157,12 @@ const TicketMaterialsTab: React.FC<Props> = ({ materials }) => {
             <Text type="secondary">
               Автор: {opened.author_name || 'Сотрудник'} • Создан: {dayjs(opened.created_at).format('DD.MM.YYYY HH:mm')} • Обновлён: {dayjs(opened.updated_at).format('DD.MM.YYYY HH:mm')}
             </Text>
-            <div className="markdown-body ticket-materials-tab__content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{opened.content}</ReactMarkdown>
-            </div>
+            {opened.files.length > 0 ? <MaterialFilesList files={opened.files} /> : null}
+            {opened.content ? (
+              <div className="markdown-body ticket-materials-tab__content">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{opened.content}</ReactMarkdown>
+              </div>
+            ) : null}
           </Space>
         ) : null}
       </Modal>

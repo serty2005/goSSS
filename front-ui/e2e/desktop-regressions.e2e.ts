@@ -417,8 +417,10 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     const secondEquipmentCardBox = await equipmentCards.nth(1).boundingBox();
     expect(firstEquipmentCardBox).not.toBeNull();
     expect(secondEquipmentCardBox).not.toBeNull();
-    expect(Math.abs((firstEquipmentCardBox?.y || 0) - (secondEquipmentCardBox?.y || 0)), 'карточки оборудования должны идти в две колонки').toBeLessThanOrEqual(4);
-    expect((secondEquipmentCardBox?.x || 0), 'вторая карточка должна быть в правой колонке').toBeGreaterThan(firstEquipmentCardBox?.x || 0);
+    // Колонка контекста на 1440 px узкая: карточки идут друг под другом и занимают всю ширину, а не сжимаются в две колонки.
+    expect(secondEquipmentCardBox?.y || 0, 'в узкой колонке карточки оборудования идут друг под другом').toBeGreaterThan((firstEquipmentCardBox?.y || 0) + 40);
+    expect(Math.abs((firstEquipmentCardBox?.x || 0) - (secondEquipmentCardBox?.x || 0))).toBeLessThanOrEqual(2);
+    expect(firstEquipmentCardBox?.width || 0, 'карточка оборудования не должна быть уже 340 px').toBeGreaterThanOrEqual(340);
 
     await sideCard.getByRole('button', { name: /IP:порт/ }).click();
     await expect(page.locator('.ant-message-notice-content').last()).toContainText('Значение скопировано');
@@ -464,6 +466,30 @@ test.describe('Desktop-регрессии ServiceDesk', () => {
     await expect(sideCard.getByText('Звонки по тикету пока не привязаны')).toBeVisible();
 
     await expectDocumentHasNoHorizontalOverflow(page);
+    expectNoBrowserErrors(browserErrors);
+  });
+
+  test('раскладывает карточки оборудования тикета в две колонки, когда колонка контекста широкая', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Сценарий проверяет desktop-карточку тикета');
+
+    const browserErrors = collectBrowserErrors(page);
+    await page.setViewportSize({ width: 2560, height: 1300 });
+    await loginAsAdmin(page);
+    await page.goto('/tickets/ticket-1001');
+
+    const equipmentGrid = page.locator('.ticket-overview-side-card .ticket-overview-equipment-grid');
+    // Две колонки карточек включены вместе с горизонтальным видом служебной информации.
+    await expect(page.locator('.ticket-service-descriptions')).not.toHaveClass(/ticket-service-descriptions--vertical/);
+    await expect(equipmentGrid).toHaveClass(/ticket-overview-equipment-grid--two-columns/);
+    const equipmentCards = equipmentGrid.locator('> .ticket-equipment-card');
+    await expect(equipmentCards).toHaveCount(5);
+    const firstBox = await equipmentCards.nth(0).boundingBox();
+    const secondBox = await equipmentCards.nth(1).boundingBox();
+    expect(firstBox).not.toBeNull();
+    expect(secondBox).not.toBeNull();
+    expect(Math.abs((firstBox?.y || 0) - (secondBox?.y || 0)), 'карточки оборудования должны идти в две колонки').toBeLessThanOrEqual(4);
+    expect(secondBox?.x || 0, 'вторая карточка должна быть в правой колонке').toBeGreaterThan(firstBox?.x || 0);
+
     expectNoBrowserErrors(browserErrors);
   });
 });

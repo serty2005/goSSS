@@ -1,6 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest';
 import {
   cleanWebUrl,
+  formatFileSize,
   getIikoWebAppLinkMeta,
   isIikoWebAddress,
   normalizeIikoWebAppUrl,
@@ -46,5 +47,15 @@ describe('formatters: адреса серверов', () => {
       url: 'https://809-613-203.iikoweb.ru/',
     });
     expect(getIikoWebAppLinkMeta('https://example.com')).toBeNull();
+  });
+});
+
+describe('formatFileSize', () => {
+  it('форматирует размер файла в русских единицах', () => {
+    expect(formatFileSize(0)).toBe('0 Б');
+    expect(formatFileSize(1023)).toBe('1023 Б');
+    expect(formatFileSize(1536)).toBe('1,5 КБ');
+    expect(formatFileSize(10 * 1024 * 1024)).toBe('10 МБ');
+    expect(formatFileSize(undefined)).toBe('');
   });
 });

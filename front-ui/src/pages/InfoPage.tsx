@@ -2,12 +2,15 @@ import React, { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Select, Skeleton, Space, Tag, Typography } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Button, Card, Empty, Input, Popconfirm, Select, Skeleton, Space, Tag, Typography } from 'antd';
+import { PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
 import { articlesApi } from '@/api/articles';
 import { materialsApi } from '@/api/materials';
 import ArticleStatusTag from '@/components/articles/ArticleStatusTag';
 import ArticleTypeTag from '@/components/articles/ArticleTypeTag';
+import MaterialEditorModal from '@/components/materials/MaterialEditorModal';
+import MaterialFilesList from '@/components/materials/MaterialFilesList';
+import { useDeleteMaterial, useDeleteMaterialFile } from '@/components/materials/useMaterialMutations';
 import type { ArticleDTO, ArticleStatus, ArticleType, MaterialDTO, MaterialEntityRefDTO } from '@/types/api';
 import { useAuthStore } from '@/store/authStore';
 
@@ -31,7 +34,11 @@ const sourceOptions = [
   { value: 'all', label: 'Все материалы' },
   { value: 'articles', label: 'Статьи' },
   { value: 'materials', label: 'Старые материалы' },
+  { value: 'files', label: 'Файлы' },
 ];
+
+// Источники, в которых показываются только материалы: фильтры статей к ним не применяются.
+const MATERIAL_ONLY_SOURCES = ['materials', 'files'];
 
 type AggregateItem =
   | { kind: 'article'; id: string; title: string; excerpt: string; updatedAt: string; article: ArticleDTO }
@@ -63,6 +70,10 @@ const InfoPage: React.FC = () => {
   const type = (searchParams.get('type') || undefined) as ArticleType | undefined;
   const status = (searchParams.get('status') || undefined) as ArticleStatus | undefined;
   const source = searchParams.get('source') || 'all';
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingMaterialID, setEditingMaterialID] = useState<string | null>(null);
+  const deleteMaterialMutation = useDeleteMaterial();
+  const { deleteFileMutation, deletingFileID } = useDeleteMaterialFile();
   const appliedTerm = searchParams.get('term') || undefined;
 
   const articleParams = useMemo(() => ({
@@ -74,13 +85,14 @@ const InfoPage: React.FC = () => {
 
   const materialsParams = useMemo(() => ({
     term: appliedTerm,
+    has_files: source === 'files' ? true : undefined,
     limit: 100,
-  }), [appliedTerm]);
+  }), [appliedTerm, source]);
 
   const articlesQuery = useQuery({
     queryKey: ['articles', articleParams],
     queryFn: () => articlesApi.list(articleParams),
-    enabled: source !== 'materials',
+    enabled: !MATERIAL_ONLY_SOURCES.includes(source),
     staleTime: 60_000,
   });
 
@@ -95,7 +107,7 @@ const InfoPage: React.FC = () => {
     const next = new URLSearchParams(searchParams);
     if (value && value !== 'all') next.set(key, value);
     else next.delete(key);
-    if (key === 'source' && value === 'materials') {
+    if (key === 'source' && value && MATERIAL_ONLY_SOURCES.includes(value)) {
       next.delete('type');
       next.delete('status');
     }
@@ -105,7 +117,7 @@ const InfoPage: React.FC = () => {
   const submitSearch = () => updateParam('term', term.trim() || undefined);
 
   const items = useMemo<AggregateItem[]>(() => {
-    const articles = source !== 'materials'
+    const articles = !MATERIAL_ONLY_SOURCES.includes(source)
       ? (articlesQuery.data?.data || []).map((article): AggregateItem => ({
         kind: 'article',
         id: article.id,
@@ -129,18 +141,30 @@ const InfoPage: React.FC = () => {
   }, [articlesQuery.data?.data, materialsQuery.data?.data, source, status, type]);
 
   const isLoading = articlesQuery.isLoading || materialsQuery.isLoading;
+  const editingMaterial = useMemo(
+    () => (editingMaterialID ? (materialsQuery.data?.data || []).find((item) => item.id === editingMaterialID) || null : null),
+    [editingMaterialID, materialsQuery.data?.data],
+  );
+
+  const openMaterialEditor = (material: MaterialDTO | null) => {
+    setEditingMaterialID(material?.id || null);
+    setEditorOpen(true);
+  };
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space style={{ justifyContent: 'space-between', width: '100%' }} align="start" wrap>
         <Space direction="vertical" size={2}>
           <Title level={2} style={{ margin: 0 }}>База знаний</Title>
-          <Text type="secondary">Статьи, новости, release notes и старые материалы из карточек сущностей.</Text>
+          <Text type="secondary">Статьи, новости, release notes, материалы и файлы - в том числе без привязки к компании или оборудованию.</Text>
         </Space>
         {canCreate ? (
-          <Link to="/info/articles/new">
-            <Button type="primary" icon={<PlusOutlined />}>Создать статью</Button>
-          </Link>
+          <Space wrap>
+            <Button icon={<PlusOutlined />} onClick={() => openMaterialEditor(null)}>Добавить материал или файл</Button>
+            <Link to="/info/articles/new">
+              <Button type="primary" icon={<PlusOutlined />}>Создать статью</Button>
+            </Link>
+          </Space>
         ) : null}
       </Space>
 
@@ -166,7 +190,7 @@ const InfoPage: React.FC = () => {
             options={typeOptions}
             onChange={(value) => updateParam('type', value)}
             style={{ width: 190 }}
-            disabled={source === 'materials'}
+            disabled={MATERIAL_ONLY_SOURCES.includes(source)}
           />
           {canCreate ? (
             <Select
@@ -176,7 +200,7 @@ const InfoPage: React.FC = () => {
               options={statusOptions}
               onChange={(value) => updateParam('status', value)}
               style={{ width: 170 }}
-              disabled={source === 'materials'}
+              disabled={MATERIAL_ONLY_SOURCES.includes(source)}
             />
           ) : null}
         </Space>
@@ -207,6 +231,12 @@ const InfoPage: React.FC = () => {
                   <>
                     <Space size={6} wrap>
                       <Tag color="default" style={{ marginInlineEnd: 0 }}>Материал</Tag>
+                      {item.material.files.length > 0 ? (
+                        <Tag icon={<PaperClipOutlined />} style={{ marginInlineEnd: 0 }}>Файлы: {item.material.files.length}</Tag>
+                      ) : null}
+                      {item.material.entity_refs.length === 0 ? (
+                        <Tag style={{ marginInlineEnd: 0 }}>Без привязки</Tag>
+                      ) : null}
                       {item.material.entity_refs.map((ref) => {
                         const meta = entityMeta[ref.entity_type];
                         return (
@@ -219,6 +249,15 @@ const InfoPage: React.FC = () => {
                       })}
                     </Space>
                     <Title level={4} style={{ margin: 0 }}>{item.title}</Title>
+                    {item.material.files.length > 0 ? (
+                      <MaterialFilesList
+                        files={item.material.files}
+                        onDelete={canCreate
+                          ? (file) => deleteFileMutation.mutate({ materialID: item.material.id, fileID: file.id })
+                          : undefined}
+                        deletingFileID={deletingFileID}
+                      />
+                    ) : null}
                   </>
                 )}
                 {item.excerpt ? (
@@ -226,12 +265,37 @@ const InfoPage: React.FC = () => {
                     {item.excerpt}
                   </Paragraph>
                 ) : null}
-                <Text type="secondary">{formatDate(item.updatedAt)}</Text>
+                <Space size={8} wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+                  <Text type="secondary">{formatDate(item.updatedAt)}</Text>
+                  {item.kind === 'material' && canCreate ? (
+                    <Space size={4}>
+                      <Button size="small" onClick={() => openMaterialEditor(item.material)}>Редактировать</Button>
+                      <Popconfirm
+                        title="Удалить материал?"
+                        description="Файлы материала тоже будут удалены."
+                        okText="Удалить"
+                        cancelText="Отмена"
+                        onConfirm={() => deleteMaterialMutation.mutate(item.material.id)}
+                      >
+                        <Button size="small" danger>Удалить</Button>
+                      </Popconfirm>
+                    </Space>
+                  ) : null}
+                </Space>
               </Space>
             </Card>
           ))}
         </div>
       )}
+
+      <MaterialEditorModal
+        open={editorOpen}
+        material={editingMaterial}
+        onClose={() => {
+          setEditorOpen(false);
+          setEditingMaterialID(null);
+        }}
+      />
     </Space>
   );
 };

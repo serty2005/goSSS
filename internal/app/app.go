@@ -155,7 +155,7 @@ func New() (*Application, error) {
 	services := setupServices(app, repos, clients)
 	app.AgentAdapterCatalogSync = services.AgentAdapterCatalogSync
 	setupBackgroundServices(app, repos, clients, services)
-	setupHandlers(app, repos, services)
+	setupHandlers(app, repos, clients, services)
 	setupIntegrationModules(app, services)
 
 	return app, nil
@@ -311,6 +311,7 @@ type ExternalClients struct {
 	RedisClient             *redis.Client
 	AgentAdapterStore       services.AgentAdapterObjectStore
 	TelephonyRecordingStore services.TelephonyRecordingObjectStore
+	MaterialFileStore       *adapterstore.MaterialFileObjectStore
 }
 
 func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *gorm.DB, linkRepo repositories.LinkRepo) (ExternalClients, error) {
@@ -330,6 +331,10 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 	if err != nil {
 		return ExternalClients{}, err
 	}
+	materialFileStore, err := adapterstore.NewMaterialFileObjectStore(context.Background(), cfg)
+	if err != nil {
+		return ExternalClients{}, err
+	}
 	return ExternalClients{
 		SDClient:                naumen.NewNaumenClient(cfg, log.With("component", "naumen_client"), db, linkRepo),
 		FTPClient:               services.NewFTPClient(cfg, log.With("component", "ftp_client")),
@@ -341,6 +346,7 @@ func setupExternalClients(cfg *config.Config, log logger.LoggerInterface, db *go
 		RedisClient:             redisClient,
 		AgentAdapterStore:       agentAdapterStore,
 		TelephonyRecordingStore: telephonyRecordingStore,
+		MaterialFileStore:       materialFileStore,
 	}, nil
 }
 
@@ -599,7 +605,7 @@ func setupBackgroundServices(app *Application, repos Repositories, clients Exter
 	)
 }
 
-func setupHandlers(app *Application, repos Repositories, srvs Services) {
+func setupHandlers(app *Application, repos Repositories, clients ExternalClients, srvs Services) {
 	app.ServerHandler = handlers.NewServerHandler(srvs.ServerService, srvs.EntityDeletionService)
 	app.WorkstationHandler = handlers.NewWSHandler(srvs.WorkstationService, srvs.EntityDeletionService)
 	app.FiscalHandler = handlers.NewFiscalHandler(srvs.FiscalService, srvs.EntityDeletionService)
@@ -633,6 +639,13 @@ func setupHandlers(app *Application, repos Repositories, srvs Services) {
 	app.EntityDeletionHandler = handlers.NewEntityDeletionHandler(srvs.EntityDeletionService)
 	app.IntegrationSyncHandler = handlers.NewIntegrationSyncHandler(srvs.IntegrationSyncControl)
 	app.MaterialHandler = handlers.NewMaterialHandler(app.DB, repos.UserRepo)
+	if clients.MaterialFileStore != nil {
+		app.MaterialHandler.WithFileStorage(
+			clients.MaterialFileStore,
+			app.Config.MaterialFiles.PublicBaseURL,
+			app.Config.MaterialFiles.MaxFileBytes,
+		)
+	}
 	app.ArticleHandler = handlers.NewArticleHandler(app.DB, repos.UserRepo, app.Config.ArticleWebhookKey)
 	app.TranslationsHandler = handlers.NewTranslationsHandler(app.DB)
 }
@@ -771,11 +784,14 @@ func (a *Application) setupRouter() *chi.Mux {
 
 		r.Route("/materials", func(r chi.Router) {
 			r.Get("/", a.MaterialHandler.List)
+			r.Get("/files-config", a.MaterialHandler.FilesConfig)
 			r.Get("/company-scope/{companyID}", a.MaterialHandler.CompanyScope)
 			r.Get("/{id}", a.MaterialHandler.Get)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/", a.MaterialHandler.Create)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Put("/{id}", a.MaterialHandler.Update)
 			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/{id}", a.MaterialHandler.Delete)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Post("/{id}/files", a.MaterialHandler.UploadFiles)
+			r.With(middleware.RequireAnyRole(user.RoleAdmin, user.RoleSupportSpecialist)).Delete("/{id}/files/{fileID}", a.MaterialHandler.DeleteFile)
 		})
 		r.Route("/articles", func(r chi.Router) {
 			r.Get("/", a.ArticleHandler.List)

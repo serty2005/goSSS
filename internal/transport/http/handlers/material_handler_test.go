@@ -25,7 +25,7 @@ func TestMaterialHandlerCompanyScopeCollectsCompanyParentAndEquipment(t *testing
 	if err != nil {
 		t.Fatalf("не удалось открыть БД: %v", err)
 	}
-	if err := db.AutoMigrate(&company.Company{}, &server.Server{}, &workstation.Workstation{}, &fiscal.FiscalRegister{}, &models.Material{}, &models.MaterialLink{}); err != nil {
+	if err := db.AutoMigrate(&company.Company{}, &server.Server{}, &workstation.Workstation{}, &fiscal.FiscalRegister{}, &models.Material{}, &models.MaterialLink{}, &models.MaterialFile{}); err != nil {
 		t.Fatalf("не удалось подготовить схему: %v", err)
 	}
 

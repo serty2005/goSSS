@@ -12,3 +12,7 @@ if [ -n "${MEGAFON_VATS_RECORDINGS_BUCKET}" ]; then
   mc mb --ignore-existing "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"
   mc anonymous set download "local/${MEGAFON_VATS_RECORDINGS_BUCKET}"
 fi
+if [ -n "${MATERIAL_FILES_BUCKET}" ]; then
+  mc mb --ignore-existing "local/${MATERIAL_FILES_BUCKET}"
+  mc anonymous set download "local/${MATERIAL_FILES_BUCKET}"
+fi

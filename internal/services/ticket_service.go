@@ -50,6 +50,7 @@ type TicketService interface {
 	List(ctx context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error)
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]tickets.LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter tickets.TicketFilter) ([]tickets.CompanyFilterItem, error)
+	CountByStatus(ctx context.Context, filter tickets.TicketFilter) (map[string]int64, error)
 	GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error)
 	GetDetails(ctx context.Context, ticketID string) (*tickets.TicketDetails, error)
 	GetConnectionCopyStats(ctx context.Context, ticketID string) ([]tickets.ConnectionCopyStat, error)
@@ -206,6 +207,15 @@ func (s *ticketServiceImpl) GetCompanyFilters(ctx context.Context, filter ticket
 		return nil, fmt.Errorf("service: get company filters: %w", err)
 	}
 	return items, nil
+}
+
+// CountByStatus возвращает число заявок по статусам в рамках фильтра.
+func (s *ticketServiceImpl) CountByStatus(ctx context.Context, filter tickets.TicketFilter) (map[string]int64, error) {
+	counts, err := s.ticketRepo.CountByStatus(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("service: count tickets by status: %w", err)
+	}
+	return counts, nil
 }
 
 func (s *ticketServiceImpl) GetDashboardStats(ctx context.Context) (*tickets.DashboardStats, error) {

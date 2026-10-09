@@ -767,6 +767,8 @@ export interface TicketListParams {
   limit?: number;
   offset?: number;
   status?: string | string[];
+  /** Статусы, которые нужно исключить из выборки (свернутые группы). */
+  exclude_status?: string;
   search?: string;
   archive_mode?: "active" | "archive" | "all";
   period_from?: string;
@@ -776,6 +778,13 @@ export interface TicketListParams {
   closed_from?: string;
   closed_to?: string;
   assignee_ids?: string | string[];
+  /** Серверная сортировка: `<поле>:<asc|desc>`, поля number, status, assignee, created_at, last_activity. */
+  sort_by?: string;
+}
+
+export interface TicketStatusCountsResponse {
+  /** Число заявок по сырым статусам backend (включая устаревшие registered, inprogress, wait). */
+  counts: Record<string, number>;
 }
 
 export type ArticleType =
@@ -1328,6 +1337,22 @@ export interface MaterialEntityRefDTO {
   entity_id: string;
 }
 
+export interface MaterialFileDTO {
+  id: string;
+  name: string;
+  content_type: string;
+  size: number;
+  /** Прямая ссылка на скачивание файла из S3. */
+  url: string;
+  created_at: string;
+}
+
+export interface MaterialFilesConfigDTO {
+  enabled: boolean;
+  max_file_bytes: number;
+  max_files: number;
+}
+
 export interface MaterialDTO {
   id: string;
   author_id?: number;
@@ -1335,6 +1360,7 @@ export interface MaterialDTO {
   subject: string;
   content: string;
   entity_refs: MaterialEntityRefDTO[];
+  files: MaterialFileDTO[];
   created_at: string;
   updated_at: string;
 }

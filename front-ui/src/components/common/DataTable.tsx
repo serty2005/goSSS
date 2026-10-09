@@ -41,6 +41,12 @@ export type DataTableSortState = {
   order: DataTableSortOrder;
 } | null;
 
+// DataTableGroupHeader описывает строки-заголовки групп: такая строка занимает всю ширину таблицы.
+export type DataTableGroupHeader<T extends object> = {
+  isHeader: (record: T) => boolean;
+  render: (record: T) => React.ReactNode;
+};
+
 export type DataTableColumn<T extends object> = ColumnType<T> & {
   key: string;
   width: number;
@@ -70,6 +76,9 @@ interface DataTableProps<T extends object> {
   sortableColumnKeys?: string[];
   sortState?: DataTableSortState;
   onSortChange?: (columnKey: string) => void;
+  /** Сортировка выполняется снаружи (на сервере): строки показываются в порядке dataSource. */
+  manualSort?: boolean;
+  groupHeader?: DataTableGroupHeader<T>;
   defaultSortState?: DataTableSortState;
   visibleColumnKeys?: string[];
   defaultVisibleColumnKeys?: string[];
@@ -388,6 +397,8 @@ const DataTable = <T extends object>({
   sortableColumnKeys,
   sortState,
   onSortChange,
+  manualSort = false,
+  groupHeader,
   defaultSortState = null,
   visibleColumnKeys,
   defaultVisibleColumnKeys,
@@ -597,15 +608,15 @@ const DataTable = <T extends object>({
     visibilityStorageKey,
   ]);
 
-  const normalizedColumns = useMemo<ColumnType<T>[]>(() => (
-    columnsState
-      .filter((column) => {
-        if (!visibleKeys) {
-          return true;
-        }
-        return visibleKeys.includes(column.key);
-      })
-      .map((column) => {
+  const normalizedColumns = useMemo<ColumnType<T>[]>(() => {
+    const visibleColumns = columnsState.filter((column) => {
+      if (!visibleKeys) {
+        return true;
+      }
+      return visibleKeys.includes(column.key);
+    });
+    return visibleColumns
+      .map((column, columnIndex) => {
         const stateIndex = columnsState.findIndex((item) => item.key === column.key);
         const isSortable = sortableColumnKeys
           ? sortableColumnKeys.includes(column.key)
@@ -615,7 +626,23 @@ const DataTable = <T extends object>({
           : (value: unknown) => <DataTableTextCell value={value} />);
         return {
           ...column,
-          render,
+          // Строка-заголовок группы объединяет все видимые колонки в первой.
+          onCell: groupHeader
+            ? (record: T, rowIndex?: number) => {
+              if (groupHeader.isHeader(record)) {
+                return { colSpan: columnIndex === 0 ? visibleColumns.length : 0 };
+              }
+              return column.onCell?.(record, rowIndex) ?? {};
+            }
+            : column.onCell,
+          render: groupHeader
+            ? (value: unknown, record: T, index: number) => {
+              if (groupHeader.isHeader(record)) {
+                return columnIndex === 0 ? groupHeader.render(record) : null;
+              }
+              return render ? render(value, record, index) : value as React.ReactNode;
+            }
+            : render,
           onHeaderCell: () => ({
             id: column.key,
             width: column.width,
@@ -634,10 +661,11 @@ const DataTable = <T extends object>({
             isResizing: isResizingColumn,
           }),
         };
-      })
-  ), [
+      });
+  }, [
     columnsState,
     effectiveSort,
+    groupHeader,
     handleResize,
     handleResizeStop,
     isResizingColumn,
@@ -647,7 +675,7 @@ const DataTable = <T extends object>({
   ]);
 
   const sortedRows = useMemo(() => {
-    if (!effectiveSort) {
+    if (!effectiveSort || manualSort) {
       return dataSource;
     }
     const sortColumn = columnsState.find((column) => column.key === effectiveSort.key);
@@ -668,7 +696,7 @@ const DataTable = <T extends object>({
       );
       return effectiveSort.order === 'asc' ? result : -result;
     });
-  }, [columnsState, dataSource, effectiveSort]);
+  }, [columnsState, dataSource, effectiveSort, manualSort]);
 
   const tableScrollX = useMemo(() => {
     return normalizedColumns.reduce((sum, column) => {
@@ -731,7 +759,14 @@ const DataTable = <T extends object>({
               },
             }}
             locale={{ emptyText: isTableLoading(loading) ? ' ' : emptyText }}
-            rowClassName={rowClassName}
+            rowClassName={groupHeader
+              ? (record, index, indent) => {
+                if (groupHeader.isHeader(record)) {
+                  return 'data-table__group-header-row';
+                }
+                return typeof rowClassName === 'function' ? rowClassName(record, index, indent) : (rowClassName || '');
+              }
+              : rowClassName}
             onHeaderRow={() => ({
               onContextMenu: (event) => {
                 if (!canOpenColumnsMenu) {

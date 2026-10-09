@@ -12,6 +12,9 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/pkg/eventbus"
 	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,10 +23,13 @@ import (
 )
 
 type ticketHandlerServiceStub struct {
-	details *tickets.TicketDetails
+	details     *tickets.TicketDetails
+	lastFilter  tickets.TicketFilter
+	countFilter tickets.TicketFilter
 }
 
-func (s *ticketHandlerServiceStub) List(context.Context, tickets.TicketFilter) ([]tickets.Ticket, int64, error) {
+func (s *ticketHandlerServiceStub) List(_ context.Context, filter tickets.TicketFilter) ([]tickets.Ticket, int64, error) {
+	s.lastFilter = filter
 	return nil, 0, nil
 }
 func (s *ticketHandlerServiceStub) GetLastComments(context.Context, []string) (map[string]tickets.LastCommentInfo, error) {
@@ -31,6 +37,10 @@ func (s *ticketHandlerServiceStub) GetLastComments(context.Context, []string) (m
 }
 func (s *ticketHandlerServiceStub) GetCompanyFilters(context.Context, tickets.TicketFilter) ([]tickets.CompanyFilterItem, error) {
 	return nil, nil
+}
+func (s *ticketHandlerServiceStub) CountByStatus(_ context.Context, filter tickets.TicketFilter) (map[string]int64, error) {
+	s.countFilter = filter
+	return map[string]int64{"new": 2}, nil
 }
 func (s *ticketHandlerServiceStub) GetDashboardStats(context.Context) (*tickets.DashboardStats, error) {
 	return nil, nil
@@ -182,5 +192,25 @@ func TestTicketHandler_PublishPyrusCommentSyncForTicketUsesTicketLink(t *testing
 	}
 	if payload.TaskID != 345176232 {
 		t.Fatalf("ожидали task_id=345176232 из pyrus_ticket_links, получили %d", payload.TaskID)
+	}
+}
+
+func TestTicketHandlerListParsesExcludedStatusesAndStatusCountsIgnoresStatusFilters(t *testing.T) {
+	stub := &ticketHandlerServiceStub{}
+	h := &TicketHandler{service: stub}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tickets?exclude_status=new,closed&status=pending&sort_by=status:asc", nil)
+	h.List(httptest.NewRecorder(), req)
+
+	if got := strings.Join(stub.lastFilter.ExcludeStatuses, ","); got != "new,registered,closed" {
+		t.Fatalf("исключаемые статусы должны включать устаревшие аналоги: %q", got)
+	}
+	if stub.lastFilter.SortBy != "status:asc" {
+		t.Fatalf("сортировка не передана в фильтр: %q", stub.lastFilter.SortBy)
+	}
+
+	h.StatusCounts(httptest.NewRecorder(), req)
+	if len(stub.countFilter.Statuses) != 0 || len(stub.countFilter.ExcludeStatuses) != 0 {
+		t.Fatalf("счетчики не должны учитывать фильтры по статусу: %+v", stub.countFilter)
 	}
 }

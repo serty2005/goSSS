@@ -1,5 +1,5 @@
 import apiClient from './axios';
-import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, ManagerTransferContactType, ManagerTransferTarget, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams } from '@/types/api';
+import { ApiResponse, BitrixServicePointDTO, ConnectionCopyStatDTO, DashboardStatsDTO, ManagerTransferContactType, ManagerTransferTarget, TicketAttachmentDTO, TicketCreatePayload, TicketDTO, TicketDetailsDTO, TicketFiltersResponse, TicketListItemDTO, TicketListParams, TicketStatusCountsResponse } from '@/types/api';
 
 export type TicketUploadRelation = 'direct' | 'inline_comment' | 'inline_description';
 
@@ -35,6 +35,21 @@ export const ticketsApi = {
     };
     const response = await apiClient.get<ApiResponse<TicketFiltersResponse>>('/tickets/filters', {
       params: normalizedParams,
+    });
+    return response.data;
+  },
+
+  // getTicketStatusCounts возвращает число заявок по статусам для фильтров списка без учета фильтра по статусу.
+  getTicketStatusCounts: async (params: TicketListParams = {}) => {
+    const response = await apiClient.get<ApiResponse<TicketStatusCountsResponse>>('/tickets/status-counts', {
+      params: {
+        search: params.search,
+        archive_mode: params.archive_mode,
+        period_from: params.period_from,
+        period_to: params.period_to,
+        company_ids: Array.isArray(params.company_ids) ? params.company_ids.join(',') : params.company_ids,
+        assignee_ids: Array.isArray(params.assignee_ids) ? params.assignee_ids.join(',') : params.assignee_ids,
+      },
     });
     return response.data;
   },

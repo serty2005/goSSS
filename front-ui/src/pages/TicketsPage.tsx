@@ -7,6 +7,7 @@
   useState,
 } from "react";
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -57,10 +58,12 @@ import { getTelephonyContactPhoneForCopy } from "@/utils/telephony";
 import { getPrimaryTicketPhone, getPrimaryTicketTelegram } from "@/utils/ticketContacts";
 import {
   getTicketStatusMeta,
+  canonicalTicketStatus,
   isClosedLikeTicketStatus,
   TICKET_ACTIVE_STATUS_VALUES,
   TICKET_STATUS_OPTIONS,
 } from "@/constants/ticketStatus";
+import { mergeStatusCounts } from "@/components/tickets/ticketStatusGroups";
 import i18n from "@/i18n/i18n";
 import { BITRIX_SERVICE_POINT_REQUIRED, getApiErrorCode, withApiError } from '@/utils/apiError';
 import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
@@ -131,10 +134,20 @@ const DEFAULT_TABLE_COLUMN_KEYS = TABLE_COLUMN_KEYS.filter(
 type TableColumnKey = (typeof TABLE_COLUMN_KEYS)[number];
 type TableSortKey =
   | "number"
+  | "status"
   | "assignee_display"
   | "created_at"
   | "last_activity";
 type TableSortOrder = "asc" | "desc";
+
+// Ключ колонки таблицы -> поле сортировки на сервере.
+const TABLE_SORT_API_FIELDS: Record<TableSortKey, string> = {
+  number: "number",
+  status: "status",
+  assignee_display: "assignee",
+  created_at: "created_at",
+  last_activity: "last_activity",
+};
 
 const encodeTableLayout = (columns: Array<{ key: string; width?: number }>) => {
   if (!columns.length) {
@@ -466,6 +479,7 @@ const TicketsPage: React.FC = () => {
     const [rawKey, rawOrder] = tableSortParam.split(":");
     if (
       (rawKey === "number" ||
+        rawKey === "status" ||
         rawKey === "assignee_display" ||
         rawKey === "created_at" ||
         rawKey === "last_activity") &&
@@ -496,11 +510,27 @@ const TicketsPage: React.FC = () => {
     };
   }, [headerAddon, setHeaderAddon, setHeaderAddonPlacement]);
 
+  const sortBy = tableSort
+    ? `${TABLE_SORT_API_FIELDS[tableSort.key]}:${tableSort.order}`
+    : undefined;
+  // Свернутые группы статусов не загружаются: сервер исключает их из выборки, заголовки строятся по счетчикам.
+  const collapsedStatuses = useMemo(
+    () => (searchParams.get("collapsed_statuses") || "").split(",").filter(Boolean),
+    [searchParams],
+  );
+  const isStatusSort = viewMode === "table" && tableSort?.key === "status";
+  const excludeStatus = isStatusSort && collapsedStatuses.length ? collapsedStatuses.join(",") : undefined;
+  const allowedGroupStatuses = useMemo(
+    () => effectiveStatusValues.map((value) => canonicalTicketStatus(value)),
+    [effectiveStatusValues],
+  );
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
     useInfiniteQuery({
       queryKey: [
         "tickets",
         {
+          sortBy,
+          excludeStatus,
           q,
           status,
           onlyActiveStatuses,
@@ -531,6 +561,8 @@ const TicketsPage: React.FC = () => {
           period_from: periodFrom || undefined,
           period_to: periodTo || undefined,
           archive_mode: archiveMode,
+          sort_by: sortBy,
+          exclude_status: excludeStatus,
           limit,
           offset: Number(pageParam) || 0,
         }),
@@ -550,13 +582,32 @@ const TicketsPage: React.FC = () => {
   );
   const visibleTickets = tickets;
   const total = data?.pages?.[0]?.meta?.total || 0;
-  const statusCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    visibleTickets.forEach((ticket) => {
-      counts.set(ticket.status, (counts.get(ticket.status) || 0) + 1);
-    });
-    return counts;
-  }, [visibleTickets]);
+  // Счетчики статусов считает сервер по всем заявкам с текущими фильтрами, кроме фильтра по статусу.
+  const { data: statusCountsResponse } = useQuery({
+    queryKey: [
+      "tickets",
+      "status-counts",
+      { q, company, assigneeIDs, periodFrom, periodTo, archiveMode },
+    ],
+    queryFn: () =>
+      ticketsApi.getTicketStatusCounts({
+        search: q || undefined,
+        company_ids: companyValues.length ? companyValues : undefined,
+        assignee_ids: assigneeIDs || undefined,
+        period_from: periodFrom || undefined,
+        period_to: periodTo || undefined,
+        archive_mode: archiveMode,
+      }),
+    enabled: viewMode === "table",
+    staleTime: 20_000,
+    placeholderData: keepPreviousData,
+    meta: { globalLoading: false },
+  });
+  const rawStatusCounts = statusCountsResponse?.data?.counts;
+  const statusCounts = useMemo(
+    () => new Map(Object.entries(mergeStatusCounts(rawStatusCounts))),
+    [rawStatusCounts],
+  );
   const { data: tableFiltersResponse, isFetching: isTableFiltersLoading } = useQuery({
     queryKey: ['ticket-table-filters', archiveMode, q, effectiveStatusValues, periodFrom, periodTo, onlyActiveStatuses],
     queryFn: () =>
@@ -937,6 +988,13 @@ const TicketsPage: React.FC = () => {
     setSearchParamsRaw(params.toString());
   }
 
+  function toggleStatusGroup(status: string) {
+    const next = collapsedStatuses.includes(status)
+      ? collapsedStatuses.filter((item) => item !== status)
+      : [...collapsedStatuses, status];
+    updateTicketParams({ collapsed_statuses: next.length ? next.join(",") : undefined });
+  }
+
   function applyTableSort(key: TableSortKey) {
     const nextOrder: TableSortOrder | null =
       tableSort?.key !== key
@@ -949,6 +1007,9 @@ const TicketsPage: React.FC = () => {
       params.delete("table_sort");
     } else {
       params.set("table_sort", `${key}:${nextOrder}`);
+    }
+    if (key !== "status" || !nextOrder) {
+      params.delete("collapsed_statuses");
     }
     params.set("page", "1");
     setSearchParamsRaw(params.toString());
@@ -1327,6 +1388,14 @@ const TicketsPage: React.FC = () => {
             }}
             sortState={tableSort}
             onSortChange={(columnKey) => applyTableSort(columnKey as TableSortKey)}
+            manualSort
+            groupByStatus={{
+              counts: rawStatusCounts,
+              collapsed: collapsedStatuses,
+              onToggle: toggleStatusGroup,
+              allowedStatuses: allowedGroupStatuses,
+              hasNextPage,
+            }}
             columnFilters={{
               status: archiveMode === "archive"
                 ? undefined

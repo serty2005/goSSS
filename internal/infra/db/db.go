@@ -75,6 +75,7 @@ func Migrate(cfg *config.Config, db *gorm.DB) error {
 		&models.CompanyContract{},
 		&models.Material{},
 		&models.MaterialLink{},
+		&models.MaterialFile{},
 		&models.Article{},
 		&models.ArticleLink{},
 		&models.ExternalSystemLink{},

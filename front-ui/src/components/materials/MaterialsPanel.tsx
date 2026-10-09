@@ -1,23 +1,20 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Typography, message } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Card, Empty, List, Popconfirm, Space, Typography } from 'antd';
+import { PaperClipOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { materialsApi } from '@/api/materials';
-import { companiesApi } from '@/api/companies';
-import { equipmentApi } from '@/api/equipment';
-import { MaterialDTO, MaterialEntityRefDTO, MaterialPayload } from '@/types/api';
-import { useUiStore } from '@/store/uiStore';
-import { SELECT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { withApiError } from '@/utils/apiError';
+import { MaterialDTO } from '@/types/api';
 import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
+import MaterialEditorModal from '@/components/materials/MaterialEditorModal';
+import MaterialFilesList from '@/components/materials/MaterialFilesList';
+import { useDeleteMaterial, useDeleteMaterialFile } from '@/components/materials/useMaterialMutations';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 type MaterialEntityType = 'Company' | 'Server' | 'Workstation' | 'FiscalRegister';
-type SelectOption = { value: string; label: string };
 
 interface MaterialsPanelProps {
   entityType: MaterialEntityType;
@@ -25,79 +22,14 @@ interface MaterialsPanelProps {
   title?: string;
 }
 
-const toRefKey = (ref: MaterialEntityRefDTO) => `${ref.entity_type}:${ref.entity_id}`;
-
-const dedupeRefs = (refs: MaterialEntityRefDTO[]) => {
-  const map = new Map<string, MaterialEntityRefDTO>();
-  refs.forEach((ref) => {
-    if (!ref.entity_id) return;
-    map.set(toRefKey(ref), ref);
-  });
-  return Array.from(map.values());
-};
-
-const mergeOptions = (...groups: SelectOption[][]): SelectOption[] => {
-  const map = new Map<string, SelectOption>();
-  groups.forEach((group) => {
-    group.forEach((item) => {
-      if (!item.value) return;
-      map.set(item.value, item);
-    });
-  });
-  return Array.from(map.values());
-};
-
-const MonacoMarkdownEditor: React.FC<{ value?: string; onChange?: (value: string) => void; themeMode: 'light' | 'dark' }> = ({ value, onChange, themeMode }) => (
-  <Editor
-    height="340px"
-    defaultLanguage="markdown"
-    theme={themeMode === 'dark' ? 'vs-dark' : 'vs'}
-    value={value || ''}
-    onChange={(nextValue) => onChange?.(nextValue || '')}
-    options={{
-      minimap: { enabled: false },
-      fontSize: 13,
-      wordWrap: 'on',
-      automaticLayout: true,
-    }}
-  />
-);
-
 const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, title }) => {
-  const themeMode = useUiStore((state) => state.themeMode);
-  const queryClient = useQueryClient();
   const [selectedID, setSelectedID] = useState<string>('');
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMaterialID = searchParams.get('material') || '';
   const requestedEdit = searchParams.get('edit') === '1';
   const [pendingEditID, setPendingEditID] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<MaterialDTO | null>(null);
-  const [companySearch, setCompanySearch] = useState('');
-  const [serverSearch, setServerSearch] = useState('');
-  const [workstationSearch, setWorkstationSearch] = useState('');
-  const [fiscalSearch, setFiscalSearch] = useState('');
-  const [companyAppliedSearch, setCompanyAppliedSearch] = useState('');
-  const [serverAppliedSearch, setServerAppliedSearch] = useState('');
-  const [workstationAppliedSearch, setWorkstationAppliedSearch] = useState('');
-  const [fiscalAppliedSearch, setFiscalAppliedSearch] = useState('');
-  const debouncedCompanySearch = useDebouncedValue(companySearch, SELECT_SEARCH_DEBOUNCE_MS);
-  const debouncedServerSearch = useDebouncedValue(serverSearch, SELECT_SEARCH_DEBOUNCE_MS);
-  const debouncedWorkstationSearch = useDebouncedValue(workstationSearch, SELECT_SEARCH_DEBOUNCE_MS);
-  const debouncedFiscalSearch = useDebouncedValue(fiscalSearch, SELECT_SEARCH_DEBOUNCE_MS);
-  const [selectedCompanyOptions, setSelectedCompanyOptions] = useState<SelectOption[]>([]);
-  const [selectedServerOptions, setSelectedServerOptions] = useState<SelectOption[]>([]);
-  const [selectedWorkstationOptions, setSelectedWorkstationOptions] = useState<SelectOption[]>([]);
-  const [selectedFiscalOptions, setSelectedFiscalOptions] = useState<SelectOption[]>([]);
-  const [fiscalOwnerNames, setFiscalOwnerNames] = useState<Record<string, string>>({});
-  const [form] = Form.useForm<{
-    subject: string;
-    content: string;
-    company_ids: string[];
-    server_ids: string[];
-    workstation_ids: string[];
-    fiscal_ids: string[];
-  }>();
+  const [editingMaterialID, setEditingMaterialID] = useState<string | null>(null);
 
   const { data: materialsRes, isLoading } = useQuery({
     queryKey: ['materials', entityType, entityID],
@@ -107,6 +39,13 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
   });
 
   const materials = useMemo(() => materialsRes?.data || [], [materialsRes?.data]);
+  // Редактируемый материал берется из списка, чтобы форма видела актуальные файлы.
+  const editingMaterial = useMemo(
+    () => (editingMaterialID ? materials.find((item) => item.id === editingMaterialID) || null : null),
+    [editingMaterialID, materials],
+  );
+  const { deleteFileMutation, deletingFileID } = useDeleteMaterialFile();
+  const deleteMutation = useDeleteMaterial();
 
   useEffect(() => {
     if (!requestedMaterialID || !materials.some((item) => item.id === requestedMaterialID)) {
@@ -142,305 +81,13 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
     [materials, selectedID],
   );
 
-  const { data: companiesRes } = useQuery({
-    queryKey: ['materials-company-search', companyAppliedSearch],
-    queryFn: () => companiesApi.searchCompanies(companyAppliedSearch, 20, 0),
-    staleTime: 20_000,
-  });
-  const { data: serversRes } = useQuery({
-    queryKey: ['materials-server-search', serverAppliedSearch],
-    queryFn: () => equipmentApi.listServers(serverAppliedSearch, 20, 0),
-    staleTime: 20_000,
-  });
-  const { data: workstationsRes } = useQuery({
-    queryKey: ['materials-workstation-search', workstationAppliedSearch],
-    queryFn: () => equipmentApi.listWorkstations(workstationAppliedSearch, 20, 0),
-    staleTime: 20_000,
-  });
-  const { data: fiscalsRes } = useQuery({
-    queryKey: ['materials-fiscal-search', fiscalAppliedSearch],
-    queryFn: () => equipmentApi.listFiscals({ term: fiscalAppliedSearch, limit: 20, offset: 0 }),
-    staleTime: 20_000,
-  });
-
-  useEffect(() => {
-    setCompanyAppliedSearch(debouncedCompanySearch);
-  }, [debouncedCompanySearch]);
-
-  useEffect(() => {
-    setServerAppliedSearch(debouncedServerSearch);
-  }, [debouncedServerSearch]);
-
-  useEffect(() => {
-    setWorkstationAppliedSearch(debouncedWorkstationSearch);
-  }, [debouncedWorkstationSearch]);
-
-  useEffect(() => {
-    setFiscalAppliedSearch(debouncedFiscalSearch);
-  }, [debouncedFiscalSearch]);
-
-  useEffect(() => {
-    const ownerIDs = Array.from(
-      new Set(
-        (fiscalsRes?.data || [])
-          .map((item) => String((item as Record<string, unknown>).owner_id || ''))
-          .filter(Boolean),
-      ),
-    );
-    if (ownerIDs.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-    void (async () => {
-      const entries = await Promise.all(ownerIDs.map(async (ownerID) => {
-        try {
-          const company = await companiesApi.getCompany(ownerID);
-          const companyData = company.data || {};
-          const ownerTitle = String(companyData.title || companyData.additional_name || ownerID);
-          return [ownerID, ownerTitle] as const;
-        } catch {
-          return [ownerID, ownerID] as const;
-        }
-      }));
-
-      if (cancelled) return;
-
-      setFiscalOwnerNames((prev) => {
-        const next = { ...prev };
-        entries.forEach(([ownerID, ownerTitle]) => {
-          next[ownerID] = ownerTitle;
-        });
-        return next;
-      });
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fiscalsRes?.data]);
-
-  const searchCompanyOptions = useMemo(
-    () => (companiesRes?.data || [])
-      .map((item) => ({
-        value: String(item.id || ''),
-        label: String(item.title || item.additional_name || item.id || ''),
-      }))
-      .filter((item) => item.value && item.label),
-    [companiesRes?.data],
-  );
-
-  const searchServerOptions = useMemo(
-    () => (serversRes?.data || [])
-      .map((item) => ({
-        value: String(item.id || ''),
-        label: String(item.device_name || item.server_name || item.id || ''),
-      }))
-      .filter((item) => item.value && item.label),
-    [serversRes?.data],
-  );
-
-  const searchWorkstationOptions = useMemo(
-    () => (workstationsRes?.data || [])
-      .map((item) => ({
-        value: String(item.id || ''),
-        label: String(item.device_name || item.id || ''),
-      }))
-      .filter((item) => item.value && item.label),
-    [workstationsRes?.data],
-  );
-
-  const searchFiscalOptions = useMemo(
-    () => (fiscalsRes?.data || [])
-      .map((item) => {
-        const row = item as Record<string, unknown>;
-        const fiscalID = String(row.id || '');
-        const ownerID = String(row.owner_id || '');
-        const ownerTitle = fiscalOwnerNames[ownerID] || ownerID || 'Без владельца';
-        const serial = String(row.fr_serial_number || row.serial_number || row.rn_kkt || fiscalID || '-');
-        return {
-          value: fiscalID,
-          label: `${ownerTitle} • ${serial}`,
-        };
-      })
-      .filter((item) => item.value && item.label),
-    [fiscalOwnerNames, fiscalsRes?.data],
-  );
-
-  const companyOptions = useMemo(
-    () => mergeOptions(selectedCompanyOptions, searchCompanyOptions),
-    [selectedCompanyOptions, searchCompanyOptions],
-  );
-  const serverOptions = useMemo(
-    () => mergeOptions(selectedServerOptions, searchServerOptions),
-    [searchServerOptions, selectedServerOptions],
-  );
-  const workstationOptions = useMemo(
-    () => mergeOptions(selectedWorkstationOptions, searchWorkstationOptions),
-    [searchWorkstationOptions, selectedWorkstationOptions],
-  );
-  const fiscalOptions = useMemo(
-    () => mergeOptions(selectedFiscalOptions, searchFiscalOptions),
-    [searchFiscalOptions, selectedFiscalOptions],
-  );
-
-  const preloadReferenceLabels = async (refs: MaterialEntityRefDTO[]) => {
-    const uniqueByType = {
-      companies: Array.from(new Set(refs.filter((ref) => ref.entity_type === 'Company').map((ref) => ref.entity_id))),
-      servers: Array.from(new Set(refs.filter((ref) => ref.entity_type === 'Server').map((ref) => ref.entity_id))),
-      workstations: Array.from(new Set(refs.filter((ref) => ref.entity_type === 'Workstation').map((ref) => ref.entity_id))),
-      fiscals: Array.from(new Set(refs.filter((ref) => ref.entity_type === 'FiscalRegister').map((ref) => ref.entity_id))),
-    };
-
-    const [companies, servers, workstations] = await Promise.all([
-      Promise.all(uniqueByType.companies.map(async (companyID) => {
-        try {
-          const company = await companiesApi.getCompany(companyID);
-          const companyData = company.data || {};
-          return {
-            value: companyID,
-            label: String(companyData.title || companyData.additional_name || companyID),
-          };
-        } catch {
-          return { value: companyID, label: companyID };
-        }
-      })),
-      Promise.all(uniqueByType.servers.map(async (serverID) => {
-        try {
-          const server = await equipmentApi.getServer(serverID);
-          const serverData = server.data || {};
-          return {
-            value: serverID,
-            label: String(serverData.device_name || serverData.server_name || serverID),
-          };
-        } catch {
-          return { value: serverID, label: serverID };
-        }
-      })),
-      Promise.all(uniqueByType.workstations.map(async (workstationID) => {
-        try {
-          const workstation = await equipmentApi.getWorkstation(workstationID);
-          const workstationData = workstation.data || {};
-          return {
-            value: workstationID,
-            label: String(workstationData.device_name || workstationID),
-          };
-        } catch {
-          return { value: workstationID, label: workstationID };
-        }
-      })),
-    ]);
-
-    const fiscalOwnerCache: Record<string, string> = { ...fiscalOwnerNames };
-    const fiscals = await Promise.all(uniqueByType.fiscals.map(async (fiscalID) => {
-      try {
-        const fiscal = await equipmentApi.getFiscal(fiscalID);
-        const fiscalData = fiscal.data || {};
-        const ownerID = String(fiscalData.owner_id || '');
-        if (ownerID && !fiscalOwnerCache[ownerID]) {
-          try {
-            const owner = await companiesApi.getCompany(ownerID);
-            const ownerData = owner.data || {};
-            fiscalOwnerCache[ownerID] = String(ownerData.title || ownerData.additional_name || ownerID);
-          } catch {
-            fiscalOwnerCache[ownerID] = ownerID;
-          }
-        }
-
-        const ownerTitle = ownerID ? (fiscalOwnerCache[ownerID] || ownerID) : 'Без владельца';
-        const serial = String(fiscalData.fr_serial_number || fiscalData.rn_kkt || fiscalID || '-');
-        return {
-          value: fiscalID,
-          label: `${ownerTitle} • ${serial}`,
-        };
-      } catch {
-        return { value: fiscalID, label: fiscalID };
-      }
-    }));
-
-    setFiscalOwnerNames((prev) => ({ ...prev, ...fiscalOwnerCache }));
-    setSelectedCompanyOptions((prev) => mergeOptions(prev, companies));
-    setSelectedServerOptions((prev) => mergeOptions(prev, servers));
-    setSelectedWorkstationOptions((prev) => mergeOptions(prev, workstations));
-    setSelectedFiscalOptions((prev) => mergeOptions(prev, fiscals));
-  };
-
-  const saveMutation = useMutation({
-    mutationFn: async (values: {
-      subject: string;
-      content: string;
-      company_ids: string[];
-      server_ids: string[];
-      workstation_ids: string[];
-      fiscal_ids: string[];
-    }) => {
-      const refs = dedupeRefs([
-        ...values.company_ids.map((id) => ({ entity_type: 'Company' as const, entity_id: id })),
-        ...values.server_ids.map((id) => ({ entity_type: 'Server' as const, entity_id: id })),
-        ...values.workstation_ids.map((id) => ({ entity_type: 'Workstation' as const, entity_id: id })),
-        ...values.fiscal_ids.map((id) => ({ entity_type: 'FiscalRegister' as const, entity_id: id })),
-        { entity_type: entityType, entity_id: entityID },
-      ]);
-
-      const payload: MaterialPayload = {
-        subject: values.subject.trim(),
-        content: values.content,
-        entity_refs: refs,
-      };
-
-      if (editingItem) {
-        return materialsApi.update(editingItem.id, payload);
-      }
-      return materialsApi.create(payload);
-    },
-    onSuccess: () => {
-      message.success(editingItem ? 'Материал обновлён' : 'Материал создан');
-      setIsModalOpen(false);
-      setEditingItem(null);
-      form.resetFields();
-      queryClient.invalidateQueries({ queryKey: ['materials', entityType, entityID] });
-    },
-    onError: (error) => {
-      message.error(withApiError('Не удалось сохранить материал', error));
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => materialsApi.delete(id),
-    onSuccess: () => {
-      message.success('Материал удалён');
-      queryClient.invalidateQueries({ queryKey: ['materials', entityType, entityID] });
-    },
-    onError: (error) => {
-      message.error(withApiError('Не удалось удалить материал', error));
-    },
-  });
-
   const openCreate = () => {
-    setEditingItem(null);
-    form.setFieldsValue({
-      subject: '',
-      content: '',
-      company_ids: entityType === 'Company' ? [entityID] : [],
-      server_ids: entityType === 'Server' ? [entityID] : [],
-      workstation_ids: entityType === 'Workstation' ? [entityID] : [],
-      fiscal_ids: entityType === 'FiscalRegister' ? [entityID] : [],
-    });
-    void preloadReferenceLabels([{ entity_type: entityType, entity_id: entityID }]);
+    setEditingMaterialID(null);
     setIsModalOpen(true);
   };
 
   const openEdit = (item: MaterialDTO) => {
-    setEditingItem(item);
-    form.setFieldsValue({
-      subject: item.subject,
-      content: item.content,
-      company_ids: item.entity_refs.filter((ref) => ref.entity_type === 'Company').map((ref) => ref.entity_id),
-      server_ids: item.entity_refs.filter((ref) => ref.entity_type === 'Server').map((ref) => ref.entity_id),
-      workstation_ids: item.entity_refs.filter((ref) => ref.entity_type === 'Workstation').map((ref) => ref.entity_id),
-      fiscal_ids: item.entity_refs.filter((ref) => ref.entity_type === 'FiscalRegister').map((ref) => ref.entity_id),
-    });
-    void preloadReferenceLabels(item.entity_refs);
+    setEditingMaterialID(item.id);
     setIsModalOpen(true);
   };
 
@@ -448,14 +95,14 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
     if (!pendingEditID || selectedMaterial?.id !== pendingEditID) {
       return;
     }
+    // Запрос редактирования пришел из URL (?material=...&edit=1).
     setPendingEditID('');
-    openEdit(selectedMaterial);
-    // openEdit пересоздается на каждом рендере; эффект реагирует только на запрос редактирования из URL.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setEditingMaterialID(selectedMaterial.id);
+    setIsModalOpen(true);
   }, [pendingEditID, selectedMaterial]);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 12 }}>
+    <div className="materials-panel">
       <Card
         size="small"
         title={title || 'Материалы'}
@@ -480,9 +127,13 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
                 onClick={() => setSelectedID(item.id)}
               >
                 <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                  <Text strong>{item.subject}</Text>
+                  <Text strong>
+                    {item.files.length > 0 ? <PaperClipOutlined style={{ marginInlineEnd: 6 }} /> : null}
+                    {item.subject}
+                  </Text>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     {item.author_name || 'Сотрудник'} • {new Date(item.updated_at).toLocaleString()}
+                    {item.files.length > 0 ? ` • файлов: ${item.files.length}` : ''}
                   </Text>
                 </Space>
               </List.Item>
@@ -515,129 +166,34 @@ const MaterialsPanel: React.FC<MaterialsPanelProps> = ({ entityType, entityID, t
             <Text type="secondary">
               Автор: {selectedMaterial.author_name || 'Сотрудник'} • Создан: {new Date(selectedMaterial.created_at).toLocaleString()} • Обновлён: {new Date(selectedMaterial.updated_at).toLocaleString()}
             </Text>
-            <div className="markdown-body" style={{ whiteSpace: 'normal' }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {selectedMaterial.content}
-              </ReactMarkdown>
-            </div>
+            {selectedMaterial.files.length > 0 ? (
+              <MaterialFilesList
+                files={selectedMaterial.files}
+                onDelete={(file) => deleteFileMutation.mutate({ materialID: selectedMaterial.id, fileID: file.id })}
+                deletingFileID={deletingFileID}
+              />
+            ) : null}
+            {selectedMaterial.content ? (
+              <div className="markdown-body" style={{ whiteSpace: 'normal' }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {selectedMaterial.content}
+                </ReactMarkdown>
+              </div>
+            ) : null}
           </Space>
         )}
       </Card>
 
-      <Modal
+      <MaterialEditorModal
         open={isModalOpen}
-        onCancel={() => {
+        material={editingMaterial}
+        defaultRefs={[{ entity_type: entityType, entity_id: entityID }]}
+        pinnedRef={{ entity_type: entityType, entity_id: entityID }}
+        onClose={() => {
           setIsModalOpen(false);
-          setEditingItem(null);
+          setEditingMaterialID(null);
         }}
-        title={editingItem ? 'Редактирование материала' : 'Новый материал'}
-        width={980}
-        okText="Сохранить"
-        cancelText="Отмена"
-        onOk={() => form.submit()}
-        confirmLoading={saveMutation.isPending}
-        destroyOnHidden
-      >
-        <Form
-          layout="vertical"
-          form={form}
-          onFinish={(values) => saveMutation.mutate(values)}
-          initialValues={{
-            subject: '',
-            content: '',
-            company_ids: [],
-            server_ids: [],
-            workstation_ids: [],
-            fiscal_ids: [],
-          }}
-        >
-          <Form.Item
-            name="subject"
-            label="Тема"
-            rules={[{ required: true, message: 'Введите тему материала' }]}
-          >
-            <Input placeholder="Краткая тема" />
-          </Form.Item>
-
-          <Form.Item
-            name="content"
-            label="Содержание (Markdown)"
-            rules={[{ required: true, message: 'Введите содержание' }]}
-          >
-            <MonacoMarkdownEditor themeMode={themeMode} />
-          </Form.Item>
-
-          <Title level={5} style={{ marginTop: 0 }}>Привязки</Title>
-
-          <Form.Item name="company_ids" label="Компании">
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              filterOption={false}
-              options={companyOptions}
-              onSearch={setCompanySearch}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setCompanyAppliedSearch(companySearch);
-                }
-              }}
-              placeholder="Найдите и выберите компании"
-            />
-          </Form.Item>
-
-          <Form.Item name="server_ids" label="Серверы">
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              filterOption={false}
-              options={serverOptions}
-              onSearch={setServerSearch}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setServerAppliedSearch(serverSearch);
-                }
-              }}
-              placeholder="Найдите и выберите серверы"
-            />
-          </Form.Item>
-
-          <Form.Item name="workstation_ids" label="Рабочие станции">
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              filterOption={false}
-              options={workstationOptions}
-              onSearch={setWorkstationSearch}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setWorkstationAppliedSearch(workstationSearch);
-                }
-              }}
-              placeholder="Найдите и выберите рабочие станции"
-            />
-          </Form.Item>
-
-          <Form.Item name="fiscal_ids" label="Фискальные регистраторы">
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              filterOption={false}
-              options={fiscalOptions}
-              onSearch={setFiscalSearch}
-              onInputKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  setFiscalAppliedSearch(fiscalSearch);
-                }
-              }}
-              placeholder="Найдите и выберите ФР (владелец • серийный номер)"
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
     </div>
   );
 };

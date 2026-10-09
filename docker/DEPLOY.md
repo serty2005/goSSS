@@ -215,6 +215,17 @@ bash docker/restore_postgres.sh ./tmp/db_backups/before-release-1.6.0/postgres.d
 - versioned release URL под `/agents/adapters/<adapter_id>/releases/...` кешировать как immutable;
 - `catalog/index.json` и `channels/*.json` не кешировать долго, потому что это mutable pointers.
 
+### Файлы материалов сущностей
+
+Файлы, приложенные к материалам компаний и оборудования, хранятся в S3 в bucket `MATERIAL_FILES_BUCKET` (по умолчанию `material-files`) под ключами `<id материала>/<id файла>/<имя файла>`.
+
+- `minio-init` создаёт bucket и включает анонимное чтение, поэтому ссылка вида `MATERIAL_FILES_PUBLIC_BASE_URL/<ключ>` скачивается без авторизации; доступ ограничен только непредсказуемостью ключа (UUID материала и файла);
+- маршрут `/material-files` в `traefik` перенаправляет запросы в bucket (`replacepathregex` подставляет `MATERIAL_FILES_BUCKET`);
+- сервер при загрузке выставляет `Content-Disposition: attachment`, поэтому браузер всегда скачивает файл и не исполняет его на домене приложения;
+- удаление файла или материала удаляет и объект S3: прямая ссылка перестаёт работать;
+- переменные: `MATERIAL_FILES_ENABLED`, `MATERIAL_FILES_BUCKET`, `MATERIAL_FILES_PUBLIC_BASE_URL` (публичный `https://<domain>/material-files`, не внутренний `http://minio:9000`), `MATERIAL_FILES_MAX_FILE_MB` (по умолчанию 50);
+- при `MATERIAL_FILES_ENABLED=false` загрузка отключена, UI показывает это в форме материала.
+
 ## 6. Первичная публикация адаптера
 
 Публикация выполняется CLI из репозитория:

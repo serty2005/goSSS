@@ -1,5 +1,10 @@
 ﻿:root {
   --app-header-message-offset: 68px;
+  --app-header-height: 64px;
+  --app-content-margin: 24px 16px;
+  --app-content-padding: 24px;
+  /* Суммарный вертикальный отступ рабочей области: margin + padding сверху и снизу. */
+  --app-content-inset-y: 96px;
   --app-bg-layout: #f0f2f5;
   --app-bg-container: #ffffff;
   --app-color-primary: #1677ff;
@@ -477,11 +482,25 @@ body .ant-message .ant-message-notice-content {
   padding-right: 20px;
 }
 
+.app-main-content {
+  margin: var(--app-content-margin);
+  padding: var(--app-content-padding);
+}
+
+/* Ноутбуки и невысокие экраны: рабочая область получает больше места. */
+@media (min-width: 768px) and (max-width: 1500px), (min-width: 768px) and (max-height: 860px) {
+  :root {
+    --app-content-margin: 12px 8px;
+    --app-content-padding: 12px;
+    --app-content-inset-y: 48px;
+  }
+}
+
 .company-details-page {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: calc(100dvh - var(--app-header-message-offset) - 32px);
+  height: calc(100dvh - var(--app-header-height) - var(--app-content-inset-y));
   min-height: 0;
 }
 
@@ -624,6 +643,7 @@ body .ant-message .ant-message-notice-content {
 }
 
 .ticket-overview-layout {
+  --ticket-comments-min-height: 340px;
   display: grid;
   width: 100%;
   grid-template-columns: minmax(0, 1.55fr) minmax(560px, 1fr);
@@ -642,18 +662,19 @@ body .ant-message .ant-message-notice-content {
   grid-area: main;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: max-content minmax(var(--ticket-comments-min-height), 1fr);
   gap: 12px;
   height: 100%;
   min-height: 0;
   min-width: 0;
+  overflow-y: auto;
 }
 
 .ticket-details-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: calc(100dvh - var(--app-header-message-offset) - 32px);
+  height: calc(100dvh - var(--app-header-height) - var(--app-content-inset-y));
   min-height: 0;
 }
 
@@ -962,10 +983,30 @@ body .ant-message .ant-message-notice-content {
   table-layout: fixed !important;
 }
 
-.ticket-service-descriptions .ant-descriptions-item-label {
+.ticket-service-descriptions:not(.ticket-service-descriptions--vertical) .ant-descriptions-item-label {
   width: 178px;
   min-width: 178px;
   white-space: nowrap;
+}
+
+.ticket-service-descriptions.ant-descriptions-bordered.ticket-service-descriptions--vertical .ant-descriptions-item-label {
+  padding: 2px 10px !important;
+  font-size: 12px;
+}
+
+.ticket-service-descriptions.ant-descriptions-bordered.ticket-service-descriptions--vertical .ant-descriptions-item-content {
+  padding: 4px 10px !important;
+}
+
+/* На невысоких экранах (ноутбуки 1366x768) комментарии должны оставаться в зоне видимости. */
+@media (max-height: 860px) {
+  .ticket-overview-layout {
+    --ticket-comments-min-height: 300px;
+  }
+
+  .ticket-overview-description-body {
+    max-height: 6.5em;
+  }
 }
 
 .ticket-service-descriptions .ant-descriptions-item-content {
@@ -1548,13 +1589,27 @@ body .ant-message .ant-message-notice-content {
 .ticket-overview-connection-grid,
 .ticket-overview-equipment-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+/* Две колонки карточек включаются одновременно с горизонтальным видом служебной информации. */
+.ticket-overview-connection-grid--two-columns,
+.ticket-overview-equipment-grid--two-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .ticket-equipment-card .ant-card-body,
 .ticket-agent-equipment-group .ant-card-body {
   min-width: 0;
+  container-type: inline-size;
+}
+
+/* Пары «поле - значение» в карточке оборудования идут в один столбец, если карточка узкая. */
+@container (max-width: 340px) {
+  .ticket-equipment-copy-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .ticket-equipment-card__header {
@@ -1612,7 +1667,7 @@ body .ant-message .ant-message-notice-content {
 .ticket-equipment-copy-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
-  gap: 24px;
+  gap: 6px;
   align-items: center;
   width: 100%;
   min-height: 34px;
@@ -1839,13 +1894,7 @@ body .ant-message .ant-message-notice-content {
 
 @media (max-width: 1760px) {
   .ticket-overview-layout {
-    grid-template-columns: minmax(0, 1.25fr) minmax(540px, 1fr);
-  }
-}
-
-@media (max-width: 1400px) {
-  .ticket-overview-connection-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1.1fr) minmax(460px, 1fr);
   }
 }
 
@@ -2121,5 +2170,75 @@ body .ant-message .ant-message-notice-content {
 
   100% {
     background-color: transparent;
+  }
+}
+
+.material-files-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.material-files-list__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 6px;
+}
+
+.material-files-list__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-files-list__size {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.material-files-list__actions {
+  flex: 0 0 auto;
+}
+
+.ticket-status-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.data-table .data-table__group-header-row > td {
+  padding-block: 4px !important;
+  cursor: pointer;
+  background: var(--app-color-primary-soft) !important;
+}
+
+.data-table .data-table__group-header-row:hover > td {
+  background: var(--app-color-primary-soft) !important;
+}
+
+/* Список материалов и просмотр: две колонки, если хватает ширины контейнера, иначе друг под другом. */
+.materials-panel {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.materials-panel .ant-card-head {
+  flex-wrap: wrap;
+}
+
+@container (max-width: 760px) {
+  .materials-panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

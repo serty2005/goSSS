@@ -122,6 +122,7 @@ type TicketRepository interface {
 	MarkCommentDeletedInBitrix(ctx context.Context, commentID string, deletedAt time.Time) error
 	GetLastComments(ctx context.Context, ticketIDs []string) (map[string]LastCommentInfo, error)
 	GetCompanyFilters(ctx context.Context, filter TicketFilter) ([]CompanyFilterItem, error)
+	CountByStatus(ctx context.Context, filter TicketFilter) (map[string]int64, error)
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
 	ListResolvedForAutoClose(ctx context.Context, threshold time.Duration) ([]Ticket, error)
 	ListExpiredDeferred(ctx context.Context, now time.Time, limit int) ([]Ticket, error)

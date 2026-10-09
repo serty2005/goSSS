@@ -11,18 +11,24 @@ import (
 	api "etalon-server/internal/transport/http/dtos"
 	"etalon-server/internal/transport/http/response"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 type MaterialHandler struct {
 	db       *gorm.DB
 	userRepo user.Repository
+
+	fileStore         MaterialFileStore
+	filePublicBaseURL string
+	fileMaxBytes      int64
 }
 
 func NewMaterialHandler(db *gorm.DB, userRepo user.Repository) *MaterialHandler {
@@ -32,11 +38,14 @@ func NewMaterialHandler(db *gorm.DB, userRepo user.Repository) *MaterialHandler 
 func (h *MaterialHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/materials", func(r chi.Router) {
 		r.Get("/", h.List)
+		r.Get("/files-config", h.FilesConfig)
 		r.Get("/company-scope/{companyID}", h.CompanyScope)
 		r.Post("/", h.Create)
 		r.Get("/{id}", h.Get)
 		r.Put("/{id}", h.Update)
 		r.Delete("/{id}", h.Delete)
+		r.Post("/{id}/files", h.UploadFiles)
+		r.Delete("/{id}/files/{fileID}", h.DeleteFile)
 	})
 }
 
@@ -52,6 +61,7 @@ type materialDTO struct {
 	Subject    string                 `json:"subject"`
 	Content    string                 `json:"content"`
 	EntityRefs []materialEntityRefDTO `json:"entity_refs"`
+	Files      []materialFileDTO      `json:"files"`
 	CreatedAt  string                 `json:"created_at"`
 	UpdatedAt  string                 `json:"updated_at"`
 }
@@ -99,7 +109,11 @@ func (h *MaterialHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if term != "" {
 		pattern := "%" + term + "%"
-		tx = tx.Where("materials.subject ILIKE ? OR materials.content ILIKE ?", pattern, pattern)
+		tx = tx.Where("materials.subject ILIKE ? OR materials.content ILIKE ? OR EXISTS (SELECT 1 FROM material_files mfn WHERE mfn.material_id = materials.id AND mfn.file_name ILIKE ?)",
+			pattern, pattern, pattern)
+	}
+	if hasFiles, _ := strconv.ParseBool(r.URL.Query().Get("has_files")); hasFiles {
+		tx = tx.Where("EXISTS (SELECT 1 FROM material_files mf WHERE mf.material_id = materials.id)")
 	}
 
 	var total int64
@@ -112,6 +126,7 @@ func (h *MaterialHandler) List(w http.ResponseWriter, r *http.Request) {
 	if err := tx.
 		Distinct("materials.*").
 		Preload("Links").
+		Preload("Files", materialFilesOrder).
 		Order("materials.updated_at DESC").
 		Limit(limit).
 		Offset(offset).
@@ -122,7 +137,7 @@ func (h *MaterialHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]materialDTO, 0, len(items))
 	for _, item := range items {
-		result = append(result, toMaterialDTO(item))
+		result = append(result, h.toMaterialDTO(item))
 	}
 
 	response.RespondWithJSON(w, http.StatusOK, api.PaginatedResponse{
@@ -275,7 +290,7 @@ func (h *MaterialHandler) CompanyScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var items []models.Material
-	if err := db.Preload("Links").
+	if err := h.preloadMaterial(db).
 		Where("id IN ?", materialIDs).
 		Order("updated_at DESC").
 		Find(&items).Error; err != nil {
@@ -291,7 +306,7 @@ func (h *MaterialHandler) CompanyScope(w http.ResponseWriter, r *http.Request) {
 			return scopeOrder[itemSources[i].Scope] < scopeOrder[itemSources[j].Scope]
 		})
 		result = append(result, companyScopedMaterialDTO{
-			materialDTO: toMaterialDTO(item),
+			materialDTO: h.toMaterialDTO(item),
 			Sources:     itemSources,
 		})
 	}
@@ -310,8 +325,7 @@ func firstNonEmpty(values ...*string) string {
 func (h *MaterialHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	var item models.Material
-	err := h.db.WithContext(r.Context()).
-		Preload("Links").
+	err := h.preloadMaterial(h.db.WithContext(r.Context())).
 		Where("id = ?", id).
 		First(&item).Error
 	if err != nil {
@@ -322,30 +336,52 @@ func (h *MaterialHandler) Get(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
-	response.RespondWithJSON(w, http.StatusOK, toMaterialDTO(item))
+	response.RespondWithJSON(w, http.StatusOK, h.toMaterialDTO(item))
 }
 
 func (h *MaterialHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var payload materialPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	var (
+		payload materialPayload
+		headers []*multipart.FileHeader
+	)
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+		if !h.filesEnabled() {
+			response.RespondWithError(w, http.StatusServiceUnavailable, errMaterialFilesDisabled.Error())
+			return
+		}
+		var (
+			status int
+			err    error
+		)
+		headers, status, err = h.readMultipartFiles(w, r)
+		if err != nil {
+			response.RespondWithError(w, status, err.Error())
+			return
+		}
+		payload, err = parseMaterialMultipartPayload(r)
+		if err != nil {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 
 	subject := strings.TrimSpace(payload.Subject)
 	content := strings.TrimSpace(payload.Content)
-	if subject == "" || content == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Тема и содержание обязательны")
+	if subject == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Тема обязательна")
+		return
+	}
+	if content == "" && len(headers) == 0 {
+		response.RespondWithError(w, http.StatusBadRequest, errMaterialWithoutBody.Error())
 		return
 	}
 
 	refs, err := h.normalizeRefs(payload.EntityRefs)
 	if err != nil {
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if len(refs) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "Нужна хотя бы одна привязка к сущности")
 		return
 	}
 
@@ -355,6 +391,16 @@ func (h *MaterialHandler) Create(w http.ResponseWriter, r *http.Request) {
 		AuthorName: authorName,
 		Subject:    subject,
 		Content:    content,
+	}
+	item.ID = uuid.New().String()
+
+	var files []models.MaterialFile
+	if len(headers) > 0 {
+		files, err = h.storeFiles(r.Context(), item.ID, headers, authorID)
+		if err != nil {
+			response.RespondWithError(w, http.StatusBadGateway, "Не удалось сохранить файлы: "+err.Error())
+			return
+		}
 	}
 
 	err = h.db.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
@@ -374,14 +420,20 @@ func (h *MaterialHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return tx.Preload("Links").First(item, "id = ?", item.ID).Error
+		if len(files) > 0 {
+			if err := tx.Create(&files).Error; err != nil {
+				return err
+			}
+		}
+		return h.preloadMaterial(tx).First(item, "id = ?", item.ID).Error
 	})
 	if err != nil {
+		h.deleteStoredFiles(files)
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusCreated, toMaterialDTO(*item))
+	response.RespondWithJSON(w, http.StatusCreated, h.toMaterialDTO(*item))
 }
 
 func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -394,8 +446,8 @@ func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	subject := strings.TrimSpace(payload.Subject)
 	content := strings.TrimSpace(payload.Content)
-	if subject == "" || content == "" {
-		response.RespondWithError(w, http.StatusBadRequest, "Тема и содержание обязательны")
+	if subject == "" {
+		response.RespondWithError(w, http.StatusBadRequest, "Тема обязательна")
 		return
 	}
 	refs, err := h.normalizeRefs(payload.EntityRefs)
@@ -403,15 +455,20 @@ func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(refs) == 0 {
-		response.RespondWithError(w, http.StatusBadRequest, "Нужна хотя бы одна привязка к сущности")
-		return
-	}
 
 	var item models.Material
 	err = h.db.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("id = ?", id).First(&item).Error; err != nil {
 			return err
+		}
+		if content == "" {
+			var filesCount int64
+			if err := tx.Model(&models.MaterialFile{}).Where("material_id = ?", id).Count(&filesCount).Error; err != nil {
+				return err
+			}
+			if filesCount == 0 {
+				return errMaterialWithoutBody
+			}
 		}
 		item.Subject = subject
 		item.Content = content
@@ -429,25 +486,32 @@ func (h *MaterialHandler) Update(w http.ResponseWriter, r *http.Request) {
 				EntityID:   ref.EntityID,
 			})
 		}
-		if err := tx.Create(&links).Error; err != nil {
-			return err
+		if len(links) > 0 {
+			if err := tx.Create(&links).Error; err != nil {
+				return err
+			}
 		}
-		return tx.Preload("Links").First(&item, "id = ?", id).Error
+		return h.preloadMaterial(tx).First(&item, "id = ?", id).Error
 	})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.RespondWithError(w, http.StatusNotFound, "Not Found")
 			return
 		}
+		if errors.Is(err, errMaterialWithoutBody) {
+			response.RespondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
-	response.RespondWithJSON(w, http.StatusOK, toMaterialDTO(item))
+	response.RespondWithJSON(w, http.StatusOK, h.toMaterialDTO(item))
 }
 
 func (h *MaterialHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	var files []models.MaterialFile
 	err := h.db.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		res := tx.Where("id = ?", id).Delete(&models.Material{})
 		if res.Error != nil {
@@ -456,7 +520,10 @@ func (h *MaterialHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if res.RowsAffected == 0 {
 			return domain.ErrNotFound
 		}
-		return nil
+		if err := tx.Where("material_id = ?", id).Find(&files).Error; err != nil {
+			return err
+		}
+		return tx.Where("material_id = ?", id).Delete(&models.MaterialFile{}).Error
 	})
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -466,7 +533,18 @@ func (h *MaterialHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		response.RespondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
+	h.deleteStoredFiles(files)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// materialFilesOrder сортирует файлы материала по времени загрузки.
+func materialFilesOrder(db *gorm.DB) *gorm.DB {
+	return db.Order("created_at ASC, id ASC")
+}
+
+// preloadMaterial подгружает связи и файлы материала.
+func (h *MaterialHandler) preloadMaterial(db *gorm.DB) *gorm.DB {
+	return db.Preload("Links").Preload("Files", materialFilesOrder)
 }
 
 func (h *MaterialHandler) normalizeRefs(refs []materialEntityRefDTO) ([]materialEntityRefDTO, error) {
@@ -559,7 +637,7 @@ func (h *MaterialHandler) resolveAuthor(ctx context.Context) (*uint, string) {
 	return &userID, name
 }
 
-func toMaterialDTO(item models.Material) materialDTO {
+func (h *MaterialHandler) toMaterialDTO(item models.Material) materialDTO {
 	entityRefs := make([]materialEntityRefDTO, 0, len(item.Links))
 	for _, link := range item.Links {
 		entityRefs = append(entityRefs, materialEntityRefDTO{
@@ -574,6 +652,7 @@ func toMaterialDTO(item models.Material) materialDTO {
 		Subject:    item.Subject,
 		Content:    item.Content,
 		EntityRefs: entityRefs,
+		Files:      h.toMaterialFileDTOs(item.Files),
 		CreatedAt:  item.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:  item.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

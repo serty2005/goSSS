@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"etalon-server/internal/infra/config"
@@ -49,6 +50,41 @@ func NewTelephonyRecordingObjectStore(ctx context.Context, cfg *config.Config) (
 		return nil, err
 	}
 	return &telephonyRecordingObjectStore{store: store}, nil
+}
+
+// MaterialFileObjectStore хранит файлы материалов сущностей в отдельном S3 bucket.
+type MaterialFileObjectStore struct {
+	store *s3store.BucketStore
+}
+
+// NewMaterialFileObjectStore возвращает nil, если хранилище файлов материалов выключено.
+func NewMaterialFileObjectStore(ctx context.Context, cfg *config.Config) (*MaterialFileObjectStore, error) {
+	if cfg == nil || !cfg.MaterialFiles.Enabled {
+		return nil, nil
+	}
+	service, err := s3store.New(ctx, cfg.S3)
+	if err != nil {
+		return nil, err
+	}
+
+	store, err := service.Bucket(ctx, strings.TrimSpace(cfg.MaterialFiles.Bucket), true)
+	if err != nil {
+		return nil, err
+	}
+	return &MaterialFileObjectStore{store: store}, nil
+}
+
+// PutFile записывает файл по ключу. Заголовок Content-Disposition принудительно включает скачивание.
+func (s *MaterialFileObjectStore) PutFile(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string, contentDisposition string) error {
+	return s.store.PutReader(ctx, key, body, size, s3store.PutReaderOptions{
+		ContentType:        contentType,
+		ContentDisposition: contentDisposition,
+	})
+}
+
+// DeleteFile удаляет объект по ключу.
+func (s *MaterialFileObjectStore) DeleteFile(ctx context.Context, key string) error {
+	return s.store.DeleteObject(ctx, key)
 }
 
 func (s *agentAdapterObjectStore) GetObject(ctx context.Context, key string) ([]byte, error) {

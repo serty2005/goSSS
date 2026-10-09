@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Checkbox, DatePicker, Space, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
-import { LinkOutlined } from '@ant-design/icons';
+import { DownOutlined, LinkOutlined, RightOutlined } from '@ant-design/icons';
 import type { TableProps } from 'antd/es/table';
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -10,6 +10,7 @@ import { profileApi } from '@/api/profile';
 import { ticketsApi } from '@/api/tickets';
 import { TicketListItemDTO, TicketStatus, UserProfileConfigDTO } from '@/types/api';
 import { getTicketStatusMeta, isClosedLikeTicketStatus } from '@/constants/ticketStatus';
+import { buildStatusGroupRows, isStatusGroupRow, type TicketTableRow } from '@/components/tickets/ticketStatusGroups';
 import { useAuthStore } from '@/store/authStore';
 import { normalizeTicketPreview } from '@/utils/ticketText';
 import DataTable, {
@@ -44,6 +45,19 @@ interface Props {
   sortState?: TableSortState;
   sortableColumnKeys?: string[];
   onSortChange?: (columnKey: string) => void;
+  /** Сортировка выполняется на сервере: таблица не пересортировывает загруженные строки. */
+  manualSort?: boolean;
+  /**
+   * Включает строки-заголовки групп по статусам при сортировке по статусу.
+   * counts - число заявок по статусам на сервере, collapsed - свернутые статусы (их заявки не загружаются).
+   */
+  groupByStatus?: {
+    counts?: Record<string, number>;
+    collapsed: string[];
+    onToggle: (status: string) => void;
+    allowedStatuses?: string[];
+    hasNextPage?: boolean;
+  };
   onRowClick?: (record: TicketListItemDTO, event: React.MouseEvent<HTMLElement>) => void;
   rowClassName?: TableProps<TicketListItemDTO>['rowClassName'];
   showSelectionColumn?: boolean;
@@ -99,7 +113,7 @@ type TicketTableColumnFilters = {
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
 const TABLE_LAYOUT_KEY = 'company_ticket_table';
-const WORKSPACE_SORTABLE_COLUMN_KEYS = ['number', 'assignee_display', 'created_at', 'last_activity'];
+const WORKSPACE_SORTABLE_COLUMN_KEYS = ['number', 'status', 'assignee_display', 'created_at', 'last_activity'];
 
 const formatDateTime = (value?: string) => {
   if (!value) return '-';
@@ -275,6 +289,8 @@ const TicketTable: React.FC<Props> = ({
   sortState,
   sortableColumnKeys,
   onSortChange,
+  manualSort,
+  groupByStatus,
   onRowClick,
   rowClassName,
   showSelectionColumn,
@@ -392,6 +408,51 @@ const TicketTable: React.FC<Props> = ({
     return sourceRows.filter((item) => String(item.id) !== excludedID);
   }, [dataSource, excludedTicketId, isControlledData, rawRows]);
   const effectiveSort = sortState !== undefined ? sortState : tableSort;
+  const isStatusGrouped = Boolean(groupByStatus) && effectiveSort?.key === 'status';
+  const statusGroupCounts = groupByStatus?.counts;
+  const statusGroupCollapsed = groupByStatus?.collapsed;
+  const statusGroupAllowed = groupByStatus?.allowedStatuses;
+  const statusGroupHasNextPage = groupByStatus?.hasNextPage ?? false;
+  const toggleStatusGroup = groupByStatus?.onToggle;
+  const displayRows = useMemo<TicketTableRow[]>(
+    () => (isStatusGrouped
+      ? buildStatusGroupRows(rows, {
+        counts: statusGroupCounts,
+        collapsed: new Set(statusGroupCollapsed),
+        order: effectiveSort?.order === 'desc' ? 'desc' : 'asc',
+        allowedStatuses: new Set(statusGroupAllowed),
+        hasNextPage: statusGroupHasNextPage,
+      })
+      : rows),
+    [effectiveSort?.order, isStatusGrouped, rows, statusGroupAllowed, statusGroupCollapsed, statusGroupCounts, statusGroupHasNextPage],
+  );
+  const statusGroupHeader = useMemo(() => (isStatusGrouped ? {
+    isHeader: (record: TicketTableRow) => isStatusGroupRow(record),
+    render: (record: TicketTableRow) => {
+      const group = record.statusGroup;
+      if (!group) return null;
+      const meta = getTicketStatusMeta(group.status);
+      return (
+        <div
+          className="ticket-status-group-header"
+          role="button"
+          tabIndex={0}
+          aria-expanded={!group.collapsed}
+          aria-label={`${meta.label}: ${group.count}`}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggleStatusGroup?.(group.status);
+            }
+          }}
+        >
+          {group.collapsed ? <RightOutlined /> : <DownOutlined />}
+          <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.label}</Tag>
+          <Text type="secondary">{group.count}</Text>
+        </div>
+      );
+    },
+  } : undefined), [isStatusGrouped, toggleStatusGroup]);
   const fetchedTotal = data?.pages?.[0]?.meta?.total || 0;
   const visibleTotal = total ?? Math.max(0, fetchedTotal - (rawRows.length - rows.length));
 
@@ -961,8 +1022,10 @@ const TicketTable: React.FC<Props> = ({
       </Space>
       )}
 
-      <DataTable<TicketListItemDTO>
-        dataSource={rows}
+      <DataTable<TicketTableRow>
+        dataSource={displayRows}
+        manualSort={manualSort}
+        groupHeader={statusGroupHeader}
         columns={tableColumns}
         rowKey="id"
         loading={tableLoading}
@@ -994,6 +1057,10 @@ const TicketTable: React.FC<Props> = ({
         rowClassName={rowClassName}
         onRow={(record) => ({
           onClick: (event) => {
+            if (record.statusGroup) {
+              toggleStatusGroup?.(record.statusGroup.status);
+              return;
+            }
             if (onRowClick) {
               onRowClick(record, event);
               return;

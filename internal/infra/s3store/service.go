@@ -119,6 +119,30 @@ func (s *BucketStore) PutObject(ctx context.Context, key string, body []byte, co
 	return nil
 }
 
+// PutReaderOptions описывает потоковую запись объекта известного размера.
+type PutReaderOptions struct {
+	ContentType        string
+	ContentDisposition string
+}
+
+// PutReader записывает объект из seekable-источника без загрузки всего содержимого в память.
+func (s *BucketStore) PutReader(ctx context.Context, key string, body io.ReadSeeker, size int64, options PutReaderOptions) error {
+	input := &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          body,
+		ContentLength: aws.Int64(size),
+		ContentType:   aws.String(defaultContentType(options.ContentType)),
+	}
+	if disposition := strings.TrimSpace(options.ContentDisposition); disposition != "" {
+		input.ContentDisposition = aws.String(disposition)
+	}
+	if _, err := s.client.PutObject(ctx, input); err != nil {
+		return fmt.Errorf("не удалось записать объект %s: %w", key, err)
+	}
+	return nil
+}
+
 func (s *BucketStore) PutFile(ctx context.Context, key string, filePath string, contentType string) error {
 	file, err := os.Open(filePath)
 	if err != nil {

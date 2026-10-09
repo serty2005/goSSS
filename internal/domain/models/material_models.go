@@ -12,6 +12,19 @@ type Material struct {
 	Subject    string         `json:"subject" gorm:"type:text;not null"`
 	Content    string         `json:"content" gorm:"type:text;not null"`
 	Links      []MaterialLink `json:"links,omitempty" gorm:"foreignKey:MaterialID;constraint:OnDelete:CASCADE"`
+	Files      []MaterialFile `json:"files,omitempty" gorm:"foreignKey:MaterialID;constraint:OnDelete:CASCADE"`
+}
+
+// MaterialFile - файл материала, хранящийся в S3 и доступный по прямой ссылке.
+type MaterialFile struct {
+	ID           string    `json:"id" gorm:"primaryKey;type:text"`
+	MaterialID   string    `json:"material_id" gorm:"type:text;not null;index"`
+	FileName     string    `json:"file_name" gorm:"type:text;not null"`
+	ContentType  string    `json:"content_type" gorm:"type:varchar(255)"`
+	Size         int64     `json:"size" gorm:"not null;default:0"`
+	StorageKey   string    `json:"storage_key" gorm:"type:text;not null;uniqueIndex"`
+	UploadedByID *uint     `json:"uploaded_by_id,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type MaterialLink struct {

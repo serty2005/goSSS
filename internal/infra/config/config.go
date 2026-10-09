@@ -41,6 +41,14 @@ type MegafonVATSRecordingsConfig struct {
 	RetentionDays int
 }
 
+// MaterialFilesConfig описывает хранилище файлов материалов сущностей в S3.
+type MaterialFilesConfig struct {
+	Enabled       bool
+	Bucket        string
+	PublicBaseURL string
+	MaxFileBytes  int64
+}
+
 // Config хранит всю конфигурацию приложения.
 type Config struct {
 	ServerPort         string
@@ -175,6 +183,7 @@ type Config struct {
 	MegafonVATSRetryBase           time.Duration
 	MegafonVATSRetryMax            time.Duration
 	MegafonVATSRecordings          MegafonVATSRecordingsConfig
+	MaterialFiles                  MaterialFilesConfig
 
 	RedisAddr     string
 	RedisPassword string
@@ -340,6 +349,12 @@ func New() *Config {
 			Bucket:        strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_BUCKET", "telephony-recordings")),
 			PublicBaseURL: strings.TrimRight(strings.TrimSpace(getEnv("MEGAFON_VATS_RECORDINGS_PUBLIC_BASE_URL", "")), "/"),
 			RetentionDays: max(1, getEnvAsInt("MEGAFON_VATS_RECORDINGS_RETENTION_DAYS", 7)),
+		},
+		MaterialFiles: MaterialFilesConfig{
+			Enabled:       getEnvAsBool("MATERIAL_FILES_ENABLED", false),
+			Bucket:        strings.TrimSpace(getEnv("MATERIAL_FILES_BUCKET", "material-files")),
+			PublicBaseURL: strings.TrimRight(strings.TrimSpace(getEnv("MATERIAL_FILES_PUBLIC_BASE_URL", "")), "/"),
+			MaxFileBytes:  int64(max(1, getEnvAsInt("MATERIAL_FILES_MAX_FILE_MB", 50))) << 20,
 		},
 
 		RedisAddr:     strings.TrimSpace(getEnv("REDIS_ADDR", "localhost:6379")),

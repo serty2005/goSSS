@@ -573,6 +573,11 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
       return;
     }
 
+    if (method === 'GET' && path === '/tickets/status-counts') {
+      await route.fulfill(json(ok({ counts: { new: 5, registered: 1, in_progress: 3 } })));
+      return;
+    }
+
     if (method === 'GET' && path === '/tickets/filters') {
       await route.fulfill(json(ok({
         companies: [
@@ -923,6 +928,55 @@ export const installMockApi = async (page: Page, options: MockApiOptions = {}) =
         offset: Number(url.searchParams.get('offset') || 0),
         has_next: false,
       })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/materials/files-config') {
+      await route.fulfill(json(ok({ enabled: true, max_file_bytes: 52428800, max_files: 10 })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/materials') {
+      const materials = [
+        {
+          id: 'material-file-1',
+          author_name: 'Администратор ServiceDesk',
+          subject: 'Схема сети ресторана',
+          content: '',
+          entity_refs: [],
+          files: [{
+            id: 'file-1',
+            name: 'схема.pdf',
+            content_type: 'application/pdf',
+            size: 2048,
+            url: 'https://sd.example.com/material-files/material-file-1/file-1/schema.pdf',
+            created_at: '2026-10-09T09:00:00+03:00',
+          }],
+          created_at: '2026-10-09T09:00:00+03:00',
+          updated_at: '2026-10-09T09:00:00+03:00',
+        },
+        {
+          id: 'material-note-1',
+          author_name: 'Администратор ServiceDesk',
+          subject: 'Заметка без файлов',
+          content: 'Текст заметки',
+          entity_refs: [{ entity_type: 'Company', entity_id: 'company-1' }],
+          files: [],
+          created_at: '2026-10-08T09:00:00+03:00',
+          updated_at: '2026-10-08T09:00:00+03:00',
+        },
+      ].filter((item) => url.searchParams.get('has_files') !== 'true' || item.files.length > 0);
+      await route.fulfill(json(ok(materials, {
+        total: materials.length,
+        limit: Number(url.searchParams.get('limit') || 50),
+        offset: 0,
+        has_next: false,
+      })));
+      return;
+    }
+
+    if (method === 'GET' && path === '/articles') {
+      await route.fulfill(json(ok([], { total: 0, limit: 100, offset: 0, has_next: false })));
       return;
     }
 

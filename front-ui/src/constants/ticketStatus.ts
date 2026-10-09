@@ -51,10 +51,22 @@ export const TICKET_CLOSED_LIKE_STATUS_VALUES: TicketStatus[] = [
   'execution',
 ];
 
+// Устаревшие статусы backend, которые показываются как актуальные (совпадает с expandStatuses на сервере).
+const LEGACY_TICKET_STATUS_ALIASES: Record<string, TicketStatus> = {
+  registered: 'new',
+  inprogress: 'in_progress',
+  wait: 'pending',
+};
+
+// canonicalTicketStatus приводит устаревший статус к актуальному, чтобы заявки группировались вместе.
+export const canonicalTicketStatus = (status?: string): string =>
+  (status && LEGACY_TICKET_STATUS_ALIASES[status]) || status || '';
+
 export const isClosedLikeTicketStatus = (status?: string) =>
   Boolean(status) && TICKET_CLOSED_LIKE_STATUS_VALUES.includes(status as TicketStatus);
 
-export const getTicketStatusMeta = (status?: string): TicketStatusMeta => {
+export const getTicketStatusMeta = (rawStatus?: string): TicketStatusMeta => {
+  const status = canonicalTicketStatus(rawStatus);
   if (!status) {
     return {
       ...UNKNOWN_STATUS_META,

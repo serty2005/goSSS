@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ const (
 	ticketSortFieldNumber         = "number"
 	ticketSortFieldStatus         = "status"
 	ticketSortFieldLastActivity   = "last_activity"
+	ticketSortFieldAssignee       = "assignee"
 )
 
 var ticketSortableColumns = map[string]clause.Column{
@@ -58,6 +60,39 @@ var ticketSortableColumns = map[string]clause.Column{
 	ticketSortFieldNumber:       {Table: ticketTableName, Name: "number"},
 	ticketSortFieldStatus:       {Table: ticketTableName, Name: "status"},
 }
+
+// ticketStatusSortGroups задает порядок групп при сортировке по статусу.
+// Порядок совпадает со списком статусов в интерфейсе; устаревшие статусы входят в группу актуального.
+// Статусы вне списка попадают в конец.
+var ticketStatusSortGroups = [][]string{
+	{tickets.StatusNew, "registered"},
+	{tickets.StatusInProgress, "inprogress"},
+	{tickets.StatusPending, "wait"},
+	{tickets.StatusDeferred},
+	{tickets.StatusOnsite},
+	{tickets.StatusToManager},
+	{tickets.StatusResolved},
+	{tickets.StatusSpam},
+	{tickets.StatusExecution},
+	{tickets.StatusClosed},
+}
+
+// ticketStatusRankExpr возвращает SQL-выражение с номером группы статуса.
+func ticketStatusRankExpr() string {
+	var builder strings.Builder
+	builder.WriteString("CASE " + ticketTableName + ".status")
+	for rank, group := range ticketStatusSortGroups {
+		for _, status := range group {
+			fmt.Fprintf(&builder, " WHEN '%s' THEN %d", status, rank)
+		}
+	}
+	fmt.Fprintf(&builder, " ELSE %d END", len(ticketStatusSortGroups))
+	return builder.String()
+}
+
+// ticketAssigneeNameExpr возвращает SQL-выражение с именем исполнителя для сортировки.
+const ticketAssigneeNameExpr = "COALESCE((SELECT COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) FROM " +
+	ticketUserTableName + " su WHERE su.id = " + ticketTableName + ".assignee_id), '')"
 
 func NewTicketRepo(db *gorm.DB) tickets.TicketRepository {
 	return &ticketRepo{db: db}
@@ -474,6 +509,25 @@ func (r *ticketRepo) Count(ctx context.Context, filter tickets.TicketFilter) (in
 	var count int64
 	err := r.buildQuery(ctx, filter).Count(&count).Error
 	return count, err
+}
+
+// CountByStatus возвращает число заявок по каждому статусу в рамках фильтра.
+func (r *ticketRepo) CountByStatus(ctx context.Context, filter tickets.TicketFilter) (map[string]int64, error) {
+	var rows []struct {
+		Status string
+		Count  int64
+	}
+	if err := r.buildQuery(ctx, filter).
+		Select(ticketTableName + ".status AS status, COUNT(*) AS count").
+		Group(ticketTableName + ".status").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		counts[row.Status] = row.Count
+	}
+	return counts, nil
 }
 
 func (r *ticketRepo) buildQuery(ctx context.Context, filter tickets.TicketFilter) *gorm.DB {
@@ -1024,14 +1078,34 @@ func withTicketParentCompanyJoin(query *gorm.DB) *gorm.DB {
 	return query.Joins(ticketParentCompanyJoinClause)
 }
 
+// applyTicketSort применяет сортировку списка. К любому порядку добавляется детерминированный хвост
+// (для статуса - свежая активность, затем id), чтобы страницы с offset не пересекались.
 func applyTicketSort(query *gorm.DB, rawSort string) *gorm.DB {
 	sortField, desc := parseTicketSort(rawSort)
-	column, ok := ticketSortableColumns[sortField]
-	if !ok {
-		column = ticketSortableColumns[ticketSortFieldCreatedAt]
-		desc = true
+	latestFirst := clause.OrderByColumn{Column: ticketSortableColumns[ticketSortFieldUpdatedAt], Desc: true}
+
+	switch sortField {
+	case ticketSortFieldStatus:
+		// Статусы вне известного списка делят общий ранг, поэтому группируются по тексту статуса.
+		unknownStatusExpr := fmt.Sprintf("CASE WHEN %s >= %d THEN %s.status ELSE '' END",
+			ticketStatusRankExpr(), len(ticketStatusSortGroups), ticketTableName)
+		query = query.
+			Order(clause.OrderByColumn{Column: clause.Column{Name: ticketStatusRankExpr(), Raw: true}, Desc: desc}).
+			Order(clause.OrderByColumn{Column: clause.Column{Name: unknownStatusExpr, Raw: true}, Desc: desc}).
+			Order(latestFirst)
+	case ticketSortFieldAssignee:
+		query = query.
+			Order(clause.OrderByColumn{Column: clause.Column{Name: ticketAssigneeNameExpr, Raw: true}, Desc: desc}).
+			Order(latestFirst)
+	default:
+		column, ok := ticketSortableColumns[sortField]
+		if !ok {
+			column = ticketSortableColumns[ticketSortFieldCreatedAt]
+			desc = true
+		}
+		query = query.Order(clause.OrderByColumn{Column: column, Desc: desc})
 	}
-	return query.Order(clause.OrderByColumn{Column: column, Desc: desc})
+	return query.Order(clause.OrderByColumn{Column: clause.Column{Table: ticketTableName, Name: "id"}})
 }
 
 func parseTicketSort(rawSort string) (string, bool) {
@@ -1047,7 +1121,7 @@ func parseTicketSort(rawSort string) (string, bool) {
 		desc = false
 	}
 
-	if _, ok := ticketSortableColumns[field]; !ok {
+	if _, ok := ticketSortableColumns[field]; !ok && field != ticketSortFieldAssignee {
 		return ticketSortFieldCreatedAt, true
 	}
 	return field, desc

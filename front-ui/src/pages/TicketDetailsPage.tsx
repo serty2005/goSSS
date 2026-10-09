@@ -1,6 +1,6 @@
 ﻿import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Grid, Input, List, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
+import { Alert, Button, Card, Checkbox, DatePicker, Descriptions, Empty, Input, List, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, MessageOutlined, PaperClipOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -23,6 +23,7 @@ import { getTelephonyContactPhoneDisplay, getTelephonyContactPhoneForCopy } from
 import { getPrimaryTicketPhone, getPrimaryTicketTelegram } from '@/utils/ticketContacts';
 import { getIikoWebAppLinkMeta } from '@/utils/formatters';
 import { useBackNavigation } from '@/hooks/useBackNavigation';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import { useAuthStore } from '@/store/authStore';
 import { getTicketStatusMeta, isClosedLikeTicketStatus, TICKET_STATUS_OPTIONS } from '@/constants/ticketStatus';
 import AgentObservationRawModal from '@/components/agents/AgentObservationRawModal';
@@ -45,7 +46,10 @@ import { collectChecklistStats } from '@/features/tickets/checklist/checklistTre
 import LoadingPlaceholder from '@/components/common/LoadingPlaceholder';
 
 const { Title, Text } = Typography;
-const { useBreakpoint } = Grid;
+// Ниже этой ширины основной колонки подпись поля показывается над значением, а не слева от него.
+const SERVICE_INFO_HORIZONTAL_MIN_WIDTH = 860;
+// Ниже этой ширины поля идут в один столбец.
+const SERVICE_INFO_SINGLE_COLUMN_MAX_WIDTH = 420;
 const LazyNewTicketModal = React.lazy(() => import('@/components/tickets/NewTicketModal'));
 type UploadRequestOption = Parameters<NonNullable<UploadProps['customRequest']>>[0];
 
@@ -471,7 +475,7 @@ const TicketServerPollButton: React.FC<TicketServerPollButtonProps> = ({ serverI
 };
 
 const TicketDetailsPage: React.FC = () => {
-  const screens = useBreakpoint();
+  const [overviewMainRef, overviewMainWidth] = useElementWidth<HTMLDivElement>();
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -547,7 +551,9 @@ const TicketDetailsPage: React.FC = () => {
   const ticketCalls = useMemo(() => details?.calls || [], [details?.calls]);
   const isManagerFlowLocked = metadata?.status === 'to_manager';
   const isPyrusLinkedTicket = hasPyrusLink(metadata);
-  const serviceInfoColumns = screens.lg ? 2 : 1;
+  // Раскладка карточек оборудования переключается вместе с видом служебной информации (по той же ширине основной колонки).
+  const serviceInfoLayout = overviewMainWidth === 0 || overviewMainWidth >= SERVICE_INFO_HORIZONTAL_MIN_WIDTH ? 'horizontal' : 'vertical';
+  const serviceInfoColumns = serviceInfoLayout === 'vertical' && overviewMainWidth < SERVICE_INFO_SINGLE_COLUMN_MAX_WIDTH ? 1 : 2;
   const userRoles = user?.roles || [];
   const isAdminRole = userRoles.includes('admin');
   const canRunServerActions = canManageServerActions(userRoles);
@@ -1835,7 +1841,7 @@ const TicketDetailsPage: React.FC = () => {
       && ungroupedFiscalItems.length === 0 ? (
       <Empty description="Оборудование не найдено" />
     ) : (
-      <div className="ticket-overview-equipment-grid">
+      <div className={serviceInfoLayout === 'horizontal' ? 'ticket-overview-equipment-grid ticket-overview-equipment-grid--two-columns' : 'ticket-overview-equipment-grid'}>
         {parentServerItems.map((item) => renderServerCard(item, 'parent-server', 'Родитель'))}
         {serverItems.map((item) => renderServerCard(item, 'server'))}
         {agentEquipmentGroups.map((group) => renderAgentEquipmentGroupCard(group))}
@@ -2215,10 +2221,16 @@ const TicketDetailsPage: React.FC = () => {
       </Space>
 
       <div className="ticket-overview-layout">
-        <div className="ticket-overview-main">
+        <div className="ticket-overview-main" ref={overviewMainRef}>
                   <Card size="small" className="ticket-overview-service-card" title="Служебная информация">
                     <div className="ticket-overview-service-summary">
-                      <Descriptions column={serviceInfoColumns} bordered size="small" className="ticket-service-descriptions">
+                      <Descriptions
+                        column={serviceInfoColumns}
+                        layout={serviceInfoLayout}
+                        bordered
+                        size="small"
+                        className={serviceInfoLayout === 'vertical' ? 'ticket-service-descriptions ticket-service-descriptions--vertical' : 'ticket-service-descriptions'}
+                      >
                       <Descriptions.Item label="Компания">
                         <div style={highlightedFields.company ? fieldHighlightStyle : undefined}>
                           {!isCompanyEditMode ? (
